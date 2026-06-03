@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import {
@@ -32,6 +33,8 @@ function makeHttpClientLayer(
     HttpClient.make((request) => handler(request)),
   );
 }
+
+const isSshHttpBridgeError = Schema.is(SshHttpBridgeError);
 
 describe("SSH environment IPC", () => {
   it.effect("fetches and decodes the remote environment descriptor", () => {
@@ -83,7 +86,7 @@ describe("SSH environment IPC", () => {
 
       assert.instanceOf(error, DesktopSshEnvironmentRequestError);
       assert.equal(error.operation, "fetch-environment-descriptor");
-      assert.equal(error.cause instanceof SshHttpBridgeError, false);
+      assert.isFalse(isSshHttpBridgeError(error.cause));
     }).pipe(Effect.provide(layer));
   });
 
@@ -108,7 +111,7 @@ describe("SSH environment IPC", () => {
       const error = failure.value;
 
       assert.instanceOf(error, DesktopSshEnvironmentRequestError);
-      assert.instanceOf(error.cause, SshHttpBridgeError);
+      assert.isTrue(isSshHttpBridgeError(error.cause));
       assert.equal(requestCount, 0);
     }).pipe(Effect.provide(layer));
   });
