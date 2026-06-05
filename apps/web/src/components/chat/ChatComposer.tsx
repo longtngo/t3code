@@ -59,6 +59,7 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { AccountSwitcher } from "./AccountSwitcher";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -2366,6 +2367,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     setIsComposerModelPickerOpen(open);
                   }}
                   onInstanceModelChange={onProviderModelSelect}
+                />
+
+                <AccountSwitcher
+                  compact={isComposerFooterCompact}
+                  activeInstanceId={selectedInstanceId}
+                  instanceEntries={providerInstanceEntries}
+                  disabled={lockedProvider !== null}
+                  onSelectAccount={onProviderModelSelect}
                 />
 
                 {isComposerFooterCompact ? (

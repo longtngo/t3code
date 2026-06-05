@@ -114,7 +114,7 @@ const makeBinaryPathSetting = (fallback: string) =>
     Schema.withDecodingDefault(Effect.succeed(fallback)),
   );
 
-export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch";
+export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch" | "folder";
 
 export interface ProviderSettingsFormAnnotation {
   readonly control?: ProviderSettingsFormControl | undefined;
@@ -221,7 +221,20 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         title: "Claude HOME path",
         description:
           "Custom HOME used when running this Claude instance. Keeps .claude.json and .claude separate.",
-        providerSettingsForm: { placeholder: "~", clearWhenEmpty: "omit" },
+        providerSettingsForm: { control: "folder", placeholder: "~", clearWhenEmpty: "omit" },
+      }),
+    ),
+    configDirPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Claude config directory",
+        description:
+          "Sets CLAUDE_CONFIG_DIR for this instance. Gives it a separate login (on macOS the Keychain credential is keyed by this path), so two instances can use different Claude accounts. Leave blank to use the default ~/.claude.",
+        providerSettingsForm: {
+          control: "folder",
+          placeholder: "~/.claude-personal",
+          clearWhenEmpty: "omit",
+        },
       }),
     ),
     customModels: Schema.Array(Schema.String).pipe(
@@ -241,7 +254,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "configDirPath", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;

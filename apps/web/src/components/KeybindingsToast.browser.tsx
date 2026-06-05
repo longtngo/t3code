@@ -154,6 +154,7 @@ function createBaseServerConfig(): ServerConfig {
           enabled: true,
           binaryPath: "",
           homePath: "",
+          configDirPath: "",
           customModels: [],
           launchArgs: "",
         },
