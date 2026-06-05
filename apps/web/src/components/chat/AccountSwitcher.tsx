@@ -4,7 +4,7 @@ import { CheckIcon, ChevronDownIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipWrapperTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { recallAccountModel } from "../../accountModelMemory";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
@@ -95,12 +95,8 @@ export const AccountSwitcher = memo(function AccountSwitcher(props: {
       }}
     >
       <Tooltip>
-        {/* The tooltip lives on a wrapper span, not the button: a native
-            disabled button doesn't dispatch the pointer/hover events the
-            tooltip listens for, so a tooltip on the button itself would never
-            open in exactly the locked state it has to explain. */}
-        <TooltipTrigger
-          render={<span className={cn("flex min-w-0", props.compact ? "shrink-0" : "shrink")} />}
+        <TooltipWrapperTrigger
+          className={cn("flex min-w-0", props.compact ? "shrink-0" : "shrink")}
         >
           <MenuTrigger
             render={
@@ -129,7 +125,7 @@ export const AccountSwitcher = memo(function AccountSwitcher(props: {
               <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
             </span>
           </MenuTrigger>
-        </TooltipTrigger>
+        </TooltipWrapperTrigger>
         <TooltipPopup side="top">
           {props.disabled ? "Account is locked for this thread" : "Switch Claude account"}
         </TooltipPopup>

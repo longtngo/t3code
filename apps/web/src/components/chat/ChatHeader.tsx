@@ -11,7 +11,7 @@ import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipWrapperTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
@@ -138,12 +138,8 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
-        {/* The tooltips live on wrapper spans, not the toggles: a native
-            disabled button doesn't dispatch the pointer/hover events the
-            tooltip listens for, so a tooltip on the toggle itself would never
-            open in exactly the unavailable state it has to explain. */}
         <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+          <TooltipWrapperTrigger className="shrink-0">
             <Toggle
               className="shrink-0"
               pressed={terminalOpen}
@@ -155,7 +151,7 @@ export const ChatHeader = memo(function ChatHeader({
             >
               <TerminalSquareIcon className="size-3" />
             </Toggle>
-          </TooltipTrigger>
+          </TooltipWrapperTrigger>
           <TooltipPopup side="bottom">
             {!terminalAvailable
               ? "Terminal is unavailable until this thread has an active project."
@@ -165,7 +161,7 @@ export const ChatHeader = memo(function ChatHeader({
           </TooltipPopup>
         </Tooltip>
         <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+          <TooltipWrapperTrigger className="shrink-0">
             <Toggle
               className="shrink-0"
               pressed={diffOpen}
@@ -177,7 +173,7 @@ export const ChatHeader = memo(function ChatHeader({
             >
               <DiffIcon className="size-3" />
             </Toggle>
-          </TooltipTrigger>
+          </TooltipWrapperTrigger>
           <TooltipPopup side="bottom">
             {!isGitRepo && !diffOpen
               ? "Diff panel is unavailable because this project is not a git repository."

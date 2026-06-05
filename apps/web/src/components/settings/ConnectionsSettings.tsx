@@ -73,7 +73,7 @@ import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger, TooltipWrapperTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Group, GroupSeparator } from "../ui/group";
@@ -1622,7 +1622,7 @@ function CloudLinkSwitch({
   );
   return disabledReason ? (
     <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex">{control}</span>} />
+      <TooltipWrapperTrigger>{control}</TooltipWrapperTrigger>
       <TooltipPopup side="top">{disabledReason}</TooltipPopup>
     </Tooltip>
   ) : (
@@ -2837,17 +2837,13 @@ export function ConnectionsSettings() {
       }
       control={
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="inline-flex">
-                <Switch
-                  checked={isLocalBackendNetworkAccessible}
-                  disabled
-                  aria-label="Enable network access"
-                />
-              </span>
-            }
-          />
+          <TooltipWrapperTrigger>
+            <Switch
+              checked={isLocalBackendNetworkAccessible}
+              disabled
+              aria-label="Enable network access"
+            />
+          </TooltipWrapperTrigger>
           <TooltipPopup side="top">
             Network exposure changes restart the backend and must be controlled where the server
             process is launched.
