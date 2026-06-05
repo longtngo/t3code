@@ -138,22 +138,24 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        {/* The tooltips live on wrapper spans, not the toggles: a native
+            disabled button doesn't dispatch the pointer/hover events the
+            tooltip listens for, so a tooltip on the toggle itself would never
+            open in exactly the unavailable state it has to explain. */}
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className="shrink-0"
-                pressed={terminalOpen}
-                onPressedChange={onToggleTerminal}
-                aria-label="Toggle terminal drawer"
-                variant="outline"
-                size="xs"
-                disabled={!terminalAvailable}
-              >
-                <TerminalSquareIcon className="size-3" />
-              </Toggle>
-            }
-          />
+          <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+            <Toggle
+              className="shrink-0"
+              pressed={terminalOpen}
+              onPressedChange={onToggleTerminal}
+              aria-label="Toggle terminal drawer"
+              variant="outline"
+              size="xs"
+              disabled={!terminalAvailable}
+            >
+              <TerminalSquareIcon className="size-3" />
+            </Toggle>
+          </TooltipTrigger>
           <TooltipPopup side="bottom">
             {!terminalAvailable
               ? "Terminal is unavailable until this thread has an active project."
@@ -163,21 +165,19 @@ export const ChatHeader = memo(function ChatHeader({
           </TooltipPopup>
         </Tooltip>
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className="shrink-0"
-                pressed={diffOpen}
-                onPressedChange={onToggleDiff}
-                aria-label="Toggle diff panel"
-                variant="outline"
-                size="xs"
-                disabled={!isGitRepo && !diffOpen}
-              >
-                <DiffIcon className="size-3" />
-              </Toggle>
-            }
-          />
+          <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+            <Toggle
+              className="shrink-0"
+              pressed={diffOpen}
+              onPressedChange={onToggleDiff}
+              aria-label="Toggle diff panel"
+              variant="outline"
+              size="xs"
+              disabled={!isGitRepo && !diffOpen}
+            >
+              <DiffIcon className="size-3" />
+            </Toggle>
+          </TooltipTrigger>
           <TooltipPopup side="bottom">
             {!isGitRepo && !diffOpen
               ? "Diff panel is unavailable because this project is not a git repository."
