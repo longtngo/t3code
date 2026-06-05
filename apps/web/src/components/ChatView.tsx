@@ -2939,7 +2939,19 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     sendInFlightRef.current = true;
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    // A send issued while a Claude turn is running is queued behind it and
+    // won't move the active turn's lifecycle, so the local-dispatch "busy"
+    // tracking would never see an ack and would pin the Send button to a
+    // spinner — blocking further queueing. Skip busy-tracking for queued sends
+    // so the user can stack multiple follow-ups. Gated on the provider (the
+    // same condition the composer uses to expose Send while running) so this
+    // matches where the backend actually queues rather than relying on the
+    // button gating to keep non-queueing providers out of this path.
+    const isQueuedSend =
+      phase === "running" && ctxSelectedProvider === ProviderDriverKind.make("claudeAgent");
+    if (!isQueuedSend) {
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    }
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
@@ -3087,7 +3099,9 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      if (!isQueuedSend) {
+        beginLocalDispatch({ preparingWorktree: false });
+      }
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),

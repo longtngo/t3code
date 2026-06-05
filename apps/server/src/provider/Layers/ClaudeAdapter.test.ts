@@ -3314,10 +3314,93 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
-  it.effect("re-sets the Claude model when the effective API model changes", () => {
+  it.effect(
+    "re-sets the Claude model when a queued follow-up turn uses a different effective API model",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        // Subscribe before emitting so the collector never misses an event.
+        const eventsFiber = yield* Stream.takeUntil(
+          adapter.streamEvents,
+          (event) => event.type === "session.exited",
+        ).pipe(Stream.runCollect, Effect.forkChild);
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-opus-4-6",
+            [{ id: "contextWindow", value: "1m" }],
+          ),
+          attachments: [],
+        });
+
+        // Sent while the first turn is still running: this queues behind it and
+        // must not change the model until it actually starts.
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "hello again",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-4-6",
+          },
+          attachments: [],
+        });
+
+        // Only the active turn's model has been applied; the queued turn's is
+        // deferred until it actually starts.
+        assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]"]);
+
+        const makeResult = (sessionId: string) =>
+          ({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            duration_ms: 1,
+            duration_api_ms: 1,
+            num_turns: 1,
+            result: "ok",
+            stop_reason: "end_turn",
+            session_id: sessionId,
+          }) as unknown as SDKMessage;
+
+        // Completing the first turn drains the queued follow-up, which starts
+        // and re-applies its (different) effective model. Completing the second
+        // and finishing the stream lets the collector terminate.
+        harness.query.emit(makeResult("sdk-session-model-reset-1"));
+        harness.query.emit(makeResult("sdk-session-model-reset-2"));
+        harness.query.finish();
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const startedCount = events.filter((event) => event.type === "turn.started").length;
+
+        assert.equal(startedCount, 2);
+        assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]", "claude-opus-4-6"]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("drops queued follow-up turns when the active turn is interrupted", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "session.exited",
+      ).pipe(Stream.runCollect, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -3325,27 +3408,111 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      yield* adapter.sendTurn({
+      const firstTurn = yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "hello",
-        modelSelection: createModelSelection(
-          ProviderInstanceId.make("claudeAgent"),
-          "claude-opus-4-6",
-          [{ id: "contextWindow", value: "1m" }],
-        ),
         attachments: [],
       });
+      // Queued behind the running turn.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "hello again",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-opus-4-6",
-        },
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]", "claude-opus-4-6"]);
+      // Interrupting the active turn must discard the queued follow-up: a
+      // deliberate stop should not silently fire the stacked message. Finishing
+      // the stream afterwards proves no second turn ever started.
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        terminal_reason: "aborted_streaming",
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "interrupted",
+        session_id: "sdk-session-interrupt-drop",
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const startedTurnIds = events
+        .filter((event) => event.type === "turn.started")
+        .map((event) => (event.type === "turn.started" ? event.turnId : null));
+      const completed = events.find((event) => event.type === "turn.completed");
+
+      // Exactly one turn started (the interrupted one); the queued turn never ran.
+      assert.deepEqual(startedTurnIds, [firstTurn.turnId]);
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.turnId, firstTurn.turnId);
+        assert.equal(completed.payload.state, "interrupted");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drains multiple queued follow-up turns in FIFO order", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "session.exited",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // First turn starts immediately; the next two queue behind it.
+      const first = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+      const second = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "second",
+        attachments: [],
+      });
+      const third = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "third",
+        attachments: [],
+      });
+
+      const makeResult = (sessionId: string) =>
+        ({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          result: "ok",
+          stop_reason: "end_turn",
+          session_id: sessionId,
+        }) as unknown as SDKMessage;
+
+      // Each completion drains exactly one queued turn, in order.
+      harness.query.emit(makeResult("sdk-fifo-1"));
+      harness.query.emit(makeResult("sdk-fifo-2"));
+      harness.query.emit(makeResult("sdk-fifo-3"));
+      harness.query.finish();
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const startedTurnIds = events
+        .filter((event) => event.type === "turn.started")
+        .map((event) => (event.type === "turn.started" ? event.turnId : null));
+
+      assert.deepEqual(startedTurnIds, [first.turnId, second.turnId, third.turnId]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

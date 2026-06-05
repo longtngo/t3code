@@ -116,6 +116,16 @@ type PromptQueueItem =
       readonly type: "terminate";
     };
 
+/**
+ * A user-initiated turn that arrived while another turn was already running.
+ * Held until the active turn completes, then started in FIFO order so the user
+ * can queue follow-up messages without interrupting the run.
+ */
+interface PendingTurnRequest {
+  readonly turnId: TurnId;
+  readonly input: ProviderSendTurnInput;
+}
+
 interface ClaudeResumeState {
   readonly threadId?: ThreadId;
   readonly resume?: string;
@@ -126,6 +136,13 @@ interface ClaudeResumeState {
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
+  /**
+   * Whether this turn was auto-started for background assistant output that
+   * arrived without an explicit user `sendTurn` (vs. a real user-initiated
+   * turn). Used to decide whether a concurrent `sendTurn` should auto-close
+   * the active turn or queue behind it.
+   */
+  readonly synthetic: boolean;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -183,6 +200,11 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
+  /**
+   * FIFO queue of user turns received while a turn was already running. Drained
+   * one-at-a-time as each active turn completes successfully.
+   */
+  readonly pendingTurns: Array<PendingTurnRequest>;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -2092,6 +2114,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       context.turnState = {
         turnId,
         startedAt,
+        synthetic: true,
         items: [],
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
@@ -2212,6 +2235,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     yield* completeTurn(context, status, errorMessage, message);
+
+    if (status === "completed") {
+      // Start the next queued follow-up turn, if the user stacked any.
+      yield* drainNextPendingTurn(context);
+    } else {
+      // Interrupt / cancel / failure halts the run: drop queued follow-ups so a
+      // deliberate stop doesn't silently fire the messages stacked behind it.
+      context.pendingTurns.length = 0;
+    }
   });
 
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
@@ -2611,6 +2643,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (context.stopped) return;
 
     context.stopped = true;
+    context.pendingTurns.length = 0;
 
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
@@ -3189,6 +3222,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         pendingUserInputs,
         turns: [],
         inFlightTools,
+        pendingTurns: [],
         turnState: undefined,
         lastKnownContextWindow: undefined,
         lastKnownTokenUsage: undefined,
@@ -3280,18 +3314,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
-  const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const context = yield* requireSession(input.threadId);
+  // Start a turn immediately. Shared by sendTurn (idle path) and
+  // drainNextPendingTurn (queued path) so a queued follow-up starts with
+  // exactly the same model / turn-state / event semantics as a fresh turn.
+  const startTurnNow = Effect.fn("startTurnNow")(function* (
+    context: ClaudeSessionContext,
+    turnId: TurnId,
+    input: ProviderSendTurnInput,
+  ) {
     const modelSelection =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
         ? input.modelSelection
         : undefined;
-
-    if (context.turnState) {
-      // Auto-close a stale synthetic turn (from background agent responses
-      // between user prompts) to prevent blocking the user's next turn.
-      yield* completeTurn(context, "completed");
-    }
 
     if (modelSelection?.model) {
       const apiModelId = resolveClaudeApiModelId(modelSelection);
@@ -3324,10 +3358,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
-    const turnId = TurnId.make(yield* randomUUIDv4);
     const turnState: ClaudeTurnState = {
       turnId,
       startedAt: yield* nowIso,
+      synthetic: false,
       items: [],
       assistantTextBlocks: new Map(),
       assistantTextBlockOrder: [],
@@ -3366,14 +3400,64 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       type: "message",
       message,
     }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
+  });
 
-    return {
+  // Start the next queued follow-up turn, if any. Called after a turn completes
+  // successfully so queued messages run one-at-a-time in FIFO order.
+  const drainNextPendingTurn = Effect.fn("drainNextPendingTurn")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    if (context.turnState) {
+      // A turn is still active (e.g. a synthetic background turn started right
+      // after completion); wait for the next completion to drain.
+      return;
+    }
+    const next = context.pendingTurns[0];
+    if (!next) {
+      return;
+    }
+    // Peek, then dequeue only after the turn is established. startTurnNow yields
+    // before it sets turnState, and keeping this item in the queue during that
+    // gap keeps a concurrent sendTurn on the queue path (pendingTurns is
+    // non-empty) instead of letting it start a second, racing turn.
+    yield* startTurnNow(context, next.turnId, next.input);
+    context.pendingTurns.shift();
+  });
+
+  const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+    const context = yield* requireSession(input.threadId);
+    // Generate the turn id up front so the queue decision below is a single
+    // synchronous read-and-push with no yield in between: an interrupt that
+    // clears pendingTurns concurrently can't interleave and strand this turn.
+    const turnId = TurnId.make(yield* randomUUIDv4);
+    const turnResult = () => ({
       threadId: context.session.threadId,
       turnId,
       ...(context.session.resumeCursor !== undefined
         ? { resumeCursor: context.session.resumeCursor }
         : {}),
-    };
+    });
+
+    // Queue this message when a real user turn is running, OR when turns are
+    // already queued. The queued-non-empty case also covers the completion
+    // window where completeTurn has cleared turnState but drainNextPendingTurn
+    // has not yet started the next queued turn — without it a concurrent send
+    // could slip past the queue and start a second turn, breaking FIFO. It is
+    // started by drainNextPendingTurn once the active turn completes.
+    if ((context.turnState && !context.turnState.synthetic) || context.pendingTurns.length > 0) {
+      context.pendingTurns.push({ turnId, input });
+      return turnResult();
+    }
+
+    if (context.turnState) {
+      // Auto-close a stale synthetic turn (from background agent responses
+      // between user prompts) to prevent blocking the user's next turn.
+      yield* completeTurn(context, "completed");
+    }
+
+    yield* startTurnNow(context, turnId, input);
+
+    return turnResult();
   });
 
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
