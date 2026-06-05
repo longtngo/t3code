@@ -1,5 +1,5 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -134,6 +134,30 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (pendingAction) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+        {compact ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="rounded-full"
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            disabled={pendingAction.isResponding}
+            aria-label="Cancel question"
+          >
+            <XIcon className="size-3.5" />
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="rounded-full"
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            disabled={pendingAction.isResponding}
+          >
+            Cancel
+          </Button>
+        )}
         {pendingAction.questionIndex > 0 ? (
           compact ? (
             <Button

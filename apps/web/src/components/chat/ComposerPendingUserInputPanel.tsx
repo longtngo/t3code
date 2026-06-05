@@ -141,7 +141,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       {activeQuestion.multiSelect ? (
         <p className="mt-1 text-xs text-muted-foreground/65">Select one or more options.</p>
       ) : null}
-      <div className="mt-3 space-y-1">
+      <div className="mt-3 max-h-[min(50vh,22rem)] space-y-1 overflow-y-auto pr-1">
         {activeQuestion.options.map((option, index) => {
           const isSelected = progress.selectedOptionLabels.includes(option.label);
           const shortcutKey = index < 9 ? index + 1 : null;
