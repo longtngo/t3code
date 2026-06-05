@@ -1196,6 +1196,432 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("accumulates turn.plan.updated from TaskCreate/TaskUpdate tool results", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const emitTaskToolCycle = (input: {
+        index: number;
+        toolUseId: string;
+        toolName: "TaskCreate" | "TaskUpdate";
+        inputJson: string;
+        resultText: string;
+        toolUseResult?: unknown;
+      }) => {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-plan",
+          uuid: `stream-task-start-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index: input.index,
+            content_block: {
+              type: "tool_use",
+              id: input.toolUseId,
+              name: input.toolName,
+              input: {},
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-plan",
+          uuid: `stream-task-input-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_delta",
+            index: input.index,
+            delta: {
+              type: "input_json_delta",
+              partial_json: input.inputJson,
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-plan",
+          uuid: `stream-task-stop-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_stop",
+            index: input.index,
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "user",
+          session_id: "sdk-session-task-plan",
+          uuid: `user-task-result-${input.index}`,
+          parent_tool_use_id: null,
+          ...(input.toolUseResult !== undefined ? { tool_use_result: input.toolUseResult } : {}),
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: input.toolUseId,
+                content: input.resultText,
+              },
+            ],
+          },
+        } as unknown as SDKMessage);
+      };
+
+      emitTaskToolCycle({
+        index: 1,
+        toolUseId: "tool-task-create-1",
+        toolName: "TaskCreate",
+        inputJson: '{"subject":"Inspect repository","description":"Look around"}',
+        resultText: "Task #1 created successfully: Inspect repository",
+        toolUseResult: { task: { id: "1", subject: "Inspect repository" } },
+      });
+      emitTaskToolCycle({
+        index: 2,
+        toolUseId: "tool-task-create-2",
+        toolName: "TaskCreate",
+        inputJson: '{"subject":"Report findings","description":"Write it up"}',
+        resultText: "Task #2 created successfully: Report findings",
+        toolUseResult: { task: { id: "2", subject: "Report findings" } },
+      });
+      emitTaskToolCycle({
+        index: 3,
+        toolUseId: "tool-task-update-1",
+        toolName: "TaskUpdate",
+        inputJson: '{"taskId":"1","status":"in_progress"}',
+        resultText: "Updated task #1 status",
+        toolUseResult: {
+          success: true,
+          taskId: "1",
+          updatedFields: ["status"],
+          statusChange: { from: "pending", to: "in_progress" },
+        },
+      });
+      emitTaskToolCycle({
+        index: 4,
+        toolUseId: "tool-task-update-2",
+        toolName: "TaskUpdate",
+        inputJson: '{"taskId":"2","status":"deleted"}',
+        resultText: "Updated task #2 deleted",
+        toolUseResult: {
+          success: true,
+          taskId: "2",
+          updatedFields: ["status"],
+          statusChange: { from: "pending", to: "deleted" },
+        },
+      });
+      // Failed update: not an is_error result, must not mutate the plan.
+      emitTaskToolCycle({
+        index: 5,
+        toolUseId: "tool-task-update-3",
+        toolName: "TaskUpdate",
+        inputJson: '{"taskId":"99","status":"completed"}',
+        resultText: "Task #99 not found",
+        toolUseResult: { success: false, taskId: "99", updatedFields: [], error: "not found" },
+      });
+      // No-op update: nothing changed, must not re-emit the plan.
+      emitTaskToolCycle({
+        index: 6,
+        toolUseId: "tool-task-update-4",
+        toolName: "TaskUpdate",
+        inputJson: '{"taskId":"1","status":"in_progress"}',
+        resultText: "Updated task #1 status",
+        toolUseResult: {
+          success: true,
+          taskId: "1",
+          updatedFields: ["status"],
+          statusChange: { from: "in_progress", to: "in_progress" },
+        },
+      });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-task-plan",
+        uuid: "result-task-plan",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const planUpdates = runtimeEvents.filter((event) => event.type === "turn.plan.updated");
+      assert.deepEqual(
+        planUpdates.map((event) => (event.type === "turn.plan.updated" ? event.payload.plan : [])),
+        [
+          [{ step: "Inspect repository", status: "pending" }],
+          [
+            { step: "Inspect repository", status: "pending" },
+            { step: "Report findings", status: "pending" },
+          ],
+          [
+            { step: "Inspect repository", status: "inProgress" },
+            { step: "Report findings", status: "pending" },
+          ],
+          [{ step: "Inspect repository", status: "inProgress" }],
+        ],
+      );
+      for (const planUpdate of planUpdates) {
+        if (planUpdate.type === "turn.plan.updated") {
+          assert.equal(String(planUpdate.turnId), String(turn.turnId));
+        }
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("applies structured task results and reseeds the plan from TaskList", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const emitToolUse = (input: {
+        index: number;
+        toolUseId: string;
+        toolName: string;
+        inputJson: string;
+      }) => {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-coalesce",
+          uuid: `stream-start-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index: input.index,
+            content_block: {
+              type: "tool_use",
+              id: input.toolUseId,
+              name: input.toolName,
+              input: {},
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-coalesce",
+          uuid: `stream-input-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_delta",
+            index: input.index,
+            delta: {
+              type: "input_json_delta",
+              partial_json: input.inputJson,
+            },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-task-coalesce",
+          uuid: `stream-stop-${input.index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_stop",
+            index: input.index,
+          },
+        } as unknown as SDKMessage);
+      };
+
+      // Subjects come from the structured result, so a create whose streamed
+      // input JSON never parsed still lands in the plan.
+      emitToolUse({
+        index: 1,
+        toolUseId: "tool-create-a",
+        toolName: "TaskCreate",
+        inputJson: '{"subject":"Plan the work","description":"d"}',
+      });
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-task-coalesce",
+        uuid: "user-task-result-a",
+        parent_tool_use_id: null,
+        tool_use_result: { task: { id: "1", subject: "Plan the work" } },
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-create-a",
+              content: "Task #1 created successfully: Plan the work",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+      emitToolUse({
+        index: 2,
+        toolUseId: "tool-create-b",
+        toolName: "TaskCreate",
+        inputJson: '{"subject":',
+      });
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-task-coalesce",
+        uuid: "user-task-result-b",
+        parent_tool_use_id: null,
+        tool_use_result: { task: { id: "2", subject: "Execute the work" } },
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-create-b",
+              content: "Task #2 created successfully: Execute the work",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // TaskList result reseeds the whole plan: renumbered ids, a status the
+      // session never saw, a task recovered from a prior session.
+      emitToolUse({
+        index: 3,
+        toolUseId: "tool-list-1",
+        toolName: "TaskList",
+        inputJson: "{}",
+      });
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-task-coalesce",
+        uuid: "user-task-list-result",
+        parent_tool_use_id: null,
+        tool_use_result: {
+          tasks: [
+            { id: "1", subject: "Plan the work", status: "completed", blockedBy: [] },
+            { id: "2", subject: "Execute the work", status: "in_progress", blockedBy: ["1"] },
+            { id: "5", subject: "Recovered after restart", status: "pending", blockedBy: [] },
+          ],
+        },
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-list-1",
+              content:
+                "#1 [completed] Plan the work\n#2 [in_progress] Execute the work [blocked by #1]\n#5 [pending] Recovered after restart",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // Missing structured result keeps the current plan (no wipe, no emit).
+      emitToolUse({
+        index: 4,
+        toolUseId: "tool-list-2",
+        toolName: "TaskList",
+        inputJson: "{}",
+      });
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-task-coalesce",
+        uuid: "user-task-list-garbage",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-list-2",
+              content: "Tasks: everything is fine",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // Empty TaskList result clears the plan.
+      emitToolUse({
+        index: 5,
+        toolUseId: "tool-list-3",
+        toolName: "TaskList",
+        inputJson: "{}",
+      });
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-task-coalesce",
+        uuid: "user-task-list-empty",
+        parent_tool_use_id: null,
+        tool_use_result: { tasks: [] },
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-list-3",
+              content: "No tasks found",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-task-coalesce",
+        uuid: "result-task-coalesce",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const planUpdates = runtimeEvents.filter((event) => event.type === "turn.plan.updated");
+      assert.deepEqual(
+        planUpdates.map((event) => (event.type === "turn.plan.updated" ? event.payload.plan : [])),
+        [
+          [{ step: "Plan the work", status: "pending" }],
+          [
+            { step: "Plan the work", status: "pending" },
+            { step: "Execute the work", status: "pending" },
+          ],
+          [
+            { step: "Plan the work", status: "completed" },
+            { step: "Execute the work", status: "inProgress" },
+            { step: "Recovered after restart", status: "pending" },
+          ],
+          [],
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("classifies Claude Task tool invocations as collaboration agent work", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

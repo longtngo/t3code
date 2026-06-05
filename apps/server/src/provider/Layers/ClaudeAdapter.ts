@@ -201,6 +201,11 @@ interface ClaudeSessionContext {
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   /**
+   * Session-scoped todo list accumulated from TaskCreate/TaskUpdate tool calls
+   * (the successor of the TodoWrite tool). Keyed by task id, insertion-ordered.
+   */
+  readonly taskPlan: Map<string, TaskPlanEntry>;
+  /**
    * FIFO queue of user turns received while a turn was already running. Drained
    * one-at-a-time as each active turn completes successfully.
    */
@@ -618,13 +623,129 @@ function extractPlanStepsFromTodoInput(input: Record<string, unknown>): PlanStep
         typeof todo.content === "string" && todo.content.trim().length > 0
           ? todo.content.trim()
           : "Task",
-      status:
-        todo.status === "completed"
-          ? "completed"
-          : todo.status === "in_progress"
-            ? "inProgress"
-            : "pending",
+      status: planStepStatusFromTaskStatus(todo.status) ?? "pending",
     }));
+}
+
+interface TaskPlanEntry {
+  subject: string;
+  status: PlanStep["status"];
+}
+
+function planStepStatusFromTaskStatus(status: unknown): PlanStep["status"] | null {
+  return status === "completed"
+    ? "completed"
+    : status === "in_progress"
+      ? "inProgress"
+      : status === "pending"
+        ? "pending"
+        : null;
+}
+
+// Newer Claude Code builds replaced the TodoWrite tool with the task tools
+// (TaskCreate/TaskUpdate/TaskList/...). The todo list is no longer a single
+// tool input; it accumulates across task-tool calls, so the session tracks a
+// task map and re-emits the full plan after each successful mutation. State is
+// read from the structured `tool_use_result` the SDK attaches to tool-result
+// user messages (TaskCreateOutput/TaskUpdateOutput/TaskListOutput — verified
+// populated at runtime), never from the prose result text. The task store is
+// session-shared across the main agent and subagents by design (tasks carry an
+// `owner` attribution), so no parent_tool_use_id filtering applies. A TaskList
+// result reseeds the whole map, which self-heals drift from missed or failed
+// updates and from sessions resumed after a server restart.
+function applyTaskToolResult(
+  taskPlan: Map<string, TaskPlanEntry>,
+  toolName: string,
+  input: Record<string, unknown>,
+  result: unknown,
+): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const structured = result as Record<string, unknown>;
+  switch (toolName.toLowerCase()) {
+    case "taskcreate": {
+      // TaskCreateOutput: { task: { id, subject } }
+      const task =
+        structured.task && typeof structured.task === "object"
+          ? (structured.task as Record<string, unknown>)
+          : undefined;
+      const taskId = typeof task?.id === "string" ? task.id : undefined;
+      const subject = typeof task?.subject === "string" ? task.subject.trim() : "";
+      if (!taskId || subject.length === 0) {
+        return false;
+      }
+      taskPlan.set(taskId, { subject, status: "pending" });
+      return true;
+    }
+    case "taskupdate": {
+      // TaskUpdateOutput: { success, taskId, updatedFields, statusChange?: { from, to } }
+      // A failed update is NOT an is_error result, so gate on `success`.
+      const taskId = typeof structured.taskId === "string" ? structured.taskId : undefined;
+      if (structured.success !== true || !taskId) {
+        return false;
+      }
+      const statusChange =
+        structured.statusChange && typeof structured.statusChange === "object"
+          ? (structured.statusChange as Record<string, unknown>)
+          : undefined;
+      if (statusChange?.to === "deleted") {
+        return taskPlan.delete(taskId);
+      }
+      const existing = taskPlan.get(taskId);
+      const subject =
+        typeof input.subject === "string" && input.subject.trim().length > 0
+          ? input.subject.trim()
+          : existing?.subject;
+      if (!subject) {
+        // Update for a task created before this session attached — nothing
+        // renderable until the next TaskList resync.
+        return false;
+      }
+      const status =
+        planStepStatusFromTaskStatus(statusChange?.to) ?? existing?.status ?? "pending";
+      if (existing && existing.subject === subject && existing.status === status) {
+        return false;
+      }
+      taskPlan.set(taskId, { subject, status });
+      return true;
+    }
+    case "tasklist": {
+      // TaskListOutput: { tasks: [{ id, subject, status, owner?, blockedBy }] }
+      if (!Array.isArray(structured.tasks)) {
+        return false;
+      }
+      const reseeded = new Map<string, TaskPlanEntry>();
+      for (const entry of structured.tasks) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        const task = entry as Record<string, unknown>;
+        const status = planStepStatusFromTaskStatus(task.status);
+        const subject = typeof task.subject === "string" ? task.subject.trim() : "";
+        if (typeof task.id !== "string" || subject.length === 0 || !status) {
+          continue;
+        }
+        reseeded.set(task.id, { subject, status });
+      }
+      // Order-sensitive on purpose: TaskList order is authoritative, so a pure
+      // reorder also re-emits. An empty list legitimately clears the plan.
+      if (JSON.stringify([...taskPlan]) === JSON.stringify([...reseeded])) {
+        return false;
+      }
+      taskPlan.clear();
+      for (const [taskId, entry] of reseeded) {
+        taskPlan.set(taskId, entry);
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+function planStepsFromTaskPlan(taskPlan: ReadonlyMap<string, TaskPlanEntry>): PlanStep[] {
+  return [...taskPlan.values()].map((entry) => ({ step: entry.subject, status: entry.status }));
 }
 
 function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
@@ -1738,6 +1859,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* updateResumeCursor(context);
   });
 
+  const offerPlanUpdated = Effect.fn("offerPlanUpdated")(function* (
+    context: ClaudeSessionContext,
+    planSteps: ReadonlyArray<PlanStep>,
+  ) {
+    const planStamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "turn.plan.updated",
+      eventId: planStamp.eventId,
+      provider: PROVIDER,
+      createdAt: planStamp.createdAt,
+      threadId: context.session.threadId,
+      ...(context.turnState
+        ? {
+            turnId: asCanonicalTurnId(context.turnState.turnId),
+          }
+        : {}),
+      payload: {
+        plan: planSteps,
+      },
+      providerRefs: nativeProviderRefs(context),
+    });
+  });
+
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
@@ -1877,23 +2021,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         if (parsedInput && isTodoTool(nextTool.toolName)) {
           const planSteps = extractPlanStepsFromTodoInput(parsedInput);
           if (planSteps && planSteps.length > 0) {
-            const planStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "turn.plan.updated",
-              eventId: planStamp.eventId,
-              provider: PROVIDER,
-              createdAt: planStamp.createdAt,
-              threadId: context.session.threadId,
-              ...(context.turnState
-                ? {
-                    turnId: asCanonicalTurnId(context.turnState.turnId),
-                  }
-                : {}),
-              payload: {
-                plan: planSteps,
-              },
-              providerRefs: nativeProviderRefs(context),
-            });
+            yield* offerPlanUpdated(context, planSteps);
           }
         }
       }
@@ -2000,6 +2128,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       context.turnState.items.push(message.message);
     }
 
+    const structuredToolResult = (message as { tool_use_result?: unknown }).tool_use_result;
+    let taskPlanChanged = false;
     for (const toolResult of toolResultBlocksFromUserMessage(message)) {
       const toolEntry = Array.from(context.inFlightTools.entries()).find(
         ([, tool]) => tool.itemId === toolResult.toolUseId,
@@ -2094,7 +2224,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
       });
 
+      if (
+        !toolResult.isError &&
+        applyTaskToolResult(context.taskPlan, tool.toolName, tool.input, structuredToolResult)
+      ) {
+        taskPlanChanged = true;
+      }
+
       context.inFlightTools.delete(index);
+    }
+
+    // Coalesce: a single user message can carry several task-tool results;
+    // emit the accumulated plan once instead of once per mutation.
+    if (taskPlanChanged) {
+      yield* offerPlanUpdated(context, planStepsFromTaskPlan(context.taskPlan));
     }
   });
 
@@ -3223,6 +3366,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         pendingUserInputs,
         turns: [],
         inFlightTools,
+        taskPlan: new Map(),
         pendingTurns: [],
         turnState: undefined,
         lastKnownContextWindow: undefined,

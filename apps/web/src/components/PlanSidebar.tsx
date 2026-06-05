@@ -29,7 +29,27 @@ import { readEnvironmentApi } from "~/environmentApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 
-function stepStatusIcon(status: string): React.ReactNode {
+// Row chrome shared with ComposerTodoList so the two plan surfaces stay in sync.
+export function stepRowClass(status: string): string {
+  return cn(
+    "rounded-lg transition-colors duration-200",
+    status === "inProgress" && "bg-blue-500/5",
+    status === "completed" && "bg-emerald-500/5",
+  );
+}
+
+export function stepTextClass(status: string): string {
+  return cn(
+    "text-[13px] leading-snug",
+    status === "completed"
+      ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
+      : status === "inProgress"
+        ? "text-foreground/90"
+        : "text-muted-foreground/70",
+  );
+}
+
+export function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
     return (
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
@@ -210,25 +230,10 @@ const PlanSidebar = memo(function PlanSidebar({
               {activePlan.steps.map((step) => (
                 <div
                   key={`${step.status}:${step.step}`}
-                  className={cn(
-                    "flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
-                    step.status === "inProgress" && "bg-blue-500/5",
-                    step.status === "completed" && "bg-emerald-500/5",
-                  )}
+                  className={cn("flex items-start gap-2.5 px-2.5 py-2", stepRowClass(step.status))}
                 >
                   <div className="mt-0.5">{stepStatusIcon(step.status)}</div>
-                  <p
-                    className={cn(
-                      "text-[13px] leading-snug",
-                      step.status === "completed"
-                        ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
-                        : step.status === "inProgress"
-                          ? "text-foreground/90"
-                          : "text-muted-foreground/70",
-                    )}
-                  >
-                    {step.step}
-                  </p>
+                  <p className={stepTextClass(step.status)}>{step.step}</p>
                 </div>
               ))}
             </div>

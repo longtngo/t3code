@@ -118,7 +118,10 @@ import {
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
-import { resolveAppModelSelectionForInstance, resolveAppModelSelectionState } from "../modelSelection";
+import {
+  resolveAppModelSelectionForInstance,
+  resolveAppModelSelectionState,
+} from "../modelSelection";
 import { rememberAccountModel } from "../accountModelMemory";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -952,7 +955,9 @@ export default function ChatView(props: ChatViewProps) {
   // provider list — an instance enabled on the primary env may be absent or
   // disabled remotely.
   const draftEnvServerConfig = useSavedEnvironmentRuntimeStore((s) =>
-    draftThread && primaryEnvironmentId !== null && draftThread.environmentId !== primaryEnvironmentId
+    draftThread &&
+    primaryEnvironmentId !== null &&
+    draftThread.environmentId !== primaryEnvironmentId
       ? (s.byId[draftThread.environmentId]?.serverConfig ?? null)
       : null,
   );
@@ -3908,7 +3913,7 @@ export default function ChatView(props: ChatViewProps) {
                   respondingRequestIds={respondingRequestIds}
                   showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                   activeProposedPlan={activeProposedPlan}
-                  activePlan={activePlan as { turnId?: TurnId } | null}
+                  activePlan={activePlan}
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
                   planSidebarLabel={planSidebarLabel}
                   planSidebarOpen={planSidebarOpen}
