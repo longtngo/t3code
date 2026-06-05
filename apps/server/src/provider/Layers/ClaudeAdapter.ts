@@ -334,13 +334,43 @@ function interruptionMessageFromClaudeCause(
   return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
 }
 
-function resultErrorsText(result: SDKResultMessage): string {
+// The Claude Code CLI tags internal, non-user-facing diagnostics with this
+// prefix (e.g. "[ede_diagnostic] result_type=user last_content_type=n/a
+// stop_reason=tool_use") and strips them itself before building any user-facing
+// message. They appear in `result.errors` only for telemetry, so we must never
+// surface or persist them as provider errors.
+const CLAUDE_DIAGNOSTIC_ERROR_PREFIX = "[ede_diagnostic]";
+
+function isClaudeDiagnosticError(error: string): boolean {
+  return error.trimStart().toLowerCase().startsWith(CLAUDE_DIAGNOSTIC_ERROR_PREFIX);
+}
+
+function userFacingResultErrors(result: SDKResultMessage): ReadonlyArray<string> {
   return "errors" in result && Array.isArray(result.errors)
-    ? result.errors.join(" ").toLowerCase()
-    : "";
+    ? result.errors.filter((error) => !isClaudeDiagnosticError(error))
+    : [];
+}
+
+function resultErrorsText(result: SDKResultMessage): string {
+  return userFacingResultErrors(result).join(" ").toLowerCase();
+}
+
+// `terminal_reason` is the SDK's authoritative signal for *why* a turn ended.
+// `aborted_streaming` / `aborted_tools` mean the user hit Stop mid-turn — that
+// is an interruption, not a failure, even when the CLI reports is_error=true
+// with only an internal "[ede_diagnostic]" error (which it does when the abort
+// lands mid tool_use).
+function isAbortedResult(result: SDKResultMessage): boolean {
+  return (
+    result.terminal_reason === "aborted_streaming" || result.terminal_reason === "aborted_tools"
+  );
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
+  if (isAbortedResult(result)) {
+    return true;
+  }
+
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
@@ -2174,7 +2204,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const status = turnStatusFromResult(message);
-    const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+    const errorMessage =
+      message.subtype === "success" ? undefined : userFacingResultErrors(message)[0];
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
