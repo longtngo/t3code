@@ -239,6 +239,33 @@ function createBaseServerConfig(): ServerConfig {
   };
 }
 
+function createClaudeAgentProvider(overrides?: {
+  instanceId?: ProviderInstanceId;
+  displayName?: string;
+}): ServerConfig["providers"][number] {
+  return {
+    driver: ProviderDriverKind.make("claudeAgent"),
+    instanceId: overrides?.instanceId ?? ProviderInstanceId.make("claudeAgent"),
+    ...(overrides?.displayName ? { displayName: overrides.displayName } : {}),
+    enabled: true,
+    installed: true,
+    version: "2.1.117",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: NOW_ISO,
+    models: [
+      {
+        slug: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        isCustom: false,
+        capabilities: createModelCapabilities({ optionDescriptors: [] }),
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  };
+}
+
 function createMockEnvironmentApi(input: {
   browse: EnvironmentApi["filesystem"]["browse"];
   dispatchCommand: EnvironmentApi["orchestration"]["dispatchCommand"];
@@ -1799,6 +1826,92 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(findButtonByText("Local checkout")).toBeNull();
+      // Without usage activities there is no meter and no second toolbar row.
+      expect(document.querySelector('button[aria-label="Account usage"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders the account usage meter on its own row below the branch toolbar selectors", async () => {
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-usage-meter-row" as MessageId,
+      targetText: "usage meter row",
+    });
+    const snapshot: OrchestrationReadModel = {
+      ...baseSnapshot,
+      threads: baseSnapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? Object.assign({}, thread, {
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("claudeAgent"),
+                "claude-opus-4-7",
+              ),
+              activities: [
+                {
+                  id: EventId.make("activity-account-usage"),
+                  tone: "info" as const,
+                  kind: "account.usage.updated",
+                  summary: "Account usage updated",
+                  payload: {
+                    fiveHour: { utilization: 87, resetsAt: isoAt(3_600) },
+                    sevenDay: { utilization: 54, resetsAt: isoAt(86_400) },
+                    extra: {
+                      isEnabled: true,
+                      usedCredits: 50_900,
+                      monthlyLimit: 200_000,
+                      utilization: 25,
+                      currency: "USD",
+                    },
+                  },
+                  turnId: null,
+                  createdAt: isoAt(100),
+                },
+              ],
+            })
+          : thread,
+      ),
+    };
+
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: [...nextFixture.serverConfig.providers, createClaudeAgentProvider()],
+        };
+      },
+    });
+
+    try {
+      const assertMeterOnOwnRow = async () => {
+        const meter = await waitForElement(
+          () => document.querySelector<HTMLElement>('button[aria-label="Account usage"]'),
+          "Unable to find account usage meter.",
+        );
+        const workspaceLabel = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLElement>("span")).find((element) =>
+              ["Local checkout", "Worktree"].includes(element.textContent?.trim() ?? ""),
+            ) ?? null,
+          "Unable to find workspace label.",
+        );
+        // The meter must sit on its own row, strictly below the selector row —
+        // sharing the row caused it to overlap the workspace/branch labels.
+        const meterRect = meter.getBoundingClientRect();
+        const workspaceRect = workspaceLabel.getBoundingClientRect();
+        // Guard against a vacuous 0 >= 0 pass from collapsed/unpainted boxes.
+        expect(meterRect.height).toBeGreaterThan(0);
+        expect(workspaceRect.height).toBeGreaterThan(0);
+        expect(meterRect.top).toBeGreaterThanOrEqual(workspaceRect.bottom);
+      };
+
+      // Both widths assert the row split so a future responsive variant can't
+      // quietly reintroduce the desktop overlap (pills on mobile, bars on desktop).
+      await assertMeterOnOwnRow();
+      await mounted.setViewport(DEFAULT_VIEWPORT);
+      await assertMeterOnOwnRow();
     } finally {
       await mounted.cleanup();
     }
@@ -2690,47 +2803,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
           ...nextFixture.serverConfig,
           providers: [
             ...nextFixture.serverConfig.providers,
-            {
-              driver: ProviderDriverKind.make("claudeAgent"),
-              instanceId: ProviderInstanceId.make("claudeAgent"),
-              enabled: true,
-              installed: true,
-              version: "2.1.117",
-              status: "ready",
-              auth: { status: "authenticated" },
-              checkedAt: NOW_ISO,
-              models: [
-                {
-                  slug: "claude-opus-4-7",
-                  name: "Claude Opus 4.7",
-                  isCustom: false,
-                  capabilities: createModelCapabilities({ optionDescriptors: [] }),
-                },
-              ],
-              slashCommands: [],
-              skills: [],
-            },
-            {
-              driver: ProviderDriverKind.make("claudeAgent"),
+            createClaudeAgentProvider(),
+            createClaudeAgentProvider({
               instanceId: openRouterInstanceId,
               displayName: "Claude OpenRouter",
-              enabled: true,
-              installed: true,
-              version: "2.1.117",
-              status: "ready",
-              auth: { status: "authenticated" },
-              checkedAt: NOW_ISO,
-              models: [
-                {
-                  slug: "claude-opus-4-7",
-                  name: "Claude Opus 4.7",
-                  isCustom: false,
-                  capabilities: createModelCapabilities({ optionDescriptors: [] }),
-                },
-              ],
-              slashCommands: [],
-              skills: [],
-            },
+            }),
           ],
           settings: {
             ...nextFixture.serverConfig.settings,
