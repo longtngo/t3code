@@ -1253,6 +1253,34 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   },
 ) {}
 
+/**
+ * Stable marker embedded in the `project.delete` invariant detail emitted when a
+ * project still has non-deleted threads (archived threads included) and `force`
+ * was not set.
+ *
+ * Centralized here so the server decider that produces the error and the web
+ * client that reacts to it agree on the exact wording. Only the message string
+ * survives the dispatch error boundary (the underlying tagged error is
+ * flattened into {@link OrchestrationDispatchCommandError}), so the client
+ * recognizes this case by matching the marker — see
+ * {@link isProjectNotEmptyDeleteInvariantMessage}.
+ */
+export const PROJECT_NOT_EMPTY_DELETE_INVARIANT_MARKER =
+  "is not empty and cannot be deleted without force=true";
+
+/** Build the `project.delete` "not empty" invariant detail for a project id. */
+export const projectNotEmptyDeleteInvariantDetail = (projectId: string): string =>
+  `Project '${projectId}' ${PROJECT_NOT_EMPTY_DELETE_INVARIANT_MARKER}.`;
+
+/**
+ * Whether a dispatch error message is the `project.delete` "not empty"
+ * invariant — i.e. the project still has threads the client could not see
+ * (archived threads are excluded from the sidebar bootstrap), so removal should
+ * be retried with `force`.
+ */
+export const isProjectNotEmptyDeleteInvariantMessage = (message: string): boolean =>
+  message.includes(PROJECT_NOT_EMPTY_DELETE_INVARIANT_MARKER);
+
 export class OrchestrationGetTurnDiffError extends Schema.TaggedErrorClass<OrchestrationGetTurnDiffError>()(
   "OrchestrationGetTurnDiffError",
   {

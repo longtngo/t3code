@@ -39,6 +39,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
   type DesktopUpdateState,
+  isProjectNotEmptyDeleteInvariantMessage,
   ProjectId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
@@ -1312,6 +1313,25 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [],
   );
 
+  const reportRemoveProjectFailure = useCallback(
+    (member: SidebarProjectGroupMember, error: unknown) => {
+      const message = error instanceof Error ? error.message : "Unknown error removing project.";
+      console.error("Failed to remove project", {
+        projectId: member.id,
+        environmentId: member.environmentId,
+        error,
+      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to remove "${member.name}"`,
+          description: message,
+        }),
+      );
+    },
+    [],
+  );
+
   const handleRemoveProject = useCallback(
     async (member: SidebarProjectGroupMember) => {
       const api = readLocalApi();
@@ -1370,20 +1390,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
                   await removeProject(member, { force: true });
                 })().catch((error) => {
-                  const message =
-                    error instanceof Error ? error.message : "Unknown error removing project.";
-                  console.error("Failed to remove project", {
-                    projectId: member.id,
-                    environmentId: member.environmentId,
-                    error,
-                  });
-                  toastManager.add(
-                    stackedThreadToast({
-                      type: "error",
-                      title: `Failed to remove "${member.name}"`,
-                      description: message,
-                    }),
-                  );
+                  reportRemoveProjectFailure(member, error);
                 });
               },
             },
@@ -1406,22 +1413,35 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       try {
         await removeProject(member);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error removing project.";
-        console.error("Failed to remove project", {
-          projectId: member.id,
-          environmentId: member.environmentId,
-          error,
-        });
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: `Failed to remove "${member.name}"`,
-            description: message,
-          }),
-        );
+        if (error instanceof Error && isProjectNotEmptyDeleteInvariantMessage(error.message)) {
+          // The sidebar believed this project was empty, but the server still
+          // has non-deleted threads for it. Archived threads are excluded from
+          // the sidebar bootstrap, so they are invisible to the client after a
+          // restart. Re-confirm with an explicit data-loss warning, then force.
+          const forceConfirmed = await api.dialogs.confirm(
+            [
+              `Remove project "${member.name}"?`,
+              `Path: ${member.cwd}`,
+              ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
+              "This project still contains archived or hidden threads.",
+              "Removing it permanently clears their conversation history.",
+              "This action cannot be undone.",
+            ].join("\n"),
+          );
+          if (!forceConfirmed) {
+            return;
+          }
+          try {
+            await removeProject(member, { force: true });
+          } catch (forceError) {
+            reportRemoveProjectFailure(member, forceError);
+          }
+          return;
+        }
+        reportRemoveProjectFailure(member, error);
       }
     },
-    [memberThreadCountByPhysicalKey, removeProject],
+    [memberThreadCountByPhysicalKey, removeProject, reportRemoveProjectFailure],
   );
 
   const handleProjectButtonContextMenu = useCallback(

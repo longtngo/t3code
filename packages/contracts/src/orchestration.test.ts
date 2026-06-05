@@ -1,8 +1,10 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
+  isProjectNotEmptyDeleteInvariantMessage,
+  projectNotEmptyDeleteInvariantDetail,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
@@ -741,3 +743,30 @@ it.effect("ModelSelection rejects malformed instance ids", () =>
     assert.strictEqual(result._tag, "Failure");
   }),
 );
+
+describe("project.delete not-empty invariant marker", () => {
+  it("detail embeds the project id and the shared marker", () => {
+    const detail = projectNotEmptyDeleteInvariantDetail("project-123");
+    assert.strictEqual(
+      detail,
+      "Project 'project-123' is not empty and cannot be deleted without force=true.",
+    );
+    assert.isTrue(isProjectNotEmptyDeleteInvariantMessage(detail));
+  });
+
+  it("predicate matches the full dispatch error message wrapping the detail", () => {
+    const wireMessage = `Orchestration command invariant failed (project.delete): ${projectNotEmptyDeleteInvariantDetail(
+      "67119381-c05a-4c05-acc5-388334de4b58",
+    )}`;
+    assert.isTrue(isProjectNotEmptyDeleteInvariantMessage(wireMessage));
+  });
+
+  it("predicate ignores unrelated dispatch errors", () => {
+    assert.isFalse(isProjectNotEmptyDeleteInvariantMessage("Failed to dispatch orchestration command"));
+    assert.isFalse(
+      isProjectNotEmptyDeleteInvariantMessage(
+        "Orchestration command invariant failed (project.delete): Project 'x' does not exist for command 'project.delete'.",
+      ),
+    );
+  });
+});

@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  projectNotEmptyDeleteInvariantDetail,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -172,7 +173,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (activeThreads.length > 0 && command.force !== true) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Project '${command.projectId}' is not empty and cannot be deleted without force=true.`,
+          detail: projectNotEmptyDeleteInvariantDetail(command.projectId),
         });
       }
       if (activeThreads.length > 0) {
