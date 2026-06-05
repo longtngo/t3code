@@ -42,6 +42,8 @@ import {
 } from "~/composerDraftStore";
 import { ensureLocalApi } from "~/localApi";
 import { collectActiveTerminalUiThreadKeys } from "~/lib/terminalUiStateCleanup";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { priorityToToast } from "~/lib/notificationToast";
 import { deriveOrchestrationBatchEffects } from "~/orchestrationEventEffects";
 import { getPrimaryKnownEnvironment } from "../primary";
 import { webRuntime } from "../../lib/runtime";
@@ -983,6 +985,47 @@ function reconcileSnapshotDerivedState() {
   useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(activeThreadKeys);
 }
 
+// Bounded record of notification activity ids already surfaced as toasts, so a
+// duplicate event delivery never double-fires. Reconnects deliver a snapshot
+// (not replayed events), so historical notifications never re-toast.
+const shownNotificationActivityIds = new Set<string>();
+
+/** Surface SDK 'notification' activities as in-app toasts (deduped by activity id). */
+function showActivityNotificationToasts(events: ReadonlyArray<OrchestrationEvent>) {
+  for (const event of events) {
+    if (event.type !== "thread.activity-appended") {
+      continue;
+    }
+    const activity = event.payload.activity;
+    if (activity.kind !== "runtime.notification") {
+      continue;
+    }
+    if (shownNotificationActivityIds.has(activity.id)) {
+      continue;
+    }
+    shownNotificationActivityIds.add(activity.id);
+    if (shownNotificationActivityIds.size > 500) {
+      const oldest = shownNotificationActivityIds.values().next().value;
+      if (oldest !== undefined) {
+        shownNotificationActivityIds.delete(oldest);
+      }
+    }
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as { priority?: unknown; timeoutMs?: unknown })
+        : {};
+    const mapped = priorityToToast(payload.priority);
+    toastManager.add(
+      stackedThreadToast({
+        type: mapped.type,
+        title: activity.summary,
+        priority: mapped.priority,
+        ...(typeof payload.timeoutMs === "number" ? { timeout: payload.timeoutMs } : {}),
+      }),
+    );
+  }
+}
+
 function applyRecoveredEventBatch(
   events: ReadonlyArray<OrchestrationEvent>,
   environmentId: EnvironmentId,
@@ -990,6 +1033,8 @@ function applyRecoveredEventBatch(
   if (events.length === 0) {
     return;
   }
+
+  showActivityNotificationToasts(events);
 
   const batchEffects = deriveOrchestrationBatchEffects(events);
   const uiEvents = coalesceOrchestrationUiEvents(events);

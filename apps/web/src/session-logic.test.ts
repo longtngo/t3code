@@ -593,6 +593,44 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("surfaces the runtime warning message as the entry detail", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "runtime-warning",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        tone: "info",
+        payload: {
+          message: "Unhandled Claude SDK message type 'rate_limit_event'.",
+          detail: { type: "rate_limit_event" },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries[0]?.label).toBe("Runtime warning");
+    expect(entries[0]?.detail).toBe("Unhandled Claude SDK message type 'rate_limit_event'.");
+  });
+
+  it("renders thinking.tokens as a thinking-toned row with a compact token count", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "thinking-tokens:turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "thinking.tokens",
+        summary: "Thinking",
+        tone: "info",
+        payload: { estimatedTokens: 12_345, estimatedTokensDelta: 1000 },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries[0]?.label).toBe("Thinking");
+    expect(entries[0]?.tone).toBe("thinking");
+    expect(entries[0]?.detail).toBe("~12k tokens");
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

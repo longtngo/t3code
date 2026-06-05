@@ -807,6 +807,159 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rawOutput?.content).toBe('import * as Effect from "effect/Effect"\n');
   });
 
+  it("projects account.usage.updated into an account usage activity", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const usagePayload = {
+      fiveHour: { utilization: 45, resetsAt: "2026-06-04T19:30:00Z" },
+      sevenDay: { utilization: 24, resetsAt: "2026-06-08T09:00:00Z" },
+      extra: {
+        isEnabled: true,
+        usedCredits: 43540,
+        monthlyLimit: 200000,
+        utilization: 21.77,
+        currency: "CAD",
+      },
+    };
+
+    harness.emit({
+      type: "account.usage.updated",
+      eventId: asEventId("evt-account-usage"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: usagePayload,
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.usage.updated",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "account.usage.updated",
+    );
+
+    // Stable per-thread id so successive poll snapshots upsert one row.
+    expect(activity?.id).toBe("account-usage:thread-1");
+    expect(activity?.kind).toBe("account.usage.updated");
+    expect(activity?.summary).toBe("Account usage updated");
+    expect(activity?.payload).toStrictEqual(usagePayload);
+  });
+
+  it("upserts successive account.usage.updated snapshots into one row per thread", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "account.usage.updated",
+      eventId: asEventId("evt-usage-1"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { fiveHour: { utilization: 10, resetsAt: null }, sevenDay: null, extra: null },
+    });
+    harness.emit({
+      type: "account.usage.updated",
+      eventId: asEventId("evt-usage-2"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: { fiveHour: { utilization: 25, resetsAt: null }, sevenDay: null, extra: null },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "account.usage.updated" &&
+          (activity.payload as { fiveHour?: { utilization?: number } }).fiveHour?.utilization ===
+            25,
+      ),
+    );
+    const usageActivities = thread.activities.filter(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "account.usage.updated",
+    );
+
+    expect(usageActivities).toHaveLength(1);
+    expect(usageActivities[0]?.id).toBe("account-usage:thread-1");
+  });
+
+  it("projects runtime.notification into a notification activity", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "runtime.notification",
+      eventId: asEventId("evt-notification"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        key: "compaction-warning",
+        text: "Context is getting full",
+        priority: "high",
+        timeoutMs: 5000,
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-notification",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-notification",
+    );
+
+    expect(activity?.kind).toBe("runtime.notification");
+    expect(activity?.summary).toBe("Context is getting full");
+    expect(activity?.payload).toStrictEqual({
+      key: "compaction-warning",
+      priority: "high",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("collapses runtime.thinking-tokens deltas into one in-place row per turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const later = "2026-01-01T00:00:01.000Z";
+
+    harness.emit({
+      type: "runtime.thinking-tokens",
+      eventId: asEventId("evt-thinking-1"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: { estimatedTokens: 512, estimatedTokensDelta: 512 },
+    });
+    harness.emit({
+      type: "runtime.thinking-tokens",
+      eventId: asEventId("evt-thinking-2"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: later,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: { estimatedTokens: 2048, estimatedTokensDelta: 1536 },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "thinking.tokens" &&
+          (activity.payload as { estimatedTokens?: number }).estimatedTokens === 2048,
+      ),
+    );
+    const thinkingActivities = thread.activities.filter(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "thinking.tokens",
+    );
+
+    // Both deltas share a stable per-turn id, so they upsert into a single row.
+    expect(thinkingActivities).toHaveLength(1);
+    expect(thinkingActivities[0]?.id).toBe("thinking-tokens:turn-1");
+    expect(thinkingActivities[0]?.summary).toBe("Thinking");
+  });
+
   it("normalizes command execution activities to ran-command summaries", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

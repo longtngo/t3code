@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationMessage,
@@ -344,6 +345,50 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "runtime.notification": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "runtime.notification",
+          summary: event.payload.text,
+          payload: {
+            key: event.payload.key,
+            priority: event.payload.priority,
+            ...(event.payload.timeoutMs !== undefined
+              ? { timeoutMs: event.payload.timeoutMs }
+              : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "runtime.thinking-tokens": {
+      // Stable per-turn id so successive token updates replace the same work-log
+      // row in place (the projector upserts activities by id) instead of
+      // appending a new row per delta.
+      const turnKey = toTurnId(event.turnId) ?? null;
+      const stableId = EventId.make(`thinking-tokens:${turnKey ?? event.threadId}`);
+      return [
+        {
+          id: stableId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "thinking.tokens",
+          summary: "Thinking",
+          payload: {
+            estimatedTokens: event.payload.estimatedTokens,
+            estimatedTokensDelta: event.payload.estimatedTokensDelta,
+          },
+          turnId: turnKey,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "runtime.warning": {
       return [
         {
@@ -592,6 +637,30 @@ function runtimeEventToActivities(
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "account.usage.updated": {
+      // NOTE: account.rate-limits.updated stays dropped (no consumer); fold it
+      // in here if a future rate-limit-detail refactor needs it.
+      //
+      // Stable per-thread id so each 60s poll snapshot upserts the same row
+      // (the projector replaces activities by id) instead of appending a new
+      // one every tick — which would grow the projection unbounded for the
+      // session's life. Only the latest snapshot is ever read
+      // (deriveLatestUsageSnapshot), so one in-place row is sufficient.
+      const stableId = EventId.make(`account-usage:${event.threadId}`);
+      return [
+        {
+          id: stableId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "account.usage.updated",
+          summary: "Account usage updated",
+          payload: event.payload,
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

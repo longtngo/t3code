@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  coalesceRepeatedWorkLogEntries,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
+import { type WorkLogEntry } from "../../session-logic";
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -538,5 +540,58 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("coalesceRepeatedWorkLogEntries", () => {
+  const makeEntry = (
+    overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">,
+  ): WorkLogEntry => ({
+    createdAt: "2026-01-01T00:00:00Z",
+    label: "Runtime warning",
+    tone: "info",
+    ...overrides,
+  });
+
+  it("collapses consecutive identical entries into one row with a count", () => {
+    const rows = coalesceRepeatedWorkLogEntries([
+      makeEntry({ id: "1" }),
+      makeEntry({ id: "2" }),
+      makeEntry({ id: "3" }),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(3);
+    // keeps the first entry as the representative row
+    expect(rows[0]?.entry.id).toBe("1");
+  });
+
+  it("keeps differing entries separate and resets the run", () => {
+    const rows = coalesceRepeatedWorkLogEntries([
+      makeEntry({ id: "1" }),
+      makeEntry({ id: "2" }),
+      makeEntry({ id: "3", label: "Account usage updated" }),
+      makeEntry({ id: "4" }),
+    ]);
+
+    expect(rows.map((row) => [row.entry.id, row.count])).toEqual([
+      ["1", 2],
+      ["3", 1],
+      ["4", 1],
+    ]);
+  });
+
+  it("does not collapse entries whose detail differs (no information hidden)", () => {
+    const rows = coalesceRepeatedWorkLogEntries([
+      makeEntry({ id: "1", detail: "Unhandled SDK message type 'a'" }),
+      makeEntry({ id: "2", detail: "Unhandled SDK message type 'b'" }),
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.count === 1)).toBe(true);
+  });
+
+  it("returns an empty array for no entries", () => {
+    expect(coalesceRepeatedWorkLogEntries([])).toEqual([]);
   });
 });

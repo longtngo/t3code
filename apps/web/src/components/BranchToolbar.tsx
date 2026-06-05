@@ -1,5 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationThreadActivity, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   CloudIcon,
@@ -12,7 +12,9 @@ import { memo, useMemo } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import { deriveLatestUsageSnapshot } from "../lib/usage";
 import { useStore } from "../store";
+import { cn } from "~/lib/utils";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import {
   type EnvMode,
@@ -25,6 +27,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { UsageMeter } from "./chat/UsageMeter";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -51,6 +54,9 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  activities?: readonly OrchestrationThreadActivity[];
+  /** Account usage is Claude-only; the readout is hidden for other providers. */
+  isClaudeModelSelected?: boolean;
 }
 
 interface MobileRunContextSelectorProps {
@@ -202,7 +208,13 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  activities,
+  isClaudeModelSelected,
 }: BranchToolbarProps) {
+  const usageSnapshot = useMemo(
+    () => (isClaudeModelSelected && activities ? deriveLatestUsageSnapshot(activities) : null),
+    [isClaudeModelSelected, activities],
+  );
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -276,8 +288,19 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       )}
 
+      {usageSnapshot ? (
+        <div className="flex min-w-0 flex-1 items-center justify-center">
+          <UsageMeter usage={usageSnapshot} />
+        </div>
+      ) : null}
+
       <BranchToolbarBranchSelector
-        className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
+        className={cn(
+          "min-w-0 justify-end",
+          // Without a usage readout the selector keeps its original full-width
+          // behavior; with one, it shrinks so the centered meter gets the slack.
+          usageSnapshot ? "shrink" : "flex-1 md:ml-auto md:flex-none",
+        )}
         environmentId={environmentId}
         threadId={threadId}
         {...(draftId ? { draftId } : {})}

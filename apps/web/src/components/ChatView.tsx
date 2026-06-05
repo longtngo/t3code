@@ -1856,6 +1856,16 @@ export default function ChatView(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  // Account usage (the BranchToolbar readout) is Claude-only, so gate it on the
+  // currently-picked model resolving to the Claude driver. Prefer the composer's
+  // unsaved pick, then the thread's active provider.
+  const isClaudeModelSelected = useMemo(() => {
+    const instanceId = composerActiveProvider ?? activeProviderInstanceId;
+    const status =
+      (instanceId ? providerStatuses.find((entry) => entry.instanceId === instanceId) : null) ??
+      activeProviderStatus;
+    return status?.driver === ProviderDriverKind.make("claudeAgent");
+  }, [composerActiveProvider, activeProviderInstanceId, providerStatuses, activeProviderStatus]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -3923,6 +3933,8 @@ export default function ChatView(props: ChatViewProps) {
                   : {})}
                 {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                 availableEnvironments={logicalProjectEnvironments}
+                {...(activeThread?.activities ? { activities: activeThread.activities } : {})}
+                isClaudeModelSelected={isClaudeModelSelected}
               />
             )}
           </div>

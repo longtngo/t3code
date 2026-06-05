@@ -24,6 +24,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -37,7 +38,11 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapter,
+  thinkingTokensDisplayBucket,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -156,6 +161,8 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly pollAccountUsage?: ClaudeAdapterLiveOptions["pollAccountUsage"];
+  readonly usagePollInterval?: ClaudeAdapterLiveOptions["usagePollInterval"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -181,6 +188,8 @@ function makeHarness(config?: {
           nativeEventLogPath: config.nativeEventLogPath,
         }
       : {}),
+    ...(config?.pollAccountUsage ? { pollAccountUsage: config.pollAccountUsage } : {}),
+    ...(config?.usagePollInterval ? { usagePollInterval: config.usagePollInterval } : {}),
   };
 
   return {
@@ -867,6 +876,56 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("broadcasts account.usage.updated to active sessions on each poll tick", () => {
+    const usageSnapshot = {
+      fiveHour: { utilization: 45, resetsAt: "2026-06-04T19:30:00Z" },
+      sevenDay: { utilization: 24, resetsAt: "2026-06-08T09:00:00Z" },
+      extra: {
+        isEnabled: true,
+        usedCredits: 43540,
+        monthlyLimit: 200000,
+        utilization: 21.77,
+        currency: "CAD",
+      },
+    };
+    const harness = makeHarness({
+      pollAccountUsage: Effect.succeed(usageSnapshot),
+      usagePollInterval: Duration.seconds(60),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const usageFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "account.usage.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-sonnet-4-5",
+        },
+        runtimeMode: "full-access",
+      });
+
+      // Advance past the poll interval so the poller fires for the live session.
+      yield* TestClock.adjust(Duration.seconds(60));
+
+      const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
+      assert.isDefined(usageEvent);
+      assert.equal(usageEvent?.type, "account.usage.updated");
+      assert.equal(usageEvent?.threadId, THREAD_ID);
+      assert.deepStrictEqual(usageEvent?.payload, usageSnapshot);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -1494,7 +1553,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 5).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1536,12 +1595,15 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("emits thread token usage updates from Claude task progress", () => {
+  it.effect("does not drive the context window meter from subagent task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+      // Subagent task `total_tokens` is the subagent's own cumulative usage, not
+      // the main thread's context window occupancy, so it must NOT emit a
+      // thread.token-usage.updated event (doing so previously pinned the meter).
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 5).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1569,21 +1631,8 @@ describe("ClaudeAdapterLive", () => {
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
       const progressEvent = runtimeEvents.find((event) => event.type === "task.progress");
-      assert.equal(usageEvent?.type, "thread.token-usage.updated");
-      if (usageEvent?.type === "thread.token-usage.updated") {
-        assert.deepEqual(usageEvent.payload, {
-          usage: {
-            usedTokens: 321,
-            lastUsedTokens: 321,
-            toolUses: 2,
-            durationMs: 654,
-          },
-        });
-      }
+      assert.equal(usageEvent, undefined);
       assert.equal(progressEvent?.type, "task.progress");
-      if (usageEvent && progressEvent) {
-        assert.notStrictEqual(usageEvent.eventId, progressEvent.eventId);
-      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -1721,7 +1770,7 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect(
-    "preserves oversized Claude result totals after task progress snapshots are recorded",
+    "clamps the result total to the context window even after subagent task progress",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -1787,8 +1836,8 @@ describe("ClaudeAdapterLive", () => {
         if (finalUsageEvent?.type === "thread.token-usage.updated") {
           assert.deepEqual(finalUsageEvent.payload, {
             usage: {
-              usedTokens: 190000,
-              lastUsedTokens: 190000,
+              usedTokens: 200000,
+              lastUsedTokens: 200000,
               totalProcessedTokens: 535000,
               maxTokens: 200000,
             },
@@ -1800,6 +1849,199 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("emits point-in-time context usage from a main-thread assistant message", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      // Collect until the assistant's point-in-time usage event (the last event
+      // we produce) so the test does not depend on an exact upstream count.
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) =>
+          event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 58908,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      // First, a result establishes the known context window (1M).
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "ok",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-assistant-usage",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        modelUsage: { "claude-opus-4-8": { contextWindow: 1000000, maxOutputTokens: 64000 } },
+      } as unknown as SDKMessage);
+
+      // A subsequent main-thread assistant message carries this single request's
+      // usage. Its prompt is ~58k of context (mostly cache reads), which is the
+      // true point-in-time occupancy — far below the cumulative totals a long
+      // multi-tool turn would sum to.
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-assistant-usage",
+        uuid: "assistant-main-1",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-main-1",
+          content: [{ type: "text", text: "Working on it" }],
+          usage: {
+            input_tokens: 1200,
+            cache_creation_input_tokens: 5000,
+            cache_read_input_tokens: 52000,
+            output_tokens: 708,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const fromAssistant = runtimeEvents.find(
+        (event) =>
+          event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 58908,
+      );
+      assert.equal(fromAssistant?.type, "thread.token-usage.updated");
+      if (fromAssistant?.type === "thread.token-usage.updated") {
+        assert.deepEqual(fromAssistant.payload.usage, {
+          usedTokens: 58908,
+          lastUsedTokens: 58908,
+          inputTokens: 58200,
+          outputTokens: 708,
+          maxTokens: 1000000,
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("ignores subagent assistant messages for the context window meter", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-subagent",
+        uuid: "assistant-subagent-1",
+        parent_tool_use_id: "tool-task-1",
+        subagent_type: "code-reviewer",
+        message: {
+          id: "assistant-message-subagent-1",
+          content: [{ type: "text", text: "subagent output" }],
+          usage: {
+            input_tokens: 9999,
+            cache_read_input_tokens: 9999,
+            output_tokens: 9999,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
+      assert.equal(usageEvent, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("resets the context window meter after a compact boundary", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      // Collect until the compacted state-change event (emitted right after the
+      // reset usage event in the compact_boundary handler), so the test does not
+      // depend on an exact upstream event count.
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "thread.state.changed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      // Establish the context window (1M) via a result.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "ok",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-compact",
+        usage: { input_tokens: 900000, output_tokens: 1000 },
+        modelUsage: { "claude-opus-4-8": { contextWindow: 1000000, maxOutputTokens: 64000 } },
+      } as unknown as SDKMessage);
+
+      // The compaction shrinks the context to post_tokens; the meter must reset.
+      harness.query.emit({
+        type: "system",
+        subtype: "compact_boundary",
+        session_id: "sdk-session-compact",
+        uuid: "compact-1",
+        compact_metadata: {
+          trigger: "manual",
+          pre_tokens: 901000,
+          post_tokens: 42000,
+        },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const resetEvent = runtimeEvents.find(
+        (event) =>
+          event.type === "thread.token-usage.updated" && event.payload.usage.usedTokens === 42000,
+      );
+      assert.equal(resetEvent?.type, "thread.token-usage.updated");
+      if (resetEvent?.type === "thread.token-usage.updated") {
+        assert.deepEqual(resetEvent.payload.usage, {
+          usedTokens: 42000,
+          lastUsedTokens: 42000,
+          maxTokens: 1000000,
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect(
     "emits completion only after turn result when assistant frames arrive before deltas",
@@ -3613,5 +3855,30 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+});
+
+describe("thinkingTokensDisplayBucket", () => {
+  it("buckets sub-1000 counts at integer granularity", () => {
+    assert.strictEqual(thinkingTokensDisplayBucket(97), "97");
+    assert.strictEqual(thinkingTokensDisplayBucket(512), "512");
+  });
+
+  it("buckets 1k–10k at one decimal and 10k+ at integer k", () => {
+    assert.strictEqual(thinkingTokensDisplayBucket(1500), "1.5k");
+    assert.strictEqual(thinkingTokensDisplayBucket(2048), "2.0k");
+    assert.strictEqual(thinkingTokensDisplayBucket(12_345), "12k");
+  });
+
+  it("collapses values within the same bucket so emission is throttled", () => {
+    // 12_300 and 12_400 both round to "12k" -> no re-emit between them.
+    assert.strictEqual(thinkingTokensDisplayBucket(12_300), thinkingTokensDisplayBucket(12_400));
+    assert.notStrictEqual(thinkingTokensDisplayBucket(12_300), thinkingTokensDisplayBucket(13_000));
+  });
+
+  it("returns a stable zero bucket for non-positive or non-finite input", () => {
+    assert.strictEqual(thinkingTokensDisplayBucket(0), "0");
+    assert.strictEqual(thinkingTokensDisplayBucket(-5), "0");
+    assert.strictEqual(thinkingTokensDisplayBucket(Number.NaN), "0");
   });
 });

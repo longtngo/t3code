@@ -47,6 +47,7 @@ import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
+  coalesceRepeatedWorkLogEntries,
   computeStableMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
@@ -611,12 +612,16 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }) {
   const { workspaceRoot } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
-  const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-  const visibleEntries =
-    hasOverflow && !isExpanded
-      ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : groupedEntries;
-  const hiddenCount = groupedEntries.length - visibleEntries.length;
+  const coalescedRows = coalesceRepeatedWorkLogEntries(groupedEntries);
+  const hasOverflow = coalescedRows.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
+  const visibleRows =
+    hasOverflow && !isExpanded ? coalescedRows.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : coalescedRows;
+  // Count hidden underlying entries (not rows): a single collapsed row can stand
+  // in for many duplicates, so "Show N more" must reflect entries to match the
+  // total in the header.
+  const hiddenCount = coalescedRows
+    .slice(0, coalescedRows.length - visibleRows.length)
+    .reduce((sum, row) => sum + row.count, 0);
   const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
   const showHeader = hasOverflow || !onlyToolEntries;
   const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
@@ -640,10 +645,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
         </div>
       )}
       <div className="space-y-0.5">
-        {visibleEntries.map((workEntry) => (
+        {visibleRows.map(({ entry, count }) => (
           <SimpleWorkEntryRow
-            key={`work-row:${workEntry.id}`}
-            workEntry={workEntry}
+            key={`work-row:${entry.id}`}
+            workEntry={entry}
+            count={count}
             workspaceRoot={workspaceRoot}
           />
         ))}
@@ -1174,12 +1180,17 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  count?: number;
   workspaceRoot: string | undefined;
 }) {
-  const { workEntry, workspaceRoot } = props;
+  const { workEntry, count = 1, workspaceRoot } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
+  const countBadge =
+    count > 1 ? (
+      <span className="ml-1 shrink-0 tabular-nums text-muted-foreground/55">×{count}</span>
+    ) : null;
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -1188,7 +1199,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const rawCommand = workEntryRawCommand(workEntry);
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const headingWithCount = count > 1 ? `${heading} ×${count}` : heading;
+  const displayText = preview ? `${headingWithCount} - ${preview}` : headingWithCount;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
 
@@ -1214,6 +1226,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                   {heading}
                 </span>
+                {countBadge}
                 {preview && (
                   <Tooltip>
                     <TooltipTrigger
@@ -1256,6 +1269,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                     {heading}
                   </span>
+                  {countBadge}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>

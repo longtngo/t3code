@@ -185,12 +185,15 @@ const ProviderRuntimeEventType = Schema.Literals([
   "auth.status",
   "account.updated",
   "account.rate-limits.updated",
+  "account.usage.updated",
   "mcp.status.updated",
   "mcp.oauth.completed",
   "model.rerouted",
   "config.warning",
   "deprecation.notice",
   "files.persisted",
+  "runtime.notification",
+  "runtime.thinking-tokens",
   "runtime.warning",
   "runtime.error",
 ]);
@@ -235,12 +238,15 @@ const ToolSummaryType = Schema.Literal("tool.summary");
 const AuthStatusType = Schema.Literal("auth.status");
 const AccountUpdatedType = Schema.Literal("account.updated");
 const AccountRateLimitsUpdatedType = Schema.Literal("account.rate-limits.updated");
+const AccountUsageUpdatedType = Schema.Literal("account.usage.updated");
 const McpStatusUpdatedType = Schema.Literal("mcp.status.updated");
 const McpOauthCompletedType = Schema.Literal("mcp.oauth.completed");
 const ModelReroutedType = Schema.Literal("model.rerouted");
 const ConfigWarningType = Schema.Literal("config.warning");
 const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
+const RuntimeNotificationType = Schema.Literal("runtime.notification");
+const RuntimeThinkingTokensType = Schema.Literal("runtime.thinking-tokens");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 
@@ -538,6 +544,31 @@ const AccountRateLimitsUpdatedPayload = Schema.Struct({
 });
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
 
+// Normalized account usage snapshot, sourced from the Anthropic OAuth usage API
+// (GET /api/oauth/usage). `utilization` is a float percent; `resetsAt` is ISO 8601;
+// `usedCredits`/`monthlyLimit` are integer cents.
+const AccountUsageWindow = Schema.Struct({
+  utilization: Schema.Number,
+  resetsAt: Schema.NullOr(IsoDateTime),
+});
+export type AccountUsageWindow = typeof AccountUsageWindow.Type;
+
+const AccountUsageExtra = Schema.Struct({
+  isEnabled: Schema.Boolean,
+  usedCredits: Schema.Number,
+  monthlyLimit: Schema.Number,
+  utilization: Schema.Number,
+  currency: Schema.NullOr(Schema.String),
+});
+export type AccountUsageExtra = typeof AccountUsageExtra.Type;
+
+const AccountUsageUpdatedPayload = Schema.Struct({
+  fiveHour: Schema.NullOr(AccountUsageWindow),
+  sevenDay: Schema.NullOr(AccountUsageWindow),
+  extra: Schema.NullOr(AccountUsageExtra),
+});
+export type AccountUsageUpdatedPayload = typeof AccountUsageUpdatedPayload.Type;
+
 const McpStatusUpdatedPayload = Schema.Struct({
   status: Schema.Unknown,
 });
@@ -588,6 +619,23 @@ const FilesPersistedPayload = Schema.Struct({
   ),
 });
 export type FilesPersistedPayload = typeof FilesPersistedPayload.Type;
+
+const RuntimeNotificationPriority = Schema.Literals(["low", "medium", "high", "immediate"]);
+export type RuntimeNotificationPriority = typeof RuntimeNotificationPriority.Type;
+
+const RuntimeNotificationPayload = Schema.Struct({
+  key: TrimmedNonEmptyStringSchema,
+  text: TrimmedNonEmptyStringSchema,
+  priority: RuntimeNotificationPriority,
+  timeoutMs: Schema.optional(NonNegativeInt),
+});
+export type RuntimeNotificationPayload = typeof RuntimeNotificationPayload.Type;
+
+const RuntimeThinkingTokensPayload = Schema.Struct({
+  estimatedTokens: NonNegativeInt,
+  estimatedTokensDelta: Schema.Int,
+});
+export type RuntimeThinkingTokensPayload = typeof RuntimeThinkingTokensPayload.Type;
 
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
@@ -890,6 +938,14 @@ const ProviderRuntimeAccountRateLimitsUpdatedEvent = Schema.Struct({
 export type ProviderRuntimeAccountRateLimitsUpdatedEvent =
   typeof ProviderRuntimeAccountRateLimitsUpdatedEvent.Type;
 
+const ProviderRuntimeAccountUsageUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: AccountUsageUpdatedType,
+  payload: AccountUsageUpdatedPayload,
+});
+export type ProviderRuntimeAccountUsageUpdatedEvent =
+  typeof ProviderRuntimeAccountUsageUpdatedEvent.Type;
+
 const ProviderRuntimeMcpStatusUpdatedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: McpStatusUpdatedType,
@@ -933,6 +989,20 @@ const ProviderRuntimeFilesPersistedEvent = Schema.Struct({
   payload: FilesPersistedPayload,
 });
 export type ProviderRuntimeFilesPersistedEvent = typeof ProviderRuntimeFilesPersistedEvent.Type;
+
+const ProviderRuntimeNotificationEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: RuntimeNotificationType,
+  payload: RuntimeNotificationPayload,
+});
+export type ProviderRuntimeNotificationEvent = typeof ProviderRuntimeNotificationEvent.Type;
+
+const ProviderRuntimeThinkingTokensEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: RuntimeThinkingTokensType,
+  payload: RuntimeThinkingTokensPayload,
+});
+export type ProviderRuntimeThinkingTokensEvent = typeof ProviderRuntimeThinkingTokensEvent.Type;
 
 const ProviderRuntimeWarningEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -988,12 +1058,15 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeAuthStatusEvent,
   ProviderRuntimeAccountUpdatedEvent,
   ProviderRuntimeAccountRateLimitsUpdatedEvent,
+  ProviderRuntimeAccountUsageUpdatedEvent,
   ProviderRuntimeMcpStatusUpdatedEvent,
   ProviderRuntimeMcpOauthCompletedEvent,
   ProviderRuntimeModelReroutedEvent,
   ProviderRuntimeConfigWarningEvent,
   ProviderRuntimeDeprecationNoticeEvent,
   ProviderRuntimeFilesPersistedEvent,
+  ProviderRuntimeNotificationEvent,
+  ProviderRuntimeThinkingTokensEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
 ]);

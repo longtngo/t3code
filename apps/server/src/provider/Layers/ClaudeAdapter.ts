@@ -21,6 +21,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import {
+  type AccountUsageUpdatedPayload,
   ApprovalRequestId,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -55,15 +56,19 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -85,6 +90,7 @@ import {
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { makeAccountUsagePoll } from "./OAuthUsage.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -125,6 +131,8 @@ interface ClaudeTurnState {
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   nextSyntheticAssistantBlockIndex: number;
+  /** Last emitted thinking-token display bucket; throttles per-delta emission. */
+  lastThinkingTokensBucket?: string;
 }
 
 interface AssistantTextBlockState {
@@ -200,6 +208,14 @@ export interface ClaudeAdapterLiveOptions {
   }) => ClaudeQueryRuntime;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /**
+   * Test seam: overrides the OAuth usage poll. When omitted, a real poll is
+   * built from the ambient HttpClient / ChildProcessSpawner / FileSystem.
+   * Returns `null` to mean "no usage update this tick".
+   */
+  readonly pollAccountUsage?: Effect.Effect<AccountUsageUpdatedPayload | null>;
+  /** Interval between account usage polls. Defaults to 60 seconds. */
+  readonly usagePollInterval?: Duration.Duration;
 }
 
 function isUuid(value: string): boolean {
@@ -208,6 +224,26 @@ function isUuid(value: string): boolean {
 
 function isSyntheticClaudeThreadId(value: string): boolean {
   return value.startsWith("claude-thread-");
+}
+
+/**
+ * Display bucket for a thinking-token count, mirroring the web work-log
+ * formatter (apps/web/src/session-logic.ts `formatThinkingTokensDetail`).
+ *
+ * The SDK streams `thinking_tokens` per thinking-delta frame (many per second).
+ * Emitting a runtime event for each one floods the activity projection, the
+ * websocket, the web store, and a full React re-render — for a value that only
+ * changes visibly when this bucket changes. Gating emission on the bucket keeps
+ * the in-place row accurate while collapsing the per-delta storm to one event
+ * per visible change. Keep the thresholds in sync with the web formatter.
+ */
+export function thinkingTokensDisplayBucket(estimatedTokens: number): string {
+  if (!Number.isFinite(estimatedTokens) || estimatedTokens <= 0) {
+    return "0";
+  }
+  return estimatedTokens >= 1000
+    ? `${(estimatedTokens / 1000).toFixed(estimatedTokens >= 10_000 ? 0 : 1)}k`
+    : `${Math.trunc(estimatedTokens)}`;
 }
 
 function hasDurableClaudeSessionId(message: SDKMessage): boolean {
@@ -1007,6 +1043,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  // Captured optionally so the adapter's hard requirements stay unchanged: the
+  // account usage poller degrades to a no-op when these aren't provided (e.g. tests).
+  const httpClientOption = yield* Effect.serviceOption(HttpClient.HttpClient);
+  const spawnerOption = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner);
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
   );
@@ -1049,6 +1089,60 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+
+  // ---------------------------------------------------------------------------
+  // Account usage broadcast
+  //
+  // The OAuth usage API (5h / 7d limits + extra credit spend) is account-global
+  // and not exposed by the SDK, so a single adapter-lifetime poller fetches it
+  // and broadcasts one `account.usage.updated` event per active session. The
+  // last snapshot is cached so a newly-started session can render immediately.
+  // ---------------------------------------------------------------------------
+  const lastUsageRef = yield* Ref.make<AccountUsageUpdatedPayload | null>(null);
+  const pollAccountUsage =
+    options?.pollAccountUsage ??
+    makeAccountUsagePoll({
+      env: options?.environment ?? process.env,
+      httpClient: httpClientOption,
+      spawner: spawnerOption,
+      fileSystem: Option.some(fileSystem),
+    });
+  const usagePollInterval = options?.usagePollInterval ?? Duration.seconds(60);
+
+  const emitUsageForSession = (
+    context: ClaudeSessionContext,
+    payload: AccountUsageUpdatedPayload,
+  ) =>
+    Effect.gen(function* () {
+      const threadId = context.session.threadId;
+      if (!threadId) return;
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "account.usage.updated",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId,
+        payload,
+      });
+    });
+
+  const refreshAccountUsage = Effect.gen(function* () {
+    const payload = yield* pollAccountUsage;
+    if (payload === null) return;
+    yield* Ref.set(lastUsageRef, payload);
+    for (const context of sessions.values()) {
+      yield* emitUsageForSession(context, payload);
+    }
+  });
+
+  // Poll first (fills the cache promptly), then wait between ticks.
+  yield* Effect.forever(
+    Effect.gen(function* () {
+      yield* refreshAccountUsage;
+      yield* Effect.sleep(usagePollInterval);
+    }).pipe(Effect.ignoreCause({ log: true })),
+  ).pipe(Effect.forkScoped);
 
   const logNativeSdkMessage = Effect.fn("logNativeSdkMessage")(function* (
     context: ClaudeSessionContext,
@@ -1365,28 +1459,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         message,
         class: "provider_error",
         ...(cause !== undefined ? { detail: cause } : {}),
-      },
-      providerRefs: nativeProviderRefs(context),
-    });
-  });
-
-  const emitRuntimeWarning = Effect.fn("emitRuntimeWarning")(function* (
-    context: ClaudeSessionContext,
-    message: string,
-    detail?: unknown,
-  ) {
-    const turnState = context.turnState;
-    const stamp = yield* makeEventStamp();
-    yield* offerRuntimeEvent({
-      type: "runtime.warning",
-      eventId: stamp.eventId,
-      provider: PROVIDER,
-      createdAt: stamp.createdAt,
-      threadId: context.session.threadId,
-      ...(turnState ? { turnId: asCanonicalTurnId(turnState.turnId) } : {}),
-      payload: {
-        message,
-        ...(detail !== undefined ? { detail } : {}),
       },
       providerRefs: nativeProviderRefs(context),
     });
@@ -2057,6 +2129,38 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* backfillAssistantTextBlocksFromSnapshot(context, message);
     }
 
+    // Update the live context-window snapshot from this assistant message's
+    // per-request usage. This is a point-in-time measurement of what is
+    // currently in the context window (the prompt sent for this single API
+    // request plus its output), unlike `result.usage`, which *sums* usage
+    // across every API request in a turn and therefore massively overcounts a
+    // multi-tool turn (each round-trip re-sends the whole context). Reading it
+    // here keeps the meter accurate and lets it drop naturally after a
+    // compaction. Subagent messages carry their own, separate context, so they
+    // must not drive the main thread's meter.
+    if (message.parent_tool_use_id == null && message.subagent_type == null) {
+      const usageSnapshot = normalizeClaudeTokenUsage(
+        (message.message as { usage?: unknown }).usage,
+        context.lastKnownContextWindow,
+      );
+      if (usageSnapshot) {
+        context.lastKnownTokenUsage = usageSnapshot;
+        const usageStamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: usageStamp.eventId,
+          provider: PROVIDER,
+          createdAt: usageStamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+          payload: {
+            usage: usageSnapshot,
+          },
+          providerRefs: {},
+        });
+      }
+    }
+
     context.lastAssistantUuid = message.uuid;
     yield* updateResumeCursor(context);
   });
@@ -2124,7 +2228,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "compact_boundary":
+      case "compact_boundary": {
+        // After a compaction the context window shrinks to `post_tokens`.
+        // Emit an authoritative point-in-time usage snapshot so the meter
+        // resets immediately instead of waiting for the next assistant message.
+        const postTokens = message.compact_metadata?.post_tokens;
+        if (typeof postTokens === "number" && Number.isFinite(postTokens) && postTokens >= 0) {
+          const maxTokens = context.lastKnownContextWindow;
+          const compactedUsage: ThreadTokenUsageSnapshot = {
+            usedTokens: postTokens,
+            lastUsedTokens: postTokens,
+            ...(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+              ? { maxTokens }
+              : {}),
+          };
+          context.lastKnownTokenUsage = compactedUsage;
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "thread.token-usage.updated",
+            payload: {
+              usage: compactedUsage,
+            },
+          });
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "thread.state.changed",
@@ -2134,6 +2260,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      }
       case "hook_started":
         yield* offerRuntimeEvent({
           ...base,
@@ -2183,25 +2310,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         return;
       case "task_progress":
-        if (message.usage) {
-          const normalizedUsage = normalizeClaudeTokenUsage(
-            message.usage,
-            context.lastKnownContextWindow,
-          );
-          if (normalizedUsage) {
-            context.lastKnownTokenUsage = normalizedUsage;
-            const usageStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              ...base,
-              eventId: usageStamp.eventId,
-              createdAt: usageStamp.createdAt,
-              type: "thread.token-usage.updated",
-              payload: {
-                usage: normalizedUsage,
-              },
-            });
-          }
-        }
+        // NOTE: `message.usage.total_tokens` here is the *subagent task's*
+        // cumulative token total, not the main thread's context window usage.
+        // It must not drive the context-window meter (doing so previously pinned
+        // the meter to bogus subagent totals). The raw usage is still forwarded
+        // on the task.progress event below for any task-level UI.
         yield* offerRuntimeEvent({
           ...base,
           type: "task.progress",
@@ -2215,25 +2328,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         return;
       case "task_notification":
-        if (message.usage) {
-          const normalizedUsage = normalizeClaudeTokenUsage(
-            message.usage,
-            context.lastKnownContextWindow,
-          );
-          if (normalizedUsage) {
-            context.lastKnownTokenUsage = normalizedUsage;
-            const usageStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              ...base,
-              eventId: usageStamp.eventId,
-              createdAt: usageStamp.createdAt,
-              type: "thread.token-usage.updated",
-              payload: {
-                usage: normalizedUsage,
-              },
-            });
-          }
-        }
+        // See task_progress above: subagent task totals are not main-thread
+        // context usage and must not drive the context-window meter.
         yield* offerRuntimeEvent({
           ...base,
           type: "task.completed",
@@ -2267,12 +2363,46 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      case "notification":
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "runtime.notification",
+          payload: {
+            key: message.key,
+            text: message.text,
+            priority: message.priority,
+            ...(typeof message.timeout_ms === "number" ? { timeoutMs: message.timeout_ms } : {}),
+          },
+        });
+        return;
+      case "thinking_tokens": {
+        // Throttle: only emit when the displayed bucket changes, so a burst of
+        // per-delta updates doesn't flood the projection/UI every frame.
+        const bucket = thinkingTokensDisplayBucket(message.estimated_tokens);
+        if (context.turnState?.lastThinkingTokensBucket === bucket) {
+          return;
+        }
+        if (context.turnState) {
+          context.turnState.lastThinkingTokensBucket = bucket;
+        }
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "runtime.thinking-tokens",
+          payload: {
+            estimatedTokens: message.estimated_tokens,
+            estimatedTokensDelta: message.estimated_tokens_delta,
+          },
+        });
+        return;
+      }
       default:
-        yield* emitRuntimeWarning(
-          context,
-          `Unhandled Claude system message subtype '${message.subtype}'.`,
-          message,
-        );
+        // Benign SDK lifecycle/telemetry subtypes this adapter doesn't model
+        // (session_state_changed, api_retry, memory_recall, etc.). The full
+        // message is already captured by logNativeSdkMessage above, so drop it
+        // here instead of surfacing a user-facing "Runtime warning".
+        yield* Effect.logDebug("Unhandled Claude system message subtype", {
+          subtype: message.subtype,
+        });
         return;
     }
   });
@@ -2382,11 +2512,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         yield* handleSdkTelemetryMessage(context, message);
         return;
       default:
-        yield* emitRuntimeWarning(
-          context,
-          `Unhandled Claude SDK message type '${message.type}'.`,
-          message,
-        );
+        // Unmodeled top-level SDK message type (e.g. prompt_suggestion).
+        // Already logged by logNativeSdkMessage; drop rather than emit a
+        // user-facing runtime warning on every turn.
+        yield* Effect.logDebug("Unhandled Claude SDK message type", {
+          messageType: message.type,
+        });
         return;
     }
   });
@@ -3036,6 +3167,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       };
       yield* Ref.set(contextRef, context);
       sessions.set(threadId, context);
+
+      // Surface the last known account usage immediately so the new session's
+      // UI renders without waiting for the next poll tick.
+      const cachedUsage = yield* Ref.get(lastUsageRef);
+      if (cachedUsage !== null) {
+        yield* emitUsageForSession(context, cachedUsage);
+      }
 
       const sessionStartedStamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({

@@ -530,6 +530,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       ? payload.detail
       : null;
   const taskLabel = taskSummary || taskDetailAsLabel;
+  // runtime.warning / runtime.error carry the human-readable cause in
+  // payload.message (payload.detail is a structured object that extractToolDetail
+  // can't read), so surface it as the row preview instead of dropping it.
+  const isRuntimeDiagnostic =
+    activity.kind === "runtime.warning" || activity.kind === "runtime.error";
+  const runtimeMessage = isRuntimeDiagnostic ? asTrimmedString(payload?.message) : null;
+  const thinkingTokensDetail =
+    activity.kind === "thinking.tokens" ? formatThinkingTokensDetail(payload) : null;
   const detail = isTaskActivity
     ? !taskDetailAsLabel &&
       payload &&
@@ -537,14 +545,16 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload.detail.length > 0
       ? stripTrailingExitCode(payload.detail).output
       : null
-    : extractToolDetail(payload, title ?? activity.summary);
+    : (thinkingTokensDetail ??
+      runtimeMessage ??
+      extractToolDetail(payload, title ?? activity.summary));
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
     label: taskLabel || activity.summary,
     tone:
-      activity.kind === "task.progress"
+      activity.kind === "task.progress" || activity.kind === "thinking.tokens"
         ? "thinking"
         : activity.tone === "approval"
           ? "info"
@@ -705,6 +715,20 @@ function asTrimmedString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// NOTE: the server throttles runtime.thinking-tokens emission on these same
+// thresholds (apps/server/src/provider/Layers/ClaudeAdapter.ts
+// `thinkingTokensDisplayBucket`). Keep the 1k / 10k granularity in sync, or the
+// server may suppress an update this formatter would render differently.
+function formatThinkingTokensDetail(payload: Record<string, unknown> | null): string | null {
+  const tokens = asNumber(payload?.estimatedTokens);
+  if (tokens === null || tokens <= 0) {
+    return null;
+  }
+  const compact =
+    tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10_000 ? 0 : 1)}k` : `${tokens}`;
+  return `~${compact} tokens`;
 }
 
 function asNumber(value: unknown): number | null {
