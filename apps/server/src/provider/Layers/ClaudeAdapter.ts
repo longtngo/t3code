@@ -2400,6 +2400,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             taskId: RuntimeTaskId.make(message.task_id),
             status: message.status,
             ...(message.summary ? { summary: message.summary } : {}),
+            ...(message.output_file ? { outputFile: message.output_file } : {}),
             ...(message.usage ? { usage: message.usage } : {}),
           },
         });

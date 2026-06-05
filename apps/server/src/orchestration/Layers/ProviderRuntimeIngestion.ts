@@ -16,6 +16,7 @@ import {
   type OrchestrationProposedPlan,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
@@ -527,6 +528,7 @@ function runtimeEventToActivities(
             taskId: event.payload.taskId,
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+            ...(event.payload.outputFile ? { outputFile: event.payload.outputFile } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1250,6 +1252,74 @@ const make = Effect.gen(function* () {
     },
   );
 
+  // Background tasks (e.g. backgrounded shell commands the agent uses as a
+  // "check back later" timer) settle outside any active turn. Without a wake
+  // here the completion only ever becomes a passive activity record and the
+  // agent is never re-invoked. Dispatch a turn start with a synthetic user
+  // message so the agent resumes with the task outcome in context. Turn-scoped
+  // task completions (eventTurnId set, e.g. plan subtasks) and explicitly
+  // stopped tasks never wake the thread, and a thread that is busy, waiting on
+  // the user, or archived is left untouched.
+  const maybeWakeThreadForCompletedTask = Effect.fn("maybeWakeThreadForCompletedTask")(
+    function* (input: {
+      event: Extract<ProviderRuntimeEvent, { type: "task.completed" }>;
+      thread: OrchestrationThreadShell;
+      eventTurnId: TurnId | undefined;
+      activeTurnId: TurnId | string | null;
+      createdAt: string;
+    }) {
+      const { event, thread } = input;
+      const shouldWakeThread =
+        input.eventTurnId === undefined &&
+        event.payload.status !== "stopped" &&
+        thread.archivedAt === null &&
+        thread.session?.status === "ready" &&
+        input.activeTurnId === null &&
+        !thread.hasPendingApprovals &&
+        !thread.hasPendingUserInput;
+      if (!shouldWakeThread) {
+        return;
+      }
+
+      const statusLabel = event.payload.status === "failed" ? "failed" : "completed";
+      const wakeText = [
+        `Background task ${event.payload.taskId} ${statusLabel}.`,
+        ...(event.payload.summary ? [`Summary: ${event.payload.summary}`] : []),
+        ...(event.payload.outputFile ? [`Output file: ${event.payload.outputFile}`] : []),
+        "Continue the work that was waiting on this task.",
+      ].join("\n");
+
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.turn.start",
+          commandId: yield* providerCommandId(event, "task-completed-wakeup"),
+          threadId: thread.id,
+          message: {
+            messageId: MessageId.make(`user:task-wakeup:${event.eventId}`),
+            role: "user",
+            text: wakeText,
+            attachments: [],
+          },
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: input.createdAt,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "provider runtime ingestion failed to wake thread for completed task",
+              {
+                eventId: event.eventId,
+                threadId: thread.id,
+                taskId: event.payload.taskId,
+                cause: Cause.pretty(cause),
+              },
+            ),
+          ),
+        );
+    },
+  );
+
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(event.threadId);
@@ -1699,6 +1769,16 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (event.type === "task.completed") {
+        yield* maybeWakeThreadForCompletedTask({
+          event,
+          thread,
+          eventTurnId,
+          activeTurnId,
+          createdAt: now,
+        });
+      }
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;

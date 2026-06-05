@@ -3014,6 +3014,175 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe("# Plan title");
   });
 
+  it("wakes an idle thread when a background task settles outside a turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-timer-1",
+        status: "completed",
+        summary: "Timer elapsed after 3 minutes",
+        outputFile: "/tmp/task-output.txt",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "user:task-wakeup:evt-bg-task-completed",
+      ),
+    );
+
+    const wakeMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "user:task-wakeup:evt-bg-task-completed",
+    );
+    expect(wakeMessage?.role).toBe("user");
+    expect(wakeMessage?.text).toContain("Background task bash-timer-1 completed.");
+    expect(wakeMessage?.text).toContain("Timer elapsed after 3 minutes");
+    expect(wakeMessage?.text).toContain("/tmp/task-output.txt");
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "task.completed",
+      ),
+    ).toBe(true);
+  });
+
+  it("wakes an idle thread when a background task fails outside a turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-build-1",
+        status: "failed",
+        summary: "Build exited with code 1",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "user:task-wakeup:evt-bg-task-failed",
+      ),
+    );
+
+    const wakeMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.id === "user:task-wakeup:evt-bg-task-failed",
+    );
+    expect(wakeMessage?.text).toContain("Background task bash-build-1 failed.");
+    expect(wakeMessage?.text).toContain("Build exited with code 1");
+  });
+
+  it("does not wake a thread for turn-scoped or stopped task completions", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-task-completed-turn-scoped"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-task-scoped"),
+      payload: {
+        taskId: "turn-task-scoped",
+        status: "completed",
+        summary: "Subtask finished",
+      },
+    });
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-task-completed-stopped"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-stopped-1",
+        status: "stopped",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.activities.filter(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "task.completed",
+        ).length === 2,
+    );
+    await harness.drain();
+
+    expect(
+      thread.messages.filter((message: ProviderRuntimeTestMessage) => message.role === "user"),
+    ).toHaveLength(0);
+    const finalReadModel = await harness.readModel();
+    const finalThread = finalReadModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(
+      finalThread?.messages.filter(
+        (message: ProviderRuntimeTestMessage) => message.role === "user",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not wake a thread with an active turn when a background task settles", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-busy-wake"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-busy-wake"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "running" && entry.session?.activeTurnId === "turn-busy-wake",
+    );
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-completed-busy"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-busy-1",
+        status: "completed",
+        summary: "Settled while the turn was running",
+      },
+    });
+
+    await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-bg-task-completed-busy",
+      ),
+    );
+    await harness.drain();
+
+    const finalReadModel = await harness.readModel();
+    const finalThread = finalReadModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(
+      finalThread?.messages.filter(
+        (message: ProviderRuntimeTestMessage) => message.role === "user",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("projects structured user input request and resolution as thread activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
