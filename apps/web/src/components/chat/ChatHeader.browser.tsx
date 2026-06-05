@@ -53,7 +53,9 @@ async function expectTooltipText(text: string) {
 describe("ChatHeader", () => {
   it("shows the terminal-unavailable tooltip on hover while the toggle is disabled", async () => {
     await renderHeader();
-    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Toggle terminal drawer"]');
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Toggle terminal drawer"]',
+    );
     expect(toggle).not.toBeNull();
     expect(toggle?.disabled).toBe(true);
     await userEvent.hover(toggle!, { force: true });
@@ -66,12 +68,16 @@ describe("ChatHeader", () => {
     expect(toggle).not.toBeNull();
     expect(toggle?.disabled).toBe(true);
     await userEvent.hover(toggle!, { force: true });
-    await expectTooltipText("Diff panel is unavailable because this project is not a git repository.");
+    await expectTooltipText(
+      "Diff panel is unavailable because this project is not a git repository.",
+    );
   });
 
   it("shows the shortcut tooltip on hover while the terminal toggle is enabled", async () => {
     await renderHeader({ terminalAvailable: true, terminalToggleShortcutLabel: "⌘J" });
-    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Toggle terminal drawer"]');
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Toggle terminal drawer"]',
+    );
     expect(toggle?.disabled).toBe(false);
     await userEvent.hover(toggle!);
     await expectTooltipText("Toggle terminal drawer (⌘J)");

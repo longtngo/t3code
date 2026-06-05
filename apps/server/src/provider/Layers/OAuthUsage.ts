@@ -100,10 +100,17 @@ export const normalizeUsage = (raw: RawUsageResponse): AccountUsageUpdatedPayloa
 // OAuth token resolution (env → macOS Keychain → credentials file)
 // ---------------------------------------------------------------------------
 
-const claudeConfigDir = (env: NodeJS.ProcessEnv): string =>
-  env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0
-    ? env.CLAUDE_CONFIG_DIR
-    : `${homedir()}/.claude`;
+// The credentials-file fallback must follow the *instance's* home (the env the
+// spawned CLI sees), not the server process's: makeClaudeEnvironment overlays
+// HOME onto a copied env object that never reaches process.env, so homedir()
+// cannot see it — only an explicit env.HOME read can.
+const claudeConfigDir = (env: NodeJS.ProcessEnv): string => {
+  if (env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0) {
+    return env.CLAUDE_CONFIG_DIR;
+  }
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  return `${home}/.claude`;
+};
 
 const keychainServiceName = (env: NodeJS.ProcessEnv): string => {
   if (env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0) {

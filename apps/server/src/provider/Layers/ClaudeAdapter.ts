@@ -1275,7 +1275,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const pollAccountUsage =
     options?.pollAccountUsage ??
     makeAccountUsagePoll({
-      env: options?.environment ?? process.env,
+      // The per-instance environment (HOME / CLAUDE_CONFIG_DIR overlays), not
+      // the base env: credential resolution must target this instance's
+      // account, exactly like the spawned sessions below.
+      env: claudeEnvironment,
       httpClient: httpClientOption,
       spawner: spawnerOption,
       fileSystem: Option.some(fileSystem),
