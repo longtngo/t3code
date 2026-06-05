@@ -118,7 +118,7 @@ import {
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
-import { resolveAppModelSelectionForInstance } from "../modelSelection";
+import { resolveAppModelSelectionForInstance, resolveAppModelSelectionState } from "../modelSelection";
 import { rememberAccountModel } from "../accountModelMemory";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -946,20 +946,46 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" && serverThread
       ? null
       : ((draftId ? localDraftErrorsByDraftId[draftId] : null) ?? null);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryServerConfig = useServerConfig();
+  // Remote-environment drafts must resolve against their own environment's
+  // provider list — an instance enabled on the primary env may be absent or
+  // disabled remotely.
+  const draftEnvServerConfig = useSavedEnvironmentRuntimeStore((s) =>
+    draftThread && primaryEnvironmentId !== null && draftThread.environmentId !== primaryEnvironmentId
+      ? (s.byId[draftThread.environmentId]?.serverConfig ?? null)
+      : null,
+  );
+  // Drafts without a per-project default fall back to the app-level model
+  // selection (settings.textGenerationModelSelection) resolved against the
+  // live provider list, so a fresh project never seeds a draft with a
+  // disabled instance (the old hardcoded "codex" fallback did exactly that
+  // on cold homes where Codex is disabled).
+  const draftFallbackModelSelection = useMemo(
+    () =>
+      resolveAppModelSelectionState(
+        settings,
+        (draftEnvServerConfig ?? primaryServerConfig)?.providers ?? [],
+      ),
+    [draftEnvServerConfig, primaryServerConfig, settings],
+  );
   const localDraftThread = useMemo(
     () =>
       draftThread
         ? buildLocalDraftThread(
             threadId,
             draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? {
-              instanceId: ProviderInstanceId.make("codex"),
-              model: DEFAULT_MODEL,
-            },
+            fallbackDraftProject?.defaultModelSelection ?? draftFallbackModelSelection,
             localDraftError,
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
+    [
+      draftFallbackModelSelection,
+      draftThread,
+      fallbackDraftProject?.defaultModelSelection,
+      localDraftError,
+      threadId,
+    ],
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
@@ -1075,7 +1101,6 @@ export default function ChatView(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentRegistry = useSavedEnvironmentRegistryStore((s) => s.byId);
   const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((s) => s.byId);
   const activeSavedEnvironmentRecord =
@@ -1336,7 +1361,6 @@ export default function ChatView(props: ChatViewProps) {
     selectedProvider: selectedProviderByThreadId,
     threadProvider,
   });
-  const primaryServerConfig = useServerConfig();
   const activeEnvRuntimeState = useSavedEnvironmentRuntimeStore((s) =>
     activeThread?.environmentId ? s.byId[activeThread.environmentId] : null,
   );
