@@ -57,6 +57,17 @@ const codex = makeEntry({ id: "codex", driverKind: codexKind, displayName: "Code
 
 const switcher = () => document.querySelector('[data-chat-account-switcher="true"]');
 
+async function expectTooltipText(text: string) {
+  await vi.waitFor(
+    () => {
+      const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
+      expect(tooltip).not.toBeNull();
+      expect(tooltip?.textContent).toContain(text);
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+}
+
 describe("AccountSwitcher", () => {
   afterEach(() => {
     localStorage.clear();
@@ -122,7 +133,7 @@ describe("AccountSwitcher", () => {
     expect(switcher()).toBeNull();
   });
 
-  it("shows the active account email on the trigger with two Claude accounts", async () => {
+  it("shows the active account display name on the trigger with two Claude accounts", async () => {
     await render(
       <AccountSwitcher
         instanceEntries={[work, personal]}
@@ -132,7 +143,49 @@ describe("AccountSwitcher", () => {
     );
     const el = switcher();
     expect(el).not.toBeNull();
-    expect(el?.textContent).toContain("work@uni.com");
+    expect(el?.textContent).toContain("Work");
+    expect(el?.textContent).not.toContain("work@uni.com");
+  });
+
+  it("renders a disabled trigger that cannot open the menu when disabled", async () => {
+    await render(
+      <AccountSwitcher
+        instanceEntries={[work, personal]}
+        activeInstanceId={work.instanceId}
+        disabled
+        onSelectAccount={vi.fn()}
+      />,
+    );
+    const el = switcher();
+    expect(el).not.toBeNull();
+    expect(el).toHaveProperty("disabled", true);
+    await userEvent.click(el!, { force: true });
+    expect(page.getByRole("menuitem").all()).toHaveLength(0);
+  });
+
+  it("shows the switch tooltip on hover while enabled", async () => {
+    await render(
+      <AccountSwitcher
+        instanceEntries={[work, personal]}
+        activeInstanceId={work.instanceId}
+        onSelectAccount={vi.fn()}
+      />,
+    );
+    await userEvent.hover(switcher()!);
+    await expectTooltipText("Switch Claude account");
+  });
+
+  it("shows the locked tooltip on hover while disabled", async () => {
+    await render(
+      <AccountSwitcher
+        instanceEntries={[work, personal]}
+        activeInstanceId={work.instanceId}
+        disabled
+        onSelectAccount={vi.fn()}
+      />,
+    );
+    await userEvent.hover(switcher()!, { force: true });
+    await expectTooltipText("Account is locked for this thread");
   });
 
   it("collapses same-login instances to one menu row", async () => {

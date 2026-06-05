@@ -37,7 +37,7 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
 } from "../../composer-logic";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import { deriveComposerSendState, readFileAsDataUrl, threadHasStarted } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -2347,6 +2347,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )}
             >
               <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <AccountSwitcher
+                  compact={isComposerFooterCompact}
+                  activeInstanceId={selectedInstanceId}
+                  instanceEntries={providerInstanceEntries}
+                  disabled={threadHasStarted(activeThread)}
+                  onSelectAccount={onProviderModelSelect}
+                />
+
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}
                   activeInstanceId={selectedInstanceId}
@@ -2367,14 +2375,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     setIsComposerModelPickerOpen(open);
                   }}
                   onInstanceModelChange={onProviderModelSelect}
-                />
-
-                <AccountSwitcher
-                  compact={isComposerFooterCompact}
-                  activeInstanceId={selectedInstanceId}
-                  instanceEntries={providerInstanceEntries}
-                  disabled={lockedProvider !== null}
-                  onSelectAccount={onProviderModelSelect}
                 />
 
                 {isComposerFooterCompact ? (

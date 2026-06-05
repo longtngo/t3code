@@ -28,7 +28,8 @@ function statusDotClassName(entry: ProviderInstanceEntry): string | undefined {
  *
  * Each Claude instance points at its own config dir / Keychain credential, so
  * two instances are two independent logins. This flips the composer's active
- * selection between them and surfaces each account's email + tier so it's
+ * selection between them; the trigger shows the active instance's display
+ * name, and the menu rows surface each account's email + tier so it's
  * obvious which is live. `onSelectAccount` is the composer's model-select
  * handler; switching restores that account's last-used model (via
  * accountModelMemory), falling back to the instance default for "".
@@ -94,39 +95,41 @@ export const AccountSwitcher = memo(function AccountSwitcher(props: {
       }}
     >
       <Tooltip>
+        {/* The tooltip lives on a wrapper span, not the button: a native
+            disabled button doesn't dispatch the pointer/hover events the
+            tooltip listens for, so a tooltip on the button itself would never
+            open in exactly the locked state it has to explain. */}
         <TooltipTrigger
-          render={
-            <MenuTrigger
-              render={
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-chat-account-switcher="true"
-                  disabled={props.disabled}
-                  className={cn(
-                    "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
-                    props.compact ? "max-w-36 shrink-0" : "max-w-44 shrink sm:max-w-52 sm:px-3",
-                  )}
-                />
-              }
-            >
-              <span className="flex min-w-0 items-center gap-2 overflow-hidden">
-                <ProviderInstanceIcon
-                  driverKind={activeAccount.driverKind}
-                  displayName={activeAccount.displayName}
-                  accentColor={activeAccount.accentColor}
-                  className="size-4"
-                  iconClassName="size-4"
-                  {...(activeDot ? { statusDotClassName: activeDot } : {})}
-                />
-                <span className="min-w-0 truncate">
-                  {activeAccount.snapshot.auth.email ?? activeAccount.displayName}
-                </span>
-                <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-              </span>
-            </MenuTrigger>
-          }
-        />
+          render={<span className={cn("flex min-w-0", props.compact ? "shrink-0" : "shrink")} />}
+        >
+          <MenuTrigger
+            render={
+              <Button
+                size="sm"
+                variant="ghost"
+                data-chat-account-switcher="true"
+                disabled={props.disabled}
+                className={cn(
+                  "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
+                  props.compact ? "max-w-36 shrink-0" : "max-w-44 shrink sm:px-3",
+                )}
+              />
+            }
+          >
+            <span className="flex min-w-0 items-center gap-2 overflow-hidden">
+              <ProviderInstanceIcon
+                driverKind={activeAccount.driverKind}
+                displayName={activeAccount.displayName}
+                accentColor={activeAccount.accentColor}
+                className="size-4"
+                iconClassName="size-4"
+                {...(activeDot ? { statusDotClassName: activeDot } : {})}
+              />
+              <span className="min-w-0 truncate">{activeAccount.displayName}</span>
+              <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+            </span>
+          </MenuTrigger>
+        </TooltipTrigger>
         <TooltipPopup side="top">
           {props.disabled ? "Account is locked for this thread" : "Switch Claude account"}
         </TooltipPopup>
