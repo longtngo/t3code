@@ -6,6 +6,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThreadShell,
   type ServerConfig,
   EnvironmentAuthInvalidError,
   ThreadId,
@@ -91,6 +92,7 @@ import {
 
 const decodeIssuedBearerScopes = Schema.decodeUnknownSync(Schema.Array(AuthEnvironmentScope));
 import { getClientSettings } from "~/hooks/useSettings";
+import { classifyThreadCompletion, notifyThreadCompletions } from "~/lib/notifier";
 import { subscribeTerminalMetadata, terminalSessionManager } from "../../terminalSessionState";
 import { resetWsReconnectBackoff } from "~/rpc/wsConnectionState";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
@@ -1107,6 +1109,37 @@ export function applyEnvironmentThreadDetailEvent(
   applyRecoveredEventBatch([event], environmentId);
 }
 
+/**
+ * Raise a thread-completion notification when the shell stream reports a
+ * thread's latest turn transitioning running -> terminal. The shell stream is
+ * the authoritative per-thread state for ALL threads (not just the actively
+ * viewed one), so this is the path that surfaces completions for background
+ * threads. Snapshot rehydration (syncServerShellSnapshot) is deliberately NOT
+ * hooked — that is reconnect hydration of already-finished threads, and
+ * classifyThreadCompletion only fires on a genuine running -> terminal edge.
+ */
+function notifyThreadCompletionFromShellEvent(
+  environmentId: EnvironmentId,
+  previousThread: ReturnType<typeof selectThreadByRef>,
+  nextThread: OrchestrationThreadShell,
+) {
+  const completion = classifyThreadCompletion({
+    threadId: nextThread.id,
+    previousState: previousThread?.latestTurn?.state ?? null,
+    nextTurnId: nextThread.latestTurn?.turnId ?? null,
+    nextState: nextThread.latestTurn?.state ?? null,
+    title: nextThread.title,
+  });
+  if (!completion) {
+    return;
+  }
+  notifyThreadCompletions({
+    environmentId,
+    completions: [completion],
+    enabled: getClientSettings().notifyOnThreadCompletion,
+  });
+}
+
 function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: EnvironmentId) {
   if (
     !shouldApplyProjectionEvent({
@@ -1136,6 +1169,7 @@ function applyShellEvent(event: OrchestrationShellStreamEvent, environmentId: En
       return;
     case "thread-upserted":
       syncThreadUiFromStore();
+      notifyThreadCompletionFromShellEvent(environmentId, previousThread, event.thread);
       if (!previousThread && threadRef) {
         markPromotedDraftThreadByRef(threadRef);
       }

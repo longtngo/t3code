@@ -247,6 +247,8 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
     }),
     onCloudAuthCallback: () => () => undefined,
     onMenuAction: () => () => undefined,
+    showNotification: () => Promise.resolve(undefined),
+    onNotificationActivated: () => () => undefined,
     getUpdateState: async () => {
       throw new Error("getUpdateState not implemented in test");
     },
@@ -648,6 +650,7 @@ describe("wsApi", () => {
       diffIgnoreWhitespace: true,
       diffWordWrap: true,
       favorites: [],
+      notifyOnThreadCompletion: false,
       providerModelPreferences: {},
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {
@@ -711,6 +714,7 @@ describe("wsApi", () => {
       diffIgnoreWhitespace: true,
       diffWordWrap: true,
       favorites: [],
+      notifyOnThreadCompletion: false,
       providerModelPreferences: {},
       sidebarProjectGroupingMode: "repository_path" as const,
       sidebarProjectGroupingOverrides: {

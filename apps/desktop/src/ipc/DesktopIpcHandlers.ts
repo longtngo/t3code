@@ -39,6 +39,7 @@ import {
   installUpdate,
   setUpdateChannel,
 } from "./methods/updates.ts";
+import { showNotification } from "./methods/notifications.ts";
 import {
   confirm,
   getAppBranding,
@@ -82,6 +83,7 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(setTheme);
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
+  yield* ipc.handle(showNotification);
   yield* ipc.handle(createCloudAuthRequest);
   yield* ipc.handle(getCloudAuthToken);
   yield* ipc.handle(setCloudAuthToken);

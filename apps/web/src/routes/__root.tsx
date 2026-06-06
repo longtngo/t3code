@@ -47,6 +47,7 @@ import {
 import { useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
+import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
 import {
   ensureEnvironmentConnectionBootstrapped,
   getPrimaryEnvironmentConnection,
@@ -113,6 +114,8 @@ function RootRouteView() {
       window.cancelAnimationFrame(frame);
     };
   }, [pathname]);
+
+  useThreadCompletionNotifications();
 
   if (pathname === "/pair") {
     return <Outlet />;

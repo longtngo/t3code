@@ -32,6 +32,7 @@ import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { ensureWebNotificationPermission } from "../../lib/notifier";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopUpdateStateQueryData,
@@ -483,6 +484,21 @@ export function GeneralSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+
+  // Enabling requires a gesture-bound OS permission prompt; only persist the
+  // preference once permission is granted so the toggle reflects reality.
+  const handleNotifyOnThreadCompletionChange = useCallback(
+    async (checked: boolean) => {
+      if (!checked) {
+        updateSettings({ notifyOnThreadCompletion: false });
+        return;
+      }
+      const permission = await ensureWebNotificationPermission();
+      updateSettings({ notifyOnThreadCompletion: permission === "granted" });
+    },
+    [updateSettings],
+  );
+
   const observability = useServerObservability();
   const serverProviders = useServerProviders();
   const diagnosticsDescription = formatDiagnosticsDescription({
@@ -693,6 +709,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ autoOpenPlanSidebar: Boolean(checked) })
               }
               aria-label="Open the task panel automatically"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Task completion notifications"
+          description="Show a system notification when a task finishes and you're not viewing it."
+          resetAction={
+            settings.notifyOnThreadCompletion !==
+            DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion ? (
+              <SettingResetButton
+                label="task completion notifications"
+                onClick={() =>
+                  updateSettings({
+                    notifyOnThreadCompletion: DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.notifyOnThreadCompletion}
+              onCheckedChange={(checked) => {
+                void handleNotifyOnThreadCompletionChange(Boolean(checked));
+              }}
+              aria-label="Notify when a task finishes"
             />
           }
         />

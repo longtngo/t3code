@@ -64,6 +64,11 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  // Raise an OS notification when a thread's turn finishes while the user is
+  // not actively viewing it. Defaults off because enabling it requires a
+  // gesture-bound OS permission prompt (browsers block silent permission
+  // requests); the settings toggle is what requests permission.
+  notifyOnThreadCompletion: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   providerModelPreferences: Schema.Record(
     ProviderInstanceId,
     Schema.Struct({
@@ -501,6 +506,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  notifyOnThreadCompletion: Schema.optionalKey(Schema.Boolean),
   providerModelPreferences: Schema.optionalKey(
     Schema.Record(
       ProviderInstanceId,

@@ -65,7 +65,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
@@ -394,6 +394,21 @@ export const DesktopCloudAuthFetchResultSchema = Schema.Struct({
 });
 export type DesktopCloudAuthFetchResult = typeof DesktopCloudAuthFetchResultSchema.Type;
 
+/** Structured reference to the thread a desktop notification points at. */
+export const DesktopNotificationThreadRefSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type DesktopNotificationThreadRef = typeof DesktopNotificationThreadRefSchema.Type;
+
+/** Payload for raising a native OS notification from the renderer. */
+export const DesktopNotificationInputSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.String,
+  threadRef: DesktopNotificationThreadRefSchema,
+});
+export type DesktopNotificationInput = typeof DesktopNotificationInputSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -446,6 +461,10 @@ export interface DesktopBridge {
   fetchCloudAuth: (input: DesktopCloudAuthFetchInput) => Promise<DesktopCloudAuthFetchResult>;
   onCloudAuthCallback: (listener: (rawUrl: string) => void) => () => void;
   onMenuAction: (listener: (action: string) => void) => () => void;
+  showNotification: (input: DesktopNotificationInput) => Promise<void>;
+  onNotificationActivated: (
+    listener: (threadRef: DesktopNotificationThreadRef) => void,
+  ) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
