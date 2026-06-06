@@ -418,7 +418,7 @@ function claudeAuthMetadata(input: {
 
 // ── SDK capability probe ────────────────────────────────────────────
 
-const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
+const CAPABILITIES_PROBE_TIMEOUT_MS = 15_000;
 
 function nonEmptyProbeString(value: string): string | undefined {
   const candidate = value.trim();
@@ -565,9 +565,21 @@ const probeClaudeCapabilities = (
     ),
     Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
     Effect.result,
-    Effect.map((result) => {
-      if (Result.isFailure(result)) return undefined;
-      return Option.isSome(result.success) ? result.success.value : undefined;
+    Effect.flatMap((result) => {
+      // Don't fail the status check over a capabilities miss, but leave a
+      // trace — a silent `undefined` here surfaces as an unexplained
+      // "Could not verify Claude authentication status" warning in the UI.
+      if (Result.isFailure(result)) {
+        return Effect.logWarning("claude capabilities probe failed", {
+          error: result.failure,
+        }).pipe(Effect.as(undefined));
+      }
+      if (Option.isNone(result.success)) {
+        return Effect.logWarning("claude capabilities probe timed out", {
+          timeoutMs: CAPABILITIES_PROBE_TIMEOUT_MS,
+        }).pipe(Effect.as(undefined));
+      }
+      return Effect.succeed(result.success.value);
     }),
   );
 };

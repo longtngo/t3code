@@ -51,6 +51,28 @@ import {
 import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
+/**
+ * Read a capabilities probe result through its cache without pinning misses.
+ *
+ * A failed probe resolves to `undefined` (never to a failure), so
+ * `Cache.make` would happily serve that miss for the full TTL — leaving the
+ * provider stuck on "Could not verify Claude authentication status" across
+ * snapshot refreshes. Invalidate the entry instead so the next refresh
+ * re-probes. Successful probes keep the normal TTL.
+ */
+export const getCachedCapabilitiesDroppingMisses = <Key, A, E, R>(
+  cache: Cache.Cache<Key, A | undefined, E, R>,
+  key: Key,
+) =>
+  Cache.get(cache, key).pipe(
+    Effect.flatMap(
+      (capabilities): Effect.Effect<A | undefined> =>
+        capabilities === undefined
+          ? Cache.invalidate(cache, key).pipe(Effect.as(undefined))
+          : Effect.succeed(capabilities),
+    ),
+  );
+
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
@@ -156,7 +178,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
 
       const checkProvider = checkClaudeProviderStatus(
         effectiveConfig,
-        () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
+        () => getCachedCapabilitiesDroppingMisses(capabilitiesProbeCache, capabilitiesCacheKey),
         processEnv,
       ).pipe(
         Effect.map(stampIdentity),
