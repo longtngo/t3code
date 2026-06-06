@@ -469,6 +469,27 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists an explicit disableAuthentication and strips the default", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const enabled = yield* serverSettings.updateSettings({ disableAuthentication: true });
+      assert.equal(enabled.disableAuthentication, true);
+      const rawEnabled = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(rawEnabled), { disableAuthentication: true });
+
+      const disabled = yield* serverSettings.updateSettings({ disableAuthentication: false });
+      assert.equal(disabled.disableAuthentication, false);
+      const rawDisabled = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // The default (false) is stripped from disk entirely.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(rawDisabled), {});
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("stores sensitive provider instance environment values outside settings.json", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;

@@ -130,14 +130,29 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
     "",
   ].join("\n");
 
+export const formatHeadlessOpenAccessOutput = (connectionString: string): string =>
+  [
+    "T3 Code server is ready.",
+    `Connection string: ${connectionString}`,
+    "",
+    "Authentication is DISABLED — anyone who can reach this server has full control.",
+    "",
+  ].join("\n");
+
+export const resolveHeadlessConnectionInfo = Effect.fn("resolveHeadlessConnectionInfo")(
+  function* () {
+    const serverConfig = yield* ServerConfig;
+    const httpServer = yield* HttpServer.HttpServer;
+    return resolveHeadlessConnectionString(
+      serverConfig.host,
+      resolveListeningPort(httpServer.address, serverConfig.port),
+    );
+  },
+);
+
 export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
-  const serverConfig = yield* ServerConfig;
-  const httpServer = yield* HttpServer.HttpServer;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-  const connectionString = resolveHeadlessConnectionString(
-    serverConfig.host,
-    resolveListeningPort(httpServer.address, serverConfig.port),
-  );
+  const connectionString = yield* resolveHeadlessConnectionInfo();
   const issued = yield* serverAuth.issueStartupPairingCredential();
 
   return {

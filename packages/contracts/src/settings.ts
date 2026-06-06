@@ -398,6 +398,12 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Opt-in open-access mode: when true the server authenticates every client
+  // automatically with administrative scopes — it disables authentication,
+  // not just the pairing UI (pairing is the only bootstrap method, so there
+  // is no narrower meaning). Overridable per launch via T3CODE_DISABLE_AUTH
+  // or --disable-auth; read once at startup.
+  disableAuthentication: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -489,6 +495,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  disableAuthentication: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

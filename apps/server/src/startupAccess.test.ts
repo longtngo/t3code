@@ -2,6 +2,7 @@ import { assert, expect, it } from "@effect/vitest";
 
 import {
   buildPairingUrl,
+  formatHeadlessOpenAccessOutput,
   formatHeadlessServeOutput,
   renderTerminalQrCode,
   resolveHeadlessConnectionHost,
@@ -76,4 +77,13 @@ it("formats headless serve output with the connection string, token, pairing url
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
   assert.isTrue(output.includes("█") || output.includes("▀") || output.includes("▄"));
+});
+
+it("formats open-access headless output without a token and with a warning", () => {
+  const output = formatHeadlessOpenAccessOutput("http://192.168.1.42:3773");
+
+  expect(output).toContain("Connection string: http://192.168.1.42:3773");
+  expect(output).toContain("Authentication is DISABLED");
+  expect(output).not.toContain("Token:");
+  expect(output).not.toContain("Pairing URL:");
 });

@@ -73,6 +73,13 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly logWebSocketEvents: boolean;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  /**
+   * Open-access mode: authenticate every client automatically with
+   * administrative scopes (no pairing, no credentials). Off unless explicitly
+   * enabled via --disable-auth, T3CODE_DISABLE_AUTH, or the persisted
+   * `disableAuthentication` setting.
+   */
+  readonly disableAuthentication: boolean;
 }
 
 export const deriveServerPaths = Effect.fn(function* (
@@ -175,6 +182,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           devUrl,
           noBrowser: false,
           startupPresentation: "browser",
+          disableAuthentication: false,
         } satisfies ServerConfigShape;
       }),
     );

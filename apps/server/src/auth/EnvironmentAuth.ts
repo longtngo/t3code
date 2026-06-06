@@ -26,8 +26,10 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
+import { ServerConfig } from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -37,6 +39,7 @@ import { layerConfig as SqlitePersistenceLayer } from "../persistence/Layers/Sql
 
 export const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+export const OPEN_ACCESS_SUBJECT = "open-access";
 
 export interface IssuedPairingLink {
   readonly id: string;
@@ -268,7 +271,14 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
   const sessions = yield* SessionStore.SessionStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const crypto = yield* Crypto.Crypto;
+  const config = yield* ServerConfig;
   const descriptor = yield* policy.getDescriptor();
+
+  if (config.disableAuthentication) {
+    yield* Effect.logWarning(
+      "Authentication is disabled — anyone who can reach this server has full control.",
+    );
+  }
 
   const authenticateToken = (
     token: string,
@@ -295,7 +305,51 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       mapSessionVerificationErrors,
     );
 
-  const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
+  // Open-access mode (config.disableAuthentication): credential failures fall
+  // back to one lazily-issued real session instead of failing. A real session
+  // row (not a synthetic principal) keeps WebSocket tickets, the client list,
+  // and revocation flows working unchanged. Lazy issuance with reissue-on-
+  // invalid is load-bearing: sessions hard-expire after DEFAULT_SESSION_TTL
+  // (30 days), so a session issued once at boot would lock out a server left
+  // running past that. A concurrent double-issue is benign — both rows are
+  // valid and the loser ages out with its TTL.
+  const openAccessTokenRef = yield* Ref.make(Option.none<string>());
+
+  const issueOpenAccessSession: Effect.Effect<AuthenticatedSession, ServerAuthInternalError> =
+    Effect.gen(function* () {
+      const issued = yield* sessions
+        .issue({
+          method: "bearer-access-token",
+          subject: OPEN_ACCESS_SUBJECT,
+          scopes: AuthAdministrativeScopes,
+          client: { label: "Open access (authentication disabled)", deviceType: "bot" },
+        })
+        .pipe(Effect.mapError(toInternalError("Failed to issue open-access session.")));
+      yield* Ref.set(openAccessTokenRef, Option.some(issued.token));
+      return {
+        sessionId: issued.sessionId,
+        subject: OPEN_ACCESS_SUBJECT,
+        method: issued.method,
+        scopes: issued.scopes,
+        expiresAt: issued.expiresAt,
+      } satisfies AuthenticatedSession;
+    });
+
+  const resolveOpenAccessSession: Effect.Effect<AuthenticatedSession, ServerAuthInternalError> =
+    Ref.get(openAccessTokenRef).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => issueOpenAccessSession,
+          onSome: (cachedToken) =>
+            authenticateToken(cachedToken).pipe(
+              Effect.catchTag("ServerAuthInvalidCredentialError", () => issueOpenAccessSession),
+            ),
+        }),
+      ),
+      Effect.withSpan("EnvironmentAuth.resolveOpenAccessSession"),
+    );
+
+  const authenticateCredentialedRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
     const dpopToken = parseDpopToken(request);
@@ -336,6 +390,33 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       }),
     );
   };
+
+  // The single place the open-access policy lives: any invalid-credential
+  // failure from a credential primitive falls back to the open-access session
+  // when authentication is disabled. Applied at the outermost pipe so it also
+  // covers failures raised by the post-verify DPoP checks (a stale
+  // `Authorization: DPoP …` header from a previous server secret must not
+  // lock anyone out), not just the token-verify step.
+  const withOpenAccessFallback = (
+    effect: Effect.Effect<
+      AuthenticatedSession,
+      ServerAuthInvalidCredentialError | ServerAuthInternalError
+    >,
+  ): Effect.Effect<
+    AuthenticatedSession,
+    ServerAuthInvalidCredentialError | ServerAuthInternalError
+  > =>
+    config.disableAuthentication
+      ? effect.pipe(
+          Effect.catchTag("ServerAuthInvalidCredentialError", () => resolveOpenAccessSession),
+        )
+      : effect;
+
+  // Wrapping this shared closure makes getSessionState,
+  // authenticateHttpRequest, and the WebSocket-upgrade fallback all inherit
+  // the same policy.
+  const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) =>
+    withOpenAccessFallback(authenticateCredentialedRequest(request));
 
   const getSessionState: EnvironmentAuthShape["getSessionState"] = (request) =>
     authenticateRequest(request).pipe(
@@ -669,7 +750,7 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
       if (Option.isSome(requestUrl)) {
         const websocketTicket = requestUrl.value.searchParams.get(WEBSOCKET_TICKET_QUERY_PARAM);
         if (websocketTicket && websocketTicket.trim().length > 0) {
-          return yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
+          const verifiedTicketSession = sessions.verifyWebSocketToken(websocketTicket).pipe(
             Effect.map((session) => ({
               sessionId: session.sessionId,
               subject: session.subject,
@@ -679,6 +760,9 @@ export const make = Effect.fn("makeEnvironmentAuth")(function* () {
             })),
             mapSessionVerificationErrors,
           );
+          // Open-access mode also tolerates a stale/expired ticket — the
+          // gate is off, so a bad ticket falls back instead of failing.
+          return yield* withOpenAccessFallback(verifiedTicketSession);
         }
       }
 

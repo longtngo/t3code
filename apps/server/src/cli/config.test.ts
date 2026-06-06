@@ -75,6 +75,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -118,6 +119,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
     }),
   );
@@ -141,6 +143,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.some(true),
           tailscaleServeEnabled: Option.some(true),
           tailscaleServePort: Option.some(8443),
+          disableAuthentication: Option.none(),
         },
         Option.some("Debug"),
       ).pipe(
@@ -184,6 +187,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: true,
         tailscaleServePort: 8443,
+        disableAuthentication: false,
       });
     }),
   );
@@ -215,6 +219,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.some(false),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -253,6 +258,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
     }),
   );
@@ -290,6 +296,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -327,6 +334,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
     }),
@@ -353,6 +361,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -412,6 +421,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.some("Debug"),
       ).pipe(
@@ -452,6 +462,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
     }),
   );
@@ -488,6 +499,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
       ).pipe(
@@ -521,7 +533,68 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
+    }),
+  );
+
+  it.effect("resolves disableAuthentication with flag > env > persisted precedence", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-noauth-" });
+      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({ disableAuthentication: true })}\n`,
+      );
+
+      const resolve = (input: {
+        readonly flag: Option.Option<boolean>;
+        readonly env: Record<string, string>;
+      }) =>
+        resolveServerConfig(
+          {
+            mode: Option.some("desktop"),
+            port: Option.some(4888),
+            host: Option.none(),
+            baseDir: Option.some(baseDir),
+            cwd: Option.none(),
+            devUrl: Option.none(),
+            noBrowser: Option.none(),
+            bootstrapFd: Option.none(),
+            autoBootstrapProjectFromCwd: Option.none(),
+            logWebSocketEvents: Option.none(),
+            tailscaleServeEnabled: Option.none(),
+            tailscaleServePort: Option.none(),
+            disableAuthentication: input.flag,
+          },
+          Option.none(),
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: input.env })),
+              NetService.layer,
+            ),
+          ),
+        );
+
+      const persistedOnly = yield* resolve({ flag: Option.none(), env: {} });
+      expect(persistedOnly.disableAuthentication).toBe(true);
+
+      const envOverridesPersisted = yield* resolve({
+        flag: Option.none(),
+        env: { T3CODE_DISABLE_AUTH: "false" },
+      });
+      expect(envOverridesPersisted.disableAuthentication).toBe(false);
+
+      const flagOverridesEnv = yield* resolve({
+        flag: Option.some(true),
+        env: { T3CODE_DISABLE_AUTH: "false" },
+      });
+      expect(flagOverridesEnv.disableAuthentication).toBe(true);
     }),
   );
 
@@ -545,6 +618,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           logWebSocketEvents: Option.none(),
           tailscaleServeEnabled: Option.none(),
           tailscaleServePort: Option.none(),
+          disableAuthentication: Option.none(),
         },
         Option.none(),
         {
@@ -584,6 +658,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        disableAuthentication: false,
       });
     }),
   );

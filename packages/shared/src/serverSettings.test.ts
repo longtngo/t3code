@@ -10,6 +10,7 @@ import {
   extractPersistedServerObservabilitySettings,
   normalizePersistedServerSettingString,
   parsePersistedServerObservabilitySettings,
+  parsePersistedServerStartupSettings,
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
@@ -56,6 +57,27 @@ describe("serverSettings helpers", () => {
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
     });
+  });
+
+  it("parses persisted startup settings including disableAuthentication", () => {
+    expect(
+      parsePersistedServerStartupSettings(
+        JSON.stringify({
+          observability: { otlpTracesUrl: "http://localhost:4318/v1/traces" },
+          disableAuthentication: true,
+        }),
+      ),
+    ).toEqual({
+      otlpTracesUrl: "http://localhost:4318/v1/traces",
+      otlpMetricsUrl: undefined,
+      disableAuthentication: true,
+    });
+  });
+
+  it("defaults disableAuthentication to false when absent or invalid", () => {
+    expect(parsePersistedServerStartupSettings("{}").disableAuthentication).toBe(false);
+    expect(parsePersistedServerStartupSettings("{").disableAuthentication).toBe(false);
+    expect(parsePersistedServerStartupSettings("").disableAuthentication).toBe(false);
   });
 
   it("replaces text generation selection when provider/model are provided", () => {

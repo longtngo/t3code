@@ -1,4 +1,8 @@
-import { ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ServerSettings,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
@@ -40,6 +44,25 @@ export function parsePersistedServerObservabilitySettings(
     return extractPersistedServerObservabilitySettings(decoded.value);
   }
   return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
+}
+
+/**
+ * The slice of persisted settings the server reads before its runtime layers
+ * exist (resolveServerConfig). Superset of the observability slice the
+ * desktop consumers use.
+ */
+export interface PersistedServerStartupSettings extends PersistedServerObservabilitySettings {
+  readonly disableAuthentication: boolean;
+}
+
+export function parsePersistedServerStartupSettings(raw: string): PersistedServerStartupSettings {
+  // Unparseable input falls back to the schema defaults, so the default
+  // values stay single-sourced in the ServerSettings schema.
+  const settings = Option.getOrElse(decodeServerSettingsJson(raw), () => DEFAULT_SERVER_SETTINGS);
+  return {
+    ...extractPersistedServerObservabilitySettings(settings),
+    disableAuthentication: settings.disableAuthentication,
+  };
 }
 
 function shouldReplaceTextGenerationModelSelection(

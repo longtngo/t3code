@@ -35,10 +35,12 @@ import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import {
+  formatHeadlessOpenAccessOutput,
   formatHeadlessServeOutput,
   formatHostForUrl,
   isWildcardHost,
   issueHeadlessServeAccessInfo,
+  resolveHeadlessConnectionInfo,
 } from "./startupAccess.ts";
 
 export class ServerRuntimeStartupError extends Data.TaggedError("ServerRuntimeStartupError")<{
@@ -251,7 +253,11 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
       ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
       : localUrl;
   const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
-  return yield* Effect.succeed(serverConfig.mode === "desktop" ? baseTarget : undefined).pipe(
+  // Desktop authenticates via the bootstrap envelope; open-access mode needs
+  // no credential at all. Both open the plain URL instead of a pairing URL.
+  const plainTarget =
+    serverConfig.mode === "desktop" || serverConfig.disableAuthentication ? baseTarget : undefined;
+  return yield* Effect.succeed(plainTarget).pipe(
     Effect.flatMap((target) =>
       target ? Effect.succeed(target) : serverAuth.issueStartupPairingUrl(baseTarget),
     ),
@@ -438,15 +444,24 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       yield* launchStartupHeartbeat;
       if (serverConfig.startupPresentation === "headless") {
         yield* Effect.logDebug("startup phase: headless access info");
-        const accessInfo = yield* issueHeadlessServeAccessInfo();
-        yield* runStartupPhase(
-          "headless.output",
-          Console.log(formatHeadlessServeOutput(accessInfo)),
-        );
+        if (serverConfig.disableAuthentication) {
+          // No pairing credential to mint or print — just the connection URL.
+          const connectionString = yield* resolveHeadlessConnectionInfo();
+          yield* runStartupPhase(
+            "headless.output",
+            Console.log(formatHeadlessOpenAccessOutput(connectionString)),
+          );
+        } else {
+          const accessInfo = yield* issueHeadlessServeAccessInfo();
+          yield* runStartupPhase(
+            "headless.output",
+            Console.log(formatHeadlessServeOutput(accessInfo)),
+          );
+        }
       } else {
         yield* Effect.logDebug("startup phase: browser open check");
         const startupBrowserTarget = yield* resolveStartupBrowserTarget;
-        if (serverConfig.mode !== "desktop") {
+        if (serverConfig.mode !== "desktop" && !serverConfig.disableAuthentication) {
           yield* Effect.logInfo(
             "Authentication required. Open T3 Code using the pairing URL.",
           ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));

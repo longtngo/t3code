@@ -41,6 +41,14 @@ const makeCookieRequest = (
     headers: {},
   }) as unknown as Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0];
 
+const makeAnonymousRequest = (): Parameters<
+  EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]
+>[0] =>
+  ({
+    cookies: {},
+    headers: {},
+  }) as unknown as Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0];
+
 const requestMetadata = {
   deviceType: "desktop" as const,
   os: "macOS",
@@ -257,5 +265,118 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
           }),
         ),
       ),
+  );
+
+  it.effect("rejects anonymous requests when authentication is enabled (default)", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const error = yield* serverAuth
+        .authenticateHttpRequest(makeAnonymousRequest())
+        .pipe(Effect.flip);
+
+      expect(error._tag).toBe("ServerAuthInvalidCredentialError");
+      if (error._tag === "ServerAuthInvalidCredentialError") {
+        expect(error.reason).toBe("missing_credential");
+      }
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("authenticates anonymous requests with one open-access session when disabled", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const first = yield* serverAuth.authenticateHttpRequest(makeAnonymousRequest());
+      const second = yield* serverAuth.authenticateHttpRequest(makeAnonymousRequest());
+
+      expect(first.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+      expect(first.scopes).toEqual(AuthAdministrativeScopes);
+      // The singleton is reused, not minted per request.
+      expect(second.sessionId).toBe(first.sessionId);
+
+      const sessionState = yield* serverAuth.getSessionState(makeAnonymousRequest());
+      expect(sessionState.authenticated).toBe(true);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
+  );
+
+  it.effect("falls back to open access for invalid credentials when disabled", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      // A stale cookie from a previous server secret must not lock anyone out.
+      const session = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest("stale-token-from-a-previous-server"),
+      );
+
+      expect(session.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
+  );
+
+  it.effect("mints a fresh open-access session after the previous one is revoked", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const first = yield* serverAuth.authenticateHttpRequest(makeAnonymousRequest());
+      yield* serverAuth.revokeSession(first.sessionId);
+      const second = yield* serverAuth.authenticateHttpRequest(makeAnonymousRequest());
+
+      expect(second.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+      expect(second.sessionId).not.toBe(first.sessionId);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
+  );
+
+  it.effect("supports websocket tickets minted off the open-access session", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const session = yield* serverAuth.authenticateHttpRequest(makeAnonymousRequest());
+      const ticket = yield* serverAuth.issueWebSocketTicket(session);
+
+      const upgradeRequest = {
+        url: `/ws?wsTicket=${encodeURIComponent(ticket.ticket)}`,
+        headers: { host: "127.0.0.1:3773" },
+        cookies: {},
+      } as unknown as Parameters<
+        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+      >[0];
+      const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
+
+      expect(upgraded.sessionId).toBe(session.sessionId);
+      expect(upgraded.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
+  );
+
+  it.effect("falls back to open access for credential-less websocket upgrades when disabled", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const upgradeRequest = {
+        url: "/ws",
+        headers: { host: "127.0.0.1:3773" },
+        cookies: {},
+      } as unknown as Parameters<
+        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+      >[0];
+      const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
+
+      expect(upgraded.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
+  );
+
+  it.effect("falls back to open access for invalid websocket tickets when disabled", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+
+      const upgradeRequest = {
+        url: "/ws?wsTicket=stale-ticket-from-a-previous-server",
+        headers: { host: "127.0.0.1:3773" },
+        cookies: {},
+      } as unknown as Parameters<
+        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+      >[0];
+      const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
+
+      expect(upgraded.subject).toBe(EnvironmentAuth.OPEN_ACCESS_SUBJECT);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ disableAuthentication: true }))),
   );
 });

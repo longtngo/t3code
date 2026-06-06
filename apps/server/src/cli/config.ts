@@ -1,5 +1,5 @@
 import * as NetService from "@t3tools/shared/Net";
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import { parsePersistedServerStartupSettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -80,6 +80,13 @@ export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
   Flag.optional,
 );
+export const disableAuthenticationFlag = Flag.boolean("disable-auth").pipe(
+  Flag.withDescription(
+    "DANGEROUS: skip pairing and authenticate every client with full access " +
+      "(equivalent to T3CODE_DISABLE_AUTH). Only for trusted networks.",
+  ),
+  Flag.optional,
+);
 
 const EnvServerConfig = Config.all({
   logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
@@ -136,6 +143,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  disableAuthentication: Config.boolean("T3CODE_DISABLE_AUTH").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -151,6 +162,7 @@ export interface CliServerFlags {
   readonly logWebSocketEvents: Option.Option<boolean>;
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
+  readonly disableAuthentication: Option.Option<boolean>;
 }
 
 export interface CliAuthLocationFlags {
@@ -185,6 +197,7 @@ export const sharedServerCommandFlags = {
   logWebSocketEvents: logWebSocketEventsFlag,
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
+  disableAuthentication: disableAuthenticationFlag,
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -193,15 +206,11 @@ const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
-const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
+const loadPersistedStartupSettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
-  const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
-  }
-
+  // A missing or unreadable file parses as "" → all schema defaults.
   const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
-  return parsePersistedServerObservabilitySettings(raw);
+  return parsePersistedServerStartupSettings(raw);
 });
 
 export const resolveServerConfig = (
@@ -230,6 +239,7 @@ export const resolveServerConfig = (
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
+      disableAuthentication: flags.disableAuthentication ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -281,9 +291,7 @@ export const resolveServerConfig = (
     yield* fs.makeDirectory(cwd, { recursive: true });
     const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
     yield* ensureServerDirectories(derivedPaths);
-    const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
-      derivedPaths.settingsPath,
-    );
+    const persistedStartupSettings = yield* loadPersistedStartupSettings(derivedPaths.settingsPath);
     const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
     yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
     const startupPresentation = options?.startupPresentation ?? "browser";
@@ -330,6 +338,13 @@ export const resolveServerConfig = (
       ),
       () => 443,
     );
+    const disableAuthentication = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.disableAuthentication,
+        Option.fromUndefinedOr(env.disableAuthentication),
+      ),
+      () => persistedStartupSettings.disableAuthentication,
+    );
     const staticDir = devUrl ? undefined : yield* resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -349,13 +364,9 @@ export const resolveServerConfig = (
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
       otlpTracesUrl:
-        env.otlpTracesUrl ??
-        bootstrap?.otlpTracesUrl ??
-        persistedObservabilitySettings.otlpTracesUrl,
+        env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedStartupSettings.otlpTracesUrl,
       otlpMetricsUrl:
-        env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
+        env.otlpMetricsUrl ?? bootstrap?.otlpMetricsUrl ?? persistedStartupSettings.otlpMetricsUrl,
       otlpExportIntervalMs: env.otlpExportIntervalMs,
       otlpServiceName: env.otlpServiceName,
       mode,
@@ -374,6 +385,7 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      disableAuthentication,
     };
 
     return config;
@@ -397,6 +409,7 @@ export const resolveCliAuthConfig = (
       logWebSocketEvents: Option.none(),
       tailscaleServeEnabled: Option.none(),
       tailscaleServePort: Option.none(),
+      disableAuthentication: Option.none(),
     },
     cliLogLevel,
   );

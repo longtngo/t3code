@@ -44,6 +44,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devUrl: undefined,
     noBrowser: false,
     startupPresentation: "browser",
+    disableAuthentication: false,
   } satisfies ServerConfigShape;
 });
 
