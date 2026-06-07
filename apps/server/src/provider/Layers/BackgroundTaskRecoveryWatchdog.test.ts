@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeRuntimeBootIdLive } from "../../environment/Layers/RuntimeBootId.ts";
+import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import {
   PendingBackgroundTaskRepository,
   type PendingBackgroundTask,
@@ -199,6 +200,15 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
       getThreadDetailById: () => Effect.die("unused"),
     };
 
+    const analyticsEvents: Array<{ event: string; properties?: Record<string, unknown> }> = [];
+    const analytics = Layer.succeed(AnalyticsService, {
+      record: (event: string, properties?: Readonly<Record<string, unknown>>) =>
+        Effect.sync(() => {
+          analyticsEvents.push({ event, ...(properties ? { properties } : {}) });
+        }),
+      flush: Effect.void,
+    });
+
     const layer = makeBackgroundTaskRecoveryWatchdogLive({
       sweepIntervalMs: 20,
       staleThresholdMs: 50,
@@ -209,11 +219,12 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, engine as never)),
       Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projection as never)),
       Layer.provideMerge(makeRuntimeBootIdLive(CURRENT_BOOT)),
+      Layer.provideMerge(analytics),
       Layer.provideMerge(NodeServices.layer),
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { store, dispatched };
+    return { store, dispatched, analyticsEvents };
   }
 
   async function startWatchdog() {
@@ -226,7 +237,7 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
 
   it("recovers a prior-boot (reboot-orphaned) task: resumes the thread and clears the row", async () => {
     const threadId = thread("prior-boot");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, analyticsEvents } = createHarness({
       rows: [row({ taskId: "task-prior", threadId, bootId: "OLD-BOOT" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       // huge stale threshold so only the prior-boot trigger can fire
@@ -238,6 +249,16 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     expect(dispatched[0]?.threadId).toBe(threadId);
     expect(dispatched[0]?.text).toContain("restarted");
     await waitFor(() => store.size === 0);
+    // Anonymous trip telemetry fired (no thread/task identifiers).
+    await waitFor(() =>
+      analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+    );
+    const recovered = analyticsEvents.find(
+      (e) => e.event === "provider.background_task.recovered",
+    );
+    expect(recovered?.properties?.reason).toBe("prior-boot");
+    expect(recovered?.properties).not.toHaveProperty("taskId");
+    expect(recovered?.properties).not.toHaveProperty("threadId");
   });
 
   it("recovers a same-boot task whose session has died (dead-session)", async () => {
@@ -255,7 +276,7 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
 
   it("recovers a same-boot, live-session task that has gone silent past the stale threshold", async () => {
     const threadId = thread("stale");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, analyticsEvents } = createHarness({
       // lastSeenAt far in the past + small stale threshold → stale
       rows: [row({ taskId: "task-stale", threadId, lastSeenAt: "2020-01-01T00:00:00.000Z" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
@@ -265,6 +286,15 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     await waitFor(() => dispatched.length > 0);
     expect(dispatched[0]?.text).toContain("silent");
     await waitFor(() => store.size === 0);
+    // The stale trip carries a real silence duration for threshold tuning.
+    await waitFor(() =>
+      analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+    );
+    const recovered = analyticsEvents.find(
+      (e) => e.event === "provider.background_task.recovered",
+    );
+    expect(recovered?.properties?.reason).toBe("stale");
+    expect(typeof recovered?.properties?.silentMs).toBe("number");
   });
 
   it("leaves a fresh, same-boot, live-session task alone", async () => {
@@ -326,7 +356,7 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
 
   it("gives up and drops the row after the recovery attempt cap, without resuming", async () => {
     const threadId = thread("giveup");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, analyticsEvents } = createHarness({
       rows: [row({ taskId: "task-giveup", threadId, bootId: "OLD-BOOT", recoveryAttempts: 3 })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       options: { maxRecoveryAttempts: 3, staleThresholdMs: 60 * 60 * 1000 },
@@ -334,5 +364,8 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     await startWatchdog();
     await waitFor(() => store.size === 0);
     expect(dispatched.length).toBe(0);
+    await waitFor(() =>
+      analyticsEvents.some((e) => e.event === "provider.background_task.recovery_gave_up"),
+    );
   });
 });

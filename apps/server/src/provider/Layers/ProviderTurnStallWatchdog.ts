@@ -19,6 +19,7 @@ import * as Schedule from "effect/Schedule";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import {
   ProviderRuntimeIngestionService,
   type TurnActivitySnapshot,
@@ -99,6 +100,7 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
     const ingestion = yield* ProviderRuntimeIngestionService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const analytics = yield* AnalyticsService;
 
     const stallThresholdMs = Math.max(
       1,
@@ -334,6 +336,11 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
             message: `Automatic recovery failed ${maxRecoveryAttempts} times for a stalled turn; manual continue needed.`,
             turnId: entry.turnId,
           });
+          // Anonymous trip telemetry (no thread/turn identifiers).
+          yield* analytics.record("provider.turn_stall.recovery_gave_up", {
+            silentMs,
+            attempts,
+          });
           yield* setRecord(threadId, {
             ...EMPTY_RECORD,
             attempts,
@@ -349,6 +356,12 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
           summary: "Stalled turn — recovering",
           message: `No provider activity for about ${Math.round(silentMs / 60000)} minutes on an active turn; stopping and resuming the session.`,
           turnId: entry.turnId,
+        });
+        // Anonymous trip telemetry (no thread/turn identifiers) — lets the stall
+        // threshold be tuned from real trips.
+        yield* analytics.record("provider.turn_stall.recovered", {
+          silentMs,
+          attempt: attempts,
         });
         yield* dispatchStop(threadId);
         yield* setRecord(threadId, {

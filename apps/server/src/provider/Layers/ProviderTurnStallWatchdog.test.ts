@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import {
   ProviderRuntimeIngestionService,
   type TurnActivitySnapshot,
@@ -175,6 +176,15 @@ describe("ProviderTurnStallWatchdog", () => {
       getThreadDetailById: () => Effect.die("unused"),
     };
 
+    const analyticsEvents: Array<{ event: string; properties?: Record<string, unknown> }> = [];
+    const analytics = Layer.succeed(AnalyticsService, {
+      record: (event: string, properties?: Readonly<Record<string, unknown>>) =>
+        Effect.sync(() => {
+          analyticsEvents.push({ event, ...(properties ? { properties } : {}) });
+        }),
+      flush: Effect.void,
+    });
+
     const layer = makeProviderTurnStallWatchdogLive({
       stallThresholdMs: 1_000,
       sweepIntervalMs: 20,
@@ -184,11 +194,12 @@ describe("ProviderTurnStallWatchdog", () => {
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, engine as never)),
       Layer.provideMerge(Layer.succeed(ProviderRuntimeIngestionService, ingestion as never)),
       Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projection as never)),
+      Layer.provideMerge(analytics),
       Layer.provideMerge(NodeServices.layer),
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { dispatched };
+    return { dispatched, analyticsEvents };
   }
 
   async function startWatchdog() {
@@ -234,6 +245,13 @@ describe("ProviderTurnStallWatchdog", () => {
     expect(types).toContain("thread.turn.start");
     // stop must precede the resume (turn.start queues behind an active turn).
     expect(types.indexOf("thread.session.stop")).toBeLessThan(types.indexOf("thread.turn.start"));
+    // Anonymous trip telemetry fired with the silence duration (no identifiers).
+    const trip = harness.analyticsEvents.find(
+      (e) => e.event === "provider.turn_stall.recovered",
+    );
+    expect(trip).toBeDefined();
+    expect(typeof trip?.properties?.silentMs).toBe("number");
+    expect(trip?.properties).not.toHaveProperty("threadId");
   });
 
   it("does not trip while a foreground tool is in flight (last event item.started)", async () => {

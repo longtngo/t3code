@@ -42,6 +42,7 @@ import { RuntimeBootId } from "../../environment/Services/RuntimeBootId.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
+import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import {
   BackgroundTaskRecoveryWatchdog,
   type BackgroundTaskRecoveryWatchdogShape,
@@ -90,6 +91,7 @@ const makeBackgroundTaskRecoveryWatchdog = (
     const repository = yield* PendingBackgroundTaskRepository;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const analytics = yield* AnalyticsService;
     const { bootId } = yield* RuntimeBootId;
 
     const sweepIntervalMs = Math.max(
@@ -167,6 +169,12 @@ const makeBackgroundTaskRecoveryWatchdog = (
         return;
       }
 
+      // Silence since the task was last seen (null when the timestamp is
+      // unparseable). Carried into trip telemetry so the stale threshold can be
+      // tuned from real recoveries.
+      const lastSeenMs = Date.parse(task.lastSeenAt);
+      const silentMs = Number.isNaN(lastSeenMs) ? null : nowMs - lastSeenMs;
+
       const sessionStatus = thread.session?.status ?? null;
       const sessionLive = sessionStatus !== null && LIVE_SESSION_STATUSES.has(sessionStatus);
 
@@ -176,8 +184,7 @@ const makeBackgroundTaskRecoveryWatchdog = (
       } else if (!sessionLive) {
         reason = "dead-session";
       } else {
-        const lastSeenMs = Date.parse(task.lastSeenAt);
-        if (Number.isNaN(lastSeenMs)) {
+        if (silentMs === null) {
           yield* Effect.logWarning("background-task-recovery.invalid-last-seen", {
             taskId: task.taskId,
             threadId: task.threadId,
@@ -185,7 +192,7 @@ const makeBackgroundTaskRecoveryWatchdog = (
           });
           return;
         }
-        if (nowMs - lastSeenMs >= staleThresholdMs) {
+        if (silentMs >= staleThresholdMs) {
           reason = "stale";
         }
       }
@@ -201,6 +208,13 @@ const makeBackgroundTaskRecoveryWatchdog = (
           threadId: task.threadId,
           reason,
           recoveryAttempts: task.recoveryAttempts,
+          ...(silentMs !== null ? { silentMs } : {}),
+        });
+        // Anonymous trip telemetry (no thread/task identifiers).
+        yield* analytics.record("provider.background_task.recovery_gave_up", {
+          reason,
+          recoveryAttempts: task.recoveryAttempts,
+          ...(silentMs !== null ? { silentMs } : {}),
         });
         yield* repository.deleteByTaskId({ taskId: task.taskId });
         return;
@@ -238,6 +252,14 @@ const makeBackgroundTaskRecoveryWatchdog = (
           threadId: task.threadId,
           reason,
           attempt,
+          ...(silentMs !== null ? { silentMs } : {}),
+        });
+        // Anonymous trip telemetry (no thread/task identifiers) — lets the stale
+        // threshold be tuned from real recoveries.
+        yield* analytics.record("provider.background_task.recovered", {
+          reason,
+          attempt,
+          ...(silentMs !== null ? { silentMs } : {}),
         });
         // Success: drop the row so a successful recovery never accumulates
         // attempts across reboots (the resumed turn re-registers fresh rows).
