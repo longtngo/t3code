@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { FileTextIcon, LoaderIcon, PanelRightCloseIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  FileTextIcon,
+  LoaderIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+  PanelRightCloseIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -7,6 +14,7 @@ import { ScrollArea } from "./ui/scroll-area";
 import { RightPanelSheet } from "./RightPanelSheet";
 import ChatMarkdown from "./ChatMarkdown";
 import { readEnvironmentApi } from "~/environmentApi";
+import { RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME } from "../rightPanelLayout";
 import { useMarkdownViewerStore, type MarkdownViewerRequest } from "../markdownViewerStore";
 
 function basenameOf(path: string): string {
@@ -37,9 +45,13 @@ const INITIAL_LOAD_STATE: LoadState = {
 function MarkdownFileViewerContent({
   request,
   onClose,
+  expanded,
+  onToggleExpand,
 }: {
   request: MarkdownViewerRequest;
   onClose: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const [state, setState] = useState<LoadState>(INITIAL_LOAD_STATE);
 
@@ -104,15 +116,31 @@ function MarkdownFileViewerContent({
             </span>
           </span>
         </div>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          onClick={onClose}
-          aria-label="Close markdown viewer"
-          className="shrink-0 text-muted-foreground/50 hover:text-foreground/70"
-        >
-          <PanelRightCloseIcon className="size-3.5" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={onToggleExpand}
+            aria-label={expanded ? "Collapse markdown viewer" : "Expand markdown viewer to full width"}
+            aria-pressed={expanded}
+            className="text-muted-foreground/50 hover:text-foreground/70"
+          >
+            {expanded ? (
+              <Minimize2Icon className="size-3.5" />
+            ) : (
+              <Maximize2Icon className="size-3.5" />
+            )}
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Close markdown viewer"
+            className="text-muted-foreground/50 hover:text-foreground/70"
+          >
+            <PanelRightCloseIcon className="size-3.5" />
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -155,11 +183,26 @@ export function MarkdownFileViewerSidebar() {
   const open = useMarkdownViewerStore((state) => state.open);
   const request = useMarkdownViewerStore((state) => state.request);
   const closeMarkdownViewer = useMarkdownViewerStore((state) => state.closeMarkdownViewer);
+  const [expanded, setExpanded] = useState(false);
+
+  const handleClose = () => {
+    setExpanded(false);
+    closeMarkdownViewer();
+  };
 
   return (
-    <RightPanelSheet open={open && request != null} onClose={closeMarkdownViewer}>
+    <RightPanelSheet
+      open={open && request != null}
+      onClose={handleClose}
+      className={expanded ? RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME : undefined}
+    >
       {request ? (
-        <MarkdownFileViewerContent request={request} onClose={closeMarkdownViewer} />
+        <MarkdownFileViewerContent
+          request={request}
+          onClose={handleClose}
+          expanded={expanded}
+          onToggleExpand={() => setExpanded((value) => !value)}
+        />
       ) : null}
     </RightPanelSheet>
   );
