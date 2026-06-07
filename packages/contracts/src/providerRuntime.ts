@@ -177,6 +177,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "task.started",
   "task.progress",
   "task.completed",
+  "task.updated",
   "hook.started",
   "hook.progress",
   "hook.completed",
@@ -230,6 +231,7 @@ const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
 const TaskCompletedType = Schema.Literal("task.completed");
+const TaskUpdatedType = Schema.Literal("task.updated");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
 const HookCompletedType = Schema.Literal("hook.completed");
@@ -488,6 +490,17 @@ const TaskCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
+
+// A per-task lifecycle status patch (SDK `task_updated`). Used as a robust,
+// per-task terminal signal to clear a persisted pending-background-task row
+// independently of `task.completed` — it never wakes a thread.
+const TaskUpdatedPayload = Schema.Struct({
+  taskId: RuntimeTaskId,
+  status: Schema.optional(
+    Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
+  ),
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
@@ -882,6 +895,13 @@ const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTaskCompletedEvent = typeof ProviderRuntimeTaskCompletedEvent.Type;
 
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
+
 const ProviderRuntimeHookStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: HookStartedType,
@@ -1051,6 +1071,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
   ProviderRuntimeTaskCompletedEvent,
+  ProviderRuntimeTaskUpdatedEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,
   ProviderRuntimeHookCompletedEvent,

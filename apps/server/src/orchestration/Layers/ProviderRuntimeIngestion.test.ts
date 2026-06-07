@@ -450,6 +450,46 @@ describe("ProviderRuntimeIngestion", () => {
     expect(await harness.pendingTasks()).toHaveLength(0);
   });
 
+  it("clears a pending background task on a terminal task.updated even if task.completed never arrives", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-task-started-3"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      payload: { taskId: RuntimeTaskId.make("task-bg-3"), description: "watcher" },
+    });
+    await harness.drain();
+    expect(await harness.pendingTasks()).toHaveLength(1);
+
+    // A non-terminal patch must NOT clear the row.
+    harness.emit({
+      type: "task.updated",
+      eventId: asEventId("evt-task-updated-running"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-bg-3"), status: "running" },
+    });
+    await harness.drain();
+    expect(await harness.pendingTasks()).toHaveLength(1);
+
+    // A terminal patch clears it (the second deletion path; no task.completed sent).
+    harness.emit({
+      type: "task.updated",
+      eventId: asEventId("evt-task-updated-killed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:02:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-bg-3"), status: "killed" },
+    });
+    await harness.drain();
+    expect(await harness.pendingTasks()).toHaveLength(0);
+  });
+
   it("tracks last turn activity for the stall watchdog and clears it on terminal events", async () => {
     const harness = await createHarness();
 

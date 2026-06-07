@@ -2551,6 +2551,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      case "task_updated":
+        // Per-task lifecycle patch. Forwarded purely so ingestion can clear a
+        // persisted pending-background-task row on a terminal status — a robust
+        // second deletion path independent of `task_notification`. Does NOT wake
+        // a thread (only `task.completed` does).
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "task.updated",
+          payload: {
+            taskId: RuntimeTaskId.make(message.task_id),
+            ...(message.patch.status ? { status: message.patch.status } : {}),
+          },
+        });
+        return;
       case "files_persisted":
         yield* offerRuntimeEvent({
           ...base,

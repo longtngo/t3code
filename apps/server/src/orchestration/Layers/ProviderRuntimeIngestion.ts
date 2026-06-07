@@ -1416,6 +1416,22 @@ const make = Effect.gen(function* () {
             taskId: event.payload.taskId,
           });
           return;
+        case "task.updated":
+          // Robust second deletion path: a per-task terminal status patch clears
+          // the pending record even if `task.completed` (task_notification) was
+          // never delivered — closing the leak where a dropped completion would
+          // otherwise let the row survive to a spurious stale-timeout recovery.
+          // Non-terminal patches (pending/running/paused) leave the row intact.
+          if (
+            event.payload.status === "completed" ||
+            event.payload.status === "failed" ||
+            event.payload.status === "killed"
+          ) {
+            yield* pendingBackgroundTaskRepository.deleteByTaskId({
+              taskId: event.payload.taskId,
+            });
+          }
+          return;
         default:
           return;
       }
@@ -1949,7 +1965,8 @@ const make = Effect.gen(function* () {
       if (
         event.type === "task.started" ||
         event.type === "task.progress" ||
-        event.type === "task.completed"
+        event.type === "task.completed" ||
+        event.type === "task.updated"
       ) {
         yield* recordPendingBackgroundTask(thread.id, event, now);
       }
