@@ -27,8 +27,12 @@ vi.mock("../localApi", () => ({
   readLocalApi: readLocalApiMock,
 }));
 
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentApi, EnvironmentId } from "@t3tools/contracts";
 
+import {
+  __resetEnvironmentApiOverridesForTests,
+  __setEnvironmentApiOverrideForTests,
+} from "~/environmentApi";
 import ChatMarkdown from "./ChatMarkdown";
 import { useMarkdownViewerStore } from "../markdownViewerStore";
 
@@ -38,6 +42,7 @@ describe("ChatMarkdown", () => {
     openExternalMock.mockClear();
     readLocalApiMock.mockClear();
     useMarkdownViewerStore.setState({ open: false, request: null });
+    __resetEnvironmentApiOverridesForTests();
     localStorage.clear();
     document.body.innerHTML = "";
   });
@@ -133,10 +138,40 @@ describe("ChatMarkdown", () => {
     }
   });
 
-  it("opens an inline html path in a new tab via file:// protocol", async () => {
+  it("opens an inline html path in a new tab by reading it over the environment RPC", async () => {
     const htmlPath = "/var/folders/58/abc/architecture-review-20260606.html";
+    const readFile = vi.fn(async () => ({
+      contents: "<!doctype html><h1>Report</h1>",
+      resolvedPath: htmlPath,
+    }));
+    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
+      projects: { readFile },
+    } as unknown as EnvironmentApi);
+
+    const appendedNodes: HTMLElement[] = [];
+    const fakeDoc = {
+      title: "",
+      write: vi.fn(),
+      close: vi.fn(),
+      createElement: (tag: string) => document.createElement(tag),
+      body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
+    };
+    const fakeWindow = {
+      opener: {},
+      closed: false,
+      document: fakeDoc,
+      close: vi.fn(),
+    };
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValue(fakeWindow as unknown as Window);
+
     const screen = await render(
-      <ChatMarkdown text={`Report: \`${htmlPath}\``} cwd="/repo/project" />,
+      <ChatMarkdown
+        text={`Report: \`${htmlPath}\``}
+        cwd="/repo/project"
+        environmentId={"env-1" as EnvironmentId}
+      />,
     );
 
     try {
@@ -145,9 +180,133 @@ describe("ChatMarkdown", () => {
 
       await button.click();
 
+      // The tab is opened synchronously (preserving the user gesture), then the
+      // file is read remotely and rendered inside a sandboxed iframe.
+      expect(openSpy).toHaveBeenCalledWith("", "_blank");
+      expect(fakeWindow.opener).toBeNull();
       await vi.waitFor(() => {
-        expect(openExternalMock).toHaveBeenCalledWith(`file://${htmlPath}`);
+        expect(readFile).toHaveBeenCalledWith({ cwd: "/repo/project", path: htmlPath });
+        expect(appendedNodes).toHaveLength(1);
       });
+      const iframe = appendedNodes[0] as HTMLIFrameElement;
+      expect(iframe.tagName).toBe("IFRAME");
+      // Scripts may run, but same-origin access is withheld so the file cannot
+      // reach this app's session token.
+      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-popups");
+      expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+      expect(iframe.srcdoc).toBe("<!doctype html><h1>Report</h1>");
+      expect(openExternalMock).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
+
+  it("shows an empty-file placeholder for a blank html file", async () => {
+    const htmlPath = "/tmp/empty.html";
+    const readFile = vi.fn(async () => ({ contents: "   ", resolvedPath: htmlPath }));
+    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
+      projects: { readFile },
+    } as unknown as EnvironmentApi);
+
+    const appendedNodes: HTMLElement[] = [];
+    const fakeWindow = {
+      opener: {},
+      closed: false,
+      document: {
+        title: "",
+        write: vi.fn(),
+        close: vi.fn(),
+        createElement: (tag: string) => document.createElement(tag),
+        body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
+      },
+      close: vi.fn(),
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+
+    const screen = await render(
+      <ChatMarkdown
+        text={`Report: \`${htmlPath}\``}
+        cwd="/repo/project"
+        environmentId={"env-1" as EnvironmentId}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: "Open in new tab" }).click();
+      await vi.waitFor(() => {
+        expect(appendedNodes).toHaveLength(1);
+      });
+      const iframe = appendedNodes[0] as HTMLIFrameElement;
+      expect(iframe.srcdoc).toContain("This file is empty.");
+    } finally {
+      openSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
+
+  it("does not error if the tab is closed before the html read resolves", async () => {
+    const htmlPath = "/tmp/slow.html";
+    let resolveRead: (value: { contents: string; resolvedPath: string }) => void = () => {};
+    const readFile = vi.fn(
+      () =>
+        new Promise<{ contents: string; resolvedPath: string }>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
+      projects: { readFile },
+    } as unknown as EnvironmentApi);
+
+    const appendedNodes: HTMLElement[] = [];
+    const fakeWindow = {
+      opener: {},
+      closed: false,
+      document: {
+        title: "",
+        write: vi.fn(),
+        close: vi.fn(),
+        createElement: (tag: string) => document.createElement(tag),
+        body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
+      },
+      close: vi.fn(),
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+
+    const screen = await render(
+      <ChatMarkdown
+        text={`Report: \`${htmlPath}\``}
+        cwd="/repo/project"
+        environmentId={"env-1" as EnvironmentId}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: "Open in new tab" }).click();
+      await vi.waitFor(() => expect(readFile).toHaveBeenCalled());
+
+      // User closes the tab before the read completes.
+      fakeWindow.closed = true;
+      resolveRead({ contents: "<h1>late</h1>", resolvedPath: htmlPath });
+
+      // The late result must be ignored: nothing is written to the closed tab.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(appendedNodes).toHaveLength(0);
+      expect(fakeWindow.close).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
+
+  it("suppresses the html open affordance without an environment", async () => {
+    const screen = await render(
+      <ChatMarkdown text={"Report: `/tmp/report.html`"} cwd="/repo/project" />,
+    );
+
+    try {
+      await expect.element(page.getByText("/tmp/report.html")).toBeInTheDocument();
+      expect(document.querySelector('button[aria-label="Open in new tab"]')).toBeNull();
     } finally {
       await screen.unmount();
     }

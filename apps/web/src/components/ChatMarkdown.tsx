@@ -35,6 +35,7 @@ import {
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
+import { readEnvironmentApi } from "~/environmentApi";
 import { useMarkdownViewerStore } from "../markdownViewerStore";
 import { cn } from "../lib/utils";
 
@@ -143,14 +144,6 @@ function classifyInlineCodePath(raw: string): InlineCodePathKind | null {
   return null;
 }
 
-function buildFileUrl(absolutePath: string): string {
-  const forwardSlashed = absolutePath.replaceAll("\\", "/");
-  const withLeadingSlash = forwardSlashed.startsWith("/")
-    ? forwardSlashed
-    : `/${forwardSlashed}`;
-  return encodeURI(`file://${withLeadingSlash}`);
-}
-
 const INLINE_PATH_BUTTON_CLASS_NAME =
   "chat-markdown-path-action ml-1 inline-flex size-4 translate-y-[2px] items-center justify-center rounded-sm text-muted-foreground/60 align-baseline hover:bg-muted/60 hover:text-foreground/80";
 
@@ -158,35 +151,73 @@ function InlineHtmlPathCode({
   text,
   className,
   cwd,
+  environmentId,
   children,
 }: {
   text: string;
   className: string | undefined;
   cwd: string | undefined;
+  environmentId: EnvironmentId;
   children: ReactNode;
 }) {
-  const meta = resolveMarkdownFileLinkMeta(text, cwd);
   const handleOpen = useCallback(() => {
-    if (!meta) return;
-    const api = readLocalApi();
+    const api = readEnvironmentApi(environmentId);
     if (!api) {
       toastManager.add({ type: "error", title: "Open in new tab is unavailable" });
       return;
     }
-    void api.shell.openExternal(buildFileUrl(meta.filePath)).catch((error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Unable to open file",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    });
-  }, [meta]);
-
-  if (!meta) {
-    return <code className={className}>{children}</code>;
-  }
+    // Open the tab synchronously so the browser keeps the user-gesture context
+    // (a window.open() deferred past the await below would be blocked). The file
+    // is read over the environment RPC, so this works for remote sessions too,
+    // where the file lives on the server rather than the viewer's machine.
+    // `noopener` is omitted because it makes window.open return null; we sever
+    // the opener reference manually instead.
+    const win = window.open("", "_blank");
+    if (!win) {
+      toastManager.add({
+        type: "error",
+        title: "Pop-up blocked",
+        description: "Allow pop-ups for this site to open the file in a new tab.",
+      });
+      return;
+    }
+    win.opener = null;
+    win.document.write(
+      '<!doctype html><html><head><meta charset="utf-8"><title>Opening…</title>' +
+        "<style>html,body{margin:0;height:100%}iframe{border:0;display:block;width:100%;height:100%}</style>" +
+        "</head><body></body></html>",
+    );
+    win.document.close();
+    void api.projects
+      .readFile({ cwd: cwd ?? ".", path: text })
+      .then((result) => {
+        // The user may have closed the tab while the read was in flight.
+        if (win.closed) return;
+        // Render untrusted file HTML in a sandboxed iframe: scripts may run (for
+        // charts etc.) but `allow-same-origin` is withheld, so the document gets
+        // an opaque origin and cannot reach this app's session token/storage.
+        // oxlint-disable-next-line iframe-missing-sandbox -- sandbox set below via setAttribute
+        const iframe = win.document.createElement("iframe");
+        iframe.setAttribute("sandbox", "allow-scripts allow-popups");
+        iframe.srcdoc =
+          result.contents.trim().length > 0
+            ? result.contents
+            : "<!doctype html><body style='margin:0;font:13px system-ui,sans-serif;color:#888;padding:2rem'>This file is empty.</body>";
+        win.document.title = text;
+        win.document.body.appendChild(iframe);
+      })
+      .catch((error: unknown) => {
+        if (win.closed) return;
+        win.close();
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      });
+  }, [environmentId, cwd, text]);
 
   return (
     <span className="inline whitespace-nowrap">
@@ -261,9 +292,14 @@ const MarkdownCode: NonNullable<Components["code"]> = ({
   }
 
   const kind = classifyInlineCodePath(text);
-  if (kind === "html") {
+  if (kind === "html" && config.environmentId) {
     return (
-      <InlineHtmlPathCode text={text} className={className} cwd={config.cwd}>
+      <InlineHtmlPathCode
+        text={text}
+        className={className}
+        cwd={config.cwd}
+        environmentId={config.environmentId}
+      >
         {children}
       </InlineHtmlPathCode>
     );
