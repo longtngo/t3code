@@ -80,6 +80,52 @@ export function deriveLatestUsageSnapshot(
   return null;
 }
 
+/** Fixed window lengths, used to derive elapsed time from `resetsAt`. */
+export const USAGE_WINDOW_MS = {
+  fiveHour: 5 * 60 * 60 * 1000,
+  sevenDay: 7 * 24 * 60 * 60 * 1000,
+} as const;
+
+/** Below this |delta| (percentage points) we treat usage as tracking the pace. */
+export const PACE_DEADZONE = 3;
+
+export type PaceState = "ahead" | "behind" | "onPace";
+
+export interface Pace {
+  /** Where usage "should" be by now: share of the window elapsed, 0–100. */
+  readonly elapsedPct: number;
+  /** utilization − elapsedPct. Positive = ahead (burning faster than allowance). */
+  readonly delta: number;
+  readonly state: PaceState;
+}
+
+/**
+ * Compare current utilization against the share of the window that has elapsed.
+ * The API gives us the reset time, not the window start, so elapsed is derived
+ * as `windowMs − (resetsAt − now)`. In a 5-hour window, "on pace" is 1% every
+ * 3 minutes; being above that line means you'll exhaust the window early.
+ *
+ * Returns null when we can't place ourselves in the window — no `resetsAt`, an
+ * unparseable value, or a reset time that sits outside one window length (stale
+ * data or a clock skew), where a pace comparison would be misleading.
+ */
+export function computePace(
+  utilization: number,
+  resetsAt: string | null,
+  windowMs: number,
+  now: number,
+): Pace | null {
+  if (!resetsAt) return null;
+  const resetMs = new Date(resetsAt).getTime();
+  if (!Number.isFinite(resetMs)) return null;
+  const elapsedPct = ((windowMs - (resetMs - now)) / windowMs) * 100;
+  if (elapsedPct <= 0 || elapsedPct > 100) return null;
+  const delta = utilization - elapsedPct;
+  const state: PaceState =
+    Math.abs(delta) < PACE_DEADZONE ? "onPace" : delta > 0 ? "ahead" : "behind";
+  return { elapsedPct, delta, state };
+}
+
 export type UsageLevel = "green" | "yellow" | "orange" | "red";
 
 /**

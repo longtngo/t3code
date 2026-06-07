@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 
 import {
+  USAGE_WINDOW_MS,
+  computePace,
   deriveLatestUsageSnapshot,
   formatCredits,
   formatCreditsShort,
@@ -88,6 +90,44 @@ describe("usageLevel", () => {
     expect(usageLevel(89)).toBe("orange");
     expect(usageLevel(90)).toBe("red");
     expect(usageLevel(100)).toBe("red");
+  });
+});
+
+describe("computePace", () => {
+  // A 5-hour window resetting at 05:00; "now" sits partway through it.
+  const reset = Date.parse("2026-06-04T05:00:00Z");
+  const win = USAGE_WINDOW_MS.fiveHour;
+  // 40% elapsed = 2h into the 5h window → 2h before reset.
+  const at40pct = reset - 0.6 * win;
+
+  it("returns null without a reset time or with an unparseable one", () => {
+    expect(computePace(50, null, win, at40pct)).toBeNull();
+    expect(computePace(50, "not-a-date", win, at40pct)).toBeNull();
+  });
+
+  it("reports ahead when usage outpaces elapsed time", () => {
+    const pace = computePace(62, "2026-06-04T05:00:00Z", win, at40pct);
+    expect(pace?.state).toBe("ahead");
+    expect(Math.round(pace?.elapsedPct ?? 0)).toBe(40);
+    expect(Math.round(pace?.delta ?? 0)).toBe(22);
+  });
+
+  it("reports behind when usage trails elapsed time", () => {
+    const pace = computePace(22, "2026-06-04T05:00:00Z", win, at40pct);
+    expect(pace?.state).toBe("behind");
+    expect(Math.round(pace?.delta ?? 0)).toBe(-18);
+  });
+
+  it("treats usage within the dead-zone as on pace", () => {
+    expect(computePace(42, "2026-06-04T05:00:00Z", win, at40pct)?.state).toBe("onPace");
+    expect(computePace(38, "2026-06-04T05:00:00Z", win, at40pct)?.state).toBe("onPace");
+  });
+
+  it("returns null when the reset is outside one window length (stale / skewed)", () => {
+    // reset already passed → elapsed > 100%
+    expect(computePace(50, "2026-06-04T05:00:00Z", win, reset + 60_000)).toBeNull();
+    // reset is more than a full window away → elapsed <= 0%
+    expect(computePace(50, "2026-06-04T05:00:00Z", win, reset - win - 60_000)).toBeNull();
   });
 });
 

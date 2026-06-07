@@ -1,7 +1,11 @@
+import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import {
+  type Pace,
+  USAGE_WINDOW_MS,
   type UsageLevel,
   type UsageSnapshot,
+  computePace,
   formatCredits,
   formatCreditsShort,
   formatResetTime,
@@ -23,6 +27,23 @@ const LEVEL_BG: Record<UsageLevel, string> = {
   red: "bg-red-500",
 };
 
+interface WindowPaces {
+  readonly fiveHour: Pace | null;
+  readonly sevenDay: Pace | null;
+}
+
+/** Derive pace for the time-windowed segments. Extra (monthly) credits have no pace. */
+function deriveWindowPaces(usage: UsageSnapshot, now: number): WindowPaces {
+  return {
+    fiveHour: usage.fiveHour
+      ? computePace(usage.fiveHour.utilization, usage.fiveHour.resetsAt, USAGE_WINDOW_MS.fiveHour, now)
+      : null,
+    sevenDay: usage.sevenDay
+      ? computePace(usage.sevenDay.utilization, usage.sevenDay.resetsAt, USAGE_WINDOW_MS.sevenDay, now)
+      : null,
+  };
+}
+
 interface Segment {
   readonly key: "5h" | "7d" | "extra";
   readonly label: string;
@@ -30,9 +51,11 @@ interface Segment {
   readonly level: UsageLevel;
   /** Compact inline value shown beside the bar (desktop). */
   readonly inlineValue: string;
+  /** Pace vs elapsed time, or null when it can't be placed in the window. */
+  readonly pace: Pace | null;
 }
 
-function buildSegments(usage: UsageSnapshot): Segment[] {
+function buildSegments(usage: UsageSnapshot, paces: WindowPaces): Segment[] {
   const segments: Segment[] = [];
   if (usage.fiveHour) {
     const pct = usage.fiveHour.utilization;
@@ -42,6 +65,7 @@ function buildSegments(usage: UsageSnapshot): Segment[] {
       pct,
       level: usageLevel(pct),
       inlineValue: `${Math.round(pct)}%`,
+      pace: paces.fiveHour,
     });
   }
   if (usage.sevenDay) {
@@ -52,6 +76,7 @@ function buildSegments(usage: UsageSnapshot): Segment[] {
       pct,
       level: usageLevel(pct),
       inlineValue: `${Math.round(pct)}%`,
+      pace: paces.sevenDay,
     });
   }
   if (usage.extra?.isEnabled) {
@@ -62,22 +87,62 @@ function buildSegments(usage: UsageSnapshot): Segment[] {
       pct,
       level: usageLevel(pct),
       inlineValue: `${formatCreditsShort(usage.extra.usedCredits)}/${formatCreditsShort(usage.extra.monthlyLimit)}`,
+      pace: null,
     });
   }
   return segments;
 }
 
-function UsageBar(props: { pct: number; level: UsageLevel; className?: string }) {
+function UsageBar(props: {
+  pct: number;
+  level: UsageLevel;
+  /** Position (0–100) of the on-pace marker; omitted when pace is unknown. */
+  tickPct?: number | null;
+  className?: string;
+}) {
   const width = Math.max(0, Math.min(100, props.pct));
   return (
+    <span className={cn("relative inline-block h-1", props.className)} aria-hidden="true">
+      <span className="block h-full overflow-hidden rounded-full bg-muted">
+        <span
+          className={cn("block h-full rounded-full", LEVEL_BG[props.level])}
+          style={{ width: `${width}%` }}
+        />
+      </span>
+      {props.tickPct != null ? (
+        <span
+          className="absolute -top-0.5 -bottom-0.5 w-px rounded-full bg-foreground/80"
+          style={{ left: `${Math.max(0, Math.min(100, props.tickPct))}%` }}
+          title="on-pace position"
+        />
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Pace readout: an up arrow + magnitude when burning faster than the elapsed
+ * time allows (red), a down arrow when under it (green), or "on pace" within
+ * the dead-zone. `compact` (mobile) drops the "%" and hides the on-pace case.
+ */
+function PaceLabel(props: { pace: Pace; compact?: boolean }) {
+  if (props.pace.state === "onPace") {
+    return props.compact ? null : <span className="text-muted-foreground/70">on pace</span>;
+  }
+  const ahead = props.pace.state === "ahead";
+  const Icon = ahead ? ArrowUpIcon : ArrowDownIcon;
+  const mag = Math.round(Math.abs(props.pace.delta));
+  return (
     <span
-      className={cn("inline-block h-1 overflow-hidden rounded-full bg-muted", props.className)}
-      aria-hidden="true"
+      className={cn(
+        "inline-flex items-center gap-px font-medium tabular-nums",
+        ahead ? "text-red-500" : "text-green-500",
+      )}
+      title={ahead ? `${mag}% ahead of pace` : `${mag}% under pace`}
     >
-      <span
-        className={cn("block h-full rounded-full", LEVEL_BG[props.level])}
-        style={{ width: `${width}%` }}
-      />
+      <Icon className="h-2.5 w-2.5" aria-hidden="true" />
+      {mag}
+      {props.compact ? "" : "%"}
     </span>
   );
 }
@@ -88,19 +153,28 @@ function PopoverRow(props: {
   pct: number;
   level: UsageLevel;
   detail?: string | null;
+  pace?: Pace | null;
 }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-6 text-xs">
         <span className="text-muted-foreground">{props.label}</span>
-        <span className={cn("font-medium tabular-nums", LEVEL_TEXT[props.level])}>
-          {props.value}
+        <span className="flex items-center gap-2">
+          {props.pace ? <PaceLabel pace={props.pace} /> : null}
+          <span className={cn("font-medium tabular-nums", LEVEL_TEXT[props.level])}>
+            {props.value}
+          </span>
         </span>
       </div>
       {props.detail ? (
         <div className="text-[11px] text-muted-foreground">{props.detail}</div>
       ) : null}
-      <UsageBar pct={props.pct} level={props.level} className="w-full" />
+      <UsageBar
+        pct={props.pct}
+        level={props.level}
+        tickPct={props.pace?.elapsedPct ?? null}
+        className="w-full"
+      />
     </div>
   );
 }
@@ -112,7 +186,8 @@ function PopoverRow(props: {
  */
 export function UsageMeter(props: { usage: UsageSnapshot }) {
   const { usage } = props;
-  const segments = buildSegments(usage);
+  const paces = deriveWindowPaces(usage, Date.now());
+  const segments = buildSegments(usage, paces);
   if (segments.length === 0) {
     return null;
   }
@@ -134,10 +209,16 @@ export function UsageMeter(props: { usage: UsageSnapshot }) {
               {segments.map((segment) => (
                 <span key={segment.key} className="flex items-center gap-1.5">
                   <span className="text-muted-foreground/70">{segment.label}</span>
-                  <UsageBar pct={segment.pct} level={segment.level} className="w-8" />
+                  <UsageBar
+                    pct={segment.pct}
+                    level={segment.level}
+                    tickPct={segment.pace?.elapsedPct ?? null}
+                    className="w-8"
+                  />
                   <span className={cn("tabular-nums", LEVEL_TEXT[segment.level])}>
                     {segment.inlineValue}
                   </span>
+                  {segment.pace ? <PaceLabel pace={segment.pace} /> : null}
                 </span>
               ))}
             </span>
@@ -154,6 +235,7 @@ export function UsageMeter(props: { usage: UsageSnapshot }) {
                   <span className={cn("font-medium tabular-nums", LEVEL_TEXT[segment.level])}>
                     {Math.round(segment.pct)}%
                   </span>
+                  {segment.pace ? <PaceLabel pace={segment.pace} compact /> : null}
                 </span>
               ))}
             </span>
@@ -171,6 +253,7 @@ export function UsageMeter(props: { usage: UsageSnapshot }) {
               value={`${Math.round(usage.fiveHour.utilization)}%`}
               pct={usage.fiveHour.utilization}
               level={usageLevel(usage.fiveHour.utilization)}
+              pace={paces.fiveHour}
               detail={
                 formatResetTime(usage.fiveHour.resetsAt, "time")
                   ? `resets ${formatResetTime(usage.fiveHour.resetsAt, "time")}`
@@ -184,6 +267,7 @@ export function UsageMeter(props: { usage: UsageSnapshot }) {
               value={`${Math.round(usage.sevenDay.utilization)}%`}
               pct={usage.sevenDay.utilization}
               level={usageLevel(usage.sevenDay.utilization)}
+              pace={paces.sevenDay}
               detail={
                 formatResetTime(usage.sevenDay.resetsAt, "datetime")
                   ? `resets ${formatResetTime(usage.sevenDay.resetsAt, "datetime")}`
