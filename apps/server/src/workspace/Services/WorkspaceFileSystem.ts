@@ -10,7 +10,12 @@ import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
-import type { ProjectWriteFileInput, ProjectWriteFileResult } from "@t3tools/contracts";
+import type {
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+} from "@t3tools/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
@@ -40,6 +45,18 @@ export interface WorkspaceFileSystemShape {
     ProjectWriteFileResult,
     WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
+
+  /**
+   * Read a file as UTF-8 text.
+   *
+   * Resolves relative paths against `cwd` and expands a leading `~`. Unlike
+   * {@link WorkspaceFileSystemShape.writeFile}, absolute paths outside the
+   * workspace root are allowed (report/temp files commonly live outside it).
+   * Files larger than a fixed byte cap are rejected rather than read.
+   */
+  readonly readFile: (
+    input: ProjectReadFileInput,
+  ) => Effect.Effect<ProjectReadFileResult, WorkspaceFileSystemError>;
 }
 
 /**

@@ -196,6 +196,7 @@ function createClient() {
     projects: {
       searchEntries: vi.fn(async () => []),
       writeFile: vi.fn(async () => undefined),
+      readFile: vi.fn(async () => undefined),
     },
     shell: {
       openInEditor: vi.fn(async () => undefined),

@@ -1,9 +1,10 @@
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon } from "lucide-react";
+import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
 import React, {
   Children,
   Suspense,
+  createContext,
   type MouseEvent as ReactMouseEvent,
   isValidElement,
   use,
@@ -34,6 +35,7 @@ import {
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
+import { useMarkdownViewerStore } from "../markdownViewerStore";
 import { cn } from "../lib/utils";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -62,9 +64,28 @@ interface ChatMarkdownProps {
   cwd: string | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  /**
+   * Environment used to read files for the inline markdown-path viewer. Omit it
+   * (e.g. plan previews) to suppress the in-app markdown "open" affordance.
+   */
+  environmentId?: EnvironmentId;
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+
+interface ChatMarkdownConfig {
+  cwd: string | undefined;
+  environmentId: EnvironmentId | undefined;
+  theme: "light" | "dark";
+}
+
+// Carries per-render config to the module-level `MarkdownCode` component (which
+// must stay a stable reference so `extractCodeBlock` can identify it).
+const ChatMarkdownConfigContext = createContext<ChatMarkdownConfig>({
+  cwd: undefined,
+  environmentId: undefined,
+  theme: "dark",
+});
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -95,6 +116,178 @@ function nodeToPlainText(node: ReactNode): string {
   return "";
 }
 
+type InlineCodePathKind = "html" | "markdown";
+
+// Characters that never appear in legitimate file paths — their presence means
+// the inline code is markup/code, not a path, so no affordance is shown.
+const NON_PATH_CHARS_PATTERN = /[<>|*"`]/;
+
+/**
+ * Classify a single-line inline-code string as an openable HTML or markdown
+ * path. Conservative: requires a single whitespace-free token ending in a known
+ * extension, with no markup characters.
+ */
+function classifyInlineCodePath(raw: string): InlineCodePathKind | null {
+  const text = raw.trim();
+  if (text.length === 0 || /\s/.test(text) || NON_PATH_CHARS_PATTERN.test(text)) {
+    return null;
+  }
+  // Reject URLs (http://, file://, …) — they aren't local file paths. The `://`
+  // check leaves Windows drive paths (`C:\…`) untouched.
+  if (text.includes("://")) {
+    return null;
+  }
+  const lower = text.toLowerCase();
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
+  return null;
+}
+
+function buildFileUrl(absolutePath: string): string {
+  const forwardSlashed = absolutePath.replaceAll("\\", "/");
+  const withLeadingSlash = forwardSlashed.startsWith("/")
+    ? forwardSlashed
+    : `/${forwardSlashed}`;
+  return encodeURI(`file://${withLeadingSlash}`);
+}
+
+const INLINE_PATH_BUTTON_CLASS_NAME =
+  "chat-markdown-path-action ml-1 inline-flex size-4 translate-y-[2px] items-center justify-center rounded-sm text-muted-foreground/60 align-baseline hover:bg-muted/60 hover:text-foreground/80";
+
+function InlineHtmlPathCode({
+  text,
+  className,
+  cwd,
+  children,
+}: {
+  text: string;
+  className: string | undefined;
+  cwd: string | undefined;
+  children: ReactNode;
+}) {
+  const meta = resolveMarkdownFileLinkMeta(text, cwd);
+  const handleOpen = useCallback(() => {
+    if (!meta) return;
+    const api = readLocalApi();
+    if (!api) {
+      toastManager.add({ type: "error", title: "Open in new tab is unavailable" });
+      return;
+    }
+    void api.shell.openExternal(buildFileUrl(meta.filePath)).catch((error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to open file",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    });
+  }, [meta]);
+
+  if (!meta) {
+    return <code className={className}>{children}</code>;
+  }
+
+  return (
+    <span className="inline whitespace-nowrap">
+      <code className={className}>{children}</code>
+      <button
+        type="button"
+        className={INLINE_PATH_BUTTON_CLASS_NAME}
+        onClick={handleOpen}
+        title="Open in new tab"
+        aria-label="Open in new tab"
+      >
+        <ExternalLinkIcon className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+function InlineMarkdownPathCode({
+  text,
+  className,
+  cwd,
+  environmentId,
+  children,
+}: {
+  text: string;
+  className: string | undefined;
+  cwd: string | undefined;
+  environmentId: EnvironmentId;
+  children: ReactNode;
+}) {
+  const openMarkdownViewer = useMarkdownViewerStore((state) => state.openMarkdownViewer);
+  const handleOpen = useCallback(() => {
+    openMarkdownViewer({ path: text, cwd, environmentId });
+  }, [openMarkdownViewer, text, cwd, environmentId]);
+
+  return (
+    <span className="inline whitespace-nowrap">
+      <code className={className}>{children}</code>
+      <button
+        type="button"
+        className={INLINE_PATH_BUTTON_CLASS_NAME}
+        onClick={handleOpen}
+        title="Open markdown preview"
+        aria-label="Open markdown preview"
+      >
+        <FileTextIcon className="size-3" />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Custom `code` renderer. Fenced/indented blocks are handled by the `pre`
+ * component (see {@link extractCodeBlock}); this only adds affordances to inline
+ * code that looks like an openable HTML/markdown path.
+ */
+const MarkdownCode: NonNullable<Components["code"]> = ({
+  node: _node,
+  className,
+  children,
+  ...props
+}) => {
+  const config = use(ChatMarkdownConfigContext);
+  const text = nodeToPlainText(children);
+  const isBlock = (className != null && /language-/.test(className)) || text.includes("\n");
+  if (isBlock) {
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  }
+
+  const kind = classifyInlineCodePath(text);
+  if (kind === "html") {
+    return (
+      <InlineHtmlPathCode text={text} className={className} cwd={config.cwd}>
+        {children}
+      </InlineHtmlPathCode>
+    );
+  }
+  if (kind === "markdown" && config.environmentId) {
+    return (
+      <InlineMarkdownPathCode
+        text={text}
+        className={className}
+        cwd={config.cwd}
+        environmentId={config.environmentId}
+      >
+        {children}
+      </InlineMarkdownPathCode>
+    );
+  }
+
+  return (
+    <code className={className} {...props}>
+      {children}
+    </code>
+  );
+};
+
 function extractCodeBlock(
   children: ReactNode,
 ): { className: string | undefined; code: string } | null {
@@ -106,7 +299,7 @@ function extractCodeBlock(
   const onlyChild = childNodes[0];
   if (
     !isValidElement<{ className?: string; children?: ReactNode }>(onlyChild) ||
-    onlyChild.type !== "code"
+    (onlyChild.type !== "code" && onlyChild.type !== MarkdownCode)
   ) {
     return null;
   }
@@ -517,6 +710,7 @@ function ChatMarkdown({
   cwd,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
+  environmentId,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -580,6 +774,7 @@ function ChatMarkdown({
           />
         );
       },
+      code: MarkdownCode,
       pre({ node: _node, children, ...props }) {
         const codeBlock = extractCodeBlock(children);
         if (!codeBlock) {
@@ -612,15 +807,22 @@ function ChatMarkdown({
     ],
   );
 
+  const markdownConfig = useMemo<ChatMarkdownConfig>(
+    () => ({ cwd, environmentId, theme: resolvedTheme }),
+    [cwd, environmentId, resolvedTheme],
+  );
+
   return (
     <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
-      >
-        {text}
-      </ReactMarkdown>
+      <ChatMarkdownConfigContext.Provider value={markdownConfig}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={markdownComponents}
+          urlTransform={markdownUrlTransform}
+        >
+          {text}
+        </ReactMarkdown>
+      </ChatMarkdownConfigContext.Provider>
     </div>
   );
 }

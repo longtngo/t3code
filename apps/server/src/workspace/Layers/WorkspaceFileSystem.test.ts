@@ -137,4 +137,61 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
   });
+
+  describe("readFile", () => {
+    it.effect("reads a file relative to the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "docs/report.md", "# Report\n\nHello.\n");
+
+        const result = yield* workspaceFileSystem.readFile({ cwd, path: "docs/report.md" });
+
+        expect(result.contents).toBe("# Report\n\nHello.\n");
+        expect(result.resolvedPath).toBe(path.join(cwd, "docs/report.md"));
+      }),
+    );
+
+    it.effect("reads an absolute file located outside the workspace root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        const path = yield* Path.Path;
+        const absolutePath = path.join(outsideDir, "decisions.md");
+        yield* writeTextFile(outsideDir, "decisions.md", "# Decisions\n");
+
+        const result = yield* workspaceFileSystem.readFile({ cwd, path: absolutePath });
+
+        expect(result.contents).toBe("# Decisions\n");
+        expect(result.resolvedPath).toBe(absolutePath);
+      }),
+    );
+
+    it.effect("rejects reading a directory", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "docs/report.md", "# Report\n");
+
+        const error = yield* workspaceFileSystem.readFile({ cwd, path: "docs" }).pipe(Effect.flip);
+
+        expect(error.detail).toContain("Not a file");
+      }),
+    );
+
+    it.effect("rejects files larger than the read cap", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const oversized = "a".repeat(2 * 1024 * 1024 + 1);
+        yield* writeTextFile(cwd, "big.md", oversized);
+
+        const error = yield* workspaceFileSystem.readFile({ cwd, path: "big.md" }).pipe(Effect.flip);
+
+        expect(error.detail).toContain("too large to preview");
+      }),
+    );
+  });
 });

@@ -13,6 +13,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
+import { MarkdownFileViewerSidebar } from "../components/MarkdownFileViewerSidebar";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
@@ -151,6 +152,7 @@ function RootRouteView() {
         ) : (
           appShell
         )}
+        <MarkdownFileViewerSidebar />
       </AnchoredToastProvider>
     </ToastProvider>
   );

@@ -53,3 +53,27 @@ export class ProjectWriteFileError extends Schema.TaggedErrorClass<ProjectWriteF
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+const PROJECT_READ_FILE_PATH_MAX_LENGTH = 4096;
+
+export const ProjectReadFileInput = Schema.Struct({
+  // Working directory used to resolve relative paths. Absolute paths and `~`
+  // expansion are honored regardless of cwd (report/temp files live outside it).
+  cwd: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
+
+export const ProjectReadFileResult = Schema.Struct({
+  contents: Schema.String,
+  resolvedPath: TrimmedNonEmptyString,
+});
+export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFileError>()(
+  "ProjectReadFileError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
