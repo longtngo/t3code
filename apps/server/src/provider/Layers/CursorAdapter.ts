@@ -1117,6 +1117,8 @@ export function makeCursorAdapter(
       listSessions,
       hasSession,
       stopAll,
+      // Cursor has no account-usage concept; on-demand refresh is a no-op.
+      refreshAccountUsage: () => Effect.void,
       streamEvents,
     } satisfies CursorAdapterShape;
   });

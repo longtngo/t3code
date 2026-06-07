@@ -120,6 +120,18 @@ export interface ProviderAdapterShape<TError> {
   readonly stopAll: () => Effect.Effect<void, TError>;
 
   /**
+   * Force an immediate account-usage poll and broadcast.
+   *
+   * Account usage (OAuth 5h/7d limits + extra credit spend) is otherwise
+   * emitted only by a per-adapter background poller. This lets callers trigger
+   * an on-demand poll; the fresh snapshot is fanned out to active sessions via
+   * the adapter's `account.usage.updated` runtime event, so this resolves with
+   * no value. Adapters whose provider has no account-usage concept implement
+   * this as a no-op.
+   */
+  readonly refreshAccountUsage: () => Effect.Effect<void, TError>;
+
+  /**
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;

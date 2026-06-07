@@ -29,7 +29,7 @@ import { readEnvironmentApi } from "~/environmentApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 
-// Row chrome shared with ComposerTodoList so the two plan surfaces stay in sync.
+// Row chrome for plan steps, kept as standalone helpers for reuse and testing.
 export function stepRowClass(status: string): string {
   return cn(
     "rounded-lg transition-colors duration-200",
@@ -164,6 +164,9 @@ const PlanSidebar = memo(function PlanSidebar({
           >
             {label}
           </Badge>
+          {activePlan?.steps.some((step) => step.status === "inProgress") ? (
+            <LoaderIcon className="size-3 animate-spin text-blue-400" aria-label="Task in progress" />
+          ) : null}
           {activePlan ? (
             <span className="text-[11px] text-muted-foreground/60">
               {formatTimestamp(activePlan.createdAt, timestampFormat)}

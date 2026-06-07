@@ -976,6 +976,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const refreshAccountUsage: ProviderServiceShape["refreshAccountUsage"] = Effect.fn(
+    "refreshAccountUsage",
+  )(function* () {
+    const currentAdapters = yield* getAdapterEntries;
+    yield* Effect.forEach(
+      currentAdapters,
+      ([instanceId, adapter]) =>
+        adapter.refreshAccountUsage().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.account-usage.refresh-failed", {
+              instanceId,
+              provider: adapter.provider,
+              cause,
+            }),
+          ),
+        ),
+      { discard: true },
+    );
+  });
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
@@ -1043,6 +1063,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
+    refreshAccountUsage,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

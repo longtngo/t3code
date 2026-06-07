@@ -27,12 +27,17 @@ function renderHeader(props?: Partial<Parameters<typeof ChatHeader>[0]>) {
         diffToggleShortcutLabel={null}
         gitCwd={null}
         diffOpen={false}
+        tasksPanelOpen={false}
+        planStepsCompleted={0}
+        planStepsTotal={0}
+        planHasActiveStep={false}
         onRunProjectScript={vi.fn()}
         onAddProjectScript={vi.fn()}
         onUpdateProjectScript={vi.fn()}
         onDeleteProjectScript={vi.fn()}
         onToggleTerminal={vi.fn()}
         onToggleDiff={vi.fn()}
+        onToggleTasksPanel={vi.fn()}
         {...props}
       />
     </SidebarProvider>,

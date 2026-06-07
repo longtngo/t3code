@@ -122,7 +122,6 @@ import {
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
 } from "../modelSelection";
-import { rememberAccountModel } from "../accountModelMemory";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -1571,6 +1570,11 @@ export default function ChatView(props: ChatViewProps) {
     [activeLatestTurn?.turnId, threadActivities],
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const planStepsTotal = activePlan?.steps.length ?? 0;
+  const planStepsCompleted =
+    activePlan?.steps.filter((step) => step.status === "completed").length ?? 0;
+  const planHasActiveStep =
+    activePlan?.steps.some((step) => step.status === "inProgress") ?? false;
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3687,7 +3691,6 @@ export default function ChatView(props: ChatViewProps) {
         instanceId,
         model: resolvedModel,
       };
-      rememberAccountModel(instanceId, resolvedModel);
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
@@ -3810,12 +3813,17 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          tasksPanelOpen={planSidebarOpen}
+          planStepsCompleted={planStepsCompleted}
+          planStepsTotal={planStepsTotal}
+          planHasActiveStep={planHasActiveStep}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onToggleTasksPanel={togglePlanSidebar}
         />
       </header>
 
@@ -3913,17 +3921,12 @@ export default function ChatView(props: ChatViewProps) {
                   respondingRequestIds={respondingRequestIds}
                   showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                   activeProposedPlan={activeProposedPlan}
-                  activePlan={activePlan}
-                  sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                  planSidebarLabel={planSidebarLabel}
-                  planSidebarOpen={planSidebarOpen}
                   runtimeMode={runtimeMode}
                   interactionMode={interactionMode}
                   lockedProvider={lockedProvider}
                   providerStatuses={providerStatuses as ServerProvider[]}
                   activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                   activeThreadModelSelection={activeThread?.modelSelection}
-                  activeThreadActivities={activeThread?.activities}
                   resolvedTheme={resolvedTheme}
                   settings={settings}
                   keybindings={keybindings}
@@ -3950,7 +3953,6 @@ export default function ChatView(props: ChatViewProps) {
                   toggleInteractionMode={toggleInteractionMode}
                   handleRuntimeModeChange={handleRuntimeModeChange}
                   handleInteractionModeChange={handleInteractionModeChange}
-                  togglePlanSidebar={togglePlanSidebar}
                   focusComposer={focusComposer}
                   scheduleComposerFocus={scheduleComposerFocus}
                   setThreadError={setThreadError}

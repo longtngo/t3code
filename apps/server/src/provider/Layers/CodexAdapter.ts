@@ -1688,6 +1688,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
+    // Codex has no account-usage concept; on-demand refresh is a no-op.
+    refreshAccountUsage: () => Effect.void,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },

@@ -504,6 +504,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       readThread,
       rollbackThread,
       stopAll,
+      refreshAccountUsage: () => Effect.void,
       streamEvents: Stream.fromQueue(runtimeEvents),
     };
 

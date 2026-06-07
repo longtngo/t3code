@@ -41,6 +41,7 @@ const fakeCodexAdapter: CodexAdapterShape = {
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
+  refreshAccountUsage: vi.fn(),
   streamEvents: Stream.empty,
 };
 
@@ -58,6 +59,7 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
+  refreshAccountUsage: vi.fn(),
   streamEvents: Stream.empty,
 };
 
@@ -75,6 +77,7 @@ const fakeOpenCodeAdapter: OpenCodeAdapterShape = {
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
+  refreshAccountUsage: vi.fn(),
   streamEvents: Stream.empty,
 };
 
@@ -92,6 +95,7 @@ const fakeCursorAdapter: CursorAdapterShape = {
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
+  refreshAccountUsage: vi.fn(),
   streamEvents: Stream.empty,
 };
 

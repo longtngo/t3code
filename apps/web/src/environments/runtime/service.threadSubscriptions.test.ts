@@ -81,6 +81,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
     dispose: async () => undefined,
     reconnect: async () => undefined,
     isHeartbeatFresh: () => false,
+    accountUsage: {
+      refresh: vi.fn(),
+    },
     cloud: {
       getRelayClientStatus: vi.fn(),
       installRelayClient: vi.fn(),

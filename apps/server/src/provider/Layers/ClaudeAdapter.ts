@@ -1312,6 +1312,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
   });
 
+  // Public adapter method: force an on-demand poll+broadcast, reusing the same
+  // fetch/emit path as the background poller above.
+  const refreshAccountUsageNow: ClaudeAdapterShape["refreshAccountUsage"] = () =>
+    refreshAccountUsage;
+
   // Poll first (fills the cache promptly), then wait between ticks.
   yield* Effect.forever(
     Effect.gen(function* () {
@@ -3743,6 +3748,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
+    refreshAccountUsage: refreshAccountUsageNow,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },

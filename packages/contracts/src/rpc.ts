@@ -175,6 +175,9 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
 
+  // Account usage methods
+  accountUsageRefresh: "account.usage.refresh",
+
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -273,6 +276,20 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * Force an immediate account-usage poll. Account usage is otherwise emitted
+ * only by a 60s background poller; this lets the client trigger an on-demand
+ * refresh (e.g. a "force refresh" button). The poll fans the fresh snapshot
+ * out to active sessions as `account.usage.updated` activities, so the success
+ * value is just an acknowledgement — the updated data arrives via the event
+ * stream, not this response.
+ */
+export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: EnvironmentAuthorizationError,
 });
 
@@ -568,6 +585,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
+  WsAccountUsageRefreshRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,

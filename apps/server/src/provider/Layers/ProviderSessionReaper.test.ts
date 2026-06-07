@@ -204,6 +204,7 @@ describe("ProviderSessionReaper", () => {
         });
       },
       rollbackConversation: () => unsupported(),
+      refreshAccountUsage: () => Effect.void,
       streamEvents: Stream.empty,
     };
 

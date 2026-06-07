@@ -1439,6 +1439,8 @@ export function makeOpenCodeAdapter(
       readThread,
       rollbackThread,
       stopAll,
+      // OpenCode has no account-usage concept; on-demand refresh is a no-op.
+      refreshAccountUsage: () => Effect.void,
       get streamEvents() {
         return Stream.fromQueue(runtimeEvents);
       },

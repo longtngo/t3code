@@ -612,6 +612,14 @@ export interface EnvironmentApi {
   review: {
     getDiffPreview: (input: ReviewDiffPreviewInput) => Promise<ReviewDiffPreviewResult>;
   };
+  accountUsage: {
+    /**
+     * Trigger an immediate account-usage poll. Resolves once the server has
+     * fanned out a fresh `account.usage.updated` activity to active sessions;
+     * the updated data arrives via the event stream, not this response.
+     */
+    refresh: () => Promise<{ ok: true }>;
+  };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;

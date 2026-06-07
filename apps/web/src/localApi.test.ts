@@ -91,6 +91,9 @@ const rpcClientMock = {
   review: {
     getDiffPreview: vi.fn(),
   },
+  accountUsage: {
+    refresh: vi.fn(),
+  },
   server: {
     getConfig: vi.fn(),
     refreshProviders: vi.fn(),

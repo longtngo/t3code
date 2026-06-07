@@ -8,11 +8,13 @@ import {
   FolderIcon,
   MonitorIcon,
 } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { deriveLatestUsageSnapshot } from "../lib/usage";
+import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
+import { readEnvironmentApi } from "~/environmentApi";
 import { useStore } from "../store";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import {
@@ -214,6 +216,13 @@ export const BranchToolbar = memo(function BranchToolbar({
     () => (isClaudeModelSelected && activities ? deriveLatestUsageSnapshot(activities) : null),
     [isClaudeModelSelected, activities],
   );
+  const contextWindowSnapshot = useMemo(
+    () => (activities ? deriveLatestContextWindowSnapshot(activities) : null),
+    [activities],
+  );
+  const handleUsageRefresh = useCallback(async () => {
+    await readEnvironmentApi(environmentId)?.accountUsage.refresh();
+  }, [environmentId]);
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -304,9 +313,13 @@ export const BranchToolbar = memo(function BranchToolbar({
 
       {/* The meter's fixed-width bars/pills can't shrink; sharing the selector
           row overlapped it at narrow widths. */}
-      {usageSnapshot ? (
+      {usageSnapshot || contextWindowSnapshot ? (
         <div className="flex items-center justify-center">
-          <UsageMeter usage={usageSnapshot} />
+          <UsageMeter
+            usage={usageSnapshot}
+            contextWindow={contextWindowSnapshot}
+            {...(usageSnapshot ? { onRefresh: handleUsageRefresh } : {})}
+          />
         </div>
       ) : null}
     </div>

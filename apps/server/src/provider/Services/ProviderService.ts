@@ -106,6 +106,16 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Force an immediate account-usage poll across all registered adapters.
+   *
+   * Fans the fresh snapshot out to active sessions via each adapter's
+   * `account.usage.updated` runtime event (the same path the background poller
+   * uses). Per-adapter failures are logged and swallowed so one misbehaving
+   * provider can't fail the whole refresh.
+   */
+  readonly refreshAccountUsage: () => Effect.Effect<void>;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
