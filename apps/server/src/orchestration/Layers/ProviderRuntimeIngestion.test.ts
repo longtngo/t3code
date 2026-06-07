@@ -18,6 +18,7 @@ import {
   MessageId,
   ProjectId,
   ProviderItemId,
+  RuntimeTaskId,
   type ServerSettings,
   ThreadId,
   TurnId,
@@ -35,6 +36,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { PendingBackgroundTaskRepositoryLive } from "../../persistence/Layers/PendingBackgroundTask.ts";
+import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
+import { makeRuntimeBootIdLive } from "../../environment/Layers/RuntimeBootId.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -191,7 +195,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | PendingBackgroundTaskRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -234,6 +241,8 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
+      Layer.provideMerge(makeRuntimeBootIdLive("ingestion-test-boot")),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -246,6 +255,7 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const pendingRepo = await runtime.runPromise(Effect.service(PendingBackgroundTaskRepository));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -316,6 +326,7 @@ describe("ProviderRuntimeIngestion", () => {
       setProviderSession: provider.setSession,
       drain,
       listTurnActivity: () => Effect.runPromise(ingestion.listTurnActivity),
+      pendingTasks: () => Effect.runPromise(pendingRepo.list()),
     };
   }
 
@@ -359,6 +370,84 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("records a pending background task on task.started and clears it on task.completed", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // A backgrounded task's task.started fires while the launching turn is
+    // still active, so it carries a turnId — we still record it.
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-task-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-bg"),
+      payload: { taskId: RuntimeTaskId.make("task-bg-1"), description: "watch the build" },
+    });
+    await harness.drain();
+
+    let pending = await harness.pendingTasks();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.taskId).toBe("task-bg-1");
+    expect(pending[0]?.threadId).toBe("thread-1");
+    expect(pending[0]?.recoveryAttempts).toBe(0);
+
+    // task.progress refreshes last_seen_at.
+    harness.emit({
+      type: "task.progress",
+      eventId: asEventId("evt-task-progress"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:05:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-bg-1"), description: "still watching" },
+    });
+    await harness.drain();
+    pending = await harness.pendingTasks();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.lastSeenAt).toBe("2026-01-01T00:05:00.000Z");
+
+    // task.completed clears the row (the normal happy path).
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-task-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:10:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-bg-1"), status: "completed" },
+    });
+    await harness.drain();
+    pending = await harness.pendingTasks();
+    expect(pending).toHaveLength(0);
+  });
+
+  it("clears a pending background task even when it settles with a stopped/failed status", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-task-started-2"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      payload: { taskId: RuntimeTaskId.make("task-bg-2"), description: "watcher" },
+    });
+    await harness.drain();
+    expect(await harness.pendingTasks()).toHaveLength(1);
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-task-stopped-2"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:10:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-bg-2"), status: "stopped" },
+    });
+    await harness.drain();
+    expect(await harness.pendingTasks()).toHaveLength(0);
   });
 
   it("tracks last turn activity for the stall watchdog and clears it on terminal events", async () => {

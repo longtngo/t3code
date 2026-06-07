@@ -32,6 +32,8 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
+import { RuntimeBootId } from "../../environment/Services/RuntimeBootId.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -734,6 +736,8 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
+  const { bootId } = yield* RuntimeBootId;
   const serverSettingsService = yield* ServerSettingsService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
@@ -1371,6 +1375,64 @@ const make = Effect.gen(function* () {
   // task completions (eventTurnId set, e.g. plan subtasks) and explicitly
   // stopped tasks never wake the thread, and a thread that is busy, waiting on
   // the user, or archived is left untouched.
+  // Durable record of in-flight background tasks for the recovery heartbeat
+  // (see migration 033 + BackgroundTaskRecoveryWatchdog). "Background-ness"
+  // cannot be known at task.started (a background task's task_started still
+  // carries its launching turn id), so we record EVERY task.started and delete
+  // on completion. In normal operation a turn-scoped task (plan subtask,
+  // foreground subagent) self-deletes at its completion before its thread ever
+  // goes idle, so it is not recovered. The recovery message asks the agent to
+  // re-verify rather than trust a completion it never saw, so the residual edge
+  // cases — a task interrupted mid-turn by a server restart, or a row that leaks
+  // because its completion was dropped — recover an idle thread harmlessly
+  // (the agent re-checks and continues). Best-effort: a persistence hiccup must
+  // never break event ingestion.
+  const recordPendingBackgroundTask = (
+    threadId: ThreadId,
+    event: ProviderRuntimeEvent,
+    createdAt: string,
+  ) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "task.started":
+          yield* pendingBackgroundTaskRepository.upsert({
+            taskId: event.payload.taskId,
+            threadId,
+            bootId,
+            startedAt: createdAt,
+            lastSeenAt: createdAt,
+            recoveryAttempts: 0,
+          });
+          return;
+        case "task.progress":
+          yield* pendingBackgroundTaskRepository.touch({
+            taskId: event.payload.taskId,
+            lastSeenAt: createdAt,
+          });
+          return;
+        case "task.completed":
+          // Any settle (completed/failed/stopped) clears the pending record.
+          yield* pendingBackgroundTaskRepository.deleteByTaskId({
+            taskId: event.payload.taskId,
+          });
+          return;
+        default:
+          return;
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          "provider runtime ingestion failed to record pending background task",
+          {
+            eventId: event.eventId,
+            threadId,
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          },
+        ),
+      ),
+    );
+
   const maybeWakeThreadForCompletedTask = Effect.fn("maybeWakeThreadForCompletedTask")(
     function* (input: {
       event: Extract<ProviderRuntimeEvent, { type: "task.completed" }>;
@@ -1883,6 +1945,14 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (
+        event.type === "task.started" ||
+        event.type === "task.progress" ||
+        event.type === "task.completed"
+      ) {
+        yield* recordPendingBackgroundTask(thread.id, event, now);
+      }
 
       if (event.type === "task.completed") {
         yield* maybeWakeThreadForCompletedTask({

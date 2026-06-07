@@ -5,6 +5,7 @@ import {
   TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RuntimeTaskId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -20,6 +21,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import {
+  PendingBackgroundTaskRepository,
+  type PendingBackgroundTask,
+} from "../../persistence/Services/PendingBackgroundTask.ts";
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
@@ -139,7 +144,33 @@ describe("ProviderSessionReaper", () => {
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
+    /** Thread ids that should report an in-flight background task (reaper guard). */
+    readonly pendingTaskThreadIds?: ReadonlyArray<ThreadId>;
   }) {
+    const pendingTaskThreadIds = new Set(input.pendingTaskThreadIds ?? []);
+    const pendingBackgroundTaskRepositoryMock = Layer.succeed(PendingBackgroundTaskRepository, {
+      upsert: () => Effect.void,
+      touch: () => Effect.void,
+      incrementAttempts: () => Effect.void,
+      getByTaskId: () => Effect.succeed(Option.none()),
+      list: () => Effect.succeed([]),
+      listByThreadId: ({ threadId }) =>
+        Effect.succeed(
+          pendingTaskThreadIds.has(threadId)
+            ? ([
+                {
+                  taskId: RuntimeTaskId.make(`task-${threadId}`),
+                  threadId,
+                  bootId: "test-boot",
+                  startedAt: "2026-01-01T00:00:00.000Z",
+                  lastSeenAt: "2026-01-01T00:00:00.000Z",
+                  recoveryAttempts: 0,
+                },
+              ] satisfies ReadonlyArray<PendingBackgroundTask>)
+            : [],
+        ),
+      deleteByTaskId: () => Effect.void,
+    });
     const stoppedThreadIds = new Set<ThreadId>();
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
       (request) =>
@@ -188,6 +219,7 @@ describe("ProviderSessionReaper", () => {
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
+      Layer.provideMerge(pendingBackgroundTaskRepositoryMock),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -264,6 +296,52 @@ describe("ProviderSessionReaper", () => {
 
     expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({ threadId });
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
+  });
+
+  it("does not reap a stale session whose thread has an in-flight background task", async () => {
+    const threadId = ThreadId.make("thread-reaper-pending-bg-task");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      pendingTaskThreadIds: [threadId],
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-pending-bg" },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    // Let the (immediate) first sweep run, then confirm the guard held.
+    await Effect.runPromise(Effect.sleep("150 millis"));
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
   });
 
   it("skips stale sessions when the thread still has an active turn", async () => {

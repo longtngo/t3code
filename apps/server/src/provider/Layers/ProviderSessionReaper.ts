@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -26,6 +27,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -65,6 +67,30 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
             activeTurnId: thread.session.activeTurnId,
+            idleDurationMs,
+          });
+          continue;
+        }
+
+        // A thread with an in-flight background task is not truly idle —
+        // reaping its session would kill the live watcher. Leave it alone; the
+        // BackgroundTaskRecoveryWatchdog owns recovery if the task is orphaned.
+        // Fail closed: if the lookup errors, skip reaping this sweep rather than
+        // risk killing a live watcher on a transient persistence hiccup.
+        const pendingTasks = yield* pendingBackgroundTaskRepository
+          .listByThreadId({ threadId: binding.threadId })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.session.reaper.pending-task-lookup-failed", {
+                threadId: binding.threadId,
+                cause,
+              }).pipe(Effect.as(null)),
+            ),
+          );
+        if (pendingTasks === null || pendingTasks.length > 0) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-pending-background-task", {
+            threadId: binding.threadId,
+            pendingTaskCount: pendingTasks?.length ?? "lookup-failed",
             idleDurationMs,
           });
           continue;

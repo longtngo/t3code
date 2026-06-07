@@ -30,6 +30,8 @@ import { OrchestrationEventStoreLive } from "../src/persistence/Layers/Orchestra
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
+import { PendingBackgroundTaskRepositoryLive } from "../src/persistence/Layers/PendingBackgroundTask.ts";
+import { makeRuntimeBootIdLive } from "../src/environment/Layers/RuntimeBootId.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
@@ -304,6 +306,8 @@ export const makeOrchestrationIntegrationHarness = (
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusTest,
+      PendingBackgroundTaskRepositoryLive,
+      makeRuntimeBootIdLive("integration-boot"),
     );
     const serverSettingsLayer = ServerSettingsService.layerTest();
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(

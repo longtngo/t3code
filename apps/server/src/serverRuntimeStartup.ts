@@ -35,6 +35,7 @@ import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
 import { ProviderTurnStallWatchdog } from "./provider/Services/ProviderTurnStallWatchdog.ts";
+import { BackgroundTaskRecoveryWatchdog } from "./provider/Services/BackgroundTaskRecoveryWatchdog.ts";
 import {
   formatHeadlessOpenAccessOutput,
   formatHeadlessServeOutput,
@@ -294,6 +295,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const orchestrationReactor = yield* OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper;
   const providerTurnStallWatchdog = yield* ProviderTurnStallWatchdog;
+  const backgroundTaskRecoveryWatchdog = yield* BackgroundTaskRecoveryWatchdog;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment;
@@ -345,6 +347,10 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         // T3CODE_TURN_STALL_WATCHDOG=0 disables the active-turn stall watchdog.
         if (process.env.T3CODE_TURN_STALL_WATCHDOG !== "0") {
           yield* providerTurnStallWatchdog.start().pipe(Scope.provide(reactorScope));
+        }
+        // T3CODE_BG_TASK_RECOVERY=0 disables the background-task recovery heartbeat.
+        if (process.env.T3CODE_BG_TASK_RECOVERY !== "0") {
+          yield* backgroundTaskRecoveryWatchdog.start().pipe(Scope.provide(reactorScope));
         }
       }),
     );

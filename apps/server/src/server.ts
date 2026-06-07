@@ -26,6 +26,9 @@ import { ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
 import { ProviderTurnStallWatchdogLive } from "./provider/Layers/ProviderTurnStallWatchdog.ts";
+import { BackgroundTaskRecoveryWatchdogLive } from "./provider/Layers/BackgroundTaskRecoveryWatchdog.ts";
+import { PendingBackgroundTaskRepositoryLive } from "./persistence/Layers/PendingBackgroundTask.ts";
+import { RuntimeBootIdLive } from "./environment/Layers/RuntimeBootId.ts";
 import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
@@ -145,6 +148,7 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderTurnStallWatchdogLive),
+  Layer.provideMerge(BackgroundTaskRecoveryWatchdogLive),
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
@@ -259,6 +263,12 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
+  // Pending-background-task persistence + the per-boot id. Exposed here so the
+  // reaper guard, the recovery watchdog, and the ingestion writer all share one
+  // repository and the SAME boot id (SqlClient/Crypto are satisfied by the
+  // outer PersistenceLayerLive / PlatformServicesLive).
+  Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
+  Layer.provideMerge(RuntimeBootIdLive),
 );
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
