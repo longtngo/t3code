@@ -26,6 +26,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -38,6 +39,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
+  type TurnActivitySnapshot,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
@@ -57,6 +59,56 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+
+// Synthetic turns are auto-started for assistant/subagent responses that arrive
+// between user prompts; the stall watchdog must never inject a user-visible
+// "continue" into one. Tagged on the turn.started event by the Claude adapter.
+const SYNTHETIC_TURN_START_METHOD = "claude/synthetic-turn-start";
+
+// Event types that the turn-activity tracker treats as the end of a turn and so
+// remove the thread's entry. Kept thread-keyed (not turn-keyed) so a turnId-less
+// completion still clears.
+const TURN_ACTIVITY_TERMINAL_TYPES: ReadonlySet<string> = new Set([
+  "turn.completed",
+  "turn.aborted",
+  "session.exited",
+]);
+
+// Runtime events that t3code itself generates (the account-usage poller runs in
+// the server, not the SDK), so they must NOT refresh the stall clock — otherwise
+// a healthy poll would mask a wedged SDK. Everything else (thinking-tokens,
+// token-usage, content/tool/task lifecycle) is genuine SDK liveness and refreshes.
+const TURN_ACTIVITY_IGNORED_TYPES: ReadonlySet<string> = new Set([
+  "account.usage.updated",
+  "account.rate-limits.updated",
+]);
+
+// Backstop against leaked tracker entries. A turn normally clears via a terminal
+// event, but some paths end a turn without one (e.g. a runtime.error that leaves
+// the projection's activeTurnId set). A real active turn refreshes far more
+// often than this, and the watchdog recovers a genuinely silent one within
+// minutes, so an hour of silence only ever reclaims an abandoned entry.
+const TURN_ACTIVITY_TTL_MS = 60 * 60 * 1000;
+
+function pruneStaleTurnActivity(
+  map: ReadonlyMap<ThreadId, TurnActivitySnapshot>,
+  nowMs: number,
+): ReadonlyMap<ThreadId, TurnActivitySnapshot> {
+  let stale: ThreadId[] | null = null;
+  for (const [threadId, entry] of map) {
+    if (nowMs - entry.lastEventAt > TURN_ACTIVITY_TTL_MS) {
+      (stale ??= []).push(threadId);
+    }
+  }
+  if (!stale) {
+    return map;
+  }
+  const next = new Map(map);
+  for (const threadId of stale) {
+    next.delete(threadId);
+  }
+  return next;
+}
 
 type TurnStartRequestedDomainEvent = Extract<
   OrchestrationEvent,
@@ -715,6 +767,65 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  // Last SDK runtime event seen per thread with an active turn — the stall
+  // watchdog's clock. Holds at most one entry per active thread, so a plain
+  // copy-on-write map under a Ref is cheap to enumerate. Written on the single
+  // ingestion worker fiber; read from the watchdog fiber.
+  const turnActivityByThread = yield* Ref.make<ReadonlyMap<ThreadId, TurnActivitySnapshot>>(
+    new Map(),
+  );
+
+  const recordTurnActivity = (
+    threadId: ThreadId,
+    event: ProviderRuntimeEvent,
+    eventTurnId: TurnId | undefined,
+  ) =>
+    Ref.update(turnActivityByThread, (map) => {
+      const lastEventAt = Date.parse(event.createdAt);
+      // Prune leaked entries whenever we have a usable clock from this event.
+      const base = Number.isNaN(lastEventAt) ? map : pruneStaleTurnActivity(map, lastEventAt);
+
+      if (TURN_ACTIVITY_TERMINAL_TYPES.has(event.type)) {
+        if (!base.has(threadId)) {
+          return base;
+        }
+        const next = new Map(base);
+        next.delete(threadId);
+        return next;
+      }
+      if (TURN_ACTIVITY_IGNORED_TYPES.has(event.type)) {
+        return base;
+      }
+      if (Number.isNaN(lastEventAt)) {
+        return base;
+      }
+      if (event.type === "turn.started") {
+        if (eventTurnId === undefined) {
+          return base;
+        }
+        const next = new Map(base);
+        next.set(threadId, {
+          threadId,
+          turnId: eventTurnId,
+          lastEventAt,
+          lastEventType: event.type,
+          synthetic: event.raw?.method === SYNTHETIC_TURN_START_METHOD,
+        });
+        return next;
+      }
+      // Only refresh an existing entry (don't create one from a mid-turn event):
+      // the synthetic flag and turnId are established by turn.started, and a
+      // missed turn.started should leave the turn untracked rather than tracked
+      // with an unknown synthetic flag.
+      const existing = base.get(threadId);
+      if (!existing) {
+        return base;
+      }
+      const next = new Map(base);
+      next.set(threadId, { ...existing, lastEventAt, lastEventType: event.type });
+      return next;
+    });
+
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
@@ -1339,6 +1450,9 @@ const make = Effect.gen(function* () {
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
 
+      // Stall-watchdog clock: record/refresh/clear the thread's last SDK event.
+      yield* recordTurnActivity(thread.id, event, eventTurnId);
+
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
@@ -1820,9 +1934,14 @@ const make = Effect.gen(function* () {
       );
     });
 
+  const listTurnActivity = Ref.get(turnActivityByThread).pipe(
+    Effect.map((map) => Array.from(map.values())),
+  );
+
   return {
     start,
     drain: worker.drain,
+    listTurnActivity,
   } satisfies ProviderRuntimeIngestionShape;
 });
 

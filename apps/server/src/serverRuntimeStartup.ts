@@ -34,6 +34,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
+import { ProviderTurnStallWatchdog } from "./provider/Services/ProviderTurnStallWatchdog.ts";
 import {
   formatHeadlessOpenAccessOutput,
   formatHeadlessServeOutput,
@@ -292,6 +293,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const keybindings = yield* Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper;
+  const providerTurnStallWatchdog = yield* ProviderTurnStallWatchdog;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment;
@@ -340,6 +342,10 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+        // T3CODE_TURN_STALL_WATCHDOG=0 disables the active-turn stall watchdog.
+        if (process.env.T3CODE_TURN_STALL_WATCHDOG !== "0") {
+          yield* providerTurnStallWatchdog.start().pipe(Scope.provide(reactorScope));
+        }
       }),
     );
 
