@@ -147,6 +147,9 @@ describe("FileViewerSidebar", () => {
         expect(iframe?.getAttribute("sandbox")).not.toContain("allow-same-origin");
         // The interceptor script is prepended ahead of the file contents.
         expect(iframe?.srcdoc).toContain("__t3FileViewerNav");
+        // …and it handles same-page anchors itself (a srcdoc iframe would
+        // otherwise resolve `#id` against the embedder URL and blank out).
+        expect(iframe?.srcdoc).toContain("scrollIntoView");
         expect(iframe?.srcdoc).toContain("<!doctype html><h1>Report</h1>");
       });
 

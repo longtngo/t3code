@@ -48,19 +48,28 @@ const EMPTY_HTML_PLACEHOLDER =
 
 /**
  * Script prepended to untrusted report HTML before it is rendered in the
- * sandboxed iframe. It captures clicks on relative links to other openable
- * files and hands the href up to the parent panel via postMessage, since the
- * iframe's opaque origin can't resolve them itself (and the files live on the
- * server in remote sessions). Other links keep their default behaviour.
+ * sandboxed iframe. A `srcdoc` iframe has no document URL of its own, so the
+ * browser resolves every relative href (including a bare `#anchor`) against the
+ * *embedder's* URL — letting any such click fall through navigates the frame to
+ * this app and blanks the report. So we intercept clicks and handle each case
+ * ourselves: same-page anchors scroll in-document; links to other openable
+ * files post up to the parent panel (the files live on the server in remote
+ * sessions); any other relative link is blocked rather than left to blank out.
+ * Absolute-scheme links (http:, mailto:, …) keep their default behaviour.
  */
 const LINK_INTERCEPTOR_SCRIPT =
   "<script>(function(){document.addEventListener('click',function(e){" +
   "var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;" +
   "var href=a.getAttribute('href');if(!href)return;" +
+  "if(href.charAt(0)==='#'){e.preventDefault();" + // same-page anchor → scroll manually
+  "var id=decodeURIComponent(href.slice(1));" +
+  "if(!id){window.scrollTo(0,0);return;}" +
+  "var t=document.getElementById(id)||document.getElementsByName(id)[0];" +
+  "if(t&&t.scrollIntoView)t.scrollIntoView();return;}" +
   "if(/^[a-z][a-z0-9+.-]*:/i.test(href))return;" + // scheme (http:, mailto:, data:…)
-  "if(href.charAt(0)==='#')return;" + // in-page anchor
-  "if(!/\\.(html?|markdown|md)([?#]|$)/i.test(href))return;" + // only viewer-openable
-  "e.preventDefault();parent.postMessage({__t3FileViewerNav:true,href:href},'*');" +
+  "if(/\\.(html?|markdown|md)([?#]|$)/i.test(href)){" + // openable → open in the panel
+  "e.preventDefault();parent.postMessage({__t3FileViewerNav:true,href:href},'*');return;}" +
+  "e.preventDefault();" + // other relative link: can't resolve in srcdoc, so block it
   "},true);})();</scr" +
   "ipt>";
 
