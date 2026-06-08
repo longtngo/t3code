@@ -52,6 +52,9 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     accountUsage: {
       refresh: rpcClient.accountUsage.refresh,
     },
+    hostMetrics: {
+      subscribe: (callback, options) => rpcClient.hostMetrics.subscribe(callback, options),
+    },
     orchestration: {
       dispatchCommand: rpcClient.orchestration.dispatchCommand,
       getTurnDiff: rpcClient.orchestration.getTurnDiff,

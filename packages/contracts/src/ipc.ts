@@ -82,6 +82,7 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import type { HostMetricsSample } from "./rpc.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -619,6 +620,19 @@ export interface EnvironmentApi {
      * the updated data arrives via the event stream, not this response.
      */
     refresh: () => Promise<{ ok: true }>;
+  };
+  hostMetrics: {
+    /**
+     * Subscribe to live host CPU/GPU/memory utilization. The server samples
+     * only while subscribed; the returned function unsubscribes and stops the
+     * stream. Samples arrive roughly every 1–2 seconds.
+     */
+    subscribe: (
+      callback: (sample: HostMetricsSample) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

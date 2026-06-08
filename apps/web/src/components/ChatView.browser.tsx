@@ -281,6 +281,7 @@ function createMockEnvironmentApi(input: {
     git: {} as EnvironmentApi["git"],
     review: {} as EnvironmentApi["review"],
     accountUsage: {} as EnvironmentApi["accountUsage"],
+    hostMetrics: {} as EnvironmentApi["hostMetrics"],
     orchestration: {
       dispatchCommand: input.dispatchCommand,
       getTurnDiff: (() => {

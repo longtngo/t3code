@@ -28,6 +28,8 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { HostMetrics } from "./chat/HostMetrics";
+import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import { UsageMeter } from "./chat/UsageMeter";
 import { Button } from "./ui/button";
 import {
@@ -223,6 +225,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   const handleUsageRefresh = useCallback(async () => {
     await readEnvironmentApi(environmentId)?.accountUsage.refresh();
   }, [environmentId]);
+  const [hostMetricsEnabled, setHostMetricsEnabled] = useHostMetricsEnabled();
+  const { sample: hostMetricsSample, streaming: hostMetricsStreaming } = useHostMetrics(
+    environmentId,
+    hostMetricsEnabled,
+  );
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -313,15 +320,21 @@ export const BranchToolbar = memo(function BranchToolbar({
 
       {/* The meter's fixed-width bars/pills can't shrink; sharing the selector
           row overlapped it at narrow widths. */}
-      {usageSnapshot || contextWindowSnapshot ? (
-        <div className="flex items-center justify-center">
+      <div className="flex items-center justify-center gap-3">
+        {usageSnapshot || contextWindowSnapshot ? (
           <UsageMeter
             usage={usageSnapshot}
             contextWindow={contextWindowSnapshot}
             {...(usageSnapshot ? { onRefresh: handleUsageRefresh } : {})}
           />
-        </div>
-      ) : null}
+        ) : null}
+        <HostMetrics
+          sample={hostMetricsSample}
+          streaming={hostMetricsStreaming}
+          enabled={hostMetricsEnabled}
+          onToggle={setHostMetricsEnabled}
+        />
+      </div>
     </div>
   );
 });
