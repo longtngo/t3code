@@ -318,9 +318,10 @@ export const BranchToolbar = memo(function BranchToolbar({
         />
       </div>
 
-      {/* The meter's fixed-width bars/pills can't shrink; sharing the selector
-          row overlapped it at narrow widths. */}
-      <div className="flex items-center justify-center gap-3">
+      {/* The meters' fixed-width bars/pills can't shrink, so on narrow screens
+          (≲510px) the usage and host-metrics groups can't share one line — wrap
+          lets each group drop onto its own line instead of overlapping. */}
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         {usageSnapshot || contextWindowSnapshot ? (
           <UsageMeter
             usage={usageSnapshot}
