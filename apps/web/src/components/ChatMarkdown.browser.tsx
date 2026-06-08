@@ -27,21 +27,18 @@ vi.mock("../localApi", () => ({
   readLocalApi: readLocalApiMock,
 }));
 
-import type { EnvironmentApi, EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 
-import {
-  __resetEnvironmentApiOverridesForTests,
-  __setEnvironmentApiOverrideForTests,
-} from "~/environmentApi";
+import { __resetEnvironmentApiOverridesForTests } from "~/environmentApi";
 import ChatMarkdown from "./ChatMarkdown";
-import { useMarkdownViewerStore } from "../markdownViewerStore";
+import { useFileViewerStore } from "../fileViewerStore";
 
 describe("ChatMarkdown", () => {
   afterEach(() => {
     openInPreferredEditorMock.mockClear();
     openExternalMock.mockClear();
     readLocalApiMock.mockClear();
-    useMarkdownViewerStore.setState({ open: false, request: null });
+    useFileViewerStore.setState({ open: false, request: null });
     __resetEnvironmentApiOverridesForTests();
     localStorage.clear();
     document.body.innerHTML = "";
@@ -138,34 +135,8 @@ describe("ChatMarkdown", () => {
     }
   });
 
-  it("opens an inline html path in a new tab by reading it over the environment RPC", async () => {
+  it("opens an inline html path in the viewer sidebar", async () => {
     const htmlPath = "/var/folders/58/abc/architecture-review-20260606.html";
-    const readFile = vi.fn(async () => ({
-      contents: "<!doctype html><h1>Report</h1>",
-      resolvedPath: htmlPath,
-    }));
-    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
-      projects: { readFile },
-    } as unknown as EnvironmentApi);
-
-    const appendedNodes: HTMLElement[] = [];
-    const fakeDoc = {
-      title: "",
-      write: vi.fn(),
-      close: vi.fn(),
-      createElement: (tag: string) => document.createElement(tag),
-      body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
-    };
-    const fakeWindow = {
-      opener: {},
-      closed: false,
-      document: fakeDoc,
-      close: vi.fn(),
-    };
-    const openSpy = vi
-      .spyOn(window, "open")
-      .mockReturnValue(fakeWindow as unknown as Window);
-
     const screen = await render(
       <ChatMarkdown
         text={`Report: \`${htmlPath}\``}
@@ -175,144 +146,37 @@ describe("ChatMarkdown", () => {
     );
 
     try {
-      const button = page.getByRole("button", { name: "Open in new tab" });
+      const button = page.getByRole("button", { name: "Open architecture-review-20260606.html" });
       await expect.element(button).toBeInTheDocument();
 
       await button.click();
 
-      // The tab is opened synchronously (preserving the user gesture), then the
-      // file is read remotely and rendered inside a sandboxed iframe.
-      expect(openSpy).toHaveBeenCalledWith("", "_blank");
-      expect(fakeWindow.opener).toBeNull();
       await vi.waitFor(() => {
-        expect(readFile).toHaveBeenCalledWith({ cwd: "/repo/project", path: htmlPath });
-        expect(appendedNodes).toHaveLength(1);
+        const state = useFileViewerStore.getState();
+        expect(state.open).toBe(true);
+        expect(state.request?.path).toBe(htmlPath);
+        expect(state.request?.kind).toBe("html");
+        expect(state.request?.environmentId).toBe("env-1");
       });
-      const iframe = appendedNodes[0] as HTMLIFrameElement;
-      expect(iframe.tagName).toBe("IFRAME");
-      // Scripts may run, but same-origin access is withheld so the file cannot
-      // reach this app's session token.
-      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-popups");
-      expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
-      expect(iframe.srcdoc).toBe("<!doctype html><h1>Report</h1>");
-      expect(openExternalMock).not.toHaveBeenCalled();
     } finally {
-      openSpy.mockRestore();
       await screen.unmount();
     }
   });
 
-  it("shows an empty-file placeholder for a blank html file", async () => {
-    const htmlPath = "/tmp/empty.html";
-    const readFile = vi.fn(async () => ({ contents: "   ", resolvedPath: htmlPath }));
-    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
-      projects: { readFile },
-    } as unknown as EnvironmentApi);
-
-    const appendedNodes: HTMLElement[] = [];
-    const fakeWindow = {
-      opener: {},
-      closed: false,
-      document: {
-        title: "",
-        write: vi.fn(),
-        close: vi.fn(),
-        createElement: (tag: string) => document.createElement(tag),
-        body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
-      },
-      close: vi.fn(),
-    };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
-
-    const screen = await render(
-      <ChatMarkdown
-        text={`Report: \`${htmlPath}\``}
-        cwd="/repo/project"
-        environmentId={"env-1" as EnvironmentId}
-      />,
-    );
-
-    try {
-      await page.getByRole("button", { name: "Open in new tab" }).click();
-      await vi.waitFor(() => {
-        expect(appendedNodes).toHaveLength(1);
-      });
-      const iframe = appendedNodes[0] as HTMLIFrameElement;
-      expect(iframe.srcdoc).toContain("This file is empty.");
-    } finally {
-      openSpy.mockRestore();
-      await screen.unmount();
-    }
-  });
-
-  it("does not error if the tab is closed before the html read resolves", async () => {
-    const htmlPath = "/tmp/slow.html";
-    let resolveRead: (value: { contents: string; resolvedPath: string }) => void = () => {};
-    const readFile = vi.fn(
-      () =>
-        new Promise<{ contents: string; resolvedPath: string }>((resolve) => {
-          resolveRead = resolve;
-        }),
-    );
-    __setEnvironmentApiOverrideForTests("env-1" as EnvironmentId, {
-      projects: { readFile },
-    } as unknown as EnvironmentApi);
-
-    const appendedNodes: HTMLElement[] = [];
-    const fakeWindow = {
-      opener: {},
-      closed: false,
-      document: {
-        title: "",
-        write: vi.fn(),
-        close: vi.fn(),
-        createElement: (tag: string) => document.createElement(tag),
-        body: { appendChild: (node: HTMLElement) => appendedNodes.push(node) },
-      },
-      close: vi.fn(),
-    };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
-
-    const screen = await render(
-      <ChatMarkdown
-        text={`Report: \`${htmlPath}\``}
-        cwd="/repo/project"
-        environmentId={"env-1" as EnvironmentId}
-      />,
-    );
-
-    try {
-      await page.getByRole("button", { name: "Open in new tab" }).click();
-      await vi.waitFor(() => expect(readFile).toHaveBeenCalled());
-
-      // User closes the tab before the read completes.
-      fakeWindow.closed = true;
-      resolveRead({ contents: "<h1>late</h1>", resolvedPath: htmlPath });
-
-      // The late result must be ignored: nothing is written to the closed tab.
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(appendedNodes).toHaveLength(0);
-      expect(fakeWindow.close).not.toHaveBeenCalled();
-    } finally {
-      openSpy.mockRestore();
-      await screen.unmount();
-    }
-  });
-
-  it("suppresses the html open affordance without an environment", async () => {
+  it("suppresses the file chip without an environment", async () => {
     const screen = await render(
       <ChatMarkdown text={"Report: `/tmp/report.html`"} cwd="/repo/project" />,
     );
 
     try {
       await expect.element(page.getByText("/tmp/report.html")).toBeInTheDocument();
-      expect(document.querySelector('button[aria-label="Open in new tab"]')).toBeNull();
+      expect(document.querySelector(".chat-markdown-file-chip")).toBeNull();
     } finally {
       await screen.unmount();
     }
   });
 
-  it("opens an inline markdown path in the viewer side panel", async () => {
+  it("opens an inline markdown path in the viewer sidebar", async () => {
     const mdPath = "~/reports/pickup-v2/2026-06/2026-06-06-decisions-needed.md";
     const screen = await render(
       <ChatMarkdown
@@ -323,15 +187,16 @@ describe("ChatMarkdown", () => {
     );
 
     try {
-      const button = page.getByRole("button", { name: "Open markdown preview" });
+      const button = page.getByRole("button", { name: "Open 2026-06-06-decisions-needed.md" });
       await expect.element(button).toBeInTheDocument();
 
       await button.click();
 
       await vi.waitFor(() => {
-        const state = useMarkdownViewerStore.getState();
+        const state = useFileViewerStore.getState();
         expect(state.open).toBe(true);
         expect(state.request?.path).toBe(mdPath);
+        expect(state.request?.kind).toBe("markdown");
         expect(state.request?.environmentId).toBe("env-1");
       });
     } finally {
@@ -339,12 +204,12 @@ describe("ChatMarkdown", () => {
     }
   });
 
-  it("suppresses the markdown viewer affordance without an environment", async () => {
+  it("suppresses the markdown chip without an environment", async () => {
     const screen = await render(<ChatMarkdown text={"See `notes.md`"} cwd="/repo/project" />);
 
     try {
       await expect.element(page.getByText("notes.md")).toBeInTheDocument();
-      expect(document.querySelector('button[aria-label="Open markdown preview"]')).toBeNull();
+      expect(document.querySelector(".chat-markdown-file-chip")).toBeNull();
     } finally {
       await screen.unmount();
     }
@@ -361,8 +226,7 @@ describe("ChatMarkdown", () => {
 
     try {
       await expect.element(page.getByText("https://example.com/readme.md")).toBeInTheDocument();
-      expect(document.querySelector('button[aria-label="Open markdown preview"]')).toBeNull();
-      expect(document.querySelector('button[aria-label="Open in new tab"]')).toBeNull();
+      expect(document.querySelector(".chat-markdown-file-chip")).toBeNull();
     } finally {
       await screen.unmount();
     }
@@ -375,8 +239,7 @@ describe("ChatMarkdown", () => {
 
     try {
       await expect.element(page.getByText("pnpm install")).toBeInTheDocument();
-      expect(document.querySelector('button[aria-label="Open in new tab"]')).toBeNull();
-      expect(document.querySelector('button[aria-label="Open markdown preview"]')).toBeNull();
+      expect(document.querySelector(".chat-markdown-file-chip")).toBeNull();
     } finally {
       await screen.unmount();
     }
@@ -393,8 +256,8 @@ describe("ChatMarkdown", () => {
 
     try {
       await expect.element(page.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
-      // The `.md` literal inside a fenced block must not grow a viewer affordance.
-      expect(document.querySelector('button[aria-label="Open markdown preview"]')).toBeNull();
+      // The `.md` literal inside a fenced block must not grow a chip affordance.
+      expect(document.querySelector(".chat-markdown-file-chip")).toBeNull();
     } finally {
       await screen.unmount();
     }

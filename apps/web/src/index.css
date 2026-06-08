@@ -390,6 +390,100 @@ label:has(> select#reasoning-effort) select {
   line-height: 1.1;
 }
 
+/* Inline openable-file chip (HTML / markdown report paths). The whole chip is
+   the click target; the directory left-truncates so the filename stays visible
+   and `max-width` keeps it inside the viewport on mobile. */
+.chat-markdown-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  max-width: 100%;
+  vertical-align: text-bottom;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, var(--foreground) 6%);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--muted) 60%, var(--background));
+  padding: 0.12rem 0.4rem 0.12rem 0.34rem;
+  color: var(--foreground);
+  text-align: left;
+  line-height: 1.25;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.chat-markdown-file-chip:hover {
+  background: color-mix(in srgb, var(--muted) 90%, var(--foreground) 4%);
+  border-color: color-mix(in srgb, var(--border) 55%, var(--foreground));
+}
+
+.chat-markdown-file-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 60%, transparent);
+}
+
+.chat-markdown-file-chip-type {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown-file-chip-ext {
+  flex: none;
+  border-radius: 0.25rem;
+  padding: 0.02rem 0.28rem;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-markdown-file-chip-ext-html {
+  color: #fb923c;
+  background: color-mix(in srgb, #fb923c 14%, transparent);
+}
+
+.chat-markdown-file-chip-ext-markdown {
+  color: var(--color-blue-400, #60a5fa);
+  background: color-mix(in srgb, #60a5fa 14%, transparent);
+}
+
+.chat-markdown-file-chip-path {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+}
+
+/* Left-truncate the directory (clip from the start), keeping the path tail. */
+.chat-markdown-file-chip-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown-file-chip-base {
+  flex: none;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.chat-markdown-file-chip-open {
+  flex: none;
+  color: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
+}
+
+.chat-markdown-file-chip:hover .chat-markdown-file-chip-open {
+  color: var(--foreground);
+}
+
 .chat-markdown pre {
   max-width: 100%;
   overflow-x: auto;

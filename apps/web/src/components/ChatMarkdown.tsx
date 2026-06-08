@@ -1,5 +1,5 @@
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
-import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, CopyIcon, FileCodeIcon, FileTextIcon } from "lucide-react";
 import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
 import React, {
   Children,
@@ -35,8 +35,7 @@ import {
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
-import { readEnvironmentApi } from "~/environmentApi";
-import { useMarkdownViewerStore } from "../markdownViewerStore";
+import { useFileViewerStore, type FileViewerKind } from "../fileViewerStore";
 import { cn } from "../lib/utils";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -144,128 +143,61 @@ function classifyInlineCodePath(raw: string): InlineCodePathKind | null {
   return null;
 }
 
-const INLINE_PATH_BUTTON_CLASS_NAME =
-  "chat-markdown-path-action ml-1 inline-flex size-4 translate-y-[2px] items-center justify-center rounded-sm text-muted-foreground/60 align-baseline hover:bg-muted/60 hover:text-foreground/80";
-
-function InlineHtmlPathCode({
-  text,
-  className,
-  cwd,
-  environmentId,
-  children,
-}: {
-  text: string;
-  className: string | undefined;
-  cwd: string | undefined;
-  environmentId: EnvironmentId;
-  children: ReactNode;
-}) {
-  const handleOpen = useCallback(() => {
-    const api = readEnvironmentApi(environmentId);
-    if (!api) {
-      toastManager.add({ type: "error", title: "Open in new tab is unavailable" });
-      return;
-    }
-    // Open the tab synchronously so the browser keeps the user-gesture context
-    // (a window.open() deferred past the await below would be blocked). The file
-    // is read over the environment RPC, so this works for remote sessions too,
-    // where the file lives on the server rather than the viewer's machine.
-    // `noopener` is omitted because it makes window.open return null; we sever
-    // the opener reference manually instead.
-    const win = window.open("", "_blank");
-    if (!win) {
-      toastManager.add({
-        type: "error",
-        title: "Pop-up blocked",
-        description: "Allow pop-ups for this site to open the file in a new tab.",
-      });
-      return;
-    }
-    win.opener = null;
-    win.document.write(
-      '<!doctype html><html><head><meta charset="utf-8"><title>Opening…</title>' +
-        "<style>html,body{margin:0;height:100%}iframe{border:0;display:block;width:100%;height:100%}</style>" +
-        "</head><body></body></html>",
-    );
-    win.document.close();
-    void api.projects
-      .readFile({ cwd: cwd ?? ".", path: text })
-      .then((result) => {
-        // The user may have closed the tab while the read was in flight.
-        if (win.closed) return;
-        // Render untrusted file HTML in a sandboxed iframe: scripts may run (for
-        // charts etc.) but `allow-same-origin` is withheld, so the document gets
-        // an opaque origin and cannot reach this app's session token/storage.
-        // oxlint-disable-next-line iframe-missing-sandbox -- sandbox set below via setAttribute
-        const iframe = win.document.createElement("iframe");
-        iframe.setAttribute("sandbox", "allow-scripts allow-popups");
-        iframe.srcdoc =
-          result.contents.trim().length > 0
-            ? result.contents
-            : "<!doctype html><body style='margin:0;font:13px system-ui,sans-serif;color:#888;padding:2rem'>This file is empty.</body>";
-        win.document.title = text;
-        win.document.body.appendChild(iframe);
-      })
-      .catch((error: unknown) => {
-        if (win.closed) return;
-        win.close();
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open file",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      });
-  }, [environmentId, cwd, text]);
-
-  return (
-    <span className="inline whitespace-nowrap">
-      <code className={className}>{children}</code>
-      <button
-        type="button"
-        className={INLINE_PATH_BUTTON_CLASS_NAME}
-        onClick={handleOpen}
-        title="Open in new tab"
-        aria-label="Open in new tab"
-      >
-        <ExternalLinkIcon className="size-3" />
-      </button>
-    </span>
-  );
+function inlinePathBasename(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
 }
 
-function InlineMarkdownPathCode({
+/**
+ * Inline affordance for an openable file path. The whole chip is one click
+ * target (so it stays tappable on mobile, where a trailing icon could scroll
+ * off-screen), opening the file in the viewer sidebar. The directory is
+ * left-truncated so the filename stays visible; `max-width` keeps it on-screen.
+ */
+function InlineFilePathChip({
   text,
-  className,
+  kind,
   cwd,
   environmentId,
-  children,
 }: {
   text: string;
-  className: string | undefined;
+  kind: FileViewerKind;
   cwd: string | undefined;
   environmentId: EnvironmentId;
-  children: ReactNode;
 }) {
-  const openMarkdownViewer = useMarkdownViewerStore((state) => state.openMarkdownViewer);
+  const openFileViewer = useFileViewerStore((state) => state.openFileViewer);
   const handleOpen = useCallback(() => {
-    openMarkdownViewer({ path: text, cwd, environmentId });
-  }, [openMarkdownViewer, text, cwd, environmentId]);
+    openFileViewer({ path: text, cwd, environmentId, kind });
+  }, [openFileViewer, text, cwd, environmentId, kind]);
+
+  const basename = inlinePathBasename(text);
+  const dir = text.slice(0, text.length - basename.length);
 
   return (
-    <span className="inline whitespace-nowrap">
-      <code className={className}>{children}</code>
-      <button
-        type="button"
-        className={INLINE_PATH_BUTTON_CLASS_NAME}
-        onClick={handleOpen}
-        title="Open markdown preview"
-        aria-label="Open markdown preview"
-      >
-        <FileTextIcon className="size-3" />
-      </button>
-    </span>
+    <button
+      type="button"
+      className="chat-markdown-file-chip"
+      onClick={handleOpen}
+      title={`Open ${basename}`}
+      aria-label={`Open ${basename}`}
+    >
+      <span className="chat-markdown-file-chip-type">
+        {kind === "html" ? (
+          <FileCodeIcon className="size-3.5" />
+        ) : (
+          <FileTextIcon className="size-3.5" />
+        )}
+      </span>
+      <span className={`chat-markdown-file-chip-ext chat-markdown-file-chip-ext-${kind}`}>
+        {kind === "html" ? "html" : "md"}
+      </span>
+      <span className="chat-markdown-file-chip-path">
+        {dir ? <span className="chat-markdown-file-chip-dir">{dir}</span> : null}
+        <span className="chat-markdown-file-chip-base">{basename}</span>
+      </span>
+      <ChevronRightIcon className="chat-markdown-file-chip-open size-3.5" />
+    </button>
   );
 }
 
@@ -292,28 +224,14 @@ const MarkdownCode: NonNullable<Components["code"]> = ({
   }
 
   const kind = classifyInlineCodePath(text);
-  if (kind === "html" && config.environmentId) {
+  if (kind != null && config.environmentId) {
     return (
-      <InlineHtmlPathCode
+      <InlineFilePathChip
         text={text}
-        className={className}
+        kind={kind}
         cwd={config.cwd}
         environmentId={config.environmentId}
-      >
-        {children}
-      </InlineHtmlPathCode>
-    );
-  }
-  if (kind === "markdown" && config.environmentId) {
-    return (
-      <InlineMarkdownPathCode
-        text={text}
-        className={className}
-        cwd={config.cwd}
-        environmentId={config.environmentId}
-      >
-        {children}
-      </InlineMarkdownPathCode>
+      />
     );
   }
 
