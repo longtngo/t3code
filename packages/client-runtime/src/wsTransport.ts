@@ -53,9 +53,36 @@ interface TransportSession {
   readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
 }
 
-function formatErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
+/**
+ * Render an arbitrary thrown/failed value into a diagnostic string for logging.
+ *
+ * `Error` instances keep their `message` (transport-connection detection keys off it).
+ * Non-`Error` values — e.g. an Effect failure squashed from a `Cause`, or a structured RPC
+ * error — used to collapse to a useless `"[object Object]"` via `String(value)`. Instead we
+ * surface a tagged error's `_tag`/`message`, then fall back to JSON, then to `String`, so a
+ * protocol mismatch logs something actionable rather than an opaque blob.
+ */
+export function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.trim().length > 0 ? error.message : String(error);
+  }
+
+  if (error !== null && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const tag = typeof record._tag === "string" ? record._tag : undefined;
+    const message = typeof record.message === "string" ? record.message : undefined;
+    if (tag !== undefined || message !== undefined) {
+      return [tag, message].filter((part) => part !== undefined && part.length > 0).join(": ");
+    }
+
+    try {
+      const json = JSON.stringify(error);
+      if (typeof json === "string" && json.length > 0) {
+        return json;
+      }
+    } catch {
+      // Unserializable (circular refs, BigInt, …) — fall through to String().
+    }
   }
 
   return String(error);

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { WsTransport } from "./wsTransport.ts";
+import { formatErrorMessage, WsTransport } from "./wsTransport.ts";
 
 type WsEventType = "open" | "message" | "close" | "error";
 type WsEvent = { code?: number; data?: unknown; reason?: string; type?: string };
@@ -133,6 +133,50 @@ afterEach(async () => {
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
+});
+
+describe("formatErrorMessage", () => {
+  it("returns the message of a non-empty Error (so transport-connection detection keeps working)", () => {
+    expect(formatErrorMessage(new Error("SocketCloseError: connection lost"))).toBe(
+      "SocketCloseError: connection lost",
+    );
+  });
+
+  it("falls back to String() for an Error with an empty message", () => {
+    expect(formatErrorMessage(new Error(""))).toBe("Error");
+  });
+
+  it("surfaces a tagged error's _tag and message instead of [object Object]", () => {
+    expect(formatErrorMessage({ _tag: "RpcError", message: "decode failed" })).toBe(
+      "RpcError: decode failed",
+    );
+  });
+
+  it("surfaces _tag or message alone", () => {
+    expect(formatErrorMessage({ _tag: "ClosedError" })).toBe("ClosedError");
+    expect(formatErrorMessage({ message: "boom" })).toBe("boom");
+  });
+
+  it("JSON-encodes a structured object that has no _tag/message", () => {
+    expect(formatErrorMessage({ code: 42, reason: "nope" })).toBe('{"code":42,"reason":"nope"}');
+  });
+
+  it("renders an empty object as {} rather than [object Object]", () => {
+    expect(formatErrorMessage({})).toBe("{}");
+  });
+
+  it("falls back to String() for unserializable objects (circular refs)", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(formatErrorMessage(circular)).toBe("[object Object]");
+  });
+
+  it("handles primitive and nullish values", () => {
+    expect(formatErrorMessage("plain string")).toBe("plain string");
+    expect(formatErrorMessage(42)).toBe("42");
+    expect(formatErrorMessage(null)).toBe("null");
+    expect(formatErrorMessage(undefined)).toBe("undefined");
+  });
 });
 
 describe("WsTransport", () => {
