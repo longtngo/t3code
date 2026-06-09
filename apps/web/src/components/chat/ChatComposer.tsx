@@ -11,6 +11,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  ATTACHMENT_UPLOAD_MAX_BYTES,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -31,10 +32,12 @@ import {
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
+  buildFilePathInsertion,
   collapseExpandedComposerCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
+  shouldUseLocalFilePath,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
@@ -90,6 +93,8 @@ import {
   PenLineIcon,
   XIcon,
 } from "lucide-react";
+import { readEnvironmentApi } from "../../environmentApi";
+import { isLocalEnvironment } from "../../environments/runtime";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderInteractionModeToggle } from "../../providerModels";
 import {
@@ -1638,6 +1643,74 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerImageFromDraft(imageId);
   };
 
+  // Non-image files can't be interpreted as attachments; instead surface an absolute
+  // filesystem path into the prompt so the model can Read them directly. On the desktop app
+  // the real local path is available (zero copy via the desktop bridge / webUtils). In a
+  // plain browser — or for any remote agent, where a client path would be meaningless — the
+  // bytes are uploaded to the agent host and that server-side path is inserted instead.
+  const addComposerFilePaths = async (files: File[]): Promise<void> => {
+    if (!activeThreadId || files.length === 0) return;
+
+    const paths: string[] = [];
+    const unresolved: string[] = [];
+    const toUpload: File[] = [];
+
+    // 1. Desktop on the same-host (primary) agent: resolve the real local path with no copy.
+    // A desktop path is meaningless to a remote/SSH agent, so only trust it for the primary
+    // environment; everything else falls through to the upload path below.
+    const bridge = window.desktopBridge;
+    const useLocalPath = shouldUseLocalFilePath({
+      hasDesktopBridge: typeof bridge?.getPathForFile === "function",
+      isLocalEnvironment: isLocalEnvironment(environmentId),
+    });
+    for (const file of files) {
+      const localPath = useLocalPath ? (bridge?.getPathForFile(file) ?? "") : "";
+      if (localPath) {
+        paths.push(localPath);
+      } else {
+        toUpload.push(file);
+      }
+    }
+
+    // 2. Fallback: upload bytes to the agent host and reference the written path.
+    if (toUpload.length > 0) {
+      const api = readEnvironmentApi(environmentId);
+      for (const file of toUpload) {
+        const name = file.name || "file";
+        if (!api || file.size > ATTACHMENT_UPLOAD_MAX_BYTES) {
+          unresolved.push(name);
+          continue;
+        }
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          const result = await api.attachments.upload({
+            threadId: activeThreadId,
+            fileName: name,
+            dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+          });
+          paths.push(result.path);
+        } catch {
+          unresolved.push(name);
+        }
+      }
+    }
+
+    if (paths.length > 0) {
+      const snapshot = readComposerSnapshot();
+      const cursor = snapshot.cursor;
+      const insertion = buildFilePathInsertion(snapshot.value.slice(0, cursor), paths);
+      applyPromptReplacement(cursor, cursor, insertion, { focusEditorAfterReplace: true });
+    } else {
+      focusComposer();
+    }
+
+    // Only report our own failures; don't clear an error another handler set (e.g. an image
+    // that failed in the same mixed drop) by overwriting it with null on success.
+    if (unresolved.length > 0) {
+      setThreadError(activeThreadId, `Couldn't attach: ${unresolved.join(", ")}.`);
+    }
+  };
+
   // ------------------------------------------------------------------
   // Callbacks: paste / drag
   // ------------------------------------------------------------------
@@ -1681,8 +1754,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     const files = Array.from(event.dataTransfer.files);
-    addComposerImages(files);
-    focusComposer();
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const otherFiles = files.filter((file) => !file.type.startsWith("image/"));
+    if (imageFiles.length > 0) {
+      addComposerImages(imageFiles);
+    }
+    if (otherFiles.length > 0) {
+      // Async (may upload bytes for the web/remote fallback); it handles its own focus.
+      void addComposerFilePaths(otherFiles);
+    } else {
+      focusComposer();
+    }
   };
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();

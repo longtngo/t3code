@@ -3312,7 +3312,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         canUseTool,
         env: claudeEnvironment,
-        ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+        // The attachments dir holds files uploaded via the web/remote fallback for dropped
+        // non-image files; allow the agent to Read them without a permission prompt.
+        additionalDirectories: [
+          ...(input.cwd ? [input.cwd] : []),
+          serverConfig.attachmentsDir,
+        ],
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
       };
 

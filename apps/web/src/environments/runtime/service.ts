@@ -1813,6 +1813,17 @@ export function readEnvironmentConnection(
   return environmentConnections.get(environmentId) ?? null;
 }
 
+/**
+ * Whether the given environment's agent runs on this same host — i.e. the "primary" local
+ * backend rather than a remote/SSH "saved" environment. This is the single source of truth for
+ * locality decisions (e.g. whether a desktop-resolved absolute file path is meaningful to the
+ * agent). Returns false for unknown/unconnected environments. Callers should prefer this over
+ * inspecting `EnvironmentConnection.kind` directly so the locality rule lives in one place.
+ */
+export function isLocalEnvironment(environmentId: EnvironmentId): boolean {
+  return readEnvironmentConnection(environmentId)?.kind === "primary";
+}
+
 export function requireEnvironmentConnection(environmentId: EnvironmentId): EnvironmentConnection {
   const connection = readEnvironmentConnection(environmentId);
   if (!connection) {

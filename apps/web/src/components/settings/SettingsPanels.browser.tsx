@@ -370,6 +370,7 @@ const createDesktopBridgeStub = (overrides?: {
 
   return {
     getAppBranding: vi.fn().mockReturnValue(null),
+    getPathForFile: () => "",
     getLocalEnvironmentBootstrap: () => ({
       label: "Local environment",
       httpBaseUrl: "http://127.0.0.1:3773",

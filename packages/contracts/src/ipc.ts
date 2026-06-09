@@ -28,6 +28,7 @@ import type {
   ProjectReadFileInput,
   ProjectReadFileResult,
 } from "./project.ts";
+import type { AttachmentUploadInput, AttachmentUploadResult } from "./attachment.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
   ServerConfig,
@@ -450,6 +451,12 @@ export interface DesktopBridge {
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
+  /**
+   * Resolve the absolute filesystem path of a dropped/selected `File`, via Electron's
+   * `webUtils.getPathForFile`. Returns `""` when the file has no real path backing it
+   * (e.g. a clipboard blob). Synchronous — no IPC round-trip.
+   */
+  getPathForFile: (file: File) => string;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -572,6 +579,9 @@ export interface EnvironmentApi {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+  };
+  attachments: {
+    upload: (input: AttachmentUploadInput) => Promise<AttachmentUploadResult>;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;

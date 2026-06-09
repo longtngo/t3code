@@ -75,6 +75,11 @@ import {
   ProjectReadFileResult,
 } from "./project.ts";
 import {
+  AttachmentUploadError,
+  AttachmentUploadInput,
+  AttachmentUploadResult,
+} from "./attachment.ts";
+import {
   TerminalAttachInput,
   TerminalAttachStreamEvent,
   TerminalClearInput,
@@ -127,6 +132,9 @@ export const WS_METHODS = {
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
   projectsReadFile: "projects.readFile",
+
+  // Attachment methods
+  attachmentsUpload: "attachments.upload",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -347,6 +355,12 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsAttachmentsUploadRpc = Rpc.make(WS_METHODS.attachmentsUpload, {
+  payload: AttachmentUploadInput,
+  success: AttachmentUploadResult,
+  error: Schema.Union([AttachmentUploadError, EnvironmentAuthorizationError]),
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -653,6 +667,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsProjectsReadFileRpc,
+  WsAttachmentsUploadRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsSubscribeVcsStatusRpc,

@@ -59,6 +59,9 @@ const rpcClientMock = {
     writeFile: vi.fn(),
     readFile: vi.fn(),
   },
+  attachments: {
+    upload: vi.fn(),
+  },
   filesystem: {
     browse: vi.fn(),
   },
@@ -184,6 +187,7 @@ function createLocalStorageStub(): Storage {
 function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridge {
   return {
     getAppBranding: () => null,
+    getPathForFile: () => "",
     getLocalEnvironmentBootstrap: () => null,
     getClientSettings: async () => null,
     setClientSettings: async () => undefined,

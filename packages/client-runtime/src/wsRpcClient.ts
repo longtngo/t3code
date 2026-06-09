@@ -84,6 +84,9 @@ export interface WsRpcClient {
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.projectsWriteFile>;
     readonly readFile: RpcUnaryMethod<typeof WS_METHODS.projectsReadFile>;
   };
+  readonly attachments: {
+    readonly upload: RpcUnaryMethod<typeof WS_METHODS.attachmentsUpload>;
+  };
   readonly filesystem: {
     readonly browse: RpcUnaryMethod<typeof WS_METHODS.filesystemBrowse>;
   };
@@ -226,6 +229,10 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.projectsWriteFile](input)),
       readFile: (input) =>
         transport.request((client) => client[WS_METHODS.projectsReadFile](input)),
+    },
+    attachments: {
+      upload: (input) =>
+        transport.request((client) => client[WS_METHODS.attachmentsUpload](input)),
     },
     filesystem: {
       browse: (input) => transport.request((client) => client[WS_METHODS.filesystemBrowse](input)),

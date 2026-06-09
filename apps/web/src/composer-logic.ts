@@ -279,3 +279,30 @@ export function replaceTextRange(
   const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
   return { text: nextText, cursor: safeStart + replacement.length };
 }
+
+/**
+ * Build the text inserted into the composer when non-image files are dropped: one absolute
+ * path per line, prefixed with a newline when `textBeforeCursor` ends in non-whitespace (so
+ * the paths don't glue onto existing text) and suffixed with a trailing newline so the user
+ * can keep typing on a fresh line. Returns `""` when there are no paths to insert.
+ */
+export function buildFilePathInsertion(textBeforeCursor: string, paths: readonly string[]): string {
+  if (paths.length === 0) {
+    return "";
+  }
+  const needsLeadingNewline = textBeforeCursor.length > 0 && !/\s$/.test(textBeforeCursor);
+  return `${needsLeadingNewline ? "\n" : ""}${paths.join("\n")}\n`;
+}
+
+/**
+ * Whether a dropped file should be referenced by its real local filesystem path (zero copy)
+ * rather than uploaded. Only true in the desktop app (bridge present) AND when the active
+ * environment's agent runs on this same host (the primary/local backend) — a desktop local
+ * path is meaningless to a remote/SSH agent, so those must upload instead.
+ */
+export function shouldUseLocalFilePath(input: {
+  readonly hasDesktopBridge: boolean;
+  readonly isLocalEnvironment: boolean;
+}): boolean {
+  return input.hasDesktopBridge && input.isLocalEnvironment;
+}

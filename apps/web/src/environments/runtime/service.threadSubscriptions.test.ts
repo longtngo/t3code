@@ -115,6 +115,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       writeFile: vi.fn(),
       readFile: vi.fn(),
     },
+    attachments: {
+      upload: vi.fn(),
+    },
     filesystem: {
       browse: vi.fn(),
     },
