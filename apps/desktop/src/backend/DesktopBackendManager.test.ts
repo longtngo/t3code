@@ -21,6 +21,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -108,6 +109,7 @@ function makeManagerLayer(input: {
   readonly desktopState?: DesktopState.DesktopStateShape;
   readonly desktopWindow?: Partial<DesktopWindow.DesktopWindowShape>;
   readonly config?: DesktopBackendManager.DesktopBackendStartConfig;
+  readonly environment?: Partial<DesktopEnvironment.DesktopEnvironmentShape>;
 }) {
   return DesktopBackendManager.layer.pipe(
     Layer.provide(
@@ -115,6 +117,16 @@ function makeManagerLayer(input: {
         FileSystem.layerNoop({
           exists: () => Effect.succeed(true),
         }),
+        Layer.succeed(
+          DesktopEnvironment.DesktopEnvironment,
+          DesktopEnvironment.DesktopEnvironment.of({
+            externalBackendUrl: Option.none<URL>(),
+            externalBackendToken: Option.none<string>(),
+            baseDir: "/tmp/t3",
+            backendCwd: "/server",
+            ...input.environment,
+          } as DesktopEnvironment.DesktopEnvironmentShape),
+        ),
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
           resolve: Effect.succeed(input.config ?? baseConfig),
         }),
@@ -489,6 +501,59 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         assert.equal((yield* manager.snapshot).desiredRunning, false);
       }).pipe(Effect.provide(Layer.merge(TestClock.layer(), managerLayer)));
+    }),
+  );
+
+  it.effect("connects to an external backend without spawning a child process", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const backendReady = yield* Ref.make(false);
+      const quitting = yield* Ref.make(false);
+      const externalUrl = new URL("http://127.0.0.1:9999");
+
+      // Any spawn attempt is a defect: external mode must never launch a child.
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => Effect.die("unexpected spawn in external backend mode")),
+      );
+
+      const managerLayer = makeManagerLayer({
+        spawnerLayer,
+        desktopState: { backendReady, quitting },
+        desktopWindow: {
+          handleBackendReady: Deferred.succeed(ready, void 0).pipe(Effect.asVoid),
+        },
+        environment: {
+          externalBackendUrl: Option.some(externalUrl),
+          externalBackendToken: Option.some("ext-token"),
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const manager = yield* DesktopBackendManager.DesktopBackendManager;
+        assert.isTrue(Option.isNone(yield* manager.currentConfig));
+
+        yield* manager.start;
+        yield* Deferred.await(ready);
+        assert.isTrue(yield* Ref.get(backendReady));
+
+        const config = yield* manager.currentConfig;
+        assert.isTrue(Option.isSome(config));
+        if (Option.isSome(config)) {
+          assert.equal(config.value.httpBaseUrl.href, externalUrl.href);
+          assert.equal(config.value.bootstrap.desktopBootstrapToken, "ext-token");
+          assert.equal(config.value.bootstrap.port, 9999);
+        }
+
+        const snapshot = yield* manager.snapshot;
+        assert.equal(snapshot.ready, true);
+        // No child process means no active pid.
+        assert.isTrue(Option.isNone(snapshot.activePid));
+
+        yield* manager.stop();
+        assert.isFalse(yield* Ref.get(backendReady));
+        assert.equal((yield* manager.snapshot).desiredRunning, false);
+      }).pipe(Effect.provide(managerLayer));
     }),
   );
 });

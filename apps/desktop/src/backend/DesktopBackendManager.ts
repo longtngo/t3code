@@ -25,6 +25,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -277,9 +278,48 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   return describeProcessExit(yield* Effect.result(handle.exitCode));
 });
 
+const EXTERNAL_BACKEND_RETRY_DELAY = Duration.seconds(2);
+const EXTERNAL_TAILSCALE_SERVE_PORT = 443;
+
+const resolveUrlPort = (url: URL): number => {
+  if (url.port.length > 0) {
+    return Number(url.port);
+  }
+  return url.protocol === "https:" ? 443 : 80;
+};
+
+// Builds a synthetic start config for an externally-hosted backend the desktop app
+// connects to (rather than spawns). entryPath/executablePath are unused because no
+// child process is launched; the bootstrap token is surfaced to the renderer via
+// `currentConfig` so it can authenticate to the external backend.
+const buildExternalBackendConfig = (input: {
+  readonly url: URL;
+  readonly token: Option.Option<string>;
+  readonly t3Home: string;
+  readonly cwd: string;
+}): DesktopBackendStartConfig => ({
+  executablePath: process.execPath,
+  entryPath: "",
+  cwd: input.cwd,
+  env: {},
+  bootstrap: {
+    mode: "desktop",
+    noBrowser: true,
+    port: resolveUrlPort(input.url),
+    t3Home: input.t3Home,
+    host: input.url.hostname,
+    desktopBootstrapToken: Option.getOrElse(input.token, () => ""),
+    tailscaleServeEnabled: false,
+    tailscaleServePort: EXTERNAL_TAILSCALE_SERVE_PORT,
+  },
+  httpBaseUrl: input.url,
+  captureOutput: false,
+});
+
 const makeDesktopBackendManager = Effect.fn("makeDesktopBackendManager")(function* () {
   const parentScope = yield* Scope.Scope;
   const fileSystem = yield* FileSystem.FileSystem;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
   const backendOutputLog = yield* DesktopObservability.DesktopBackendOutputLog;
   const desktopState = yield* DesktopState.DesktopState;
@@ -320,11 +360,85 @@ const makeDesktopBackendManager = Effect.fn("makeDesktopBackendManager")(functio
     });
   });
 
+  // External backend mode: connect to an already-running server instead of spawning
+  // a child process. Publishes the connection config immediately (so the renderer can
+  // read it via `currentConfig`) and polls readiness in the background before opening
+  // the window. Retries on failure so the desktop can be launched before the backend.
+  const connectToExternalBackend = Effect.fn("desktop.backendManager.connectToExternalBackend")(
+    function* (url: URL, token: Option.Option<string>) {
+      const current = yield* Ref.get(state);
+      if (current.desiredRunning && Option.isSome(current.config)) {
+        return;
+      }
+
+      const externalConfig = buildExternalBackendConfig({
+        url,
+        token,
+        t3Home: environment.baseDir,
+        cwd: environment.backendCwd,
+      });
+      yield* cancelRestart;
+      yield* Ref.update(state, (latest) => ({
+        ...latest,
+        desiredRunning: true,
+        ready: false,
+        config: Option.some(externalConfig),
+      }));
+      yield* Ref.set(desktopState.backendReady, false);
+
+      const markReadyAndOpenWindow = Effect.gen(function* () {
+        yield* Ref.update(state, (latest) => ({ ...latest, ready: true, restartAttempt: 0 }));
+        yield* Ref.set(desktopState.backendReady, true);
+        yield* desktopWindow.handleBackendReady.pipe(
+          Effect.catch((error) =>
+            logBackendManagerError("failed to open main window after external backend readiness", {
+              message: error.message,
+            }),
+          ),
+        );
+      });
+
+      const readinessLoop: Effect.Effect<void> = waitForHttpReady(
+        url,
+        DEFAULT_BACKEND_READINESS_TIMEOUT,
+      ).pipe(
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.matchEffect({
+          onSuccess: () => markReadyAndOpenWindow,
+          onFailure: (error) =>
+            Effect.gen(function* () {
+              const stillDesired = yield* Ref.get(state).pipe(Effect.map((s) => s.desiredRunning));
+              if (!stillDesired) {
+                return;
+              }
+              yield* logBackendManagerWarning("external backend not ready; retrying", {
+                url: url.href,
+                error: error.message,
+              });
+              yield* Effect.sleep(EXTERNAL_BACKEND_RETRY_DELAY);
+              yield* readinessLoop;
+            }),
+        }),
+      );
+
+      const fiber = yield* Effect.forkIn(readinessLoop, parentScope);
+      yield* Ref.update(state, (latest) => ({ ...latest, restartFiber: Option.some(fiber) }));
+    },
+  );
+
   const start: Effect.Effect<void> = Effect.suspend(() =>
     mutex.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* Ref.get(state);
         if (Option.isSome(current.active)) {
+          return;
+        }
+
+        if (Option.isSome(environment.externalBackendUrl)) {
+          yield* connectToExternalBackend(
+            environment.externalBackendUrl.value,
+            environment.externalBackendToken,
+          );
           return;
         }
 

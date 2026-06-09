@@ -40,6 +40,11 @@ export const DesktopConfig = Config.all({
   appUserModelIdOverride: trimmedString("T3CODE_DESKTOP_APP_USER_MODEL_ID"),
   devRemoteT3ServerEntryPath: trimmedString("T3CODE_DEV_REMOTE_T3_SERVER_ENTRY_PATH"),
   configuredBackendPort: Config.port("T3CODE_PORT").pipe(Config.option),
+  // When set, the desktop app connects to this already-running backend instead of
+  // spawning its own embedded server. The token authenticates the renderer to that
+  // backend (omit it when the backend runs with --dangerously-skip-pairing).
+  externalBackendUrl: Config.url("T3CODE_DESKTOP_BACKEND_URL").pipe(Config.option),
+  externalBackendToken: trimmedString("T3CODE_DESKTOP_BACKEND_TOKEN"),
   commitHashOverride: trimmedString("T3CODE_COMMIT_HASH"),
   desktopLanHostOverride: trimmedString("T3CODE_DESKTOP_LAN_HOST"),
   desktopHttpsEndpointUrls: commaSeparatedStrings("T3CODE_DESKTOP_HTTPS_ENDPOINTS"),

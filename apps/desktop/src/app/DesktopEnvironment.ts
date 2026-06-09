@@ -58,6 +58,8 @@ export interface DesktopEnvironmentShape {
   readonly devServerUrl: Option.Option<URL>;
   readonly devRemoteT3ServerEntryPath: Option.Option<string>;
   readonly configuredBackendPort: Option.Option<number>;
+  readonly externalBackendUrl: Option.Option<URL>;
+  readonly externalBackendToken: Option.Option<string>;
   readonly commitHashOverride: Option.Option<string>;
   readonly otlpTracesUrl: Option.Option<string>;
   readonly otlpExportIntervalMs: number;
@@ -194,6 +196,8 @@ const makeDesktopEnvironment = Effect.fn("desktop.environment.make")(function* (
     devServerUrl,
     devRemoteT3ServerEntryPath: config.devRemoteT3ServerEntryPath,
     configuredBackendPort: config.configuredBackendPort,
+    externalBackendUrl: config.externalBackendUrl,
+    externalBackendToken: config.externalBackendToken,
     commitHashOverride: config.commitHashOverride,
     otlpTracesUrl: config.otlpTracesUrl,
     otlpExportIntervalMs: config.otlpExportIntervalMs,

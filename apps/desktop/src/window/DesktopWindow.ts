@@ -320,7 +320,13 @@ const make = Effect.gen(function* () {
 
   const createMain = Effect.gen(function* () {
     const backendConfig = yield* serverExposure.backendConfig;
-    const window = yield* createWindow(backendConfig.httpBaseUrl);
+    // When configured to use an external backend, load it directly; the local
+    // server-exposure config is not used in that mode.
+    const backendHttpUrl = Option.getOrElse(
+      environment.externalBackendUrl,
+      () => backendConfig.httpBaseUrl,
+    );
+    const window = yield* createWindow(backendHttpUrl);
     yield* electronWindow.setMain(window);
     yield* logWindowInfo("main window created");
     return window;

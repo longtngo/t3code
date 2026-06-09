@@ -139,6 +139,21 @@ const bootstrap = Effect.gen(function* () {
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   yield* logBootstrapInfo("bootstrap start");
 
+  // External backend mode: skip the embedded server entirely (no port scan, no local
+  // exposure) and let the backend manager connect to the configured URL.
+  if (Option.isSome(environment.externalBackendUrl)) {
+    yield* logBootstrapInfo("bootstrap connecting to external backend", {
+      url: environment.externalBackendUrl.value.href,
+    });
+    yield* installDesktopIpcHandlers;
+    yield* logBootstrapInfo("bootstrap ipc handlers registered");
+    if (!(yield* Ref.get(state.quitting))) {
+      yield* backendManager.start;
+      yield* logBootstrapInfo("bootstrap external backend connect requested");
+    }
+    return;
+  }
+
   if (environment.isDevelopment && Option.isNone(environment.configuredBackendPort)) {
     return yield* new DesktopDevelopmentBackendPortRequiredError();
   }
