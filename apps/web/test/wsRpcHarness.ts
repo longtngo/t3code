@@ -3,8 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
+import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { RpcMessage, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcMessage, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 type RpcServerInstance = RpcServer.RpcServer<any>;
 
@@ -26,20 +27,40 @@ interface BrowserWsRpcHarnessOptions {
   ) => ReadonlyArray<unknown> | undefined;
 }
 
-const STREAM_METHODS = new Set<string>([
-  ORCHESTRATION_WS_METHODS.subscribeShell,
-  ORCHESTRATION_WS_METHODS.subscribeThread,
-  WS_METHODS.gitRunStackedAction,
-  WS_METHODS.terminalAttach,
-  WS_METHODS.subscribeVcsStatus,
-  WS_METHODS.subscribeTerminalEvents,
-  WS_METHODS.subscribeTerminalMetadata,
-  WS_METHODS.subscribeServerConfig,
-  WS_METHODS.subscribeServerLifecycle,
-  WS_METHODS.subscribeAuthAccess,
-]);
-
 const ALL_RPC_METHODS = Array.from(WsRpcGroup.requests.keys());
+
+/**
+ * Stream RPCs, derived directly from the contract so this never drifts as new streaming
+ * methods are added. A method whose success schema is an `RpcSchema.Stream` must be answered
+ * with a stream; answering it as a unary call sends a malformed response that corrupts the
+ * shared WS session and tears down every concurrent subscription. (Hardcoding this set
+ * previously let `subscribeHostMetrics` slip through and break all streams.)
+ */
+const STREAM_METHODS = new Set<string>(
+  Array.from(WsRpcGroup.requests.values())
+    .filter((rpc) =>
+      RpcSchema.isStreamSchema((rpc as { readonly successSchema: Schema.Top }).successSchema),
+    )
+    .map((rpc) => (rpc as { readonly _tag: string })._tag),
+);
+
+// Fail loud, not silent. The derivation above leans on `RpcSchema.isStreamSchema`, an unstable
+// effect API. If a future effect bump changes the stream marker, the filter would silently
+// match nothing, every stream RPC would be answered as a unary call, and *every* browser test
+// would corrupt its WS session with the same opaque timeout we hunted down once already. Anchor
+// the derivation to a couple of methods we know are streams so that regression trips here, at
+// import, with a clear message — instead of as mass test flakes.
+for (const requiredStreamMethod of [
+  ORCHESTRATION_WS_METHODS.subscribeShell,
+  WS_METHODS.subscribeServerConfig,
+]) {
+  if (!STREAM_METHODS.has(requiredStreamMethod)) {
+    throw new Error(
+      `wsRpcHarness: stream-method derivation is broken — expected '${requiredStreamMethod}' to ` +
+        `be detected as a streaming RPC. Did effect's RpcSchema.isStreamSchema change shape?`,
+    );
+  }
+}
 
 function normalizeRequest(tag: string, payload: unknown): NormalizedWsRpcRequestBody {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
