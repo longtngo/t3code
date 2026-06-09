@@ -86,25 +86,12 @@ jobs:
       - name: Install browser test runtime
         run: vp run --filter @t3tools/web test:browser:install
 
-      - name: Browser test / Chat view
-        working-directory: apps/web
-        run: vp test run --mode browser --browser=chromium src/components/ChatView.browser.tsx
-
-      - name: Browser test / Chat markdown
-        working-directory: apps/web
-        run: vp test run --mode browser --browser=chromium src/components/ChatMarkdown.browser.tsx
-
-      - name: Browser test / Components
-        working-directory: apps/web
-        run: |
-          vp test run --mode browser --browser=chromium \
-            src/components/GitActionsControl.browser.tsx \
-            src/components/KeybindingsToast.browser.tsx \
-            src/components/ThreadTerminalDrawer.browser.tsx \
-            src/components/chat/MessagesTimeline.browser.tsx \
-            src/components/chat/ProviderModelPicker.browser.tsx \
-            src/components/chat/CompactComposerControlsMenu.browser.tsx \
-            src/components/settings/SettingsPanels.browser.tsx
+      # Runs the whole browser project (src/components/**/*.browser.tsx). Do NOT re-introduce a
+      # hardcoded per-file list here: it silently drifts as new *.browser.tsx files are added
+      # (6 files had gone unrun this way). The `test:browser` script globs them via the vite
+      # `browser` project config, so new browser tests are picked up automatically.
+      - name: Browser tests
+        run: vp run --filter @t3tools/web test:browser
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
