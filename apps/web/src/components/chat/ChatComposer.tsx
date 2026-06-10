@@ -198,7 +198,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             size="sm"
             type="button"
             onClick={props.onToggleInteractionMode}
-            title={
+            aria-label={
               props.interactionMode === "plan"
                 ? "Plan mode — click to return to normal build mode"
                 : "Default mode — click to enter plan mode"
