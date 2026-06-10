@@ -1317,12 +1317,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const refreshAccountUsageNow: ClaudeAdapterShape["refreshAccountUsage"] = () =>
     refreshAccountUsage;
 
-  // Poll first (fills the cache promptly), then wait between ticks.
-  // Guard: skip the poll entirely when no sessions are active — the subprocess
-  // spawn + HTTPS round-trip are wasted when there is nobody to broadcast to.
-  // The on-demand path (refreshAccountUsageNow / refreshAccountUsage) is
-  // intentionally left unguarded so a freshly-started session can force a
-  // snapshot regardless of the current session count.
+  // Adapter-lifetime scope for forking a one-shot usage poll when a session
+  // starts with an empty cache (see startSession), so the fiber outlives the
+  // per-call scope but is torn down with the adapter.
+  const accountUsageScope = yield* Effect.scope;
+
+  // Skip the periodic poll when no sessions are active — the subprocess spawn +
+  // HTTPS round-trip are wasted when there is nobody to broadcast to. The first
+  // session after an idle period fills the cache via the on-demand poll forked
+  // in startSession, so gating the tick does not delay its first snapshot.
   yield* Effect.forever(
     Effect.gen(function* () {
       if (sessions.size > 0) {
@@ -3432,10 +3435,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       sessions.set(threadId, context);
 
       // Surface the last known account usage immediately so the new session's
-      // UI renders without waiting for the next poll tick.
+      // UI renders without waiting for the next poll tick. When the cache is
+      // empty (first session after boot/idle, where the gated background tick
+      // has not polled), fork a one-shot poll so the snapshot arrives promptly
+      // instead of waiting up to a full poll interval.
       const cachedUsage = yield* Ref.get(lastUsageRef);
       if (cachedUsage !== null) {
         yield* emitUsageForSession(context, cachedUsage);
+      } else {
+        yield* Effect.forkIn(
+          refreshAccountUsage.pipe(Effect.ignoreCause({ log: true })),
+          accountUsageScope,
+        );
       }
 
       const sessionStartedStamp = yield* makeEventStamp();

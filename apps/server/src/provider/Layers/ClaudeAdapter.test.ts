@@ -1015,6 +1015,65 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect(
+    "starting a session with an empty cache forks a prompt on-demand poll",
+    () => {
+      // RED-without-fix: with the gated background tick, a session starting while
+      // the usage cache is empty must trigger an on-demand poll at start (not wait
+      // up to a full poll interval). The poll interval here is huge so the only
+      // way pollAccountUsage runs is the session-start fork.
+      return Effect.gen(function* () {
+        const pollCallCount = yield* Ref.make(0);
+        const usageSnapshot = {
+          fiveHour: { utilization: 12, resetsAt: "2026-06-10T00:00:00Z" },
+          sevenDay: { utilization: 6, resetsAt: "2026-06-15T00:00:00Z" },
+          extra: null,
+        };
+        const harness = makeHarness({
+          pollAccountUsage: Effect.gen(function* () {
+            yield* Ref.update(pollCallCount, (n) => n + 1);
+            return usageSnapshot;
+          }),
+          usagePollInterval: Duration.minutes(999),
+        });
+
+        yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+
+          // Let the background poller run its first (idle, sessions.size === 0)
+          // iteration and settle into its long sleep BEFORE any session exists —
+          // mirroring a server that has been idle. It must not have polled yet.
+          yield* TestClock.adjust(Duration.seconds(1));
+          assert.equal(yield* Ref.get(pollCallCount), 0, "idle poller must not poll");
+
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            provider: ProviderDriverKind.make("claudeAgent"),
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: "claude-sonnet-4-5",
+            },
+            runtimeMode: "full-access",
+          });
+
+          // Let the session-start fork run; far under the poll interval so the
+          // background tick cannot be the cause of any poll.
+          yield* TestClock.adjust(Duration.seconds(1));
+
+          const count = yield* Ref.get(pollCallCount);
+          assert.equal(
+            count,
+            1,
+            "a session starting with an empty usage cache must fork exactly one on-demand poll",
+          );
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      });
+    },
+  );
+
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
