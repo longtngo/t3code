@@ -29,6 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -948,6 +949,71 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect(
+    "background tick skips pollAccountUsage when no sessions are active",
+    () => {
+      // RED test: without the sessions.size guard, the poller invokes pollAccountUsage
+      // on every tick regardless of active sessions.  After the fix it must NOT call
+      // pollAccountUsage when sessions.size === 0.
+      return Effect.gen(function* () {
+        const pollCallCount = yield* Ref.make(0);
+        const harness = makeHarness({
+          pollAccountUsage: Effect.gen(function* () {
+            yield* Ref.update(pollCallCount, (n) => n + 1);
+            return null; // null means "no data" — adapter ignores it
+          }),
+          usagePollInterval: Duration.seconds(60),
+        });
+
+        yield* Effect.gen(function* () {
+          // Do NOT start any session — sessions.size stays 0.
+          // Let the background poller fire several times.
+          yield* TestClock.adjust(Duration.seconds(180));
+
+          const count = yield* Ref.get(pollCallCount);
+          // With the guard the poller must have called pollAccountUsage zero times.
+          assert.equal(count, 0, "pollAccountUsage should not be called when no sessions are active");
+        }).pipe(Effect.provide(harness.layer));
+      });
+    },
+  );
+
+  it.effect(
+    "on-demand refreshAccountUsage still polls even when no sessions are active",
+    () => {
+      // The on-demand path (refreshAccountUsageNow) must ALWAYS call pollAccountUsage
+      // regardless of sessions, so a freshly-started session can force a snapshot.
+      return Effect.gen(function* () {
+        const pollCallCount = yield* Ref.make(0);
+        const usageSnapshot = {
+          fiveHour: { utilization: 10, resetsAt: "2026-06-10T00:00:00Z" },
+          sevenDay: { utilization: 5, resetsAt: "2026-06-15T00:00:00Z" },
+          extra: null,
+        };
+        const harness = makeHarness({
+          pollAccountUsage: Effect.gen(function* () {
+            yield* Ref.update(pollCallCount, (n) => n + 1);
+            return usageSnapshot;
+          }),
+          // Use a very long poll interval so the background tick never fires
+          usagePollInterval: Duration.minutes(999),
+        });
+
+        yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          // Explicitly invoke the on-demand refresh with no sessions active.
+          yield* adapter.refreshAccountUsage();
+
+          const count = yield* Ref.get(pollCallCount);
+          assert.equal(count, 1, "on-demand refreshAccountUsage must call pollAccountUsage unconditionally");
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      });
+    },
+  );
 
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();

@@ -1692,7 +1692,7 @@ const make = Effect.gen(function* () {
         }
 
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
-          serverSettingsService.getSettings,
+          serverSettingsService.getRawSettings,
           (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
         );
         if (assistantDeliveryMode === "buffered") {
@@ -1728,7 +1728,7 @@ const make = Effect.gen(function* () {
       if (pauseForUserTurnId) {
         const detailedThread = yield* getLoadedThreadDetail();
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
-          serverSettingsService.getSettings,
+          serverSettingsService.getRawSettings,
           (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
         );
         const flushedMessageIds =

@@ -1,9 +1,9 @@
-import * as OS from "node:os";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
+import { expandHomePath } from "../../pathExpansion.ts";
 import {
   WorkspaceFileSystem,
   WorkspaceFileSystemError,
@@ -14,16 +14,6 @@ import { WorkspacePaths } from "../Services/WorkspacePaths.ts";
 
 // Cap previewable file reads so a stray large file can't be slurped into memory.
 const MAX_READ_FILE_BYTES = 2 * 1024 * 1024;
-
-function expandHomePath(input: string, path: Path.Path): string {
-  if (input === "~") {
-    return OS.homedir();
-  }
-  if (input.startsWith("~/") || input.startsWith("~\\")) {
-    return path.join(OS.homedir(), input.slice(2));
-  }
-  return input;
-}
 
 export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -70,7 +60,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const readFile: WorkspaceFileSystemShape["readFile"] = Effect.fn(
     "WorkspaceFileSystem.readFile",
   )(function* (input) {
-    const expanded = expandHomePath(input.path.trim(), path);
+    const expanded = expandHomePath(input.path.trim());
     // Relative paths resolve against cwd; absolute paths (e.g. /var/folders/…,
     // ~/reports/…) are used as-is, intentionally allowing reads outside the root.
     const absolutePath = path.isAbsolute(expanded)

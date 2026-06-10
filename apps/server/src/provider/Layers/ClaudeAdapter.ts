@@ -1318,9 +1318,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     refreshAccountUsage;
 
   // Poll first (fills the cache promptly), then wait between ticks.
+  // Guard: skip the poll entirely when no sessions are active — the subprocess
+  // spawn + HTTPS round-trip are wasted when there is nobody to broadcast to.
+  // The on-demand path (refreshAccountUsageNow / refreshAccountUsage) is
+  // intentionally left unguarded so a freshly-started session can force a
+  // snapshot regardless of the current session count.
   yield* Effect.forever(
     Effect.gen(function* () {
-      yield* refreshAccountUsage;
+      if (sessions.size > 0) {
+        yield* refreshAccountUsage;
+      }
       yield* Effect.sleep(usagePollInterval);
     }).pipe(Effect.ignoreCause({ log: true })),
   ).pipe(Effect.forkScoped);

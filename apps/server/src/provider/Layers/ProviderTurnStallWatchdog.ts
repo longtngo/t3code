@@ -20,6 +20,7 @@ import * as Schedule from "effect/Schedule";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { parsePositiveIntEnv } from "./parsePositiveIntEnv.ts";
 import {
   ProviderRuntimeIngestionService,
   type TurnActivitySnapshot,
@@ -85,15 +86,6 @@ function sameTurn(left: string | null | undefined, right: string | null | undefi
   return left != null && right != null && left === right;
 }
 
-function readEnvInt(name: string): number | undefined {
-  const raw = process.env[name];
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOptions) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
@@ -104,7 +96,7 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
 
     const stallThresholdMs = Math.max(
       1,
-      options?.stallThresholdMs ?? readEnvInt("T3CODE_TURN_STALL_THRESHOLD_MS") ?? DEFAULT_STALL_THRESHOLD_MS,
+      options?.stallThresholdMs ?? parsePositiveIntEnv("T3CODE_TURN_STALL_THRESHOLD_MS") ?? DEFAULT_STALL_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
     const stopGraceMs = Math.max(1, options?.stopGraceMs ?? DEFAULT_STOP_GRACE_MS);

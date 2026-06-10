@@ -47,6 +47,7 @@ import {
   BackgroundTaskRecoveryWatchdog,
   type BackgroundTaskRecoveryWatchdogShape,
 } from "../Services/BackgroundTaskRecoveryWatchdog.ts";
+import { parsePositiveIntEnv } from "./parsePositiveIntEnv.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
@@ -77,13 +78,6 @@ export interface BackgroundTaskRecoveryWatchdogLiveOptions {
   readonly maxRecoveryAttempts?: number;
 }
 
-const envNumber = (name: string): number | undefined => {
-  const raw = process.env[name];
-  if (raw === undefined) return undefined;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-};
-
 const makeBackgroundTaskRecoveryWatchdog = (
   options?: BackgroundTaskRecoveryWatchdogLiveOptions,
 ) =>
@@ -96,18 +90,18 @@ const makeBackgroundTaskRecoveryWatchdog = (
 
     const sweepIntervalMs = Math.max(
       1,
-      options?.sweepIntervalMs ?? envNumber("T3CODE_BG_TASK_RECOVERY_SWEEP_MS") ?? DEFAULT_SWEEP_INTERVAL_MS,
+      options?.sweepIntervalMs ?? parsePositiveIntEnv("T3CODE_BG_TASK_RECOVERY_SWEEP_MS") ?? DEFAULT_SWEEP_INTERVAL_MS,
     );
     const staleThresholdMs = Math.max(
       1,
       options?.staleThresholdMs ??
-        envNumber("T3CODE_BG_TASK_STALE_THRESHOLD_MS") ??
+        parsePositiveIntEnv("T3CODE_BG_TASK_STALE_THRESHOLD_MS") ??
         DEFAULT_STALE_THRESHOLD_MS,
     );
     const maxRecoveryAttempts = Math.max(
       1,
       options?.maxRecoveryAttempts ??
-        envNumber("T3CODE_BG_TASK_RECOVERY_MAX_ATTEMPTS") ??
+        parsePositiveIntEnv("T3CODE_BG_TASK_RECOVERY_MAX_ATTEMPTS") ??
         DEFAULT_MAX_RECOVERY_ATTEMPTS,
     );
 

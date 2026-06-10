@@ -29,6 +29,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -58,6 +59,29 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
+}
+
+/**
+ * Wraps the test settings layer with a counter that tracks how many times the
+ * expensive `getSettings` accessor (the one that would run secret-store reads
+ * in production) is invoked.  The counter is a plain mutable holder so tests
+ * can read it synchronously without a manual Effect runtime.
+ */
+function makeSpyServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
+  const getSettingsCallCount = { count: 0 };
+  const layer = Layer.effect(
+    ServerSettingsService,
+    Effect.gen(function* () {
+      const base = yield* ServerSettingsService;
+      return {
+        ...base,
+        getSettings: Effect.sync(() => {
+          getSettingsCallCount.count += 1;
+        }).pipe(Effect.flatMap(() => base.getSettings)),
+      };
+    }).pipe(Effect.provide(ServerSettingsService.layerTest(overrides))),
+  ).pipe(Layer.orDie);
+  return { layer, getSettingsCallCount };
 }
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -226,7 +250,10 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -242,6 +269,8 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolverLive),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const settingsLayer =
+      options?.serverSettingsLayer ?? makeTestServerSettingsLayer(options?.serverSettings);
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
       Layer.provideMerge(makeRuntimeBootIdLive("ingestion-test-boot")),
@@ -249,7 +278,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
-      Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
+      Layer.provideMerge(settingsLayer),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -3570,5 +3599,55 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+
+  it("does not call the expensive getSettings on the content.delta hot path", async () => {
+    // This test guards the performance fix: reading `enableAssistantStreaming`
+    // during streaming must use getRawSettings (cheap O(1) Ref read), not
+    // getSettings (which materializes secrets in production on every call).
+    // We spy on getSettings at the service boundary.  After the fix the
+    // counter must remain 0 no matter how many content.delta events arrive.
+    const { layer: spyLayer, getSettingsCallCount } = makeSpyServerSettingsLayer();
+    const harness = await createHarness({ serverSettingsLayer: spyLayer });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-hot-path-spy"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-hot-path-spy"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-hot-path-spy",
+    );
+
+    const DELTA_COUNT = 10;
+    for (let i = 0; i < DELTA_COUNT; i++) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-hot-path-delta-${i}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-hot-path-spy"),
+        itemId: asItemId("item-hot-path-spy"),
+        payload: {
+          streamKind: "assistant_text",
+          delta: `token-${i}`,
+        },
+      });
+    }
+
+    await harness.drain();
+
+    // getSettings (the expensive path) must NOT be called for any of the
+    // content.delta events.  getRawSettings should be used instead.
+    expect(getSettingsCallCount.count).toBe(0);
   });
 });

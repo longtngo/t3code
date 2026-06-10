@@ -115,8 +115,27 @@ export interface ServerSettingsShape {
   /** Await settings runtime readiness. */
   readonly ready: Effect.Effect<void, ServerSettingsError>;
 
-  /** Read the current settings. */
+  /**
+   * Read the current settings with all expensive transforms applied:
+   * provider-environment secrets are materialized from the secret store and
+   * `textGenerationModelSelection` is resolved to an enabled provider.
+   *
+   * Use this wherever the resolved model selection or plain-text secret values
+   * are needed (e.g. when starting a provider session).  Do NOT call on
+   * hot paths — every invocation performs a secret-store read per sensitive
+   * env var.
+   */
   readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+
+  /**
+   * Read the raw cached settings without materializing provider-environment
+   * secrets or resolving the text-generation provider.
+   *
+   * This is a cheap O(1) Ref read — safe to call on every streaming event.
+   * Use it whenever you only need plain, non-secret settings fields such as
+   * `enableAssistantStreaming`.
+   */
+  readonly getRawSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
   /** Patch settings and persist. Returns the new full settings object. */
   readonly updateSettings: (
@@ -149,6 +168,7 @@ export class ServerSettingsService extends Context.Service<
           start: Effect.void,
           ready: Effect.void,
           getSettings: Ref.get(currentSettingsRef),
+          getRawSettings: Ref.get(currentSettingsRef),
           updateSettings: (patch) =>
             Ref.get(currentSettingsRef).pipe(
               Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
@@ -547,6 +567,7 @@ const makeServerSettings = Effect.gen(function* () {
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
+    getRawSettings: getSettingsFromCache,
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
