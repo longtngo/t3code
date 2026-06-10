@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -204,6 +205,69 @@ describe("DesktopWindow", () => {
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect(
+    "refuses to load a non-http(s) external backend URL at the createWindow sink",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+
+        // Non-dev (no VITE_DEV_SERVER_URL → isDevelopment false) so the external
+        // backend URL becomes the loaded renderer origin; point it at file://.
+        const nonDevEnvLayer = DesktopEnvironment.layer(environmentInput).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              DesktopConfig.layerTest({
+                T3CODE_PORT: "3773",
+                T3CODE_DESKTOP_BACKEND_URL: "file:///etc/passwd",
+              }),
+            ),
+          ),
+        );
+        const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
+          create: () =>
+            Ref.update(createCount, (count) => count + 1).pipe(Effect.as(fakeWindow.window)),
+          main: Ref.get(mainWindow),
+          currentMainOrFirst: Ref.get(mainWindow),
+          focusedMainOrFirst: Ref.get(mainWindow),
+          setMain: (window) => Ref.set(mainWindow, Option.some(window)),
+          clearMain: () => Ref.set(mainWindow, Option.none()),
+          reveal: () => Effect.void,
+          sendAll: () => Effect.void,
+          destroyAll: Effect.void,
+          syncAllAppearance: (sync) => sync(fakeWindow.window),
+        } satisfies ElectronWindow.ElectronWindowShape);
+        const layer = DesktopWindow.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              desktopAssetsLayer,
+              nonDevEnvLayer,
+              desktopServerExposureLayer,
+              DesktopState.layer,
+              electronMenuLayer,
+              Layer.succeed(ElectronShell.ElectronShell, {
+                openExternal: () => Effect.succeed(true),
+                copyText: () => Effect.void,
+              } satisfies ElectronShell.ElectronShellShape),
+              electronThemeLayer,
+              electronWindowLayer,
+            ),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          const exit = yield* Effect.exit(desktopWindow.createMain);
+          // Fails before any window is created or content loaded.
+          assert.isTrue(Exit.isFailure(exit));
+          assert.equal(yield* Ref.get(createCount), 0);
+          assert.equal(fakeWindow.loadURL.mock.calls.length, 0);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect("opens safe off-origin renderer navigations in the system browser", () =>

@@ -556,4 +556,38 @@ describe("DesktopBackendManager", () => {
       }).pipe(Effect.provide(managerLayer));
     }),
   );
+
+  it.effect("refuses to connect to an external backend with an unsupported URL scheme", () =>
+    Effect.gen(function* () {
+      const backendReady = yield* Ref.make(false);
+      const quitting = yield* Ref.make(false);
+      // file:/data:/javascript: must never become the privileged renderer origin.
+      const externalUrl = new URL("file:///etc/passwd");
+
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => Effect.die("unexpected spawn in external backend mode")),
+      );
+
+      const managerLayer = makeManagerLayer({
+        spawnerLayer,
+        desktopState: { backendReady, quitting },
+        environment: {
+          externalBackendUrl: Option.some(externalUrl),
+          externalBackendToken: Option.some("ext-token"),
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const manager = yield* DesktopBackendManager.DesktopBackendManager;
+        yield* manager.start;
+
+        // Fail-closed: no config published, backend never marked ready, no window.
+        assert.isTrue(Option.isNone(yield* manager.currentConfig));
+        assert.isFalse(yield* Ref.get(backendReady));
+        assert.equal((yield* manager.snapshot).desiredRunning, false);
+        assert.equal((yield* manager.snapshot).ready, false);
+      }).pipe(Effect.provide(managerLayer));
+    }),
+  );
 });

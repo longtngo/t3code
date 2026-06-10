@@ -204,4 +204,47 @@ describe("FileViewerSidebar", () => {
       await screen.unmount();
     }
   });
+
+  it("ignores nav messages when no viewer iframe is mounted (markdown view)", async () => {
+    // The XSS-relevant case: in markdown view there is NO iframe, so the once-
+    // subscribed message listener must reject forged nav messages. (With the old
+    // `iframeRef.current && …` guard this path fell through and navigated.)
+    const readFile = vi.fn(async ({ path }: { cwd: string; path: string }) =>
+      path.endsWith(".md")
+        ? { contents: "# notes", resolvedPath: `/repo/project/${path}` }
+        : { contents: `<h1>${path}</h1>`, resolvedPath: `/repo/project/${path}` },
+    );
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, {
+      projects: { readFile },
+    } as unknown as EnvironmentApi);
+
+    const screen = await render(<FileViewerSidebar />);
+    try {
+      useFileViewerStore.getState().openFileViewer({
+        path: "notes.md",
+        cwd: "/repo/project",
+        environmentId: ENVIRONMENT_ID,
+        kind: "markdown",
+      });
+
+      // Markdown renders without an iframe.
+      await vi.waitFor(() => expect(readFile).toHaveBeenCalledWith({ cwd: "/repo/project", path: "notes.md" }));
+      expect(viewerIframe()).toBeNull();
+      readFile.mockClear();
+
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { __t3FileViewerNav: true, href: "attacker.html" },
+          source: window,
+        }),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(readFile).not.toHaveBeenCalledWith(
+        expect.objectContaining({ path: "attacker.html" }),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

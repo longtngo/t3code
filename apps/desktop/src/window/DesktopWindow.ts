@@ -46,8 +46,17 @@ export class DesktopWindowDevServerUrlMissingError extends Data.TaggedError(
   }
 }
 
+export class DesktopWindowUnsupportedBackendUrlError extends Data.TaggedError(
+  "DesktopWindowUnsupportedBackendUrlError",
+)<{ readonly url: string; readonly scheme: string }> {
+  override get message() {
+    return `Refusing to load desktop backend over unsupported scheme '${this.scheme}': ${this.url}`;
+  }
+}
+
 export type DesktopWindowError =
   | DesktopWindowDevServerUrlMissingError
+  | DesktopWindowUnsupportedBackendUrlError
   | ElectronWindow.ElectronWindowCreateError;
 
 export interface DesktopWindowShape {
@@ -170,9 +179,18 @@ const make = Effect.gen(function* () {
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (
     backendHttpUrl: URL,
   ): Effect.fn.Return<Electron.BrowserWindow, DesktopWindowError> {
+    // In production the backend URL IS the renderer origin (loaded below with the
+    // desktop bridge attached), so it must be http(s) — never file:/data:/etc.
+    // Validate at this sink so every caller (e.g. ensureMain from the app menu,
+    // not just the readiness path) is covered.
     const applicationUrl = environment.isDevelopment
       ? yield* resolveDesktopDevServerUrl(environment)
-      : backendHttpUrl.href;
+      : backendHttpUrl.protocol === "http:" || backendHttpUrl.protocol === "https:"
+        ? backendHttpUrl.href
+        : yield* new DesktopWindowUnsupportedBackendUrlError({
+            url: backendHttpUrl.href,
+            scheme: backendHttpUrl.protocol,
+          });
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;

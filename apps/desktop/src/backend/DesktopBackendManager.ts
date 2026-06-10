@@ -371,6 +371,31 @@ const makeDesktopBackendManager = Effect.fn("makeDesktopBackendManager")(functio
         return;
       }
 
+      // The external URL becomes the privileged renderer origin (loadURL) with the
+      // desktop bridge attached, so only http(s) may be loaded — never file:/data:/
+      // javascript:/blob:, which would run attacker markup as the app origin.
+      // Fail closed (no config published, no window opened) on an unsupported scheme.
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        yield* logBackendManagerError(
+          "refusing to connect to external backend: unsupported URL scheme",
+          { url: url.href, scheme: url.protocol },
+        );
+        return;
+      }
+      const isLoopbackHost =
+        url.hostname === "localhost" ||
+        url.hostname === "127.0.0.1" ||
+        url.hostname === "::1" ||
+        url.hostname === "[::1]";
+      if (url.protocol === "http:" && !isLoopbackHost) {
+        // The bootstrap token is handed to this origin; over cleartext it is
+        // captured/replayable. Allowed (e.g. trusted LAN/Tailscale) but audited.
+        yield* logBackendManagerWarning(
+          "connecting to external backend over cleartext http; bootstrap token will be sent unencrypted",
+          { url: url.href },
+        );
+      }
+
       const externalConfig = buildExternalBackendConfig({
         url,
         token,

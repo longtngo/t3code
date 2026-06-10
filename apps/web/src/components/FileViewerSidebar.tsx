@@ -200,8 +200,9 @@ function FileViewerContent({
   useEffect(() => {
     function onMessage(event: MessageEvent) {
       // Opaque-origin srcdoc frames report origin "null", so identify the
-      // sender by window reference rather than origin.
-      if (iframeRef.current && event.source !== iframeRef.current.contentWindow) return;
+      // sender by window reference rather than origin. Reject when no iframe is
+      // mounted (markdown view) so only the live HTML frame can drive nav.
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
       if (!isNavMessage(event.data)) return;
       const cleanHref = event.data.href.split(/[?#]/)[0] ?? event.data.href;
       const kind = inferFileViewerKind(cleanHref);
@@ -230,10 +231,11 @@ function FileViewerContent({
       return;
     }
     win.opener = null;
+    // Title is set safely via the `document.title` property assignment below;
+    // never interpolate the path into the written HTML (it can carry attacker
+    // markup from an intra-report link href and this popup is same-origin).
     win.document.write(
-      '<!doctype html><html><head><meta charset="utf-8"><title>' +
-        basenameOf(current.path) +
-        "</title>" +
+      '<!doctype html><html><head><meta charset="utf-8"><title></title>' +
         "<style>html,body{margin:0;height:100%}iframe{border:0;display:block;width:100%;height:100%}</style>" +
         "</head><body></body></html>",
     );
