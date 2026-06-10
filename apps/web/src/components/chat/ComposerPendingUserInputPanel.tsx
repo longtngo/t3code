@@ -71,6 +71,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const activeQuestion = progress.activeQuestion;
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const onAdvanceRef = useRef(onAdvance);
+  const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
+    questionId: string;
+    optionLabel: string;
+  } | null>(null);
 
   // Collapse hides the options so the chat behind the panel can be read before
   // deciding; the drag grabber lets the user fine-tune the options height. A
@@ -152,6 +156,27 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     onAdvanceRef.current = onAdvance;
   }, [onAdvance]);
 
+  useEffect(() => {
+    if (!activeQuestion || activeQuestion.multiSelect || !optimisticSingleSelect) {
+      return;
+    }
+    if (optimisticSingleSelect.questionId !== activeQuestion.id) {
+      setOptimisticSingleSelect(null);
+      return;
+    }
+    if (
+      progress.customAnswer.trim().length === 0 &&
+      progress.selectedOptionLabels.includes(optimisticSingleSelect.optionLabel)
+    ) {
+      setOptimisticSingleSelect(null);
+    }
+  }, [
+    activeQuestion,
+    optimisticSingleSelect,
+    progress.customAnswer,
+    progress.selectedOptionLabels,
+  ]);
+
   // Clear auto-advance timer on unmount
   useEffect(() => {
     return () => {
@@ -162,10 +187,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }, []);
 
   const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
-    onToggleOption(questionId, optionLabel);
     if (activeQuestion?.multiSelect) {
+      onToggleOption(questionId, optionLabel);
       return;
     }
+    setOptimisticSingleSelect({ questionId, optionLabel });
+    onToggleOption(questionId, optionLabel);
     if (autoAdvanceTimerRef.current !== null) {
       window.clearTimeout(autoAdvanceTimerRef.current);
     }

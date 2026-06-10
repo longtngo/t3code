@@ -421,6 +421,26 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "tool.denied": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "error",
+          kind: "tool.denied",
+          summary: `Tool denied: ${event.payload.toolName}`,
+          payload: {
+            toolName: event.payload.toolName,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.reason ? { detail: truncateDetail(event.payload.reason) } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "runtime.thinking-tokens": {
       // Stable per-turn id so successive token updates replace the same work-log
       // row in place (the projector upserts activities by id) instead of
@@ -451,7 +471,9 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          // Use the adapter-supplied message as the row label so the work log
+          // shows what the warning was about, not a generic "Runtime warning".
+          summary: truncateDetail(event.payload.message, 120),
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),

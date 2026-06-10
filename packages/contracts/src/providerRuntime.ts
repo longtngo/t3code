@@ -249,6 +249,7 @@ const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
 const RuntimeNotificationType = Schema.Literal("runtime.notification");
 const RuntimeThinkingTokensType = Schema.Literal("runtime.thinking-tokens");
+const ToolDeniedType = Schema.Literal("tool.denied");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 
@@ -651,6 +652,14 @@ const RuntimeThinkingTokensPayload = Schema.Struct({
 });
 export type RuntimeThinkingTokensPayload = typeof RuntimeThinkingTokensPayload.Type;
 
+const ToolDeniedPayload = Schema.Struct({
+  toolName: TrimmedNonEmptyStringSchema,
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  reason: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type ToolDeniedPayload = typeof ToolDeniedPayload.Type;
+
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(Schema.Unknown),
@@ -1025,6 +1034,13 @@ const ProviderRuntimeThinkingTokensEvent = Schema.Struct({
 });
 export type ProviderRuntimeThinkingTokensEvent = typeof ProviderRuntimeThinkingTokensEvent.Type;
 
+const ProviderRuntimeToolDeniedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: ToolDeniedType,
+  payload: ToolDeniedPayload,
+});
+export type ProviderRuntimeToolDeniedEvent = typeof ProviderRuntimeToolDeniedEvent.Type;
+
 const ProviderRuntimeWarningEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: RuntimeWarningType,
@@ -1089,6 +1105,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeFilesPersistedEvent,
   ProviderRuntimeNotificationEvent,
   ProviderRuntimeThinkingTokensEvent,
+  ProviderRuntimeToolDeniedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
 ]);

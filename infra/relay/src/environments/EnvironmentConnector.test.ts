@@ -14,14 +14,17 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import { RELAY_HEALTH_RESPONSE_TYP, RELAY_MINT_RESPONSE_TYP } from "@t3tools/shared/relayJwt";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
@@ -49,6 +52,9 @@ const decodeHealthRequestBody = Schema.decodeUnknownSync(
 );
 const decodeMintRequestBody = Schema.decodeUnknownSync(
   Schema.fromJsonString(RelayCloudMintCredentialRequest),
+);
+const isEnvironmentConnectNotAuthorized = Schema.is(
+  EnvironmentConnector.EnvironmentConnectNotAuthorized,
 );
 
 function requestBodyText(request: HttpClientRequest.HttpClientRequest): string {
@@ -221,6 +227,58 @@ function makeLinks(
 }
 
 describe("EnvironmentConnector", () => {
+  it.effect("loads the environment link and managed allocation concurrently", () =>
+    Effect.gen(function* () {
+      const started = yield* Ref.make(0);
+      const bothStarted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const waitForPeer = Effect.gen(function* () {
+        const count = yield* Ref.updateAndGet(started, (value) => value + 1);
+        if (count === 2) {
+          yield* Deferred.succeed(bothStarted, undefined);
+        }
+        yield* Deferred.await(release);
+      });
+      const links = makeLinks();
+      const allocations = makeAllocations();
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.sync(() => {
+          const healthRequest = decodeHealthRequestBody(requestBodyText(request));
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json(signHealthResponse(healthRequest), { status: 200 }),
+          );
+        });
+      const status = Effect.gen(function* () {
+        const connector = yield* EnvironmentConnector.EnvironmentConnector;
+        return yield* connector.status({
+          userId: "user_123",
+          environmentId: "env-connector-test" as never,
+        });
+      }).pipe(
+        Effect.provide(
+          connectorTestLayer(execute, {
+            links: {
+              ...links,
+              getForUser: (input) => waitForPeer.pipe(Effect.andThen(links.getForUser(input))),
+            },
+            allocations: {
+              ...allocations,
+              get: (input) => waitForPeer.pipe(Effect.andThen(allocations.get(input))),
+            },
+          }),
+        ),
+      );
+
+      const fiber = yield* Effect.forkChild(status);
+      yield* Deferred.await(bothStarted);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(fiber);
+
+      expect(yield* Ref.get(started)).toBe(2);
+    }),
+  );
+
   it.effect("checks linked environment health through the managed endpoint", () => {
     const seenUrls: Array<string> = [];
     const seenProofs: Array<RelayCloudEnvironmentHealthProofPayload> = [];
@@ -242,7 +300,7 @@ describe("EnvironmentConnector", () => {
         environmentId: "env-connector-test",
       });
 
-      expect(seenUrls).toEqual(["https://env.example.test/api/t3-cloud/health"]);
+      expect(seenUrls).toEqual(["https://env.example.test/api/t3-connect/health"]);
       expect(seenProofs[0]).toMatchObject({
         iss: "https://relay.example.test",
         aud: "t3-env:env-connector-test",
@@ -280,7 +338,13 @@ describe("EnvironmentConnector", () => {
 
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
-        expect(result.failure).toBeInstanceOf(EnvironmentConnector.EnvironmentConnectNotAuthorized);
+        expect(isEnvironmentConnectNotAuthorized(result.failure)).toBe(true);
+        if (isEnvironmentConnectNotAuthorized(result.failure)) {
+          expect(result.failure).toMatchObject({
+            operation: "status",
+            reason: "endpoint_provider_not_managed",
+          });
+        }
       }
       expect(requestCount).toBe(0);
     }).pipe(
@@ -300,6 +364,14 @@ describe("EnvironmentConnector", () => {
 
   it.effect("rejects stale managed endpoints before sending a mint request", () => {
     let requestCount = 0;
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
     const execute = () =>
       Effect.sync(() => {
         requestCount += 1;
@@ -318,8 +390,27 @@ describe("EnvironmentConnector", () => {
 
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
-        expect(result.failure).toBeInstanceOf(EnvironmentConnector.EnvironmentConnectNotAuthorized);
+        expect(isEnvironmentConnectNotAuthorized(result.failure)).toBe(true);
+        if (isEnvironmentConnectNotAuthorized(result.failure)) {
+          expect(result.failure).toMatchObject({
+            operation: "connect",
+            reason: "managed_endpoint_mismatch",
+          });
+        }
       }
+      const resolutionSpan = spans.find(
+        (span) => span.name === "relay.environment_connector.resolve_managed_endpoint",
+      );
+      expect(Object.fromEntries(resolutionSpan?.attributes ?? [])).toMatchObject({
+        "relay.authorization.allocation_hostname": "env.example.test",
+        "relay.authorization.allocation_has_ready_at": true,
+        "relay.authorization.allocation_has_tunnel_id": true,
+        "relay.authorization.allocation_has_dns_record_id": true,
+        "relay.authorization.linked_http_base_url": "https://attacker.example.test/",
+        "relay.authorization.linked_ws_base_url": "wss://attacker.example.test/ws",
+        "relay.authorization.resolved_http_base_url": "https://env.example.test/",
+        "relay.authorization.resolved_ws_base_url": "wss://env.example.test/ws",
+      });
       expect(requestCount).toBe(0);
     }).pipe(
       Effect.provide(
@@ -333,6 +424,7 @@ describe("EnvironmentConnector", () => {
           }),
         }),
       ),
+      Effect.provideService(Tracer.Tracer, tracer),
     );
   });
 
@@ -355,7 +447,13 @@ describe("EnvironmentConnector", () => {
 
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
-        expect(result.failure).toBeInstanceOf(EnvironmentConnector.EnvironmentConnectNotAuthorized);
+        expect(isEnvironmentConnectNotAuthorized(result.failure)).toBe(true);
+        if (isEnvironmentConnectNotAuthorized(result.failure)) {
+          expect(result.failure).toMatchObject({
+            operation: "status",
+            reason: "managed_endpoint_allocation_not_ready",
+          });
+        }
       }
       expect(requestCount).toBe(0);
     }).pipe(
@@ -565,7 +663,7 @@ describe("EnvironmentConnector", () => {
         deviceId: "device-123",
       });
 
-      expect(seenUrls).toEqual(["https://env.example.test/api/t3-cloud/mint-credential"]);
+      expect(seenUrls).toEqual(["https://env.example.test/api/t3-connect/mint-credential"]);
       expect(seenProofs[0]).toMatchObject({
         iss: "https://relay.example.test",
         aud: "t3-env:env-connector-test",

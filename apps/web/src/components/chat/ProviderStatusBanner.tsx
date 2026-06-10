@@ -27,19 +27,24 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   }
 
   const providerLabel = status.displayName?.trim() || formatProviderDriverKindLabel(status.driver);
-  const defaultMessage =
-    status.status === "error"
-      ? `${providerLabel} provider is unavailable.`
-      : `${providerLabel} provider has limited availability.`;
-  const title = `${providerLabel} provider status`;
+  const isUnauthenticated = status.status === "error" && status.auth.status === "unauthenticated";
+  const title = isUnauthenticated
+    ? `${providerLabel} is unauthenticated`
+    : `${providerLabel} provider status`;
+  const message = isUnauthenticated
+    ? "Sign in via the CLI to authenticate again."
+    : (status.message ??
+      (status.status === "error"
+        ? `${providerLabel} provider is unavailable.`
+        : `${providerLabel} provider has limited availability.`));
 
   return (
     <div className="pt-3 mx-auto max-w-3xl">
       <Alert variant={status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>{title}</AlertTitle>
-        <AlertDescription className="line-clamp-3" title={status.message ?? defaultMessage}>
-          {status.message ?? defaultMessage}
+        <AlertDescription className="line-clamp-3" title={message}>
+          {message}
         </AlertDescription>
         <AlertAction>
           <Tooltip>

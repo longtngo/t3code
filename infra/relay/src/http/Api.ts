@@ -1,9 +1,9 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { sql as drizzleSql } from "drizzle-orm";
-import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Record from "effect/Record";
@@ -19,6 +19,7 @@ import * as HttpTraceContext from "effect/unstable/http/HttpTraceContext";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
+import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
 
 import {
   RelayApi,
@@ -68,6 +69,7 @@ import { withSpanAttributes } from "../observability.ts";
 import { RelayDb } from "../db.ts";
 
 const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
+const RELAY_DPOP_ACCESS_TOKEN_TTL = "30 minutes";
 const relayCorsAllowedHeaders = [
   "authorization",
   "b3",
@@ -75,11 +77,7 @@ const relayCorsAllowedHeaders = [
   "content-type",
   "dpop",
 ] as const;
-const relayCorsExposedHeaders = [
-  "traceparent",
-  "x-t3-relay-auth-failure",
-  "www-authenticate",
-] as const;
+const relayCorsExposedHeaders = ["traceparent", "www-authenticate"] as const;
 
 const relayCorsHeaders = {
   "access-control-allow-origin": "*",
@@ -177,7 +175,10 @@ export const traceRelayHttpRequestWith = <E, R, LayerError, LayerRequirements>(
     HttpServerRequest.HttpServerRequest | R
   >,
   tracerLayer: Layer.Layer<never, LayerError, LayerRequirements>,
-) => traceRelayHttpRequest(httpEffect).pipe(Effect.provide(tracerLayer));
+) =>
+  traceRelayHttpRequest(httpEffect).pipe(
+    Effect.provide(Layer.merge(tracerLayer, httpHeaderRedactionLayer)),
+  );
 
 export const withoutCapturedParentSpan = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -352,12 +353,7 @@ export const healthApi = HttpApiBuilder.group(
       "health",
       Effect.fn("relay.api.health")(
         function* () {
-          const startedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
           yield* db.execute(drizzleSql`SELECT 1`);
-          const completedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
-          yield* Effect.logInfo("relay health db probe completed", {
-            durationMs: completedAt - startedAt,
-          });
           return { ok: true, service: "relay" as const };
         },
         Effect.catch(() => relayInternalErrorResponse("database_unavailable")),
@@ -603,7 +599,7 @@ export const tokenApi = HttpApiBuilder.group(
           Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
         );
         const now = yield* DateTime.now;
-        const expiresAt = DateTime.add(now, { minutes: 5 });
+        const expiresAt = DateTime.addDuration(now, RELAY_DPOP_ACCESS_TOKEN_TTL);
         const jti = yield* crypto.randomUUIDv4.pipe(
           Effect.catch(() => relayInternalErrorResponse("internal_error")),
         );
@@ -621,7 +617,7 @@ export const tokenApi = HttpApiBuilder.group(
             .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
           issued_token_type: RelayAccessTokenType,
           token_type: "DPoP" as const,
-          expires_in: 300,
+          expires_in: Duration.toSeconds(RELAY_DPOP_ACCESS_TOKEN_TTL),
           scope: encodeOAuthScope(requestedScopes),
         };
       }, mapRelayCommonApiErrors("invalid_dpop")),
@@ -813,9 +809,16 @@ export const serverApi = HttpApiBuilder.group(
   }),
 );
 
-class ClerkTokenVerificationFailed extends Data.TaggedError("ClerkTokenVerificationFailed")<{
-  readonly cause: unknown;
-}> {}
+class ClerkTokenVerificationFailed extends Schema.TaggedErrorClass<ClerkTokenVerificationFailed>()(
+  "ClerkTokenVerificationFailed",
+  {
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Clerk token verification failed";
+  }
+}
 
 const isHttpUnauthorized = Schema.is(HttpApiError.Unauthorized);
 
@@ -824,7 +827,7 @@ const currentTraceId = Effect.currentParentSpan.pipe(
   Effect.orElseSucceed(() => "unavailable"),
 );
 
-const COMMON_AUTH_INVALID_REASONS = [
+const RelayCommonPersistenceError = Schema.Union([
   Devices.DeviceRegistrationPersistenceError,
   Devices.DeviceUnregistrationPersistenceError,
   Devices.DeviceListPersistenceError,
@@ -844,17 +847,14 @@ const COMMON_AUTH_INVALID_REASONS = [
   AgentActivityRows.AgentActivityRowListPersistenceError,
   LiveActivities.LiveActivityDeliveryMarkPersistenceError,
   DeliveryAttempts.DeliveryAttemptRecordPersistenceError,
-] as const;
-type RelayCommonPersistenceError = InstanceType<(typeof COMMON_AUTH_INVALID_REASONS)[number]>;
+]);
+type RelayCommonPersistenceError = typeof RelayCommonPersistenceError.Type;
+const isRelayCommonPersistenceError = Schema.is(RelayCommonPersistenceError);
 
 type MapRelayCommonApiError<E> =
   | Exclude<E, HttpApiError.Unauthorized | RelayCommonPersistenceError>
   | (Extract<E, HttpApiError.Unauthorized> extends never ? never : RelayAuthInvalidError)
   | (Extract<E, RelayCommonPersistenceError> extends never ? never : RelayInternalError);
-
-function isRelayCommonPersistenceError(error: unknown): error is RelayCommonPersistenceError {
-  return COMMON_AUTH_INVALID_REASONS.some((ErrorType) => error instanceof ErrorType);
-}
 
 function relayInternalErrorResponse(reason: RelayInternalError["reason"]) {
   return currentTraceId.pipe(
