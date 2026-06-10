@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it } from "@effect/vitest";
 import {
   ProjectId,
   ThreadId,
@@ -16,7 +17,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, vi } from "vite-plus/test";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -139,7 +140,7 @@ describe("ProviderSessionReaper", () => {
     runtime = null;
   });
 
-  async function createHarness(input: {
+  function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
@@ -249,7 +250,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds };
+    return { stopSession, stoppedThreadIds, layer };
   }
 
   it("reaps stale persisted sessions without active turns", async () => {
@@ -487,11 +488,11 @@ describe("ProviderSessionReaper", () => {
     expect(Option.isSome(remaining)).toBe(true);
   });
 
-  it("continues reaping other sessions when one stop attempt fails", async () => {
+  it.live("continues reaping other sessions when one stop attempt fails", () => {
     const failedThreadId = ThreadId.make("thread-reaper-stop-failure");
     const reapedThreadId = ThreadId.make("thread-reaper-stop-success");
     const now = "2026-01-01T00:00:00.000Z";
-    const harness = await createHarness({
+    const harness = createHarness({
       readModel: makeReadModel([
         {
           id: failedThreadId,
@@ -528,10 +529,11 @@ describe("ProviderSessionReaper", () => {
             )
           : Effect.void,
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
 
-    await runtime!.runPromise(
-      repository.upsert({
+    return Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntimeRepository;
+
+      yield* repository.upsert({
         threadId: failedThreadId,
         providerName: "claudeAgent",
         providerInstanceId: null,
@@ -543,10 +545,8 @@ describe("ProviderSessionReaper", () => {
           opaque: "resume-failure",
         },
         runtimePayload: null,
-      }),
-    );
-    await runtime!.runPromise(
-      repository.upsert({
+      });
+      yield* repository.upsert({
         threadId: reapedThreadId,
         providerName: "codex",
         providerInstanceId: null,
@@ -558,26 +558,26 @@ describe("ProviderSessionReaper", () => {
           opaque: "resume-success",
         },
         runtimePayload: null,
-      }),
-    );
+      });
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+      const reaper = yield* ProviderSessionReaper;
+      scope = yield* Scope.make("sequential");
+      yield* reaper.start().pipe(Scope.provide(scope));
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+      yield* Effect.promise(() => waitFor(() => harness.stopSession.mock.calls.length === 2));
 
-    expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
-      failedThreadId,
-      reapedThreadId,
-    ]);
+      expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
+        failedThreadId,
+        reapedThreadId,
+      ]);
+    }).pipe(Effect.provide(harness.layer));
   });
 
-  it("continues reaping other sessions when one stop attempt defects", async () => {
+  it.live("continues reaping other sessions when one stop attempt defects", () => {
     const defectThreadId = ThreadId.make("thread-reaper-stop-defect");
     const reapedThreadId = ThreadId.make("thread-reaper-stop-after-defect");
     const now = "2026-01-01T00:00:00.000Z";
-    const harness = await createHarness({
+    const harness = createHarness({
       readModel: makeReadModel([
         {
           id: defectThreadId,
@@ -609,10 +609,11 @@ describe("ProviderSessionReaper", () => {
           ? Effect.die(new Error("simulated stop defect"))
           : Effect.void,
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
 
-    await runtime!.runPromise(
-      repository.upsert({
+    return Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntimeRepository;
+
+      yield* repository.upsert({
         threadId: defectThreadId,
         providerName: "claudeAgent",
         providerInstanceId: null,
@@ -624,10 +625,8 @@ describe("ProviderSessionReaper", () => {
           opaque: "resume-defect",
         },
         runtimePayload: null,
-      }),
-    );
-    await runtime!.runPromise(
-      repository.upsert({
+      });
+      yield* repository.upsert({
         threadId: reapedThreadId,
         providerName: "codex",
         providerInstanceId: null,
@@ -639,18 +638,18 @@ describe("ProviderSessionReaper", () => {
           opaque: "resume-after-defect",
         },
         runtimePayload: null,
-      }),
-    );
+      });
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+      const reaper = yield* ProviderSessionReaper;
+      scope = yield* Scope.make("sequential");
+      yield* reaper.start().pipe(Scope.provide(scope));
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+      yield* Effect.promise(() => waitFor(() => harness.stopSession.mock.calls.length === 2));
 
-    expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
-      defectThreadId,
-      reapedThreadId,
-    ]);
+      expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
+        defectThreadId,
+        reapedThreadId,
+      ]);
+    }).pipe(Effect.provide(harness.layer));
   });
 });

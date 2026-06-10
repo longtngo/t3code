@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { AttachmentUploadError } from "@t3tools/contracts";
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 import {
   resolveUploadedAttachmentPath,
@@ -67,48 +68,48 @@ describe("resolveUploadedAttachmentPath", () => {
 describe("writeUploadedAttachment", () => {
   const tempAttachmentsDir = () => mkdtempSync(path.join(os.tmpdir(), "t3-upload-"));
 
-  it("writes decoded bytes and returns the absolute path", async () => {
-    const dir = tempAttachmentsDir();
-    const bytes = Buffer.from("hello world");
-    const result = await Effect.runPromise(
-      writeUploadedAttachment({
+  it.effect("writes decoded bytes and returns the absolute path", () =>
+    Effect.gen(function* () {
+      const dir = tempAttachmentsDir();
+      const bytes = Buffer.from("hello world");
+      const result = yield* writeUploadedAttachment({
         attachmentsDir: dir,
         threadId: "thread-1",
         fileName: "greeting.txt",
         dataBase64: bytes.toString("base64"),
-      }),
-    );
-    expect(result.path.startsWith(path.resolve(dir))).toBe(true);
-    expect(result.path.endsWith("/greeting.txt")).toBe(true);
-    expect(readFileSync(result.path)).toEqual(bytes);
-  });
+      });
+      expect(result.path.startsWith(path.resolve(dir))).toBe(true);
+      expect(result.path.endsWith("/greeting.txt")).toBe(true);
+      expect(readFileSync(result.path)).toEqual(bytes);
+    }),
+  );
 
-  it("fails with a typed error for an empty payload", async () => {
-    const dir = tempAttachmentsDir();
-    const error = await Effect.runPromise(
-      writeUploadedAttachment({
+  it.effect("fails with a typed error for an empty payload", () =>
+    Effect.gen(function* () {
+      const dir = tempAttachmentsDir();
+      const error = yield* writeUploadedAttachment({
         attachmentsDir: dir,
         threadId: "thread-1",
         fileName: "empty.bin",
         dataBase64: "",
-      }).pipe(Effect.flip),
-    );
-    expect(error).toBeInstanceOf(AttachmentUploadError);
-  });
+      }).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(AttachmentUploadError);
+    }),
+  );
 
-  it("fails with a typed error when the decoded bytes exceed the size limit", async () => {
-    const dir = tempAttachmentsDir();
-    // 21 MB of zero bytes (limit is 20 MB).
-    const tooBig = Buffer.alloc(21 * 1024 * 1024);
-    const error = await Effect.runPromise(
-      writeUploadedAttachment({
+  it.effect("fails with a typed error when the decoded bytes exceed the size limit", () =>
+    Effect.gen(function* () {
+      const dir = tempAttachmentsDir();
+      // 21 MB of zero bytes (limit is 20 MB).
+      const tooBig = Buffer.alloc(21 * 1024 * 1024);
+      const error = yield* writeUploadedAttachment({
         attachmentsDir: dir,
         threadId: "thread-1",
         fileName: "big.bin",
         dataBase64: tooBig.toString("base64"),
-      }).pipe(Effect.flip),
-    );
-    expect(error).toBeInstanceOf(AttachmentUploadError);
-    expect(error.message).toContain("limit");
-  });
+      }).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(AttachmentUploadError);
+      expect(error.message).toContain("limit");
+    }),
+  );
 });

@@ -1,14 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, RuntimeTaskId, ThreadId, TurnId } from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -97,34 +94,21 @@ function row(overrides: {
   };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
-  const poll = async (): Promise<void> => {
-    if (predicate()) return;
-    if ((await Effect.runPromise(Clock.currentTimeMillis)) >= deadline) {
-      throw new Error("Timed out waiting for expectation.");
+// Effect-based poll on the live wall clock, mirroring the original async
+// `waitFor`: yields the fiber so the forked sweep loop can make progress, and
+// fails once the deadline passes.
+const waitFor = (predicate: () => boolean, timeoutMs = 2_000): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
+    while (!predicate()) {
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        throw new Error("Timed out waiting for expectation.");
+      }
+      yield* Effect.yieldNow;
     }
-    await Effect.runPromise(Effect.yieldNow);
-    return poll();
-  };
-  return poll();
-}
-
-describe("BackgroundTaskRecoveryWatchdog", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<BackgroundTaskRecoveryWatchdog, unknown> | null = null;
-  let scope: Scope.Closeable | null = null;
-
-  afterEach(async () => {
-    if (scope) {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-    scope = null;
-    if (runtime) {
-      await runtime.dispose();
-    }
-    runtime = null;
   });
 
+describe("BackgroundTaskRecoveryWatchdog", () => {
   function createHarness(input: {
     readonly rows: ReadonlyArray<PendingBackgroundTask>;
     readonly shells: Map<ThreadId, ReturnType<typeof makeShell>>;
@@ -223,124 +207,137 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
       Layer.provideMerge(NodeServices.layer),
     );
 
-    runtime = ManagedRuntime.make(layer);
-    return { store, dispatched, analyticsEvents };
+    return { store, dispatched, analyticsEvents, layer };
   }
 
-  async function startWatchdog() {
-    const watchdog = await runtime!.runPromise(Effect.service(BackgroundTaskRecoveryWatchdog));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(watchdog.start().pipe(Scope.provide(scope)));
-  }
+  // Resolve the watchdog service and start its sweep loop inside the test's
+  // scope (provided by `it.live`'s `Effect.scoped`), so the forked sweep fiber
+  // is interrupted and cleaned up automatically when the test completes.
+  const startWatchdog = Effect.gen(function* () {
+    const watchdog = yield* BackgroundTaskRecoveryWatchdog;
+    yield* watchdog.start();
+  });
 
   const thread = (suffix: string) => ThreadId.make(`thread-${suffix}`);
 
-  it("recovers a prior-boot (reboot-orphaned) task: resumes the thread and clears the row", async () => {
+  it.live("recovers a prior-boot (reboot-orphaned) task: resumes the thread and clears the row", () => {
     const threadId = thread("prior-boot");
-    const { store, dispatched, analyticsEvents } = createHarness({
+    const { store, dispatched, analyticsEvents, layer } = createHarness({
       rows: [row({ taskId: "task-prior", threadId, bootId: "OLD-BOOT" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       // huge stale threshold so only the prior-boot trigger can fire
       options: { staleThresholdMs: 60 * 60 * 1000 },
     });
-    await startWatchdog();
-    await waitFor(() => dispatched.length > 0);
-    expect(dispatched[0]?.type).toBe("thread.turn.start");
-    expect(dispatched[0]?.threadId).toBe(threadId);
-    expect(dispatched[0]?.text).toContain("restarted");
-    await waitFor(() => store.size === 0);
-    // Anonymous trip telemetry fired (no thread/task identifiers).
-    await waitFor(() =>
-      analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
-    );
-    const recovered = analyticsEvents.find(
-      (e) => e.event === "provider.background_task.recovered",
-    );
-    expect(recovered?.properties?.reason).toBe("prior-boot");
-    expect(recovered?.properties).not.toHaveProperty("taskId");
-    expect(recovered?.properties).not.toHaveProperty("threadId");
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => dispatched.length > 0);
+      expect(dispatched[0]?.type).toBe("thread.turn.start");
+      expect(dispatched[0]?.threadId).toBe(threadId);
+      expect(dispatched[0]?.text).toContain("restarted");
+      yield* waitFor(() => store.size === 0);
+      // Anonymous trip telemetry fired (no thread/task identifiers).
+      yield* waitFor(() =>
+        analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+      );
+      const recovered = analyticsEvents.find(
+        (e) => e.event === "provider.background_task.recovered",
+      );
+      expect(recovered?.properties?.reason).toBe("prior-boot");
+      expect(recovered?.properties).not.toHaveProperty("taskId");
+      expect(recovered?.properties).not.toHaveProperty("threadId");
+    }).pipe(Effect.provide(layer));
   });
 
-  it("recovers a same-boot task whose session has died (dead-session)", async () => {
+  it.live("recovers a same-boot task whose session has died (dead-session)", () => {
     const threadId = thread("dead-session");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, layer } = createHarness({
       rows: [row({ taskId: "task-dead", threadId, bootId: CURRENT_BOOT })],
       shells: new Map([[threadId, makeShell(threadId, { status: "stopped" })]]),
       options: { staleThresholdMs: 60 * 60 * 1000 },
     });
-    await startWatchdog();
-    await waitFor(() => dispatched.length > 0);
-    expect(dispatched[0]?.text).toContain("session ended");
-    await waitFor(() => store.size === 0);
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => dispatched.length > 0);
+      expect(dispatched[0]?.text).toContain("session ended");
+      yield* waitFor(() => store.size === 0);
+    }).pipe(Effect.provide(layer));
   });
 
-  it("recovers a same-boot, live-session task that has gone silent past the stale threshold", async () => {
+  it.live("recovers a same-boot, live-session task that has gone silent past the stale threshold", () => {
     const threadId = thread("stale");
-    const { store, dispatched, analyticsEvents } = createHarness({
+    const { store, dispatched, analyticsEvents, layer } = createHarness({
       // lastSeenAt far in the past + small stale threshold → stale
       rows: [row({ taskId: "task-stale", threadId, lastSeenAt: "2020-01-01T00:00:00.000Z" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       options: { staleThresholdMs: 50 },
     });
-    await startWatchdog();
-    await waitFor(() => dispatched.length > 0);
-    expect(dispatched[0]?.text).toContain("silent");
-    await waitFor(() => store.size === 0);
-    // The stale trip carries a real silence duration for threshold tuning.
-    await waitFor(() =>
-      analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
-    );
-    const recovered = analyticsEvents.find(
-      (e) => e.event === "provider.background_task.recovered",
-    );
-    expect(recovered?.properties?.reason).toBe("stale");
-    expect(typeof recovered?.properties?.silentMs).toBe("number");
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => dispatched.length > 0);
+      expect(dispatched[0]?.text).toContain("silent");
+      yield* waitFor(() => store.size === 0);
+      // The stale trip carries a real silence duration for threshold tuning.
+      yield* waitFor(() =>
+        analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+      );
+      const recovered = analyticsEvents.find(
+        (e) => e.event === "provider.background_task.recovered",
+      );
+      expect(recovered?.properties?.reason).toBe("stale");
+      expect(typeof recovered?.properties?.silentMs).toBe("number");
+    }).pipe(Effect.provide(layer));
   });
 
-  it("leaves a fresh, same-boot, live-session task alone", async () => {
+  it.live("leaves a fresh, same-boot, live-session task alone", () => {
     const threadId = thread("fresh");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, layer } = createHarness({
       // lastSeenAt in the future → never stale regardless of wall-clock now
       rows: [row({ taskId: "task-fresh", threadId, lastSeenAt: "2999-01-01T00:00:00.000Z" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       options: { staleThresholdMs: 50 },
     });
-    await startWatchdog();
-    // give several sweeps a chance to run
-    await Effect.runPromise(Effect.sleep("150 millis"));
-    expect(dispatched.length).toBe(0);
-    expect(store.size).toBe(1);
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      // give several sweeps a chance to run
+      yield* Effect.sleep("150 millis");
+      expect(dispatched.length).toBe(0);
+      expect(store.size).toBe(1);
+    }).pipe(Effect.provide(layer));
   });
 
-  it("never interrupts a thread with an active turn, even when prior-boot", async () => {
+  it.live("never interrupts a thread with an active turn, even when prior-boot", () => {
     const threadId = thread("busy");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, layer } = createHarness({
       rows: [row({ taskId: "task-busy", threadId, bootId: "OLD-BOOT" })],
       shells: new Map([
         [threadId, makeShell(threadId, { status: "running", activeTurnId: TurnId.make("turn-1") })],
       ]),
     });
-    await startWatchdog();
-    await Effect.runPromise(Effect.sleep("150 millis"));
-    expect(dispatched.length).toBe(0);
-    expect(store.size).toBe(1);
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* Effect.sleep("150 millis");
+      expect(dispatched.length).toBe(0);
+      expect(store.size).toBe(1);
+    }).pipe(Effect.provide(layer));
   });
 
-  it("never interrupts a thread with pending approvals", async () => {
+  it.live("never interrupts a thread with pending approvals", () => {
     const threadId = thread("pending");
-    const { dispatched } = createHarness({
+    const { dispatched, layer } = createHarness({
       rows: [row({ taskId: "task-pending", threadId, bootId: "OLD-BOOT" })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready", hasPendingApprovals: true })]]),
     });
-    await startWatchdog();
-    await Effect.runPromise(Effect.sleep("150 millis"));
-    expect(dispatched.length).toBe(0);
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* Effect.sleep("150 millis");
+      expect(dispatched.length).toBe(0);
+    }).pipe(Effect.provide(layer));
   });
 
-  it("drops the row (no resume) when the thread is gone or archived", async () => {
+  it.live("drops the row (no resume) when the thread is gone or archived", () => {
     const missing = thread("missing");
     const archived = thread("archived");
-    const { store, dispatched } = createHarness({
+    const { store, dispatched, layer } = createHarness({
       rows: [
         row({ taskId: "task-missing", threadId: missing, bootId: "OLD-BOOT" }),
         row({ taskId: "task-archived", threadId: archived, bootId: "OLD-BOOT" }),
@@ -349,23 +346,27 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
         [archived, makeShell(archived, { status: "ready", archivedAt: "2026-01-02T00:00:00.000Z" })],
       ]),
     });
-    await startWatchdog();
-    await waitFor(() => store.size === 0);
-    expect(dispatched.length).toBe(0);
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => store.size === 0);
+      expect(dispatched.length).toBe(0);
+    }).pipe(Effect.provide(layer));
   });
 
-  it("gives up and drops the row after the recovery attempt cap, without resuming", async () => {
+  it.live("gives up and drops the row after the recovery attempt cap, without resuming", () => {
     const threadId = thread("giveup");
-    const { store, dispatched, analyticsEvents } = createHarness({
+    const { store, dispatched, analyticsEvents, layer } = createHarness({
       rows: [row({ taskId: "task-giveup", threadId, bootId: "OLD-BOOT", recoveryAttempts: 3 })],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
       options: { maxRecoveryAttempts: 3, staleThresholdMs: 60 * 60 * 1000 },
     });
-    await startWatchdog();
-    await waitFor(() => store.size === 0);
-    expect(dispatched.length).toBe(0);
-    await waitFor(() =>
-      analyticsEvents.some((e) => e.event === "provider.background_task.recovery_gave_up"),
-    );
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => store.size === 0);
+      expect(dispatched.length).toBe(0);
+      yield* waitFor(() =>
+        analyticsEvents.some((e) => e.event === "provider.background_task.recovery_gave_up"),
+      );
+    }).pipe(Effect.provide(layer));
   });
 });
