@@ -194,4 +194,71 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
   });
+
+  describe("readFileAsHtml", () => {
+    it.effect("renders markdown to a self-contained HTML document", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "docs/report.md", "# Title\n\n**bold** text\n");
+
+        const result = yield* workspaceFileSystem.readFileAsHtml({ cwd, path: "docs/report.md" });
+
+        expect(result.resolvedPath).toBe(path.join(cwd, "docs/report.md"));
+        expect(result.fromCache).toBe(false);
+        expect(result.html).toContain("<!doctype html>");
+        expect(result.html).toContain("<h1>Title</h1>");
+        expect(result.html).toContain("<strong>bold</strong>");
+        expect(result.html).toContain('class="markdown-body"');
+      }),
+    );
+
+    it.effect("serves an unchanged file from the cache on the second call", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "docs/report.md", "# Cached\n");
+
+        const first = yield* workspaceFileSystem.readFileAsHtml({ cwd, path: "docs/report.md" });
+        const second = yield* workspaceFileSystem.readFileAsHtml({ cwd, path: "docs/report.md" });
+
+        expect(first.fromCache).toBe(false);
+        expect(second.fromCache).toBe(true);
+        expect(second.html).toBe(first.html);
+      }),
+    );
+
+    it.effect("re-renders when the file content changes", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "docs/report.md", "# First\n");
+        const first = yield* workspaceFileSystem.readFileAsHtml({ cwd, path: "docs/report.md" });
+
+        yield* writeTextFile(cwd, "docs/report.md", "# Second\n");
+        const second = yield* workspaceFileSystem.readFileAsHtml({ cwd, path: "docs/report.md" });
+
+        expect(first.html).toContain("<h1>First</h1>");
+        expect(second.fromCache).toBe(false);
+        expect(second.html).toContain("<h1>Second</h1>");
+        expect(second.html).not.toContain("<h1>First</h1>");
+      }),
+    );
+
+    it.effect("rejects files larger than the read cap", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const oversized = `# Big\n\n${"a".repeat(2 * 1024 * 1024 + 1)}`;
+        yield* writeTextFile(cwd, "big.md", oversized);
+
+        const error = yield* workspaceFileSystem
+          .readFileAsHtml({ cwd, path: "big.md" })
+          .pipe(Effect.flip);
+
+        expect(error.detail).toContain("too large to preview");
+      }),
+    );
+  });
 });

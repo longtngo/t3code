@@ -1,8 +1,15 @@
 import { create } from "zustand";
 import type { EnvironmentId } from "@t3tools/contracts";
 
-/** Which renderer the viewer sidebar uses for a file. */
+/** The source file's intrinsic type (from its extension). */
 export type FileViewerKind = "html" | "markdown";
+
+/**
+ * How a markdown file is displayed: as in-app rendered markdown (`"markdown"`)
+ * or as a backend-generated standalone HTML document (`"html"`). Ignored for
+ * `kind === "html"` files, which only ever render as HTML.
+ */
+export type FileViewerView = "markdown" | "html";
 
 export interface FileViewerRequest {
   /** Raw path as displayed in the message (absolute, `~/…`, or cwd-relative). */
@@ -13,14 +20,21 @@ export interface FileViewerRequest {
   environmentId: EnvironmentId;
   /** How to render the file once read. */
   kind: FileViewerKind;
+  /** Initial view mode for a markdown file (defaults to `"markdown"`). */
+  view: FileViewerView;
   /** Monotonic id so re-opening the same path re-triggers a read. */
   requestId: number;
 }
 
+/** Args to open the viewer; `view` defaults to `"markdown"` when omitted. */
+export type OpenFileViewerInput = Omit<FileViewerRequest, "requestId" | "view"> & {
+  view?: FileViewerView;
+};
+
 interface FileViewerStore {
   open: boolean;
   request: FileViewerRequest | null;
-  openFileViewer: (request: Omit<FileViewerRequest, "requestId">) => void;
+  openFileViewer: (request: OpenFileViewerInput) => void;
   closeFileViewer: () => void;
 }
 
@@ -30,7 +44,11 @@ export const useFileViewerStore = create<FileViewerStore>((set) => ({
   openFileViewer: (request) =>
     set((state) => ({
       open: true,
-      request: { ...request, requestId: (state.request?.requestId ?? 0) + 1 },
+      request: {
+        ...request,
+        view: request.view ?? "markdown",
+        requestId: (state.request?.requestId ?? 0) + 1,
+      },
     })),
   closeFileViewer: () => set({ open: false }),
 }));

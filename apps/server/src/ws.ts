@@ -36,6 +36,7 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectReadFileError,
+  ProjectRenderMarkdownHtmlError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   OrchestrationReplayEventsError,
@@ -163,6 +164,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.attachmentsUpload, AuthOrchestrationOperateScope],
   [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
+  [WS_METHODS.projectsRenderMarkdownHtml, AuthOrchestrationReadScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
   [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
@@ -1191,6 +1193,20 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 (cause) =>
                   new ProjectReadFileError({
                     message: "Failed to read workspace file",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsRenderMarkdownHtml]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsRenderMarkdownHtml,
+            workspaceFileSystem.readFileAsHtml(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectRenderMarkdownHtmlError({
+                    message: "Failed to render markdown file",
                     cause,
                   }),
               ),

@@ -1,6 +1,7 @@
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import {
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
   FileCodeIcon,
@@ -64,7 +65,11 @@ import {
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
-import { useFileViewerStore, type FileViewerKind } from "../fileViewerStore";
+import {
+  useFileViewerStore,
+  type FileViewerKind,
+  type FileViewerView,
+} from "../fileViewerStore";
 import { cn } from "../lib/utils";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -269,21 +274,18 @@ function InlineFilePathChip({
   environmentId: EnvironmentId;
 }) {
   const openFileViewer = useFileViewerStore((state) => state.openFileViewer);
-  const handleOpen = useCallback(() => {
-    openFileViewer({ path: text, cwd, environmentId, kind });
-  }, [openFileViewer, text, cwd, environmentId, kind]);
+  const open = useCallback(
+    (view: FileViewerView) => {
+      openFileViewer({ path: text, cwd, environmentId, kind, view });
+    },
+    [openFileViewer, text, cwd, environmentId, kind],
+  );
 
   const basename = inlinePathBasename(text);
   const dir = text.slice(0, text.length - basename.length);
 
-  return (
-    <button
-      type="button"
-      className="chat-markdown-file-chip"
-      onClick={handleOpen}
-      title={`Open ${basename}`}
-      aria-label={`Open ${basename}`}
-    >
+  const label = (
+    <>
       <span className="chat-markdown-file-chip-type">
         {kind === "html" ? (
           <FileCodeIcon className="size-3.5" />
@@ -298,8 +300,57 @@ function InlineFilePathChip({
         {dir ? <span className="chat-markdown-file-chip-dir">{dir}</span> : null}
         <span className="chat-markdown-file-chip-base">{basename}</span>
       </span>
-      <ChevronRightIcon className="chat-markdown-file-chip-open size-3.5" />
-    </button>
+    </>
+  );
+
+  // HTML files have a single view; the chip stays a plain button.
+  if (kind === "html") {
+    return (
+      <button
+        type="button"
+        className="chat-markdown-file-chip"
+        onClick={() => open("html")}
+        title={`Open ${basename}`}
+        aria-label={`Open ${basename}`}
+      >
+        {label}
+        <ChevronRightIcon className="chat-markdown-file-chip-open size-3.5" />
+      </button>
+    );
+  }
+
+  // Markdown: the chip body opens the default Markdown view; a distinct trailing
+  // caret (its own button, not a split region) chooses Markdown vs generated HTML.
+  return (
+    <span className="chat-markdown-file-chip chat-markdown-file-chip-group">
+      <button
+        type="button"
+        className="chat-markdown-file-chip-main"
+        onClick={() => open("markdown")}
+        title={`Open ${basename}`}
+        aria-label={`Open ${basename}`}
+      >
+        {label}
+      </button>
+      <Menu>
+        <MenuTrigger
+          render={
+            <button
+              type="button"
+              className="chat-markdown-file-chip-caret"
+              title={`View ${basename} as Markdown or HTML`}
+              aria-label={`View options for ${basename}`}
+            />
+          }
+        >
+          <ChevronDownIcon className="size-3.5" />
+        </MenuTrigger>
+        <MenuPopup align="end">
+          <MenuItem onClick={() => open("markdown")}>Open as Markdown</MenuItem>
+          <MenuItem onClick={() => open("html")}>Open as HTML</MenuItem>
+        </MenuPopup>
+      </Menu>
+    </span>
   );
 }
 

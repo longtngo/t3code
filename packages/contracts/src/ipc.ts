@@ -27,6 +27,8 @@ import type {
   ProjectWriteFileResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenderMarkdownHtmlInput,
+  ProjectRenderMarkdownHtmlResult,
 } from "./project.ts";
 import type { AttachmentUploadInput, AttachmentUploadResult } from "./attachment.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
@@ -587,6 +589,9 @@ export interface EnvironmentApi {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    renderMarkdownHtml: (
+      input: ProjectRenderMarkdownHtmlInput,
+    ) => Promise<ProjectRenderMarkdownHtmlResult>;
   };
   attachments: {
     upload: (input: AttachmentUploadInput) => Promise<AttachmentUploadResult>;

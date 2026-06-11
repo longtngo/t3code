@@ -205,6 +205,32 @@ describe("ChatMarkdown", () => {
     }
   });
 
+  it("offers an HTML mode via the markdown chip dropdown", async () => {
+    const mdPath = "~/reports/notes.md";
+    const screen = await render(
+      <ChatMarkdown
+        text={`See \`${mdPath}\``}
+        cwd="/repo/project"
+        environmentId={"env-1" as EnvironmentId}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: "View options for notes.md" }).click();
+      await page.getByRole("menuitem", { name: "Open as HTML" }).click();
+
+      await vi.waitFor(() => {
+        const state = useFileViewerStore.getState();
+        expect(state.open).toBe(true);
+        expect(state.request?.path).toBe(mdPath);
+        expect(state.request?.kind).toBe("markdown");
+        expect(state.request?.view).toBe("html");
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("suppresses the markdown chip without an environment", async () => {
     const screen = await render(<ChatMarkdown text={"See `notes.md`"} cwd="/repo/project" />);
 

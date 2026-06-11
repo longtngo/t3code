@@ -561,6 +561,54 @@ label:has(> select#reasoning-effort) select {
   color: var(--foreground);
 }
 
+/* Markdown chip is a button group: a main "open" body + a caret menu trigger.
+   The inner buttons are transparent; the outer span keeps the chip frame. */
+.chat-markdown-file-chip-group {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-markdown-file-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.12rem 0.34rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.chat-markdown-file-chip-caret {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.26rem;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 70%, var(--foreground) 6%);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.chat-markdown-file-chip-caret:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.chat-markdown-file-chip-main:focus-visible,
+.chat-markdown-file-chip-caret:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 60%, transparent);
+}
+
 .chat-markdown pre {
   max-width: 100%;
   overflow-x: auto;

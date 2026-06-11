@@ -13,15 +13,13 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
-import { RightPanelSheet } from "./RightPanelSheet";
 import ChatMarkdown from "./ChatMarkdown";
 import { readEnvironmentApi } from "~/environmentApi";
 import { toastManager } from "./ui/toast";
-import { RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME } from "../rightPanelLayout";
 import {
-  useFileViewerStore,
   type FileViewerKind,
   type FileViewerRequest,
+  type FileViewerView,
 } from "../fileViewerStore";
 
 function basenameOf(path: string): string {
@@ -92,6 +90,13 @@ interface ViewerEntry {
   path: string;
   cwd: string | undefined;
   kind: FileViewerKind;
+  /** Active view for a markdown entry; ignored when `kind === "html"`. */
+  view: FileViewerView;
+}
+
+/** True when the entry is displayed as HTML (raw `.html` or md rendered to HTML). */
+function isHtmlView(entry: ViewerEntry): boolean {
+  return entry.kind === "html" || entry.view === "html";
 }
 
 interface LoadState {
@@ -119,7 +124,33 @@ const KIND_BADGE: Record<FileViewerKind, { label: string; className: string }> =
   },
 };
 
-function FileViewerContent({
+/** A single segment of the MD/HTML view toggle. */
+function ViewModeButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase transition-colors ${
+        active
+          ? "bg-muted text-foreground/80"
+          : "text-muted-foreground/50 hover:text-foreground/70"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function FileViewerContent({
   request,
   onClose,
   expanded,
@@ -127,14 +158,16 @@ function FileViewerContent({
 }: {
   request: FileViewerRequest;
   onClose: () => void;
-  expanded: boolean;
-  onToggleExpand: () => void;
+  /** Full-width expand state; omit (with onToggleExpand) to hide the toggle. */
+  expanded?: boolean;
+  /** When provided, renders the expand/collapse button (sheet layout only). */
+  onToggleExpand?: () => void;
 }) {
   // Navigation history within the sidebar; seeded from the opening request and
   // grown when a link inside an HTML report is followed. Remounts per open
   // (parent keys on requestId), so this initializer is the single seed.
   const [history, setHistory] = useState<ViewerEntry[]>(() => [
-    { path: request.path, cwd: request.cwd, kind: request.kind },
+    { path: request.path, cwd: request.cwd, kind: request.kind, view: request.view },
   ]);
   const [state, setState] = useState<LoadState>(INITIAL_LOAD_STATE);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -146,8 +179,18 @@ function FileViewerContent({
     path: request.path,
     cwd: request.cwd,
     kind: request.kind,
+    view: request.view,
   };
   const canGoBack = history.length > 1;
+  // Set the active view for the current (last) history entry. Only meaningful
+  // for markdown files; switching re-runs the load below.
+  const setCurrentView = useCallback((view: FileViewerView) => {
+    setHistory((entries) =>
+      entries.map((entry, index) =>
+        index === entries.length - 1 ? { ...entry, view } : entry,
+      ),
+    );
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,31 +207,39 @@ function FileViewerContent({
       return;
     }
 
-    void api.projects
-      .readFile({ cwd: current.cwd ?? ".", path: current.path })
-      .then((result) => {
-        if (cancelled) return;
-        setState({
-          status: "loaded",
-          contents: result.contents,
-          resolvedPath: result.resolvedPath,
-          error: null,
-        });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setState({
-          status: "error",
-          contents: "",
-          resolvedPath: null,
-          error: error instanceof Error ? error.message : "Failed to read file.",
-        });
+    const onLoaded = (contents: string, resolvedPath: string) => {
+      if (cancelled) return;
+      setState({ status: "loaded", contents, resolvedPath, error: null });
+    };
+    const onError = (error: unknown) => {
+      if (cancelled) return;
+      setState({
+        status: "error",
+        contents: "",
+        resolvedPath: null,
+        error: error instanceof Error ? error.message : "Failed to read file.",
       });
+    };
+
+    const cwd = current.cwd ?? ".";
+    // A markdown file viewed as HTML is converted by the backend (cached there);
+    // every other case reads the raw file (markdown source, or a `.html` report).
+    if (current.kind === "markdown" && current.view === "html") {
+      void api.projects
+        .renderMarkdownHtml({ cwd, path: current.path })
+        .then((result) => onLoaded(result.html, result.resolvedPath))
+        .catch(onError);
+    } else {
+      void api.projects
+        .readFile({ cwd, path: current.path })
+        .then((result) => onLoaded(result.contents, result.resolvedPath))
+        .catch(onError);
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [request.environmentId, current.path, current.cwd]);
+  }, [request.environmentId, current.path, current.cwd, current.kind, current.view]);
 
   useEffect(() => {
     navBaseCwdRef.current = state.resolvedPath ? dirnameOf(state.resolvedPath) : current.cwd;
@@ -207,7 +258,10 @@ function FileViewerContent({
       const cleanHref = event.data.href.split(/[?#]/)[0] ?? event.data.href;
       const kind = inferFileViewerKind(cleanHref);
       if (!kind) return;
-      setHistory((entries) => [...entries, { path: cleanHref, cwd: navBaseCwdRef.current, kind }]);
+      setHistory((entries) => [
+        ...entries,
+        { path: cleanHref, cwd: navBaseCwdRef.current, kind, view: "markdown" },
+      ]);
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -281,7 +335,25 @@ function FileViewerContent({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          {current.kind === "html" && state.status === "loaded" ? (
+          {current.kind === "markdown" ? (
+            <div
+              role="group"
+              aria-label="View mode"
+              className="mr-1 flex items-center rounded-md border border-border/60 p-0.5"
+            >
+              <ViewModeButton
+                label="MD"
+                active={current.view === "markdown"}
+                onClick={() => setCurrentView("markdown")}
+              />
+              <ViewModeButton
+                label="HTML"
+                active={current.view === "html"}
+                onClick={() => setCurrentView("html")}
+              />
+            </div>
+          ) : null}
+          {isHtmlView(current) && state.status === "loaded" ? (
             <Button
               size="icon-xs"
               variant="ghost"
@@ -292,20 +364,22 @@ function FileViewerContent({
               <ExternalLinkIcon className="size-3.5" />
             </Button>
           ) : null}
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            onClick={onToggleExpand}
-            aria-label={expanded ? "Collapse file viewer" : "Expand file viewer to full width"}
-            aria-pressed={expanded}
-            className="text-muted-foreground/50 hover:text-foreground/70"
-          >
-            {expanded ? (
-              <Minimize2Icon className="size-3.5" />
-            ) : (
-              <Maximize2Icon className="size-3.5" />
-            )}
-          </Button>
+          {onToggleExpand ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={onToggleExpand}
+              aria-label={expanded ? "Collapse file viewer" : "Expand file viewer to full width"}
+              aria-pressed={expanded}
+              className="text-muted-foreground/50 hover:text-foreground/70"
+            >
+              {expanded ? (
+                <Minimize2Icon className="size-3.5" />
+              ) : (
+                <Maximize2Icon className="size-3.5" />
+              )}
+            </Button>
+          ) : null}
           <Button
             size="icon-xs"
             variant="ghost"
@@ -360,10 +434,12 @@ function FileViewerContent({
             This file is empty.
           </p>
         ) : null}
-        {state.status === "loaded" && !isEmpty && current.kind === "html" ? (
-          // Render untrusted report HTML in a sandboxed iframe: scripts may run
-          // (charts etc.) but `allow-same-origin` is withheld, so the document
-          // gets an opaque origin and cannot reach this app's session/storage.
+        {state.status === "loaded" && !isEmpty && isHtmlView(current) ? (
+          // Render report HTML (a raw `.html` file, or markdown converted to a
+          // standalone document by the backend) in a sandboxed iframe: scripts
+          // may run (charts etc.) but `allow-same-origin` is withheld, so the
+          // document gets an opaque origin and cannot reach this app's session.
+          // The interceptor keeps in-report relative links navigating the panel.
           <iframe
             ref={iframeRef}
             title={basenameOf(current.path)}
@@ -372,7 +448,7 @@ function FileViewerContent({
             className="h-full w-full border-0 bg-white"
           />
         ) : null}
-        {state.status === "loaded" && !isEmpty && current.kind === "markdown" ? (
+        {state.status === "loaded" && !isEmpty && current.kind === "markdown" && current.view === "markdown" ? (
           <ScrollArea className="h-full">
             <div className="p-4">
               <ChatMarkdown text={state.contents} cwd={markdownCwd} isStreaming={false} />
@@ -384,40 +460,3 @@ function FileViewerContent({
   );
 }
 
-/**
- * Global, single-instance file viewer rendered as a right-side sheet. Opened
- * from inline-code path affordances via {@link useFileViewerStore}; renders
- * markdown inline and HTML reports in a sandboxed iframe with intra-report
- * link navigation.
- */
-export function FileViewerSidebar() {
-  const open = useFileViewerStore((state) => state.open);
-  const request = useFileViewerStore((state) => state.request);
-  const closeFileViewer = useFileViewerStore((state) => state.closeFileViewer);
-  const [expanded, setExpanded] = useState(false);
-
-  const handleClose = () => {
-    setExpanded(false);
-    closeFileViewer();
-  };
-
-  return (
-    <RightPanelSheet
-      open={open && request != null}
-      onClose={handleClose}
-      className={expanded ? RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME : undefined}
-    >
-      {request ? (
-        <FileViewerContent
-          key={request.requestId}
-          request={request}
-          onClose={handleClose}
-          expanded={expanded}
-          onToggleExpand={() => setExpanded((value) => !value)}
-        />
-      ) : null}
-    </RightPanelSheet>
-  );
-}
-
-export default FileViewerSidebar;

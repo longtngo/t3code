@@ -15,6 +15,8 @@ import type {
   ProjectWriteFileResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenderMarkdownHtmlInput,
+  ProjectRenderMarkdownHtmlResult,
 } from "@t3tools/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
 
@@ -57,6 +59,19 @@ export interface WorkspaceFileSystemShape {
   readonly readFile: (
     input: ProjectReadFileInput,
   ) => Effect.Effect<ProjectReadFileResult, WorkspaceFileSystemError>;
+
+  /**
+   * Read a markdown file and render it to a self-contained HTML document.
+   *
+   * Resolves and size-caps the path exactly like {@link readFile}. The generated
+   * HTML is cached per process, keyed by resolved path; cache hits are validated
+   * by file mtime + size (fast path) and content hash (touch-without-change),
+   * so an unchanged file is converted at most once. Returns the cached document
+   * with `fromCache: true` when reused.
+   */
+  readonly readFileAsHtml: (
+    input: ProjectRenderMarkdownHtmlInput,
+  ) => Effect.Effect<ProjectRenderMarkdownHtmlResult, WorkspaceFileSystemError>;
 }
 
 /**

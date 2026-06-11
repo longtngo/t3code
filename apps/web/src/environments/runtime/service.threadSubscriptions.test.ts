@@ -114,6 +114,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       searchEntries: vi.fn(),
       writeFile: vi.fn(),
       readFile: vi.fn(),
+      renderMarkdownHtml: vi.fn(),
     },
     attachments: {
       upload: vi.fn(),

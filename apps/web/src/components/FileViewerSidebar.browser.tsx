@@ -1,5 +1,6 @@
 import "../index.css";
 
+import { useState } from "react";
 import { page } from "vite-plus/test/browser";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
@@ -10,10 +11,46 @@ import {
   __resetEnvironmentApiOverridesForTests,
   __setEnvironmentApiOverrideForTests,
 } from "~/environmentApi";
-import { FileViewerSidebar } from "./FileViewerSidebar";
+import { FileViewerContent } from "./FileViewerSidebar";
+import { RightPanelSheet } from "./RightPanelSheet";
+import { RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME } from "../rightPanelLayout";
 import { useFileViewerStore } from "../fileViewerStore";
 
 const ENVIRONMENT_ID = "env-1" as EnvironmentId;
+
+/**
+ * Mirrors the chat route's mobile (sheet) composition: store-driven open state,
+ * an `expanded` full-width toggle, and {@link FileViewerContent} inside a
+ * {@link RightPanelSheet}. Lets these tests exercise the sheet layout without the
+ * full route.
+ */
+function FileViewerSheetHarness() {
+  const open = useFileViewerStore((state) => state.open);
+  const request = useFileViewerStore((state) => state.request);
+  const closeFileViewer = useFileViewerStore((state) => state.closeFileViewer);
+  const [expanded, setExpanded] = useState(false);
+  const handleClose = () => {
+    setExpanded(false);
+    closeFileViewer();
+  };
+  return (
+    <RightPanelSheet
+      open={open && request != null}
+      onClose={handleClose}
+      className={expanded ? RIGHT_PANEL_SHEET_EXPANDED_CLASS_NAME : undefined}
+    >
+      {request ? (
+        <FileViewerContent
+          key={request.requestId}
+          request={request}
+          onClose={handleClose}
+          expanded={expanded}
+          onToggleExpand={() => setExpanded((value) => !value)}
+        />
+      ) : null}
+    </RightPanelSheet>
+  );
+}
 
 function installMarkdownApi() {
   const readFile = vi.fn(async () => ({
@@ -42,7 +79,7 @@ describe("FileViewerSidebar", () => {
 
   it("toggles between default and full width via the expand button", async () => {
     installMarkdownApi();
-    const screen = await render(<FileViewerSidebar />);
+    const screen = await render(<FileViewerSheetHarness />);
 
     try {
       useFileViewerStore.getState().openFileViewer({
@@ -87,7 +124,7 @@ describe("FileViewerSidebar", () => {
 
   it("resets to default width after the viewer is closed and reopened", async () => {
     installMarkdownApi();
-    const screen = await render(<FileViewerSidebar />);
+    const screen = await render(<FileViewerSheetHarness />);
 
     try {
       useFileViewerStore.getState().openFileViewer({
@@ -130,7 +167,7 @@ describe("FileViewerSidebar", () => {
       projects: { readFile },
     } as unknown as EnvironmentApi);
 
-    const screen = await render(<FileViewerSidebar />);
+    const screen = await render(<FileViewerSheetHarness />);
     try {
       useFileViewerStore.getState().openFileViewer({
         path: "report.html",
@@ -171,7 +208,7 @@ describe("FileViewerSidebar", () => {
       projects: { readFile },
     } as unknown as EnvironmentApi);
 
-    const screen = await render(<FileViewerSidebar />);
+    const screen = await render(<FileViewerSheetHarness />);
     try {
       useFileViewerStore.getState().openFileViewer({
         path: "index.html",
@@ -218,7 +255,7 @@ describe("FileViewerSidebar", () => {
       projects: { readFile },
     } as unknown as EnvironmentApi);
 
-    const screen = await render(<FileViewerSidebar />);
+    const screen = await render(<FileViewerSheetHarness />);
     try {
       useFileViewerStore.getState().openFileViewer({
         path: "notes.md",
@@ -243,6 +280,58 @@ describe("FileViewerSidebar", () => {
       expect(readFile).not.toHaveBeenCalledWith(
         expect.objectContaining({ path: "attacker.html" }),
       );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("toggles a markdown file between MD and backend-rendered HTML", async () => {
+    const readFile = vi.fn(async () => ({
+      contents: "# Heading\n\nBody text.",
+      resolvedPath: "/repo/project/notes.md",
+    }));
+    const renderMarkdownHtml = vi.fn(async () => ({
+      html: "<!doctype html><article class='markdown-body'><h1>Heading</h1></article>",
+      resolvedPath: "/repo/project/notes.md",
+      fromCache: false,
+    }));
+    __setEnvironmentApiOverrideForTests(ENVIRONMENT_ID, {
+      projects: { readFile, renderMarkdownHtml },
+    } as unknown as EnvironmentApi);
+
+    const screen = await render(<FileViewerSheetHarness />);
+    try {
+      useFileViewerStore.getState().openFileViewer({
+        path: "notes.md",
+        cwd: "/repo/project",
+        environmentId: ENVIRONMENT_ID,
+        kind: "markdown",
+      });
+
+      // Default MD view: markdown is read and rendered without an iframe.
+      await vi.waitFor(() =>
+        expect(readFile).toHaveBeenCalledWith({ cwd: "/repo/project", path: "notes.md" }),
+      );
+      expect(viewerIframe()).toBeNull();
+
+      // Switch to HTML: the backend conversion RPC runs and an iframe appears.
+      await page.getByRole("button", { name: "HTML" }).click();
+      await vi.waitFor(() => {
+        expect(renderMarkdownHtml).toHaveBeenCalledWith({
+          cwd: "/repo/project",
+          path: "notes.md",
+        });
+        const iframe = viewerIframe();
+        expect(iframe).not.toBeNull();
+        expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-popups");
+        // The generated HTML also gets the link interceptor for in-report nav.
+        expect(iframe?.srcdoc).toContain("__t3FileViewerNav");
+        expect(iframe?.srcdoc).toContain("markdown-body");
+      });
+
+      // Back to MD: the iframe is gone again.
+      await page.getByRole("button", { name: "MD" }).click();
+      await vi.waitFor(() => expect(viewerIframe()).toBeNull());
     } finally {
       await screen.unmount();
     }

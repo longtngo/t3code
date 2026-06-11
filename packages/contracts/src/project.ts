@@ -77,3 +77,28 @@ export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFil
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+// Render a markdown file to a self-contained HTML document on demand. Same path
+// resolution/validation as ProjectReadFileInput (absolute and `~` paths honored).
+export const ProjectRenderMarkdownHtmlInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectRenderMarkdownHtmlInput = typeof ProjectRenderMarkdownHtmlInput.Type;
+
+export const ProjectRenderMarkdownHtmlResult = Schema.Struct({
+  // A complete `<!doctype html>` document (markdown body + embedded styles).
+  html: Schema.String,
+  resolvedPath: TrimmedNonEmptyString,
+  // True when the HTML was served from the server-side conversion cache.
+  fromCache: Schema.Boolean,
+});
+export type ProjectRenderMarkdownHtmlResult = typeof ProjectRenderMarkdownHtmlResult.Type;
+
+export class ProjectRenderMarkdownHtmlError extends Schema.TaggedErrorClass<ProjectRenderMarkdownHtmlError>()(
+  "ProjectRenderMarkdownHtmlError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}

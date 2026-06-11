@@ -24,7 +24,17 @@ describe("fileViewerStore", () => {
     expect(state.request?.cwd).toBe("/repo");
     expect(state.request?.environmentId).toBe(ENV);
     expect(state.request?.kind).toBe("markdown");
+    expect(state.request?.view).toBe("markdown");
     expect(state.request?.requestId).toBe(1);
+  });
+
+  it("honors an explicit view and defaults it to markdown otherwise", () => {
+    const { openFileViewer } = useFileViewerStore.getState();
+    openFileViewer({ path: "x.md", cwd: "/repo", environmentId: ENV, kind: "markdown", view: "html" });
+    expect(useFileViewerStore.getState().request?.view).toBe("html");
+
+    openFileViewer({ path: "x.md", cwd: "/repo", environmentId: ENV, kind: "markdown" });
+    expect(useFileViewerStore.getState().request?.view).toBe("markdown");
   });
 
   it("bumps requestId when re-opening the same path so reads re-trigger", () => {

@@ -22,6 +22,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       searchEntries: rpcClient.projects.searchEntries,
       writeFile: rpcClient.projects.writeFile,
       readFile: rpcClient.projects.readFile,
+      renderMarkdownHtml: rpcClient.projects.renderMarkdownHtml,
     },
     attachments: {
       upload: rpcClient.attachments.upload,
