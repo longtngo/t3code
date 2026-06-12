@@ -126,6 +126,26 @@ export function computePace(
   return { elapsedPct, delta, state };
 }
 
+/**
+ * Fixed-width slots for the branch-toolbar meters. The displayed numbers tick
+ * every render (host metrics, pace, percentages), so without a reserved width
+ * the meters' total width changes each update and, near the flex-wrap threshold,
+ * the row oscillates between one and two lines. Sizing each dynamic value to its
+ * maximum content (with `tabular-nums`) keeps the width constant, so wrapping is
+ * decided by viewport width alone. `min-w` only sets a floor, so it never clips;
+ * each floor is sized to cover the worst case of the *fast-ticking* values
+ * (percentages, pace) exactly, while the slow extra-cost slot is sized to the
+ * common case (rarer larger values just grow it, which can't cause fast flapping
+ * since the cost changes slowly). Widths measured in the app font (DM Sans, 11px,
+ * tabular-nums).
+ */
+/** Percentage readout (`ctx`/`5h`/`7d`, `cpu`/`gpu`/`mem`): `100%` ≈ 1.70rem. */
+export const METER_VALUE_SLOT = "inline-block min-w-[1.85rem] tabular-nums";
+/** Pace readout: sized for the proportional `on pace` text (≈2.58rem, wider than `↑100%`). */
+export const METER_PACE_SLOT = "inline-flex min-w-[2.75rem] items-center";
+/** Extra-credit cost (`$…/$…`): common case `$1.9k/$2k` ≈ 2.95rem; rarer larger values grow it. */
+export const METER_EXTRA_SLOT = "inline-block min-w-[3rem] tabular-nums";
+
 export type UsageLevel = "green" | "yellow" | "orange" | "red";
 
 /**

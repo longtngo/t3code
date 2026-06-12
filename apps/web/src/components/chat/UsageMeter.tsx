@@ -3,6 +3,9 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import {
+  METER_EXTRA_SLOT,
+  METER_PACE_SLOT,
+  METER_VALUE_SLOT,
   type Pace,
   USAGE_WINDOW_MS,
   type UsageLevel,
@@ -244,7 +247,7 @@ export function UsageMeter(props: {
                 <span className="flex items-center gap-1.5">
                   <span className="text-muted-foreground/70">ctx</span>
                   {ctxPct != null ? <UsageBar pct={ctxPct} level={ctxLevel} className="w-8" /> : null}
-                  <span className={cn("tabular-nums", LEVEL_TEXT[ctxLevel])}>{ctxInline}</span>
+                  <span className={cn(METER_VALUE_SLOT, LEVEL_TEXT[ctxLevel])}>{ctxInline}</span>
                 </span>
               ) : null}
               {contextWindow && segments.length > 0 ? (
@@ -259,10 +262,19 @@ export function UsageMeter(props: {
                     tickPct={segment.pace?.elapsedPct ?? null}
                     className="w-8"
                   />
-                  <span className={cn("tabular-nums", LEVEL_TEXT[segment.level])}>
+                  <span
+                    className={cn(
+                      segment.key === "extra" ? METER_EXTRA_SLOT : METER_VALUE_SLOT,
+                      LEVEL_TEXT[segment.level],
+                    )}
+                  >
                     {segment.inlineValue}
                   </span>
-                  {segment.pace ? <PaceLabel pace={segment.pace} /> : null}
+                  {segment.key === "extra" ? null : (
+                    <span className={METER_PACE_SLOT}>
+                      {segment.pace ? <PaceLabel pace={segment.pace} /> : null}
+                    </span>
+                  )}
                 </span>
               ))}
             </span>
@@ -271,7 +283,12 @@ export function UsageMeter(props: {
               {contextWindow ? (
                 <span className="flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-muted-foreground">
                   <span className="text-muted-foreground/70">ctx</span>
-                  <span className={cn("font-medium tabular-nums", LEVEL_TEXT[ctxLevel])}>
+                  <span
+                    className={cn(
+                      "inline-block min-w-[1.85rem] text-right font-medium tabular-nums",
+                      LEVEL_TEXT[ctxLevel],
+                    )}
+                  >
                     {ctxInline}
                   </span>
                 </span>
@@ -284,10 +301,19 @@ export function UsageMeter(props: {
                   <span className="text-muted-foreground/70">
                     {segment.key === "extra" ? "$" : segment.label}
                   </span>
-                  <span className={cn("font-medium tabular-nums", LEVEL_TEXT[segment.level])}>
+                  <span
+                    className={cn(
+                      "inline-block min-w-[1.85rem] text-right font-medium tabular-nums",
+                      LEVEL_TEXT[segment.level],
+                    )}
+                  >
                     {Math.round(segment.pct)}%
                   </span>
-                  {segment.pace ? <PaceLabel pace={segment.pace} compact /> : null}
+                  {segment.key === "extra" ? null : (
+                    <span className="inline-flex min-w-[1.85rem] items-center justify-end">
+                      {segment.pace ? <PaceLabel pace={segment.pace} compact /> : null}
+                    </span>
+                  )}
                 </span>
               ))}
             </span>

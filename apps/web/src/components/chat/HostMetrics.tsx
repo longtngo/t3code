@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { cn } from "~/lib/utils";
 import { type HostMetricsSample, formatBytes } from "~/lib/hostMetrics";
-import { type UsageLevel, usageLevel } from "~/lib/usage";
+import { METER_VALUE_SLOT, type UsageLevel, usageLevel } from "~/lib/usage";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 const LEVEL_TEXT: Record<UsageLevel, string> = {
@@ -37,13 +37,17 @@ function MetricBar(props: { pct: number; className?: string }) {
   );
 }
 
-/** Desktop compact segment: label + bar + value. Renders a dash until first sample. */
+/**
+ * Desktop compact segment: label + bar + value. Renders a dash in the fixed-width
+ * value slot until the first sample (or when a probe momentarily returns null), so
+ * the segment width never changes — see METER_VALUE_SLOT.
+ */
 function MetricSegment(props: { label: string; pct: number | null }) {
   if (props.pct == null) {
     return (
       <span className="flex items-center gap-1.5">
         <span className="text-muted-foreground/70">{props.label}</span>
-        <span className="tabular-nums text-muted-foreground/50">—</span>
+        <span className={cn(METER_VALUE_SLOT, "text-muted-foreground/50")}>—</span>
       </span>
     );
   }
@@ -51,7 +55,7 @@ function MetricSegment(props: { label: string; pct: number | null }) {
     <span className="flex items-center gap-1.5">
       <span className="text-muted-foreground/70">{props.label}</span>
       <MetricBar pct={props.pct} className="w-8" />
-      <span className={cn("tabular-nums", LEVEL_TEXT[usageLevel(props.pct)])}>
+      <span className={cn(METER_VALUE_SLOT, LEVEL_TEXT[usageLevel(props.pct)])}>
         {Math.round(props.pct)}%
       </span>
     </span>
@@ -65,7 +69,7 @@ function MetricPill(props: { label: string; pct: number | null }) {
       <span className="text-muted-foreground/70">{props.label}</span>
       <span
         className={cn(
-          "font-medium tabular-nums",
+          "inline-block min-w-[1.85rem] text-right font-medium tabular-nums",
           props.pct == null ? "text-muted-foreground/50" : LEVEL_TEXT[usageLevel(props.pct)],
         )}
       >
@@ -192,6 +196,15 @@ export function HostMetrics(props: {
 }) {
   const { sample, enabled, onToggle } = props;
 
+  // Latch once this host has ever reported a GPU. `readGpu` (server) degrades to
+  // null on a transient ioreg timeout/spawn error, not just on GPU-less hosts —
+  // without this, a momentary null would unmount the whole gpu segment and flip
+  // the toolbar's wrap. After latching we keep the segment mounted and let a
+  // transient null render as the fixed-width "—". Genuinely GPU-less hosts never
+  // latch, so they get no permanent empty slot.
+  const everHadGpu = useRef(false);
+  if (sample?.gpu != null) everHadGpu.current = true;
+
   if (!enabled) {
     return (
       <button
@@ -210,7 +223,9 @@ export function HostMetrics(props: {
   const cpuPct = sample?.cpu.pct ?? null;
   const gpuPct = sample?.gpu?.pct ?? null;
   const memPct = sample?.mem.pct ?? null;
-  const hasGpu = sample == null || sample.gpu != null;
+  // Show the gpu segment before the first sample, whenever the current sample has
+  // a gpu, or once this host has ever shown one (transient-null tolerance).
+  const hasGpu = sample == null || sample.gpu != null || everHadGpu.current;
 
   return (
     <div className="flex items-center gap-1">
