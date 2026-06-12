@@ -13,6 +13,10 @@
 - `pnpm verify` — the full local pre-merge gate: `typecheck` → `lint` → `test` → `test:browser`. Run this before merging to `main`.
 - **Do not** run `vp test run apps/web` (or `vp test run <dir>`): it mixes the `unit` and `browser` projects in one run, and browser-only files then fail with misleading `Cannot find module '~/...'` alias errors. Use the package projects instead — `vp test run --project unit` / `--project browser`, or the `pnpm` scripts above.
 
+## Branching
+
+- In this fork, **`personal` is the integration / main-equivalent branch.** Land feature work by **squash-merging the feature branch into `personal`** (not `main` / `origin`). References to "merging to `main`" elsewhere in this file mean `personal` for this repo.
+
 ## Project Snapshot
 
 T3 Code is a minimal web GUI for using coding agents like Codex and Claude.
