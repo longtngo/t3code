@@ -14,10 +14,8 @@ import {
 } from "../Services/WorkspaceFileSystem.ts";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries.ts";
 import { WorkspacePaths } from "../Services/WorkspacePaths.ts";
-import {
-  createMarkdownHtmlCache,
-  renderMarkdownDocument,
-} from "../markdownHtml.ts";
+import { createMarkdownHtmlCache } from "../markdownHtml.ts";
+import { MarkdownHtmlRenderer } from "../markdownHtmlRenderer.ts";
 
 // Cap previewable file reads so a stray large file can't be slurped into memory.
 const MAX_READ_FILE_BYTES = 2 * 1024 * 1024;
@@ -27,6 +25,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries;
+  const markdownHtmlRenderer = yield* MarkdownHtmlRenderer;
 
   const writeFile: WorkspaceFileSystemShape["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
@@ -174,7 +173,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       return { html: cached.html, resolvedPath: absolutePath, fromCache: true };
     }
 
-    const html = renderMarkdownDocument(contents);
+    const html = yield* markdownHtmlRenderer.render(contents);
     htmlCache.set(absolutePath, { mtimeMs, size, hash, html });
     return { html, resolvedPath: absolutePath, fromCache: false };
   });

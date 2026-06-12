@@ -56,6 +56,7 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
 import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
+import { MarkdownHtmlRendererLive } from "./workspace/markdownHtmlRenderer.ts";
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
@@ -239,6 +240,7 @@ const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
 const WorkspaceFileSystemLayerLive = WorkspaceFileSystemLive.pipe(
   Layer.provide(WorkspacePathsLive),
   Layer.provide(WorkspaceEntriesLayerLive),
+  Layer.provide(MarkdownHtmlRendererLive),
 );
 
 const WorkspaceLayerLive = Layer.mergeAll(
