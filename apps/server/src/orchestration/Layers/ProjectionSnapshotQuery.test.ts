@@ -432,6 +432,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasPendingApprovals: true,
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
+          hasPendingBackgroundTask: false,
         },
       ]);
 
@@ -441,6 +442,81 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(threadDetail.value, snapshot.threads[0]);
       }
     }),
+  );
+
+  it.effect(
+    "reports hasPendingBackgroundTask only for threads with an in-flight background task",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_state`;
+        yield* sql`DELETE FROM pending_background_tasks`;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-1', 'Project 1', '/tmp/project-1',
+            '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+            '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:01.000Z', NULL
+          )
+        `;
+
+        // thread-bg has a pending background task; thread-idle does not.
+        for (const threadId of ["thread-bg", "thread-idle"]) {
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode,
+              interaction_mode, branch, worktree_path, latest_turn_id,
+              latest_user_message_at, pending_approval_count,
+              pending_user_input_count, has_actionable_proposed_plan,
+              created_at, updated_at, deleted_at
+            )
+            VALUES (
+              ${threadId}, 'project-1', ${threadId},
+              '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+              'default', NULL, NULL, NULL, NULL, 0, 0, 0,
+              '2026-02-24T00:00:02.000Z', '2026-02-24T00:00:03.000Z', NULL
+            )
+          `;
+        }
+
+        yield* sql`
+          INSERT INTO pending_background_tasks (
+            task_id, thread_id, boot_id, started_at, last_seen_at, recovery_attempts
+          )
+          VALUES (
+            'task-1', 'thread-bg', 'boot-1',
+            '2026-02-24T00:00:04.000Z', '2026-02-24T00:00:04.000Z', 0
+          )
+        `;
+
+        const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+        const byId = new Map(shellSnapshot.threads.map((thread) => [thread.id, thread]));
+        assert.equal(byId.get(ThreadId.make("thread-bg"))?.hasPendingBackgroundTask, true);
+        assert.equal(byId.get(ThreadId.make("thread-idle"))?.hasPendingBackgroundTask, false);
+
+        // The per-thread shell query agrees with the list snapshot.
+        const bgShell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-bg"));
+        assert.equal(bgShell._tag, "Some");
+        if (bgShell._tag === "Some") {
+          assert.equal(bgShell.value.hasPendingBackgroundTask, true);
+        }
+
+        // Clearing the row flips the flag back off.
+        yield* sql`DELETE FROM pending_background_tasks WHERE task_id = 'task-1'`;
+        const clearedShell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-bg"));
+        assert.equal(clearedShell._tag, "Some");
+        if (clearedShell._tag === "Some") {
+          assert.equal(clearedShell.value.hasPendingBackgroundTask, false);
+        }
+      }),
   );
 
   it.effect("keeps archived threads out of the main shell snapshot", () =>

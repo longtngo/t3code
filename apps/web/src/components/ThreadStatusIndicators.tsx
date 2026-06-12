@@ -1,7 +1,19 @@
 import { scopeProjectRef, scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import type { VcsStatusResult } from "@t3tools/contracts";
-import { CloudIcon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  CloudIcon,
+  GitPullRequestIcon,
+  ListTodoIcon,
+  Loader2Icon,
+  type LucideIcon,
+  MessageSquareIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useMemo } from "react";
+import { cn } from "../lib/utils";
+import { useProviderAccentColor } from "../rpc/serverState";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import {
   useSavedEnvironmentRegistryStore,
@@ -12,7 +24,12 @@ import { type AppState, selectProjectByRef, useStore } from "../store";
 import { useThreadRunningTerminalIds } from "../terminalSessionState";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
-import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
+import {
+  PROVIDER_ACCENT_STATUS_ICONS,
+  resolveThreadStatusPill,
+  type ThreadStatusIcon,
+  type ThreadStatusPill,
+} from "./Sidebar.logic";
 import type { SidebarThreadSummary } from "../types";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -93,51 +110,58 @@ export function terminalStatusFromRunningIds(
   };
 }
 
-export function ThreadStatusLabel({
+const STATUS_ICON_COMPONENTS: Record<ThreadStatusIcon, LucideIcon> = {
+  spinner: Loader2Icon,
+  check: CheckIcon,
+  approval: CircleAlertIcon,
+  input: MessageSquareIcon,
+  plan: ListTodoIcon,
+};
+
+/** Renders a thread-status pill as its icon (see PROVIDER_ACCENT_STATUS_ICONS for the accent rule). */
+export function ThreadStatusGlyph({
   status,
-  compact = false,
+  accentColor,
+  className,
 }: {
   status: ThreadStatusPill;
-  compact?: boolean;
+  accentColor?: string | undefined;
+  className?: string;
 }) {
-  if (compact) {
-    return (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <span
-              aria-label={status.label}
-              className={`inline-flex size-3.5 shrink-0 items-center justify-center ${status.colorClass}`}
-            />
-          }
-        >
-          <span
-            className={`size-[9px] rounded-full ${status.dotClass} ${
-              status.pulse ? "animate-pulse" : ""
-            }`}
-          />
-        </TooltipTrigger>
-        <TooltipPopup side="top">{status.label}</TooltipPopup>
-      </Tooltip>
-    );
-  }
+  const Icon = STATUS_ICON_COMPONENTS[status.icon];
+  const useAccent = accentColor !== undefined && PROVIDER_ACCENT_STATUS_ICONS.has(status.icon);
+  return (
+    <Icon
+      aria-hidden
+      className={cn(
+        "size-3.5 shrink-0",
+        status.icon === "spinner" ? "animate-spin" : null,
+        useAccent ? null : status.colorClass,
+        className,
+      )}
+      style={useAccent ? { color: accentColor } : undefined}
+    />
+  );
+}
 
+export function ThreadStatusLabel({
+  status,
+  accentColor,
+}: {
+  status: ThreadStatusPill;
+  accentColor?: string | undefined;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <span
             aria-label={status.label}
-            className={`inline-flex items-center gap-1 text-[10px] ${status.colorClass}`}
+            className="inline-flex size-3.5 shrink-0 items-center justify-center"
           />
         }
       >
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${status.dotClass} ${
-            status.pulse ? "animate-pulse" : ""
-          }`}
-        />
-        <span className="hidden md:inline">{status.label}</span>
+        <ThreadStatusGlyph status={status} accentColor={accentColor} />
       </TooltipTrigger>
       <TooltipPopup side="top">{status.label}</TooltipPopup>
     </Tooltip>
@@ -175,6 +199,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
       lastVisitedAt,
     },
   });
+  const statusAccentColor = useProviderAccentColor(thread.session?.providerInstanceId);
 
   if (!prStatus && !threadStatus) {
     return null;
@@ -197,7 +222,9 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
           <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
         </Tooltip>
       ) : null}
-      {threadStatus ? <ThreadStatusLabel status={threadStatus} /> : null}
+      {threadStatus ? (
+        <ThreadStatusLabel status={threadStatus} accentColor={statusAccentColor} />
+      ) : null}
     </span>
   );
 }

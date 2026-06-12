@@ -156,6 +156,8 @@ export interface SidebarThreadSummary {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
+  /** True while the thread is still waiting on an in-flight background task. */
+  hasPendingBackgroundTask: boolean;
 }
 
 export interface ThreadSession {

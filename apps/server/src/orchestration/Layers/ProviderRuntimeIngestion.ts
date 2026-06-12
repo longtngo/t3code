@@ -1459,15 +1459,12 @@ const make = Effect.gen(function* () {
       }
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning(
-          "provider runtime ingestion failed to record pending background task",
-          {
-            eventId: event.eventId,
-            threadId,
-            eventType: event.type,
-            cause: Cause.pretty(cause),
-          },
-        ),
+        Effect.logWarning("provider runtime ingestion failed to record pending background task", {
+          eventId: event.eventId,
+          threadId,
+          eventType: event.type,
+          cause: Cause.pretty(cause),
+        }),
       ),
     );
 
@@ -1969,6 +1966,25 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // Update the durable background-task record BEFORE emitting the
+      // thread.activity.append below. That append is what drives the sidebar
+      // shell refetch (ws.ts `toShellStreamEvent` default branch), whose
+      // EXISTS(pending_background_tasks) probe must observe the post-event table
+      // state — otherwise a task.completed could refetch a stale row and leave
+      // the thread showing "Working" after the worker is gone. This is a
+      // separate committed write, and the dispatch publishes to the shell
+      // stream only after its own transaction commits, so the record reliably
+      // happens-before any refetch the append triggers. Recording first makes
+      // the sidebar "Working"/"Completed" flip deterministic.
+      if (
+        event.type === "task.started" ||
+        event.type === "task.progress" ||
+        event.type === "task.completed" ||
+        event.type === "task.updated"
+      ) {
+        yield* recordPendingBackgroundTask(thread.id, event, now);
+      }
+
       const activities = runtimeEventToActivities(event);
       yield* Effect.forEach(activities, (activity) =>
         providerCommandId(event, "thread-activity-append").pipe(
@@ -1983,15 +1999,6 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
-
-      if (
-        event.type === "task.started" ||
-        event.type === "task.progress" ||
-        event.type === "task.completed" ||
-        event.type === "task.updated"
-      ) {
-        yield* recordPendingBackgroundTask(thread.id, event, now);
-      }
 
       if (event.type === "task.completed") {
         yield* maybeWakeThreadForCompletedTask({

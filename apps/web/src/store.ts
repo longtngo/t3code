@@ -309,6 +309,7 @@ function mapThreadShell(
     hasPendingApprovals: thread.hasPendingApprovals,
     hasPendingUserInput: thread.hasPendingUserInput,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    hasPendingBackgroundTask: thread.hasPendingBackgroundTask,
   };
   return {
     shell,

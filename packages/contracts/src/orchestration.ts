@@ -396,6 +396,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  // The top-level turn can settle while a background worker is still running;
+  // this drives the sidebar "Working" state in that gap. Decoding default for
+  // newer-client / older-server skew.
+  hasPendingBackgroundTask: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 

@@ -58,6 +58,7 @@ describe("hasUnseenCompletion", () => {
         hasActionableProposedPlan: false,
         hasPendingApprovals: false,
         hasPendingUserInput: false,
+        hasPendingBackgroundTask: false,
         interactionMode: "default",
         latestTurn: makeLatestTurn(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
@@ -477,6 +478,7 @@ describe("resolveThreadStatusPill", () => {
     hasActionableProposedPlan: false,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
+    hasPendingBackgroundTask: false,
     interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,
@@ -498,7 +500,7 @@ describe("resolveThreadStatusPill", () => {
           hasPendingUserInput: true,
         },
       }),
-    ).toMatchObject({ label: "Pending Approval", pulse: false });
+    ).toMatchObject({ label: "Pending Approval", icon: "approval" });
   });
 
   it("shows awaiting input when plan mode is blocked on user answers", () => {
@@ -509,7 +511,7 @@ describe("resolveThreadStatusPill", () => {
           hasPendingUserInput: true,
         },
       }),
-    ).toMatchObject({ label: "Awaiting Input", pulse: false });
+    ).toMatchObject({ label: "Awaiting Input", icon: "input" });
   });
 
   it("falls back to working when the thread is actively running without blockers", () => {
@@ -517,7 +519,43 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: baseThread,
       }),
-    ).toMatchObject({ label: "Working", pulse: true });
+    ).toMatchObject({ label: "Working", icon: "spinner" });
+  });
+
+  it("shows working with a spinner icon while a settled thread waits on a background task", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          hasPendingBackgroundTask: true,
+          latestTurn: makeLatestTurn(),
+          lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Working", icon: "spinner" });
+  });
+
+  it("keeps pending approval ahead of a pending background task", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasPendingApprovals: true,
+          hasPendingBackgroundTask: true,
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Pending Approval", icon: "approval" });
   });
 
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {
@@ -534,7 +572,7 @@ describe("resolveThreadStatusPill", () => {
           },
         },
       }),
-    ).toMatchObject({ label: "Plan Ready", pulse: false });
+    ).toMatchObject({ label: "Plan Ready", icon: "plan" });
   });
 
   it("does not show plan ready after the proposed plan was implemented elsewhere", () => {
@@ -550,7 +588,7 @@ describe("resolveThreadStatusPill", () => {
           },
         },
       }),
-    ).toMatchObject({ label: "Completed", pulse: false });
+    ).toMatchObject({ label: "Completed", icon: "check" });
   });
 
   it("shows completed when there is an unseen completion and no active blocker", () => {
@@ -568,7 +606,7 @@ describe("resolveThreadStatusPill", () => {
           },
         },
       }),
-    ).toMatchObject({ label: "Completed", pulse: false });
+    ).toMatchObject({ label: "Completed", icon: "check" });
   });
 });
 
@@ -606,24 +644,21 @@ describe("resolveProjectStatusIndicator", () => {
       resolveProjectStatusIndicator([
         {
           label: "Completed",
+          icon: "check",
           colorClass: "text-emerald-600",
-          dotClass: "bg-emerald-500",
-          pulse: false,
         },
         {
           label: "Pending Approval",
+          icon: "approval",
           colorClass: "text-amber-600",
-          dotClass: "bg-amber-500",
-          pulse: false,
         },
         {
           label: "Working",
+          icon: "spinner",
           colorClass: "text-sky-600",
-          dotClass: "bg-sky-500",
-          pulse: true,
         },
       ]),
-    ).toMatchObject({ label: "Pending Approval", dotClass: "bg-amber-500" });
+    ).toMatchObject({ label: "Pending Approval", colorClass: "text-amber-600" });
   });
 
   it("prefers plan-ready over completed when no stronger action is needed", () => {
@@ -631,18 +666,16 @@ describe("resolveProjectStatusIndicator", () => {
       resolveProjectStatusIndicator([
         {
           label: "Completed",
+          icon: "check",
           colorClass: "text-emerald-600",
-          dotClass: "bg-emerald-500",
-          pulse: false,
         },
         {
           label: "Plan Ready",
+          icon: "plan",
           colorClass: "text-violet-600",
-          dotClass: "bg-violet-500",
-          pulse: false,
         },
       ]),
-    ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
+    ).toMatchObject({ label: "Plan Ready", colorClass: "text-violet-600" });
   });
 });
 

@@ -6,15 +6,17 @@ import {
   type ServerConfigStreamEvent,
   type ServerConfigUpdatedPayload,
   type ServerLifecycleWelcomePayload,
+  type ProviderInstanceId,
   type ServerProvider,
   type ServerProviderUpdatedPayload,
   type ServerSettings,
 } from "@t3tools/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { Atom } from "effect/unstable/reactivity";
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import type { WsRpcClient } from "@t3tools/client-runtime";
+import { normalizeProviderAccentColor } from "../providerInstances";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "./atomRegistry";
 
 export type ServerConfigUpdateSource = ServerConfigStreamEvent["type"];
@@ -274,6 +276,30 @@ export function useServerSettings(): ServerSettings {
 
 export function useServerProviders(): ReadonlyArray<ServerProvider> {
   return useAtomValue(serverConfigAtom, selectProviders);
+}
+
+/**
+ * Accent color (normalized `#RRGGBB`) configured for a provider instance in
+ * settings, or `undefined` when the instance is unknown or has no accent set.
+ * Selects only the resolved color so a consumer re-renders solely on its own
+ * instance's accent changing, not on every provider-list update.
+ */
+export function useProviderAccentColor(
+  instanceId: ProviderInstanceId | undefined,
+): string | undefined {
+  return useAtomValue(
+    serverConfigAtom,
+    useMemo(
+      () => (config: ServerConfig | null) => {
+        if (instanceId === undefined) return undefined;
+        const provider = (config?.providers ?? EMPTY_SERVER_PROVIDERS).find(
+          (candidate) => candidate.instanceId === instanceId,
+        );
+        return normalizeProviderAccentColor(provider?.accentColor);
+      },
+      [instanceId],
+    ),
+  );
 }
 
 export function useServerKeybindings(): ServerConfig["keybindings"] {

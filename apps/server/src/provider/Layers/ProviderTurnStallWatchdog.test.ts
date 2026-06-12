@@ -55,6 +55,7 @@ function makeShell(threadId: ThreadId, seed: ShellSeed) {
     hasPendingApprovals: seed.hasPendingApprovals ?? false,
     hasPendingUserInput: seed.hasPendingUserInput ?? false,
     hasActionableProposedPlan: false,
+    hasPendingBackgroundTask: false,
     latestTurn: null,
     messages: [],
     session: {
@@ -230,9 +231,7 @@ describe("ProviderTurnStallWatchdog", () => {
       // stop must precede the resume (turn.start queues behind an active turn).
       expect(types.indexOf("thread.session.stop")).toBeLessThan(types.indexOf("thread.turn.start"));
       // Anonymous trip telemetry fired with the silence duration (no identifiers).
-      const trip = harness.analyticsEvents.find(
-        (e) => e.event === "provider.turn_stall.recovered",
-      );
+      const trip = harness.analyticsEvents.find((e) => e.event === "provider.turn_stall.recovered");
       expect(trip).toBeDefined();
       expect(typeof trip?.properties?.silentMs).toBe("number");
       expect(trip?.properties).not.toHaveProperty("threadId");
@@ -287,7 +286,9 @@ describe("ProviderTurnStallWatchdog", () => {
       const turnId = TurnId.make("turn-stall-fresh");
       const nowMs = yield* nowMillis;
       const harness = createHarness({
-        activity: new Map([[threadId, staleEntry(threadId, turnId, nowMs, { lastEventAt: nowMs })]]),
+        activity: new Map([
+          [threadId, staleEntry(threadId, turnId, nowMs, { lastEventAt: nowMs })],
+        ]),
         shells: new Map([
           [threadId, makeShell(threadId, { status: "running", activeTurnId: turnId })],
         ]),
@@ -335,7 +336,10 @@ describe("ProviderTurnStallWatchdog", () => {
       const harness = createHarness({
         activity: new Map([[threadId, staleEntry(threadId, TurnId.make("turn-old"), nowMs)]]),
         shells: new Map([
-          [threadId, makeShell(threadId, { status: "running", activeTurnId: TurnId.make("turn-new") })],
+          [
+            threadId,
+            makeShell(threadId, { status: "running", activeTurnId: TurnId.make("turn-new") }),
+          ],
         ]),
       });
 

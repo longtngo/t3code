@@ -25,6 +25,20 @@ type SidebarProject = {
 
 export type ThreadTraversalDirection = "previous" | "next";
 
+/**
+ * Glyph rendered for a thread-status indicator. `spinner` and `check` are the
+ * neutral working/completed states that adopt the provider's accent color;
+ * `approval`/`input`/`plan` keep their semantic colors (they encode
+ * action-required / plan-ready meaning).
+ */
+export type ThreadStatusIcon = "spinner" | "check" | "approval" | "input" | "plan";
+
+/** Icons that adopt the provider accent color when one is configured. */
+export const PROVIDER_ACCENT_STATUS_ICONS: ReadonlySet<ThreadStatusIcon> = new Set([
+  "spinner",
+  "check",
+]);
+
 export interface ThreadStatusPill {
   label:
     | "Working"
@@ -33,9 +47,8 @@ export interface ThreadStatusPill {
     | "Pending Approval"
     | "Awaiting Input"
     | "Plan Ready";
+  icon: ThreadStatusIcon;
   colorClass: string;
-  dotClass: string;
-  pulse: boolean;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
@@ -52,6 +65,7 @@ type ThreadStatusInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "hasPendingBackgroundTask"
   | "interactionMode"
   | "latestTurn"
   | "session"
@@ -334,36 +348,44 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingApprovals) {
     return {
       label: "Pending Approval",
+      icon: "approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
-      dotClass: "bg-amber-500 dark:bg-amber-300/90",
-      pulse: false,
     };
   }
 
   if (thread.hasPendingUserInput) {
     return {
       label: "Awaiting Input",
+      icon: "input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
-      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
-      pulse: false,
     };
   }
 
   if (thread.session?.status === "running") {
     return {
       label: "Working",
+      icon: "spinner",
       colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
     };
   }
 
   if (thread.session?.status === "connecting") {
     return {
       label: "Connecting",
+      icon: "spinner",
       colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
+    };
+  }
+
+  // A settled top-level turn can still be waiting on an in-flight background
+  // worker; surface that as "Working" rather than letting it fall through to
+  // "Completed". Ranks below the active-session states above but above the
+  // terminal Plan Ready / Completed states.
+  if (thread.hasPendingBackgroundTask) {
+    return {
+      label: "Working",
+      icon: "spinner",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
     };
   }
 
@@ -375,18 +397,16 @@ export function resolveThreadStatusPill(input: {
   if (hasPlanReadyPrompt) {
     return {
       label: "Plan Ready",
+      icon: "plan",
       colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
-      pulse: false,
     };
   }
 
   if (hasUnseenCompletion(thread)) {
     return {
       label: "Completed",
+      icon: "check",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
-      dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
-      pulse: false,
     };
   }
 

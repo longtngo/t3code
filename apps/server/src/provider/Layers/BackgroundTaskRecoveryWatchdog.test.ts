@@ -63,6 +63,7 @@ function makeShell(threadId: ThreadId, seed: ShellSeed) {
     hasPendingApprovals: seed.hasPendingApprovals ?? false,
     hasPendingUserInput: seed.hasPendingUserInput ?? false,
     hasActionableProposedPlan: false,
+    hasPendingBackgroundTask: false,
     latestTurn: null,
     session: {
       threadId,
@@ -220,33 +221,36 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
 
   const thread = (suffix: string) => ThreadId.make(`thread-${suffix}`);
 
-  it.live("recovers a prior-boot (reboot-orphaned) task: resumes the thread and clears the row", () => {
-    const threadId = thread("prior-boot");
-    const { store, dispatched, analyticsEvents, layer } = createHarness({
-      rows: [row({ taskId: "task-prior", threadId, bootId: "OLD-BOOT" })],
-      shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
-      // huge stale threshold so only the prior-boot trigger can fire
-      options: { staleThresholdMs: 60 * 60 * 1000 },
-    });
-    return Effect.gen(function* () {
-      yield* startWatchdog;
-      yield* waitFor(() => dispatched.length > 0);
-      expect(dispatched[0]?.type).toBe("thread.turn.start");
-      expect(dispatched[0]?.threadId).toBe(threadId);
-      expect(dispatched[0]?.text).toContain("restarted");
-      yield* waitFor(() => store.size === 0);
-      // Anonymous trip telemetry fired (no thread/task identifiers).
-      yield* waitFor(() =>
-        analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
-      );
-      const recovered = analyticsEvents.find(
-        (e) => e.event === "provider.background_task.recovered",
-      );
-      expect(recovered?.properties?.reason).toBe("prior-boot");
-      expect(recovered?.properties).not.toHaveProperty("taskId");
-      expect(recovered?.properties).not.toHaveProperty("threadId");
-    }).pipe(Effect.provide(layer));
-  });
+  it.live(
+    "recovers a prior-boot (reboot-orphaned) task: resumes the thread and clears the row",
+    () => {
+      const threadId = thread("prior-boot");
+      const { store, dispatched, analyticsEvents, layer } = createHarness({
+        rows: [row({ taskId: "task-prior", threadId, bootId: "OLD-BOOT" })],
+        shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
+        // huge stale threshold so only the prior-boot trigger can fire
+        options: { staleThresholdMs: 60 * 60 * 1000 },
+      });
+      return Effect.gen(function* () {
+        yield* startWatchdog;
+        yield* waitFor(() => dispatched.length > 0);
+        expect(dispatched[0]?.type).toBe("thread.turn.start");
+        expect(dispatched[0]?.threadId).toBe(threadId);
+        expect(dispatched[0]?.text).toContain("restarted");
+        yield* waitFor(() => store.size === 0);
+        // Anonymous trip telemetry fired (no thread/task identifiers).
+        yield* waitFor(() =>
+          analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+        );
+        const recovered = analyticsEvents.find(
+          (e) => e.event === "provider.background_task.recovered",
+        );
+        expect(recovered?.properties?.reason).toBe("prior-boot");
+        expect(recovered?.properties).not.toHaveProperty("taskId");
+        expect(recovered?.properties).not.toHaveProperty("threadId");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.live("recovers a same-boot task whose session has died (dead-session)", () => {
     const threadId = thread("dead-session");
@@ -263,30 +267,33 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.live("recovers a same-boot, live-session task that has gone silent past the stale threshold", () => {
-    const threadId = thread("stale");
-    const { store, dispatched, analyticsEvents, layer } = createHarness({
-      // lastSeenAt far in the past + small stale threshold → stale
-      rows: [row({ taskId: "task-stale", threadId, lastSeenAt: "2020-01-01T00:00:00.000Z" })],
-      shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
-      options: { staleThresholdMs: 50 },
-    });
-    return Effect.gen(function* () {
-      yield* startWatchdog;
-      yield* waitFor(() => dispatched.length > 0);
-      expect(dispatched[0]?.text).toContain("silent");
-      yield* waitFor(() => store.size === 0);
-      // The stale trip carries a real silence duration for threshold tuning.
-      yield* waitFor(() =>
-        analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
-      );
-      const recovered = analyticsEvents.find(
-        (e) => e.event === "provider.background_task.recovered",
-      );
-      expect(recovered?.properties?.reason).toBe("stale");
-      expect(typeof recovered?.properties?.silentMs).toBe("number");
-    }).pipe(Effect.provide(layer));
-  });
+  it.live(
+    "recovers a same-boot, live-session task that has gone silent past the stale threshold",
+    () => {
+      const threadId = thread("stale");
+      const { store, dispatched, analyticsEvents, layer } = createHarness({
+        // lastSeenAt far in the past + small stale threshold → stale
+        rows: [row({ taskId: "task-stale", threadId, lastSeenAt: "2020-01-01T00:00:00.000Z" })],
+        shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
+        options: { staleThresholdMs: 50 },
+      });
+      return Effect.gen(function* () {
+        yield* startWatchdog;
+        yield* waitFor(() => dispatched.length > 0);
+        expect(dispatched[0]?.text).toContain("silent");
+        yield* waitFor(() => store.size === 0);
+        // The stale trip carries a real silence duration for threshold tuning.
+        yield* waitFor(() =>
+          analyticsEvents.some((e) => e.event === "provider.background_task.recovered"),
+        );
+        const recovered = analyticsEvents.find(
+          (e) => e.event === "provider.background_task.recovered",
+        );
+        expect(recovered?.properties?.reason).toBe("stale");
+        expect(typeof recovered?.properties?.silentMs).toBe("number");
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.live("leaves a fresh, same-boot, live-session task alone", () => {
     const threadId = thread("fresh");
@@ -325,7 +332,9 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     const threadId = thread("pending");
     const { dispatched, layer } = createHarness({
       rows: [row({ taskId: "task-pending", threadId, bootId: "OLD-BOOT" })],
-      shells: new Map([[threadId, makeShell(threadId, { status: "ready", hasPendingApprovals: true })]]),
+      shells: new Map([
+        [threadId, makeShell(threadId, { status: "ready", hasPendingApprovals: true })],
+      ]),
     });
     return Effect.gen(function* () {
       yield* startWatchdog;
@@ -343,7 +352,10 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
         row({ taskId: "task-archived", threadId: archived, bootId: "OLD-BOOT" }),
       ],
       shells: new Map([
-        [archived, makeShell(archived, { status: "ready", archivedAt: "2026-01-02T00:00:00.000Z" })],
+        [
+          archived,
+          makeShell(archived, { status: "ready", archivedAt: "2026-01-02T00:00:00.000Z" }),
+        ],
       ]),
     });
     return Effect.gen(function* () {

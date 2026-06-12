@@ -77,6 +77,9 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    // Computed column (not a real projection_threads column): an EXISTS probe
+    // against pending_background_tasks, decoded as 0/1 and mapped with `> 0`.
+    hasPendingBackgroundTask: NonNegativeInt,
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -337,6 +340,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          EXISTS (
+            SELECT 1 FROM pending_background_tasks
+            WHERE pending_background_tasks.thread_id = projection_threads.thread_id
+          ) AS "hasPendingBackgroundTask",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -365,6 +372,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          EXISTS (
+            SELECT 1 FROM pending_background_tasks
+            WHERE pending_background_tasks.thread_id = projection_threads.thread_id
+          ) AS "hasPendingBackgroundTask",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -395,6 +406,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          EXISTS (
+            SELECT 1 FROM pending_background_tasks
+            WHERE pending_background_tasks.thread_id = projection_threads.thread_id
+          ) AS "hasPendingBackgroundTask",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -757,6 +772,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          EXISTS (
+            SELECT 1 FROM pending_background_tasks
+            WHERE pending_background_tasks.thread_id = projection_threads.thread_id
+          ) AS "hasPendingBackgroundTask",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1517,6 +1536,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                      hasPendingBackgroundTask: row.hasPendingBackgroundTask > 0,
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
               ),
@@ -1651,6 +1671,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  hasPendingBackgroundTask: row.hasPendingBackgroundTask > 0,
                 }),
               ),
               updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -1891,6 +1912,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        hasPendingBackgroundTask: threadRow.value.hasPendingBackgroundTask > 0,
       } satisfies OrchestrationThreadShell);
     });
 
