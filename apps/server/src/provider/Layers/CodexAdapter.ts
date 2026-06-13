@@ -11,6 +11,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
+  EventId,
   ProviderDriverKind,
   type ProviderEvent,
   ProviderInstanceId,
@@ -23,13 +24,17 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  type AccountUsageUpdatedPayload,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -62,6 +67,7 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { makeAccountUsagePoll, normalizeCodexRateLimitsNotification } from "./CodexUsage.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -83,6 +89,13 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /**
+   * Test seam: overrides the Codex rate-limits poll. When omitted, a real poll
+   * is wired via `account/rateLimits/read`. Returns `null` for "no update".
+   */
+  readonly pollAccountUsage?: Effect.Effect<AccountUsageUpdatedPayload | null>;
+  /** Interval between account usage polls. Defaults to 60 seconds. */
+  readonly usagePollInterval?: Duration.Duration;
 }
 
 interface CodexAdapterSessionContext {
@@ -1115,16 +1128,22 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
-    if (!readPayload(EffectCodexSchema.V2AccountRateLimitsUpdatedNotification, event.payload)) {
+    const payload = readPayload(
+      EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      event.payload,
+    );
+    if (!payload) {
+      return [];
+    }
+    const usage = normalizeCodexRateLimitsNotification(payload);
+    if (!usage) {
       return [];
     }
     return [
       {
-        type: "account.rate-limits.updated",
+        type: "account.usage.updated",
         ...runtimeEventBase(event, canonicalThreadId),
-        payload: {
-          rateLimits: event.payload ?? {},
-        },
+        payload: usage,
       },
     ];
   }
@@ -1363,6 +1382,83 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const codexEnvironment = options?.environment ?? process.env;
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  const randomUUIDv4 = crypto.randomUUIDv4.pipe(
+    Effect.mapError(
+      (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "crypto/randomUUIDv4",
+          detail: "Failed to generate Codex runtime identifier.",
+          cause,
+        }),
+    ),
+  );
+  const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
+  const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+
+  const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+    Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+
+  // ---------------------------------------------------------------------------
+  // Account usage broadcast
+  //
+  // Codex rate limits (primary/secondary windows + credits) are account-global
+  // and exposed via app-server `account/rateLimits/read`, so a single
+  // adapter-lifetime poller fetches them and broadcasts one
+  // `account.usage.updated` event per active session.
+  // ---------------------------------------------------------------------------
+  const lastUsageRef = yield* Ref.make<AccountUsageUpdatedPayload | null>(null);
+  const pollAccountUsage =
+    options?.pollAccountUsage ??
+    makeAccountUsagePoll({
+      binaryPath: codexConfig.binaryPath,
+      ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+      cwd: process.cwd(),
+      environment: codexEnvironment,
+      spawner: childProcessSpawner,
+    });
+  const usagePollInterval = options?.usagePollInterval ?? Duration.seconds(60);
+
+  const emitUsageForSession = (
+    context: CodexAdapterSessionContext,
+    payload: AccountUsageUpdatedPayload,
+  ) =>
+    Effect.gen(function* () {
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "account.usage.updated",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.threadId,
+        payload,
+      });
+    });
+
+  const refreshAccountUsage = Effect.gen(function* () {
+    const payload = yield* pollAccountUsage;
+    if (payload === null) return;
+    yield* Ref.set(lastUsageRef, payload);
+    for (const context of sessions.values()) {
+      yield* emitUsageForSession(context, payload);
+    }
+  });
+
+  const refreshAccountUsageNow: CodexAdapterShape["refreshAccountUsage"] = () =>
+    refreshAccountUsage;
+
+  const accountUsageScope = yield* Effect.scope;
+
+  yield* Effect.forever(
+    Effect.gen(function* () {
+      if (sessions.size > 0) {
+        yield* refreshAccountUsage;
+      }
+      yield* Effect.sleep(usagePollInterval);
+    }).pipe(Effect.ignoreCause({ log: true })),
+  ).pipe(Effect.forkScoped);
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -1464,6 +1560,25 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           stopped: false,
         });
         sessionScopeTransferred = true;
+
+        const cachedUsage = yield* Ref.get(lastUsageRef);
+        if (cachedUsage !== null) {
+          yield* emitUsageForSession(
+            {
+              threadId: input.threadId,
+              scope: sessionScope,
+              runtime,
+              eventFiber,
+              stopped: false,
+            },
+            cachedUsage,
+          );
+        } else {
+          yield* Effect.forkIn(
+            refreshAccountUsage.pipe(Effect.ignoreCause({ log: true })),
+            accountUsageScope,
+          );
+        }
 
         return started;
       }),
@@ -1688,8 +1803,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
-    // Codex has no account-usage concept; on-demand refresh is a no-op.
-    refreshAccountUsage: () => Effect.void,
+    refreshAccountUsage: refreshAccountUsageNow,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },

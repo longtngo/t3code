@@ -596,11 +596,37 @@ const AccountUsageCursorPayload = Schema.Struct({
 });
 export type AccountUsageCursorPayload = typeof AccountUsageCursorPayload.Type;
 
+// Codex app-server usage (`account/rateLimits/read`). Primary/secondary windows
+// mirror Codex `/status`; `windowDurationMins` drives UI labels when present.
+const AccountUsageCodexWindow = Schema.Struct({
+  utilization: Schema.Number,
+  resetsAt: Schema.NullOr(IsoDateTime),
+  windowDurationMins: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+export type AccountUsageCodexWindow = typeof AccountUsageCodexWindow.Type;
+
+const AccountUsageCodexCredits = Schema.Struct({
+  balance: Schema.optional(Schema.NullOr(Schema.String)),
+  hasCredits: Schema.Boolean,
+  unlimited: Schema.Boolean,
+});
+export type AccountUsageCodexCredits = typeof AccountUsageCodexCredits.Type;
+
+const AccountUsageCodexPayload = Schema.Struct({
+  primary: Schema.NullOr(AccountUsageCodexWindow),
+  secondary: Schema.NullOr(AccountUsageCodexWindow),
+  credits: Schema.optional(Schema.NullOr(AccountUsageCodexCredits)),
+  planType: Schema.optional(Schema.NullOr(Schema.String)),
+  limitName: Schema.optional(Schema.NullOr(Schema.String)),
+});
+export type AccountUsageCodexPayload = typeof AccountUsageCodexPayload.Type;
+
 const AccountUsageUpdatedPayload = Schema.Struct({
   fiveHour: Schema.NullOr(AccountUsageWindow),
   sevenDay: Schema.NullOr(AccountUsageWindow),
   extra: Schema.NullOr(AccountUsageExtra),
   cursor: Schema.optional(AccountUsageCursorPayload),
+  codex: Schema.optional(AccountUsageCodexPayload),
 });
 export type AccountUsageUpdatedPayload = typeof AccountUsageUpdatedPayload.Type;
 

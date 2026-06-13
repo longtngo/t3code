@@ -23,6 +23,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -32,6 +33,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
@@ -1179,3 +1181,137 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
     }
   }),
 );
+
+const usageLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: lifecycleRuntimeFactory.factory,
+        pollAccountUsage: Effect.succeed({
+          fiveHour: null,
+          sevenDay: null,
+          extra: null,
+          codex: {
+            primary: {
+              utilization: 42,
+              resetsAt: "2026-06-04T19:30:00Z",
+              windowDurationMins: 300,
+            },
+            secondary: {
+              utilization: 8,
+              resetsAt: "2026-06-11T09:00:00Z",
+              windowDurationMins: 10_080,
+            },
+            credits: null,
+            planType: "pro",
+            limitName: "codex",
+          },
+        }),
+        usagePollInterval: Duration.seconds(60),
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+usageLayer("CodexAdapterLive account usage", (it) => {
+  it.effect("broadcasts account.usage.updated to active sessions on each poll tick", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const usageFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "account.usage.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-usage"),
+        runtimeMode: "full-access",
+      });
+
+      yield* TestClock.adjust(Duration.seconds(60));
+
+      const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
+      assert.ok(usageEvent);
+      assert.equal(usageEvent?.type, "account.usage.updated");
+      assert.equal(usageEvent?.threadId, asThreadId("thread-usage"));
+      if (usageEvent?.type === "account.usage.updated") {
+        assert.equal(usageEvent.payload.codex?.primary?.utilization, 42);
+      }
+    }),
+  );
+
+  it.effect("maps account/rateLimits/updated notifications to account.usage.updated", () =>
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      const adapter = yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: lifecycleRuntimeFactory.factory,
+        pollAccountUsage: Effect.succeed(null),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ServerConfig.layerTest(process.cwd(), process.cwd()),
+            ServerSettingsService.layerTest(),
+            providerSessionDirectoryTestLayer,
+            NodeServices.layer,
+          ),
+        ),
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access",
+      });
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+
+      const usageFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "account.usage.updated" &&
+            event.payload.codex?.primary?.utilization === 33,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-rate-limits-updated"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "account/rateLimits/updated",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          rateLimits: {
+            primary: {
+              usedPercent: 33,
+              windowDurationMins: 300,
+              resetsAt: 1_704_074_400,
+            },
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            limitName: "codex",
+          },
+        },
+      });
+
+      const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
+      assert.ok(usageEvent);
+      if (usageEvent?.type === "account.usage.updated") {
+        assert.equal(usageEvent.payload.codex?.primary?.utilization, 33);
+      }
+    }),
+  );
+});

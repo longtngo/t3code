@@ -1993,8 +1993,8 @@ export default function ChatView(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
-  // Account usage (the BranchToolbar readout) is Claude/Cursor-only, so gate it
-  // on the currently-picked model resolving to a provider that emits usage.
+  // Account usage (the BranchToolbar readout) is shown for providers that emit
+  // `account.usage.updated` activities (Claude, Cursor, Codex).
   const showAccountUsage = useMemo(() => {
     const instanceId = composerActiveProvider ?? activeProviderInstanceId;
     const status =
@@ -2003,7 +2003,8 @@ export default function ChatView(props: ChatViewProps) {
     const driver = status?.driver;
     return (
       driver === ProviderDriverKind.make("claudeAgent") ||
-      driver === ProviderDriverKind.make("cursor")
+      driver === ProviderDriverKind.make("cursor") ||
+      driver === ProviderDriverKind.make("codex")
     );
   }, [composerActiveProvider, activeProviderInstanceId, providerStatuses, activeProviderStatus]);
   const activeProjectCwd = activeProject?.cwd ?? null;

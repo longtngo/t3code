@@ -170,7 +170,12 @@ export function UsageMeter(props: {
     return null;
   }
 
-  const popoverTitle = usage?.source === "cursor" ? "Cursor usage" : "Usage limits";
+  const popoverTitle =
+    usage?.source === "cursor"
+      ? "Cursor usage"
+      : usage?.source === "codex"
+        ? "Codex usage"
+        : "Usage limits";
 
   return (
     <Popover>

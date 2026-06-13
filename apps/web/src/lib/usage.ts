@@ -25,7 +25,7 @@ export interface UsageExtra {
   readonly currency: string | null;
 }
 
-export type UsageSource = "claude" | "cursor";
+export type UsageSource = "claude" | "cursor" | "codex";
 
 export interface UsageSegment {
   readonly key: string;
@@ -243,10 +243,116 @@ function buildCursorSegments(payload: Record<string, unknown>): UsageSegment[] {
   return segments;
 }
 
+function deriveCodexWindow(
+  value: unknown,
+): (UsageWindow & { windowDurationMins?: number | null }) | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const utilization = asFiniteNumber(record.utilization);
+  if (utilization === null) return null;
+  return {
+    utilization,
+    resetsAt: asString(record.resetsAt),
+    windowDurationMins: asFiniteNumber(record.windowDurationMins),
+  };
+}
+
+function formatCodexWindowLabel(
+  windowDurationMins: number | null | undefined,
+  fallback: string,
+): string {
+  if (windowDurationMins == null || !Number.isFinite(windowDurationMins)) return fallback;
+  if (windowDurationMins >= 7 * 24 * 60) return "7d";
+  if (windowDurationMins >= 24 * 60) return "1d";
+  if (windowDurationMins >= 60) {
+    const hours = Math.round(windowDurationMins / 60);
+    return `${hours}h`;
+  }
+  return `${windowDurationMins}m`;
+}
+
+function formatCodexCreditsBalance(balance: string | null): string {
+  if (!balance) return "—";
+  const trimmed = balance.trim();
+  if (trimmed.startsWith("$")) return trimmed;
+  const parsed = Number.parseFloat(trimmed);
+  if (Number.isFinite(parsed)) return `$${parsed.toFixed(2)}`;
+  return trimmed;
+}
+
+function buildCodexSegments(payload: Record<string, unknown>): UsageSegment[] {
+  const codex = asRecord(payload.codex);
+  if (!codex) return [];
+
+  const segments: UsageSegment[] = [];
+  const primary = deriveCodexWindow(codex.primary);
+  const secondary = deriveCodexWindow(codex.secondary);
+  const credits = asRecord(codex.credits);
+  const creditsBalance = asString(credits?.balance);
+  const creditsHasCredits = credits?.hasCredits === true;
+  const creditsUnlimited = credits?.unlimited === true;
+
+  if (primary) {
+    const label = formatCodexWindowLabel(primary.windowDurationMins, "5h");
+    segments.push(
+      percentSegment({
+        key: "primary",
+        label,
+        popoverLabel: "Session limit",
+        window: primary,
+        showPace: true,
+        paceWindowMs: primary.windowDurationMins
+          ? primary.windowDurationMins * 60 * 1000
+          : USAGE_WINDOW_MS.fiveHour,
+        resetDetailStyle: "time",
+      }),
+    );
+  }
+  if (secondary) {
+    const label = formatCodexWindowLabel(secondary.windowDurationMins, "week");
+    segments.push(
+      percentSegment({
+        key: "secondary",
+        label,
+        popoverLabel: "Weekly limit",
+        window: secondary,
+        showPace: true,
+        paceWindowMs: secondary.windowDurationMins
+          ? secondary.windowDurationMins * 60 * 1000
+          : USAGE_WINDOW_MS.sevenDay,
+        resetDetailStyle: "datetime",
+      }),
+    );
+  }
+  if (creditsHasCredits) {
+    segments.push({
+      key: "credits",
+      label: "credits",
+      popoverLabel: "Credits balance",
+      utilization: 0,
+      inlineValue: creditsUnlimited ? "∞" : formatCodexCreditsBalance(creditsBalance),
+      popoverValue: creditsUnlimited
+        ? "Unlimited credits"
+        : formatCodexCreditsBalance(creditsBalance),
+      resetsAt: null,
+      resetDetailStyle: null,
+      showPace: false,
+      isCurrency: !creditsUnlimited,
+      popoverDetail: creditsUnlimited ? "Unlimited credits enabled" : null,
+    });
+  }
+
+  return segments;
+}
+
 function buildUsageSegments(payload: Record<string, unknown>): UsageSnapshot | null {
   const cursorSegments = buildCursorSegments(payload);
   if (cursorSegments.length > 0) {
     return { source: "cursor", segments: cursorSegments, updatedAt: "" };
+  }
+  const codexSegments = buildCodexSegments(payload);
+  if (codexSegments.length > 0) {
+    return { source: "codex", segments: codexSegments, updatedAt: "" };
   }
   const claudeSegments = buildClaudeSegments(payload);
   if (claudeSegments.length > 0) {

@@ -55,6 +55,31 @@ const cursorUsagePayload = {
   },
 };
 
+const codexUsagePayload = {
+  fiveHour: null,
+  sevenDay: null,
+  extra: null,
+  codex: {
+    primary: {
+      utilization: 42,
+      resetsAt: "2026-06-04T19:30:00Z",
+      windowDurationMins: 300,
+    },
+    secondary: {
+      utilization: 8,
+      resetsAt: "2026-06-11T09:00:00Z",
+      windowDurationMins: 10_080,
+    },
+    credits: {
+      balance: "25.50",
+      hasCredits: true,
+      unlimited: false,
+    },
+    planType: "pro",
+    limitName: "codex",
+  },
+};
+
 describe("deriveLatestUsageSnapshot", () => {
   it("returns Claude segments from the legacy payload shape", () => {
     const snapshot = deriveLatestUsageSnapshot([
@@ -81,6 +106,21 @@ describe("deriveLatestUsageSnapshot", () => {
     expect(snapshot?.segments[0]?.label).toBe("api");
     expect(snapshot?.segments[1]?.popoverLabel).toBe("Included usage");
     expect(snapshot?.segments[2]?.label).toBe("pool");
+  });
+
+  it("returns Codex-native segments when codex payload is present", () => {
+    const snapshot = deriveLatestUsageSnapshot([
+      makeActivity("a1", "account.usage.updated", codexUsagePayload),
+    ]);
+    expect(snapshot?.source).toBe("codex");
+    expect(snapshot?.segments.map((segment) => segment.key)).toEqual([
+      "primary",
+      "secondary",
+      "credits",
+    ]);
+    expect(snapshot?.segments[0]?.label).toBe("5h");
+    expect(snapshot?.segments[1]?.label).toBe("7d");
+    expect(snapshot?.segments[2]?.inlineValue).toBe("$25.50");
   });
 
   it("returns null when no usage activity is present", () => {
