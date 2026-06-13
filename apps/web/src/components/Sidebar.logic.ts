@@ -39,6 +39,45 @@ export const PROVIDER_ACCENT_STATUS_ICONS: ReadonlySet<ThreadStatusIcon> = new S
   "check",
 ]);
 
+// Luminance bounds past which a provider accent is too close to the sidebar
+// background to see (white-ish on the light theme, black-ish on the dark theme).
+// These only reject the near-invisible tail — normal brand colors (e.g. a
+// saturated orange ~0.46) stay in range — so we intentionally do NOT enforce a
+// full WCAG ratio, which would override most deliberately-chosen accents.
+const LIGHT_THEME_MAX_ACCENT_LUMINANCE = 0.75;
+const DARK_THEME_MIN_ACCENT_LUMINANCE = 0.06;
+
+function srgbChannelToLinear(channel: number): number {
+  const s = channel / 255;
+  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+}
+
+/** WCAG relative luminance of a `#RRGGBB` color, or null if unparseable. */
+export function relativeLuminance(hex: string): number | null {
+  const match = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!match) return null;
+  const int = Number.parseInt(match[1]!, 16);
+  return (
+    0.2126 * srgbChannelToLinear((int >> 16) & 0xff) +
+    0.7152 * srgbChannelToLinear((int >> 8) & 0xff) +
+    0.0722 * srgbChannelToLinear(int & 0xff)
+  );
+}
+
+/**
+ * Whether a provider accent is legible as a status glyph against the current
+ * theme's sidebar background. Rejects near-white accents on the light theme and
+ * near-black accents on the dark theme so the icon never disappears; callers
+ * fall back to the status's semantic color when this returns false.
+ */
+export function isAccentColorLegible(hex: string, resolvedTheme: "light" | "dark"): boolean {
+  const luminance = relativeLuminance(hex);
+  if (luminance === null) return false;
+  return resolvedTheme === "dark"
+    ? luminance >= DARK_THEME_MIN_ACCENT_LUMINANCE
+    : luminance <= LIGHT_THEME_MAX_ACCENT_LUMINANCE;
+}
+
 export interface ThreadStatusPill {
   label:
     | "Working"

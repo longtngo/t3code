@@ -16,6 +16,8 @@ import {
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
+  isAccentColorLegible,
+  relativeLuminance,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -50,6 +52,31 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("isAccentColorLegible", () => {
+  it("returns null luminance for an unparseable color", () => {
+    expect(relativeLuminance("not-a-color")).toBeNull();
+  });
+
+  it("rejects a near-white accent on the light theme but keeps it on dark", () => {
+    expect(isAccentColorLegible("#ffffff", "light")).toBe(false);
+    expect(isAccentColorLegible("#ffffff", "dark")).toBe(true);
+  });
+
+  it("rejects a near-black accent on the dark theme but keeps it on light", () => {
+    expect(isAccentColorLegible("#000000", "dark")).toBe(false);
+    expect(isAccentColorLegible("#000000", "light")).toBe(true);
+  });
+
+  it("keeps a saturated brand accent on both themes", () => {
+    expect(isAccentColorLegible("#ff8f1c", "light")).toBe(true);
+    expect(isAccentColorLegible("#ff8f1c", "dark")).toBe(true);
+  });
+
+  it("treats an unparseable accent as illegible", () => {
+    expect(isAccentColorLegible("blue", "light")).toBe(false);
+  });
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {

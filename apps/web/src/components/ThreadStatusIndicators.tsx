@@ -25,11 +25,13 @@ import { useThreadRunningTerminalIds } from "../terminalSessionState";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
 import {
+  isAccentColorLegible,
   PROVIDER_ACCENT_STATUS_ICONS,
   resolveThreadStatusPill,
   type ThreadStatusIcon,
   type ThreadStatusPill,
 } from "./Sidebar.logic";
+import { useTheme } from "../hooks/useTheme";
 import type { SidebarThreadSummary } from "../types";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -128,8 +130,12 @@ export function ThreadStatusGlyph({
   accentColor?: string | undefined;
   className?: string;
 }) {
+  const { resolvedTheme } = useTheme();
   const Icon = STATUS_ICON_COMPONENTS[status.icon];
-  const useAccent = accentColor !== undefined && PROVIDER_ACCENT_STATUS_ICONS.has(status.icon);
+  const useAccent =
+    accentColor !== undefined &&
+    PROVIDER_ACCENT_STATUS_ICONS.has(status.icon) &&
+    isAccentColorLegible(accentColor, resolvedTheme);
   return (
     <Icon
       aria-hidden
