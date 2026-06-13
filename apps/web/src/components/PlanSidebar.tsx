@@ -6,7 +6,6 @@ import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
 import {
-  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   EllipsisIcon,
@@ -28,6 +27,21 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readEnvironmentApi } from "~/environmentApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { SidebarItemRow, SidebarSection, statusGlyph } from "./SidebarSection";
+import { useSidebarViewStore } from "../sidebarViewStore";
+import {
+  isTerminalSidebarStatus,
+  type AgentSidebarItem,
+  type BackgroundSidebarItem,
+} from "../sidebarSections";
+
+// Plan steps render active-first, completed sunk to the bottom (stable within
+// each group), matching the background/agent sections.
+function orderPlanSteps<T extends { status: string }>(steps: ReadonlyArray<T>): T[] {
+  const active = steps.filter((step) => step.status !== "completed");
+  const completed = steps.filter((step) => step.status === "completed");
+  return [...active, ...completed];
+}
 
 // Row chrome for plan steps, kept as standalone helpers for reuse and testing.
 export function stepRowClass(status: string): string {
@@ -50,30 +64,18 @@ export function stepTextClass(status: string): string {
 }
 
 export function stepStatusIcon(status: string): React.ReactNode {
-  if (status === "completed") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-500">
-        <CheckIcon className="size-3" />
-      </span>
-    );
-  }
-  if (status === "inProgress") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-400">
-        <LoaderIcon className="size-3 animate-spin" />
-      </span>
-    );
-  }
-  return (
-    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border/60 bg-muted/30">
-      <span className="size-1.5 rounded-full bg-muted-foreground/30" />
-    </span>
+  return statusGlyph(
+    status === "completed" ? "completed" : status === "inProgress" ? "running" : "idle",
   );
 }
 
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
+  /** Background-process (terminal) items for the active thread, already filtered + sorted. */
+  backgroundItems: ReadonlyArray<BackgroundSidebarItem>;
+  /** Agent/subagent items for the active thread, already filtered + sorted. */
+  agentItems: ReadonlyArray<AgentSidebarItem>;
   label?: string;
   environmentId: EnvironmentId;
   markdownCwd: string | undefined;
@@ -86,6 +88,8 @@ interface PlanSidebarProps {
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
+  backgroundItems,
+  agentItems,
   label = "Plan",
   environmentId,
   markdownCwd,
@@ -97,6 +101,17 @@ const PlanSidebar = memo(function PlanSidebar({
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const collapsedSections = useSidebarViewStore((state) => state.collapsedSections);
+  const toggleSection = useSidebarViewStore((state) => state.toggleSection);
+  const selectedDetail = useSidebarViewStore((state) => state.selectedDetail);
+  const selectDetail = useSidebarViewStore((state) => state.selectDetail);
+  const dismissItem = useSidebarViewStore((state) => state.dismissItem);
+  const orderedSteps = activePlan ? orderPlanSteps(activePlan.steps) : [];
+  const hasAnyContent =
+    orderedSteps.length > 0 ||
+    backgroundItems.length > 0 ||
+    agentItems.length > 0 ||
+    activeProposedPlan != null;
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -224,13 +239,15 @@ const PlanSidebar = memo(function PlanSidebar({
             </p>
           ) : null}
 
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
-            <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
-              </p>
-              {activePlan.steps.map((step) => (
+          {/* Tasks */}
+          {orderedSteps.length > 0 ? (
+            <SidebarSection
+              title="Tasks"
+              count={orderedSteps.length}
+              collapsed={collapsedSections.tasks}
+              onToggle={() => toggleSection("tasks")}
+            >
+              {orderedSteps.map((step) => (
                 <div
                   key={`${step.status}:${step.step}`}
                   className={cn("flex items-start gap-2.5 px-2.5 py-2", stepRowClass(step.status))}
@@ -239,7 +256,59 @@ const PlanSidebar = memo(function PlanSidebar({
                   <p className={stepTextClass(step.status)}>{step.step}</p>
                 </div>
               ))}
-            </div>
+            </SidebarSection>
+          ) : null}
+
+          {/* Background processes (terminal sessions) */}
+          {backgroundItems.length > 0 ? (
+            <SidebarSection
+              title="Background processes"
+              count={backgroundItems.length}
+              collapsed={collapsedSections.background}
+              onToggle={() => toggleSection("background")}
+            >
+              {backgroundItems.map((item) => (
+                <SidebarItemRow
+                  key={item.id}
+                  status={item.status}
+                  label={item.label}
+                  detail={item.cwd}
+                  selected={selectedDetail?.id === item.id}
+                  onSelect={() => selectDetail({ kind: "background", id: item.id })}
+                  onRemove={
+                    isTerminalSidebarStatus(item.status)
+                      ? () => dismissItem(item.id)
+                      : undefined
+                  }
+                />
+              ))}
+            </SidebarSection>
+          ) : null}
+
+          {/* Agents / subagents */}
+          {agentItems.length > 0 ? (
+            <SidebarSection
+              title="Agents"
+              count={agentItems.length}
+              collapsed={collapsedSections.agents}
+              onToggle={() => toggleSection("agents")}
+            >
+              {agentItems.map((item) => (
+                <SidebarItemRow
+                  key={item.id}
+                  status={item.status}
+                  label={item.label}
+                  detail={item.finalSummary ?? item.log.at(-1)?.text}
+                  selected={selectedDetail?.id === item.id}
+                  onSelect={() => selectDetail({ kind: "agent", id: item.id })}
+                  onRemove={
+                    isTerminalSidebarStatus(item.status)
+                      ? () => dismissItem(item.id)
+                      : undefined
+                  }
+                />
+              ))}
+            </SidebarSection>
           ) : null}
 
           {/* Proposed Plan Markdown */}
@@ -272,11 +341,11 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
 
           {/* Empty state */}
-          {!activePlan && !planMarkdown ? (
+          {!hasAnyContent ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+              <p className="text-[13px] text-muted-foreground/40">Nothing active yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
+                Plans, background processes, and agents will appear here.
               </p>
             </div>
           ) : null}

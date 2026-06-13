@@ -104,6 +104,13 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
+import { SidebarDetailPanel } from "./SidebarDetailPanel";
+import {
+  deriveAgentItems,
+  deriveBackgroundItems,
+  visibleSidebarItems,
+} from "../sidebarSections";
+import { useSidebarViewStore } from "../sidebarViewStore";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
@@ -1618,6 +1625,54 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
+  // Background-process (terminal) + agent/subagent items for the active thread's
+  // sidebar sections. Derived from data the client already holds; the unfiltered
+  // lists also back the detail panel lookup (so a dismissed/cleared item can
+  // still be opened by id).
+  const allAgentItems = useMemo(() => deriveAgentItems(threadActivities), [threadActivities]);
+  const allBackgroundItems = useMemo(
+    () => deriveBackgroundItems(activeThreadKnownSessions),
+    [activeThreadKnownSessions],
+  );
+  const dismissedSidebarIds = useSidebarViewStore((state) => state.dismissedIds);
+  const selectedSidebarDetail = useSidebarViewStore((state) => state.selectedDetail);
+  const clearSidebarDetail = useSidebarViewStore((state) => state.clearDetail);
+  const dismissedSidebarIdSet = useMemo(
+    () => new Set(Object.keys(dismissedSidebarIds)),
+    [dismissedSidebarIds],
+  );
+  // Coarse clock so the 6h auto-clear still fires on a fully idle thread (which
+  // otherwise never re-renders to re-evaluate the TTL). 5min is far finer than
+  // the TTL yet cheap.
+  const [autoClearNow, setAutoClearNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setAutoClearNow(Date.now()), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  // Memoized so PlanSidebar's memo holds; recomputed when the item set,
+  // dismissals, or the coarse clock change.
+  const visibleAgentItems = useMemo(
+    () => visibleSidebarItems(allAgentItems, dismissedSidebarIdSet, autoClearNow),
+    [allAgentItems, dismissedSidebarIdSet, autoClearNow],
+  );
+  const visibleBackgroundItems = useMemo(
+    () => visibleSidebarItems(allBackgroundItems, dismissedSidebarIdSet, autoClearNow),
+    [allBackgroundItems, dismissedSidebarIdSet, autoClearNow],
+  );
+  const selectedSidebarDetailItem = useMemo(() => {
+    if (!selectedSidebarDetail) return null;
+    const pool = selectedSidebarDetail.kind === "agent" ? allAgentItems : allBackgroundItems;
+    return pool.find((item) => item.id === selectedSidebarDetail.id) ?? null;
+  }, [selectedSidebarDetail, allAgentItems, allBackgroundItems]);
+  // The detail panel lives within the plan sidebar region; close it when the
+  // plan sidebar closes or the active thread changes.
+  useEffect(() => {
+    if (!planSidebarOpen) clearSidebarDetail();
+  }, [planSidebarOpen, clearSidebarDetail]);
+  useEffect(() => {
+    clearSidebarDetail();
+  }, [activeThreadId, clearSidebarDetail]);
+  const sidebarDetailOpen = planSidebarOpen && selectedSidebarDetail !== null;
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const planStepsTotal = activePlan?.steps.length ?? 0;
   const planStepsCompleted =
@@ -4115,6 +4170,8 @@ export default function ChatView(props: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
+            backgroundItems={visibleBackgroundItems}
+            agentItems={visibleAgentItems}
             label={planSidebarLabel}
             environmentId={environmentId}
             markdownCwd={gitCwd ?? undefined}
@@ -4122,6 +4179,16 @@ export default function ChatView(props: ChatViewProps) {
             timestampFormat={timestampFormat}
             mode="sidebar"
             onClose={closePlanSidebar}
+          />
+        ) : null}
+        {/* Background/agent detail panel (master/detail beside the plan sidebar) */}
+        {sidebarDetailOpen && !shouldUsePlanSidebarSheet ? (
+          <SidebarDetailPanel
+            item={selectedSidebarDetailItem}
+            environmentId={environmentId}
+            markdownCwd={gitCwd ?? undefined}
+            mode="sidebar"
+            onClose={clearSidebarDetail}
           />
         ) : null}
       </div>
@@ -4149,6 +4216,8 @@ export default function ChatView(props: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
+            backgroundItems={visibleBackgroundItems}
+            agentItems={visibleAgentItems}
             label={planSidebarLabel}
             environmentId={environmentId}
             markdownCwd={gitCwd ?? undefined}
@@ -4156,6 +4225,17 @@ export default function ChatView(props: ChatViewProps) {
             timestampFormat={timestampFormat}
             mode="sheet"
             onClose={closePlanSidebar}
+          />
+        </RightPanelSheet>
+      ) : null}
+      {shouldUsePlanSidebarSheet ? (
+        <RightPanelSheet open={sidebarDetailOpen} onClose={clearSidebarDetail}>
+          <SidebarDetailPanel
+            item={selectedSidebarDetailItem}
+            environmentId={environmentId}
+            markdownCwd={gitCwd ?? undefined}
+            mode="sheet"
+            onClose={clearSidebarDetail}
           />
         </RightPanelSheet>
       ) : null}
