@@ -577,10 +577,30 @@ const AccountUsageExtra = Schema.Struct({
 });
 export type AccountUsageExtra = typeof AccountUsageExtra.Type;
 
+// Cursor dashboard usage (`GetCurrentPeriodUsage` + enterprise `/auth/usage`).
+// When present, the web UI renders Cursor-native labels instead of Claude 5h/7d slots.
+const AccountUsageCursorRequests = Schema.Struct({
+  used: Schema.Number,
+  limit: Schema.Number,
+  utilization: Schema.Number,
+});
+export type AccountUsageCursorRequests = typeof AccountUsageCursorRequests.Type;
+
+const AccountUsageCursorPayload = Schema.Struct({
+  auto: Schema.NullOr(AccountUsageWindow),
+  api: Schema.NullOr(AccountUsageWindow),
+  total: Schema.NullOr(AccountUsageWindow),
+  onDemand: Schema.NullOr(AccountUsageExtra),
+  onDemandScope: Schema.optional(Schema.Literals(["team", "individual"])),
+  requests: Schema.optional(AccountUsageCursorRequests),
+});
+export type AccountUsageCursorPayload = typeof AccountUsageCursorPayload.Type;
+
 const AccountUsageUpdatedPayload = Schema.Struct({
   fiveHour: Schema.NullOr(AccountUsageWindow),
   sevenDay: Schema.NullOr(AccountUsageWindow),
   extra: Schema.NullOr(AccountUsageExtra),
+  cursor: Schema.optional(AccountUsageCursorPayload),
 });
 export type AccountUsageUpdatedPayload = typeof AccountUsageUpdatedPayload.Type;
 

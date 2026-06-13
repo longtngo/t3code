@@ -105,11 +105,7 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import { SidebarDetailPanel } from "./SidebarDetailPanel";
-import {
-  deriveAgentItems,
-  deriveBackgroundItems,
-  visibleSidebarItems,
-} from "../sidebarSections";
+import { deriveAgentItems, deriveBackgroundItems, visibleSidebarItems } from "../sidebarSections";
 import { useSidebarViewStore } from "../sidebarViewStore";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
@@ -1677,8 +1673,7 @@ export default function ChatView(props: ChatViewProps) {
   const planStepsTotal = activePlan?.steps.length ?? 0;
   const planStepsCompleted =
     activePlan?.steps.filter((step) => step.status === "completed").length ?? 0;
-  const planHasActiveStep =
-    activePlan?.steps.some((step) => step.status === "inProgress") ?? false;
+  const planHasActiveStep = activePlan?.steps.some((step) => step.status === "inProgress") ?? false;
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -1998,15 +1993,18 @@ export default function ChatView(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
-  // Account usage (the BranchToolbar readout) is Claude-only, so gate it on the
-  // currently-picked model resolving to the Claude driver. Prefer the composer's
-  // unsaved pick, then the thread's active provider.
-  const isClaudeModelSelected = useMemo(() => {
+  // Account usage (the BranchToolbar readout) is Claude/Cursor-only, so gate it
+  // on the currently-picked model resolving to a provider that emits usage.
+  const showAccountUsage = useMemo(() => {
     const instanceId = composerActiveProvider ?? activeProviderInstanceId;
     const status =
       (instanceId ? providerStatuses.find((entry) => entry.instanceId === instanceId) : null) ??
       activeProviderStatus;
-    return status?.driver === ProviderDriverKind.make("claudeAgent");
+    const driver = status?.driver;
+    return (
+      driver === ProviderDriverKind.make("claudeAgent") ||
+      driver === ProviderDriverKind.make("cursor")
+    );
   }, [composerActiveProvider, activeProviderInstanceId, providerStatuses, activeProviderStatus]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
@@ -4141,7 +4139,7 @@ export default function ChatView(props: ChatViewProps) {
                 {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                 availableEnvironments={logicalProjectEnvironments}
                 {...(activeThread?.activities ? { activities: activeThread.activities } : {})}
-                isClaudeModelSelected={isClaudeModelSelected}
+                showAccountUsage={showAccountUsage}
               />
             )}
           </div>

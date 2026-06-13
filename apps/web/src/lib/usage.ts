@@ -25,10 +25,26 @@ export interface UsageExtra {
   readonly currency: string | null;
 }
 
+export type UsageSource = "claude" | "cursor";
+
+export interface UsageSegment {
+  readonly key: string;
+  readonly label: string;
+  readonly popoverLabel: string;
+  readonly utilization: number;
+  readonly inlineValue: string;
+  readonly popoverValue: string;
+  readonly resetsAt: string | null;
+  readonly resetDetailStyle: "time" | "datetime" | null;
+  readonly showPace: boolean;
+  readonly paceWindowMs?: number;
+  readonly popoverDetail?: string | null;
+  readonly isCurrency?: boolean;
+}
+
 export interface UsageSnapshot {
-  readonly fiveHour: UsageWindow | null;
-  readonly sevenDay: UsageWindow | null;
-  readonly extra: UsageExtra | null;
+  readonly source: UsageSource;
+  readonly segments: readonly UsageSegment[];
   readonly updatedAt: string;
 }
 
@@ -43,9 +59,6 @@ function deriveWindow(value: unknown): UsageWindow | null {
 function deriveExtra(value: unknown): UsageExtra | null {
   const record = asRecord(value);
   if (!record) return null;
-  // A disabled extra-credits segment is never rendered (buildSegments and the
-  // popover both gate on isEnabled), so treat it as absent — otherwise a
-  // disabled-only payload looks "usable" and yields an empty meter.
   if (record.isEnabled !== true) return null;
   return {
     isEnabled: true,
@@ -54,6 +67,192 @@ function deriveExtra(value: unknown): UsageExtra | null {
     utilization: asFiniteNumber(record.utilization) ?? 0,
     currency: asString(record.currency),
   };
+}
+
+function percentSegment(input: {
+  readonly key: string;
+  readonly label: string;
+  readonly popoverLabel: string;
+  readonly window: UsageWindow;
+  readonly showPace: boolean;
+  readonly paceWindowMs?: number;
+  readonly resetDetailStyle: "time" | "datetime" | null;
+}): UsageSegment {
+  const pct = input.window.utilization;
+  const rounded = Math.round(pct);
+  return {
+    key: input.key,
+    label: input.label,
+    popoverLabel: input.popoverLabel,
+    utilization: pct,
+    inlineValue: `${rounded}%`,
+    popoverValue: `${rounded}%`,
+    resetsAt: input.window.resetsAt,
+    resetDetailStyle: input.resetDetailStyle,
+    showPace: input.showPace,
+    ...(input.paceWindowMs !== undefined ? { paceWindowMs: input.paceWindowMs } : {}),
+  };
+}
+
+function buildClaudeSegments(payload: Record<string, unknown>): UsageSegment[] {
+  const segments: UsageSegment[] = [];
+  const fiveHour = deriveWindow(payload.fiveHour);
+  const sevenDay = deriveWindow(payload.sevenDay);
+  const extra = deriveExtra(payload.extra);
+
+  if (fiveHour) {
+    segments.push(
+      percentSegment({
+        key: "5h",
+        label: "5h",
+        popoverLabel: "5-hour",
+        window: fiveHour,
+        showPace: true,
+        paceWindowMs: USAGE_WINDOW_MS.fiveHour,
+        resetDetailStyle: "time",
+      }),
+    );
+  }
+  if (sevenDay) {
+    segments.push(
+      percentSegment({
+        key: "7d",
+        label: "7d",
+        popoverLabel: "7-day",
+        window: sevenDay,
+        showPace: true,
+        paceWindowMs: USAGE_WINDOW_MS.sevenDay,
+        resetDetailStyle: "datetime",
+      }),
+    );
+  }
+  if (extra) {
+    segments.push({
+      key: "extra",
+      label: "extra",
+      popoverLabel: "Extra usage",
+      utilization: extra.utilization,
+      inlineValue: `${formatCreditsShort(extra.usedCredits)}/${formatCreditsShort(extra.monthlyLimit)}`,
+      popoverValue: `${formatCredits(extra.usedCredits)} / ${formatCredits(extra.monthlyLimit)}`,
+      resetsAt: null,
+      resetDetailStyle: null,
+      showPace: false,
+      isCurrency: true,
+      popoverDetail: `${Math.round(extra.utilization)}% of monthly limit${
+        extra.currency ? ` · ${extra.currency}` : ""
+      }`,
+    });
+  }
+  return segments;
+}
+
+function shouldShowCursorPercentWindow(window: UsageWindow | null): window is UsageWindow {
+  if (!window) return false;
+  return window.utilization > 0;
+}
+
+function buildCursorSegments(payload: Record<string, unknown>): UsageSegment[] {
+  const cursor = asRecord(payload.cursor);
+  if (!cursor) return [];
+
+  const segments: UsageSegment[] = [];
+  const auto = deriveWindow(cursor.auto);
+  const api = deriveWindow(cursor.api);
+  const total = deriveWindow(cursor.total);
+  const onDemand = deriveExtra(cursor.onDemand);
+  const onDemandScope = asString(cursor.onDemandScope);
+  const requests = asRecord(cursor.requests);
+  const requestUsed = asFiniteNumber(requests?.used);
+  const requestLimit = asFiniteNumber(requests?.limit);
+  const requestUtilization = asFiniteNumber(requests?.utilization);
+
+  if (shouldShowCursorPercentWindow(auto)) {
+    segments.push(
+      percentSegment({
+        key: "auto",
+        label: "auto",
+        popoverLabel: "Auto usage",
+        window: auto,
+        showPace: false,
+        resetDetailStyle: "datetime",
+      }),
+    );
+  }
+  if (shouldShowCursorPercentWindow(api)) {
+    segments.push(
+      percentSegment({
+        key: "api",
+        label: "api",
+        popoverLabel: "API usage",
+        window: api,
+        showPace: false,
+        resetDetailStyle: "datetime",
+      }),
+    );
+  }
+  if (total) {
+    segments.push(
+      percentSegment({
+        key: "total",
+        label: "plan",
+        popoverLabel: "Included usage",
+        window: total,
+        showPace: false,
+        resetDetailStyle: "datetime",
+      }),
+    );
+  }
+  if (onDemand) {
+    const isTeamPool = onDemandScope === "team";
+    segments.push({
+      key: "on-demand",
+      label: isTeamPool ? "pool" : "ondemand",
+      popoverLabel: isTeamPool ? "Team on-demand pool" : "On-demand usage",
+      utilization: onDemand.utilization,
+      inlineValue: `${formatCreditsShort(onDemand.usedCredits)}/${formatCreditsShort(onDemand.monthlyLimit)}`,
+      popoverValue: `${formatCredits(onDemand.usedCredits)} / ${formatCredits(onDemand.monthlyLimit)}`,
+      resetsAt: null,
+      resetDetailStyle: null,
+      showPace: false,
+      isCurrency: true,
+      popoverDetail: `${Math.round(onDemand.utilization)}% of ${isTeamPool ? "team pool" : "on-demand limit"}${
+        onDemand.currency ? ` · ${onDemand.currency}` : ""
+      }`,
+    });
+  }
+  if (
+    requestUsed !== null &&
+    requestLimit !== null &&
+    requestLimit > 0 &&
+    requestUtilization !== null
+  ) {
+    segments.push({
+      key: "requests",
+      label: "reqs",
+      popoverLabel: "Included requests",
+      utilization: requestUtilization,
+      inlineValue: `${requestUsed}/${requestLimit}`,
+      popoverValue: `${requestUsed} / ${requestLimit} requests`,
+      resetsAt: null,
+      resetDetailStyle: null,
+      showPace: false,
+      popoverDetail: `${Math.round(requestUtilization)}% of request limit`,
+    });
+  }
+
+  return segments;
+}
+
+function buildUsageSegments(payload: Record<string, unknown>): UsageSnapshot | null {
+  const cursorSegments = buildCursorSegments(payload);
+  if (cursorSegments.length > 0) {
+    return { source: "cursor", segments: cursorSegments, updatedAt: "" };
+  }
+  const claudeSegments = buildClaudeSegments(payload);
+  if (claudeSegments.length > 0) {
+    return { source: "claude", segments: claudeSegments, updatedAt: "" };
+  }
+  return null;
 }
 
 /**
@@ -69,13 +268,10 @@ export function deriveLatestUsageSnapshot(
       continue;
     }
     const payload = asRecord(activity.payload);
-    const fiveHour = deriveWindow(payload?.fiveHour);
-    const sevenDay = deriveWindow(payload?.sevenDay);
-    const extra = deriveExtra(payload?.extra);
-    if (fiveHour === null && sevenDay === null && extra === null) {
-      continue;
-    }
-    return { fiveHour, sevenDay, extra, updatedAt: activity.createdAt };
+    if (!payload) continue;
+    const snapshot = buildUsageSegments(payload);
+    if (!snapshot) continue;
+    return { ...snapshot, updatedAt: activity.createdAt };
   }
   return null;
 }
@@ -92,23 +288,11 @@ export const PACE_DEADZONE = 3;
 export type PaceState = "ahead" | "behind" | "onPace";
 
 export interface Pace {
-  /** Where usage "should" be by now: share of the window elapsed, 0–100. */
   readonly elapsedPct: number;
-  /** utilization − elapsedPct. Positive = ahead (burning faster than allowance). */
   readonly delta: number;
   readonly state: PaceState;
 }
 
-/**
- * Compare current utilization against the share of the window that has elapsed.
- * The API gives us the reset time, not the window start, so elapsed is derived
- * as `windowMs − (resetsAt − now)`. In a 5-hour window, "on pace" is 1% every
- * 3 minutes; being above that line means you'll exhaust the window early.
- *
- * Returns null when we can't place ourselves in the window — no `resetsAt`, an
- * unparseable value, or a reset time that sits outside one window length (stale
- * data or a clock skew), where a pace comparison would be misleading.
- */
 export function computePace(
   utilization: number,
   resetsAt: string | null,
@@ -126,19 +310,11 @@ export function computePace(
   return { elapsedPct, delta, state };
 }
 
-/**
- * Fixed-width slots for the branch-toolbar meters. The displayed numbers tick
- * every render (host metrics, pace, percentages), so without a reserved width
- * the meters' total width changes each update and, near the flex-wrap threshold,
- * the row oscillates between one and two lines. Sizing each dynamic value to its
- * maximum content (with `tabular-nums`) keeps the width constant, so wrapping is
- * decided by viewport width alone. `min-w` only sets a floor, so it never clips;
- * each floor is sized to cover the worst case of the *fast-ticking* values
- * (percentages, pace) exactly, while the slow extra-cost slot is sized to the
- * common case (rarer larger values just grow it, which can't cause fast flapping
- * since the cost changes slowly). Widths measured in the app font (DM Sans, 11px,
- * tabular-nums).
- */
+export function deriveSegmentPace(segment: UsageSegment, now: number): Pace | null {
+  if (!segment.showPace || segment.paceWindowMs === undefined) return null;
+  return computePace(segment.utilization, segment.resetsAt, segment.paceWindowMs, now);
+}
+
 /** Percentage readout (`ctx`/`5h`/`7d`, `cpu`/`gpu`/`mem`): `100%` ≈ 1.70rem. */
 export const METER_VALUE_SLOT = "inline-block min-w-[1.85rem] tabular-nums";
 /** Pace readout: sized for the proportional `on pace` text (≈2.58rem, wider than `↑100%`). */
@@ -148,10 +324,6 @@ export const METER_EXTRA_SLOT = "inline-block min-w-[3rem] tabular-nums";
 
 export type UsageLevel = "green" | "yellow" | "orange" | "red";
 
-/**
- * Map a utilization percentage to a severity level. Thresholds match the
- * reference `statusline.sh` `usage_color`: ≥90 red, ≥70 orange, ≥50 yellow.
- */
 export function usageLevel(pct: number): UsageLevel {
   if (pct >= 90) return "red";
   if (pct >= 70) return "orange";
@@ -159,7 +331,6 @@ export function usageLevel(pct: number): UsageLevel {
   return "green";
 }
 
-/** Format a reset timestamp in local time: "14:30" (time) or "Mon Jun 8, 04:00" (datetime). */
 export function formatResetTime(iso: string | null, style: "time" | "datetime"): string | null {
   if (!iso) return null;
   const date = new Date(iso);
@@ -181,13 +352,11 @@ export function formatResetTime(iso: string | null, style: "time" | "datetime"):
   }).format(date);
 }
 
-/** Format integer cents as a currency-ish dollar amount: 43540 → "$435.40". */
 export function formatCredits(cents: number): string {
   const safe = Number.isFinite(cents) && cents > 0 ? cents : 0;
   return `$${(safe / 100).toFixed(2)}`;
 }
 
-/** Short dollar amount for tight inline rendering: 43540 → "$435", 200000 → "$2k". */
 export function formatCreditsShort(cents: number): string {
   const dollars = (Number.isFinite(cents) && cents > 0 ? cents : 0) / 100;
   if (dollars >= 1000) {

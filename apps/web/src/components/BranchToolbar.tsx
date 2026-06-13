@@ -58,8 +58,8 @@ interface BranchToolbarProps {
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   activities?: readonly OrchestrationThreadActivity[];
-  /** Account usage is Claude-only; the readout is hidden for other providers. */
-  isClaudeModelSelected?: boolean;
+  /** Account usage is shown for providers that emit usage activities. */
+  showAccountUsage?: boolean;
 }
 
 interface MobileRunContextSelectorProps {
@@ -212,11 +212,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   availableEnvironments,
   onEnvironmentChange,
   activities,
-  isClaudeModelSelected,
+  showAccountUsage,
 }: BranchToolbarProps) {
   const usageSnapshot = useMemo(
-    () => (isClaudeModelSelected && activities ? deriveLatestUsageSnapshot(activities) : null),
-    [isClaudeModelSelected, activities],
+    () => (showAccountUsage && activities ? deriveLatestUsageSnapshot(activities) : null),
+    [showAccountUsage, activities],
   );
   const contextWindowSnapshot = useMemo(
     () => (activities ? deriveLatestContextWindowSnapshot(activities) : null),

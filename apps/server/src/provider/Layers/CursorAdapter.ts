@@ -6,6 +6,7 @@
 
 import {
   ApprovalRequestId,
+  type AccountUsageUpdatedPayload,
   type CursorSettings,
   type ProviderOptionSelection,
   EventId,
@@ -24,6 +25,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -31,11 +33,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -75,6 +79,7 @@ import {
 } from "../acp/CursorAcpExtension.ts";
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
+import { makeAccountUsagePoll } from "./CursorUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -110,6 +115,14 @@ export interface CursorAdapterLiveOptions {
    * the latest snapshot so the closure isn't stale.
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  /**
+   * Test seam: overrides the account usage poll. When omitted, a real poll is
+   * built from the ambient HttpClient / ChildProcessSpawner / FileSystem.
+   * Returns `null` to mean "no usage update this tick".
+   */
+  readonly pollAccountUsage?: Effect.Effect<AccountUsageUpdatedPayload | null>;
+  /** Interval between account usage polls. Defaults to 60 seconds. */
+  readonly usagePollInterval?: Duration.Duration;
 }
 
 interface PendingApproval {
@@ -314,6 +327,7 @@ export function makeCursorAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const httpClientOption = yield* Effect.serviceOption(HttpClient.HttpClient);
     const serverConfig = yield* Effect.service(ServerConfig);
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
@@ -358,6 +372,66 @@ export function makeCursorAdapter(
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+
+    // ---------------------------------------------------------------------------
+    // Account usage broadcast
+    //
+    // Cursor's dashboard API (billing-cycle plan usage + on-demand spend) is
+    // account-global and not exposed by ACP, so a single adapter-lifetime poller
+    // fetches it and broadcasts one `account.usage.updated` event per active
+    // session. The last snapshot is cached so a newly-started session can render
+    // immediately.
+    // ---------------------------------------------------------------------------
+    const cursorEnvironment = options?.environment ?? process.env;
+    const lastUsageRef = yield* Ref.make<AccountUsageUpdatedPayload | null>(null);
+    const pollAccountUsage =
+      options?.pollAccountUsage ??
+      makeAccountUsagePoll({
+        env: cursorEnvironment,
+        httpClient: httpClientOption,
+        spawner: Option.some(childProcessSpawner),
+        fileSystem: Option.some(fileSystem),
+      });
+    const usagePollInterval = options?.usagePollInterval ?? Duration.seconds(60);
+
+    const emitUsageForSession = (
+      context: CursorSessionContext,
+      payload: AccountUsageUpdatedPayload,
+    ) =>
+      Effect.gen(function* () {
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "account.usage.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.threadId,
+          payload,
+        });
+      });
+
+    const refreshAccountUsage = Effect.gen(function* () {
+      const payload = yield* pollAccountUsage;
+      if (payload === null) return;
+      yield* Ref.set(lastUsageRef, payload);
+      for (const context of sessions.values()) {
+        yield* emitUsageForSession(context, payload);
+      }
+    });
+
+    const refreshAccountUsageNow: CursorAdapterShape["refreshAccountUsage"] = () =>
+      refreshAccountUsage;
+
+    const accountUsageScope = yield* Effect.scope;
+
+    yield* Effect.forever(
+      Effect.gen(function* () {
+        if (sessions.size > 0) {
+          yield* refreshAccountUsage;
+        }
+        yield* Effect.sleep(usagePollInterval);
+      }).pipe(Effect.ignoreCause({ log: true })),
+    ).pipe(Effect.forkScoped);
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -853,6 +927,16 @@ export function makeCursorAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
+          const cachedUsage = yield* Ref.get(lastUsageRef);
+          if (cachedUsage !== null) {
+            yield* emitUsageForSession(ctx, cachedUsage);
+          } else {
+            yield* Effect.forkIn(
+              refreshAccountUsage.pipe(Effect.ignoreCause({ log: true })),
+              accountUsageScope,
+            );
+          }
+
           yield* offerRuntimeEvent({
             type: "session.started",
             ...(yield* makeEventStamp()),
@@ -1117,8 +1201,7 @@ export function makeCursorAdapter(
       listSessions,
       hasSession,
       stopAll,
-      // Cursor has no account-usage concept; on-demand refresh is a no-op.
-      refreshAccountUsage: () => Effect.void,
+      refreshAccountUsage: refreshAccountUsageNow,
       streamEvents,
     } satisfies CursorAdapterShape;
   });
