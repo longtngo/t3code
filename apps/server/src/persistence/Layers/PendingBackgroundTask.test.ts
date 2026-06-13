@@ -90,4 +90,38 @@ layer("PendingBackgroundTaskRepository", (it) => {
       assert.strictEqual(y.length, 1);
     }),
   );
+
+  it.effect("deleteByThreadId removes only the target thread's rows", () =>
+    Effect.gen(function* () {
+      const repository = yield* PendingBackgroundTaskRepository;
+      yield* repository.upsert(baseRow("task-a", "thread-x"));
+      yield* repository.upsert(baseRow("task-b", "thread-x"));
+      yield* repository.upsert(baseRow("task-c", "thread-y"));
+
+      yield* repository.deleteByThreadId({ threadId: ThreadId.make("thread-x") });
+
+      assert.strictEqual(
+        (yield* repository.listByThreadId({ threadId: ThreadId.make("thread-x") })).length,
+        0,
+      );
+      assert.strictEqual(
+        (yield* repository.listByThreadId({ threadId: ThreadId.make("thread-y") })).length,
+        1,
+      );
+    }),
+  );
+
+  it.effect("deleteByThreadId leaves other threads' rows intact when the target has none", () =>
+    Effect.gen(function* () {
+      const repository = yield* PendingBackgroundTaskRepository;
+      yield* repository.upsert(baseRow("task-keep", "thread-keep"));
+
+      yield* repository.deleteByThreadId({ threadId: ThreadId.make("thread-absent") });
+
+      assert.strictEqual(
+        (yield* repository.listByThreadId({ threadId: ThreadId.make("thread-keep") })).length,
+        1,
+      );
+    }),
+  );
 });

@@ -141,6 +141,15 @@ const makePendingBackgroundTaskRepository = Effect.gen(function* () {
       `,
   });
 
+  const deleteTasksByThreadId = SqlSchema.void({
+    Request: ThreadIdRequestSchema,
+    execute: ({ threadId }) =>
+      sql`
+        DELETE FROM pending_background_tasks
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
   const upsert: PendingBackgroundTaskRepositoryShape["upsert"] = (task) =>
     upsertTaskRow(task).pipe(
       Effect.mapError(
@@ -208,6 +217,13 @@ const makePendingBackgroundTaskRepository = Effect.gen(function* () {
       ),
     );
 
+  const deleteByThreadId: PendingBackgroundTaskRepositoryShape["deleteByThreadId"] = (input) =>
+    deleteTasksByThreadId(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("PendingBackgroundTaskRepository.deleteByThreadId:query"),
+      ),
+    );
+
   return {
     upsert,
     touch,
@@ -216,6 +232,7 @@ const makePendingBackgroundTaskRepository = Effect.gen(function* () {
     list,
     listByThreadId,
     deleteByTaskId,
+    deleteByThreadId,
   } satisfies PendingBackgroundTaskRepositoryShape;
 });
 

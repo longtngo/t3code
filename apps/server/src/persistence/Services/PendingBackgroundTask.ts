@@ -34,6 +34,10 @@ export type GetPendingBackgroundTaskInput = typeof GetPendingBackgroundTaskInput
 export const DeletePendingBackgroundTaskInput = Schema.Struct({ taskId: RuntimeTaskId });
 export type DeletePendingBackgroundTaskInput = typeof DeletePendingBackgroundTaskInput.Type;
 
+export const DeletePendingBackgroundTasksByThreadInput = Schema.Struct({ threadId: ThreadId });
+export type DeletePendingBackgroundTasksByThreadInput =
+  typeof DeletePendingBackgroundTasksByThreadInput.Type;
+
 export const TouchPendingBackgroundTaskInput = Schema.Struct({
   taskId: RuntimeTaskId,
   lastSeenAt: IsoDateTime,
@@ -96,6 +100,15 @@ export interface PendingBackgroundTaskRepositoryShape {
 
   readonly deleteByTaskId: (
     input: DeletePendingBackgroundTaskInput,
+  ) => Effect.Effect<void, PendingBackgroundTaskRepositoryError>;
+
+  /**
+   * Delete every pending-task row for a thread. Called when a thread is deleted
+   * so its in-flight task records don't outlive it (the recovery watchdog skips
+   * gone threads, so without this the rows would leak until the stale-timeout).
+   */
+  readonly deleteByThreadId: (
+    input: DeletePendingBackgroundTasksByThreadInput,
   ) => Effect.Effect<void, PendingBackgroundTaskRepositoryError>;
 }
 

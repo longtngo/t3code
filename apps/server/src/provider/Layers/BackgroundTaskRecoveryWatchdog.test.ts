@@ -150,6 +150,12 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
         Effect.sync(() => {
           store.delete(taskId);
         }),
+      deleteByThreadId: ({ threadId }: { threadId: ThreadId }) =>
+        Effect.sync(() => {
+          for (const [id, row] of store) {
+            if (row.threadId === threadId) store.delete(id);
+          }
+        }),
     });
 
     const engine = {

@@ -172,6 +172,7 @@ describe("ProviderSessionReaper", () => {
             : [],
         ),
       deleteByTaskId: () => Effect.void,
+      deleteByThreadId: () => Effect.void,
     });
     const stoppedThreadIds = new Set<ThreadId>();
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
