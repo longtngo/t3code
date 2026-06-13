@@ -26,15 +26,16 @@ type SidebarProject = {
 export type ThreadTraversalDirection = "previous" | "next";
 
 /**
- * Glyph rendered for a thread-status indicator. `spinner` and `check` are the
- * neutral working/completed states that adopt the provider's accent color;
+ * Glyph rendered for a thread-status indicator. `dot`, `spinner`, and `check` are
+ * the neutral idle/working/completed states that adopt the provider's accent color;
  * `approval`/`input`/`plan` keep their semantic colors (they encode
  * action-required / plan-ready meaning).
  */
-export type ThreadStatusIcon = "spinner" | "check" | "approval" | "input" | "plan";
+export type ThreadStatusIcon = "dot" | "spinner" | "check" | "approval" | "input" | "plan";
 
 /** Icons that adopt the provider accent color when one is configured. */
 export const PROVIDER_ACCENT_STATUS_ICONS: ReadonlySet<ThreadStatusIcon> = new Set([
+  "dot",
   "spinner",
   "check",
 ]);
@@ -80,6 +81,7 @@ export function isAccentColorLegible(hex: string, resolvedTheme: "light" | "dark
 
 export interface ThreadStatusPill {
   label:
+    | "Idle"
     | "Working"
     | "Connecting"
     | "Completed"
@@ -97,6 +99,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
+  Idle: 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -449,6 +452,24 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // Idle threads show a provider-colored dot so each row still signals which
+  // provider instance backs the chat. Higher-priority states above replace it
+  // with spinner/check/action icons in the same leading slot.
+  const isSettledForIdle =
+    thread.latestTurn === null || isLatestTurnSettled(thread.latestTurn, thread.session);
+  if (
+    thread.session?.providerInstanceId !== undefined &&
+    thread.session.status !== "error" &&
+    thread.session.status !== "closed" &&
+    isSettledForIdle
+  ) {
+    return {
+      label: "Idle",
+      icon: "dot",
+      colorClass: "bg-muted-foreground/45",
+    };
+  }
+
   return null;
 }
 
@@ -458,7 +479,7 @@ export function resolveProjectStatusIndicator(
   let highestPriorityStatus: ThreadStatusPill | null = null;
 
   for (const status of statuses) {
-    if (status === null) continue;
+    if (status === null || status.label === "Idle") continue;
     if (
       highestPriorityStatus === null ||
       THREAD_STATUS_PRIORITY[status.label] > THREAD_STATUS_PRIORITY[highestPriorityStatus.label]

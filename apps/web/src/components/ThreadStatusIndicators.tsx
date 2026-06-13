@@ -112,7 +112,7 @@ export function terminalStatusFromRunningIds(
   };
 }
 
-const STATUS_ICON_COMPONENTS: Record<ThreadStatusIcon, LucideIcon> = {
+const STATUS_ICON_COMPONENTS: Record<Exclude<ThreadStatusIcon, "dot">, LucideIcon> = {
   spinner: Loader2Icon,
   check: CheckIcon,
   approval: CircleAlertIcon,
@@ -131,11 +131,26 @@ export function ThreadStatusGlyph({
   className?: string;
 }) {
   const { resolvedTheme } = useTheme();
-  const Icon = STATUS_ICON_COMPONENTS[status.icon];
   const useAccent =
     accentColor !== undefined &&
     PROVIDER_ACCENT_STATUS_ICONS.has(status.icon) &&
     isAccentColorLegible(accentColor, resolvedTheme);
+
+  if (status.icon === "dot") {
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 shrink-0 rounded-full",
+          useAccent ? null : status.colorClass,
+          className,
+        )}
+        style={useAccent ? { backgroundColor: accentColor } : undefined}
+      />
+    );
+  }
+
+  const Icon = STATUS_ICON_COMPONENTS[status.icon];
   return (
     <Icon
       aria-hidden

@@ -635,6 +635,83 @@ describe("resolveThreadStatusPill", () => {
       }),
     ).toMatchObject({ label: "Completed", icon: "check" });
   });
+
+  it("shows an idle provider dot when the thread is settled and already visited", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          lastVisitedAt: "2026-03-09T10:06:00.000Z",
+          session: {
+            ...baseThread.session,
+            providerInstanceId: ProviderInstanceId.make("provider-codex"),
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Idle", icon: "dot" });
+  });
+
+  it("returns null for idle threads without a provider instance", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          lastVisitedAt: "2026-03-09T10:06:00.000Z",
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not show idle for error sessions", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: makeLatestTurn(),
+          lastVisitedAt: "2026-03-09T10:06:00.000Z",
+          session: {
+            ...baseThread.session,
+            providerInstanceId: ProviderInstanceId.make("provider-codex"),
+            status: "error",
+            orchestrationStatus: "error",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not show idle while the latest turn is still in flight", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          interactionMode: "default",
+          latestTurn: {
+            ...makeLatestTurn(),
+            completedAt: null,
+          },
+          session: {
+            ...baseThread.session,
+            providerInstanceId: ProviderInstanceId.make("provider-codex"),
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("resolveThreadRowClassName", () => {
@@ -703,6 +780,23 @@ describe("resolveProjectStatusIndicator", () => {
         },
       ]),
     ).toMatchObject({ label: "Plan Ready", colorClass: "text-violet-600" });
+  });
+
+  it("ignores idle provider dots when aggregating project status", () => {
+    expect(
+      resolveProjectStatusIndicator([
+        {
+          label: "Idle",
+          icon: "dot",
+          colorClass: "bg-muted-foreground/45",
+        },
+        {
+          label: "Completed",
+          icon: "check",
+          colorClass: "text-emerald-600",
+        },
+      ]),
+    ).toMatchObject({ label: "Completed", icon: "check" });
   });
 });
 
