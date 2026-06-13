@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useMemo } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { Badge } from "./ui/badge";
@@ -9,6 +9,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   EllipsisIcon,
+  EraserIcon,
   LoaderIcon,
   PanelRightCloseIcon,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import { SidebarItemRow, SidebarSection, statusGlyph } from "./SidebarSection";
 import { useSidebarViewStore } from "../sidebarViewStore";
 import {
   isTerminalSidebarStatus,
+  planStepDismissKey,
   type AgentSidebarItem,
   type BackgroundSidebarItem,
 } from "../sidebarSections";
@@ -106,9 +108,16 @@ const PlanSidebar = memo(function PlanSidebar({
   const selectedDetail = useSidebarViewStore((state) => state.selectedDetail);
   const selectDetail = useSidebarViewStore((state) => state.selectDetail);
   const dismissItem = useSidebarViewStore((state) => state.dismissItem);
+  const dismissItems = useSidebarViewStore((state) => state.dismissItems);
+  const clearDetail = useSidebarViewStore((state) => state.clearDetail);
+  const dismissedIds = useSidebarViewStore((state) => state.dismissedIds);
   const orderedSteps = activePlan ? orderPlanSteps(activePlan.steps) : [];
+  const visibleSteps = useMemo(
+    () => orderedSteps.filter((step) => !dismissedIds[planStepDismissKey(step.step)]),
+    [dismissedIds, orderedSteps],
+  );
   const hasAnyContent =
-    orderedSteps.length > 0 ||
+    visibleSteps.length > 0 ||
     backgroundItems.length > 0 ||
     agentItems.length > 0 ||
     activeProposedPlan != null;
@@ -161,6 +170,32 @@ const PlanSidebar = memo(function PlanSidebar({
       );
   }, [environmentId, planMarkdown, workspaceRoot]);
 
+  const handleClearCompleted = useCallback(() => {
+    const ids: string[] = [
+      ...backgroundItems
+        .filter((item) => isTerminalSidebarStatus(item.status))
+        .map((item) => item.id),
+      ...agentItems.filter((item) => isTerminalSidebarStatus(item.status)).map((item) => item.id),
+      ...visibleSteps
+        .filter((step) => step.status === "completed")
+        .map((step) => planStepDismissKey(step.step)),
+    ];
+    dismissItems(ids);
+  }, [agentItems, backgroundItems, dismissItems, visibleSteps]);
+
+  const handleForceClearAll = useCallback(() => {
+    const ids: string[] = [
+      ...backgroundItems.map((item) => item.id),
+      ...agentItems.map((item) => item.id),
+      ...visibleSteps.map((step) => planStepDismissKey(step.step)),
+    ];
+    dismissItems(ids);
+    clearDetail();
+  }, [agentItems, backgroundItems, clearDetail, dismissItems, visibleSteps]);
+
+  const showClearControls =
+    backgroundItems.length > 0 || agentItems.length > 0 || visibleSteps.length > 0;
+
   return (
     <div
       className={cn(
@@ -189,6 +224,37 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
         </div>
         <div className="flex items-center gap-1">
+          {showClearControls ? (
+            <div className="flex items-center">
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={handleClearCompleted}
+                aria-label="Clear completed items"
+                className="h-7 rounded-r-none px-2 text-[11px] text-muted-foreground/50 hover:text-foreground/70"
+              >
+                <EraserIcon className="size-3" />
+                Clear
+              </Button>
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className="h-7 w-5 rounded-l-none border-l border-border/40 text-muted-foreground/50 hover:text-foreground/70"
+                      aria-label="More clear options"
+                    />
+                  }
+                >
+                  <ChevronDownIcon className="size-3" />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuItem onClick={handleForceClearAll}>Force clear all</MenuItem>
+                </MenuPopup>
+              </Menu>
+            </div>
+          ) : null}
           {planMarkdown ? (
             <Menu>
               <MenuTrigger
@@ -240,14 +306,14 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
 
           {/* Tasks */}
-          {orderedSteps.length > 0 ? (
+          {visibleSteps.length > 0 ? (
             <SidebarSection
               title="Tasks"
-              count={orderedSteps.length}
+              count={visibleSteps.length}
               collapsed={collapsedSections.tasks}
               onToggle={() => toggleSection("tasks")}
             >
-              {orderedSteps.map((step) => (
+              {visibleSteps.map((step) => (
                 <div
                   key={`${step.status}:${step.step}`}
                   className={cn("flex items-start gap-2.5 px-2.5 py-2", stepRowClass(step.status))}

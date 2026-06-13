@@ -24,6 +24,8 @@ interface SidebarViewStore {
   readonly collapsedSections: Readonly<Record<SidebarSectionKey, boolean>>;
   readonly selectedDetail: SelectedSidebarDetail | null;
   readonly dismissItem: (id: string) => void;
+  /** Batch-dismiss sidebar rows (background/agent ids or plan-step keys). */
+  readonly dismissItems: (ids: ReadonlyArray<string>) => void;
   readonly toggleSection: (key: SidebarSectionKey) => void;
   readonly selectDetail: (selection: SelectedSidebarDetail) => void;
   readonly clearDetail: () => void;
@@ -39,6 +41,18 @@ export const useSidebarViewStore = create<SidebarViewStore>((set) => ({
       // Removing the visible item also closes its detail panel if it was open.
       const selectedDetail =
         state.selectedDetail?.id === id ? null : state.selectedDetail;
+      return { dismissedIds: next, selectedDetail };
+    }),
+  dismissItems: (ids) =>
+    set((state) => {
+      if (ids.length === 0) return state;
+      const next = { ...state.dismissedIds };
+      for (const id of ids) next[id] = true;
+      const dismissed = new Set(ids);
+      const selectedDetail =
+        state.selectedDetail && dismissed.has(state.selectedDetail.id)
+          ? null
+          : state.selectedDetail;
       return { dismissedIds: next, selectedDetail };
     }),
   toggleSection: (key) =>

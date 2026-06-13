@@ -4,9 +4,10 @@
  * status ordering and 6h auto-clear filter.
  *
  * All inputs come from data the web client already holds — the active thread's
- * `activities` (task.* lifecycle) and `useKnownTerminalSessions` — so this is a
- * client-only view with no new server surface. Activity payloads are
- * `Schema.Unknown`, so every field is narrowed defensively.
+ * `activities` (task.* lifecycle, including terminal `task.updated` patches)
+ * and `useKnownTerminalSessions` — so derivation is client-side with no extra
+ * RPC. Activity payloads are `Schema.Unknown`, so every field is narrowed
+ * defensively.
  *
  * @module sidebarSections
  */
@@ -56,6 +57,11 @@ export interface BackgroundSidebarItem {
 
 export type SidebarItem = AgentSidebarItem | BackgroundSidebarItem;
 
+/** Dismissal key for a TodoWrite plan step in the task sidebar. */
+export function planStepDismissKey(step: string): string {
+  return `plan:${step}`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -75,6 +81,15 @@ interface MutableAgentItem {
   finalSummary?: string;
   outputFile?: string;
   log: AgentLogEntry[];
+}
+
+/** Map wire task status to a sidebar terminal status, or null when still active. */
+function taskTerminalSidebarStatus(raw: string | null): SidebarItemStatus | null {
+  if (!raw) return null;
+  if (raw === "failed") return "failed";
+  // completed / stopped / killed are all finished work (killed ≈ parent stop).
+  if (raw === "completed" || raw === "stopped" || raw === "killed") return "completed";
+  return null;
 }
 
 function ensureAgentItem(map: Map<string, MutableAgentItem>, taskId: string): MutableAgentItem {
@@ -131,16 +146,20 @@ export function deriveAgentItems(
       continue;
     }
 
-    if (activity.kind === "task.completed") {
-      // Wire status is "completed" | "failed" | "stopped"; only an explicit
-      // failure is shown as failed — a user/parent stop is a neutral finish.
-      const status = asTrimmedString(payload?.status);
-      item.status = status === "failed" ? "failed" : "completed";
+    if (activity.kind === "task.completed" || activity.kind === "task.updated") {
+      // task.completed is the primary completion signal; task.updated is a
+      // secondary terminal patch when task_notification never arrives.
+      if (!payload) continue;
+      const terminalStatus =
+        activity.kind === "task.completed"
+          ? (taskTerminalSidebarStatus(asTrimmedString(payload.status)) ?? "completed")
+          : taskTerminalSidebarStatus(asTrimmedString(payload.status));
+      if (!terminalStatus) continue;
+      item.status = terminalStatus;
       item.completedAt = activity.createdAt;
-      // The server maps the completion `summary` into `detail`.
-      const finalSummary = asTrimmedString(payload?.detail) ?? asTrimmedString(payload?.summary);
+      const finalSummary = asTrimmedString(payload.detail) ?? asTrimmedString(payload.summary);
       if (finalSummary) item.finalSummary = finalSummary;
-      const outputFile = asTrimmedString(payload?.outputFile);
+      const outputFile = asTrimmedString(payload.outputFile);
       if (outputFile) item.outputFile = outputFile;
     }
   }

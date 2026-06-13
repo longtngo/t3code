@@ -98,6 +98,41 @@ describe("deriveAgentItems", () => {
     expect(byId.get("stop")?.status).toBe("completed");
   });
 
+  it("treats a terminal task.updated as completion when task.completed never arrives", () => {
+    const items = deriveAgentItems([
+      activity({
+        id: "a1",
+        kind: "task.started",
+        createdAt: "2026-06-13T00:00:00.000Z",
+        payload: { taskId: "t1", detail: "Run unit tests" },
+      }),
+      activity({
+        id: "a2",
+        kind: "task.updated",
+        createdAt: "2026-06-13T00:00:10.000Z",
+        payload: { taskId: "t1", status: "completed" },
+      }),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "t1",
+      status: "completed",
+      completedAt: "2026-06-13T00:00:10.000Z",
+    });
+  });
+
+  it("maps task.updated killed→completed and ignores non-terminal task.updated", () => {
+    const items = deriveAgentItems([
+      activity({ id: "k1", kind: "task.started", createdAt: "t0", payload: { taskId: "killed" } }),
+      activity({ id: "k2", kind: "task.updated", createdAt: "t1", payload: { taskId: "killed", status: "killed" } }),
+      activity({ id: "r1", kind: "task.started", createdAt: "t0", payload: { taskId: "still" } }),
+      activity({ id: "r2", kind: "task.updated", createdAt: "t1", payload: { taskId: "still", status: "running" } }),
+    ]);
+    const byId = new Map(items.map((i) => [i.id, i]));
+    expect(byId.get("killed")?.status).toBe("completed");
+    expect(byId.get("still")?.status).toBe("running");
+  });
+
   it("ignores non-task activities and activities without a taskId", () => {
     const items = deriveAgentItems([
       activity({ id: "x1", kind: "tool.completed", createdAt: "t0", payload: { taskId: "t1" } }),

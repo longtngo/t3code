@@ -613,6 +613,36 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "task.updated": {
+      const status = event.payload.status;
+      // Non-terminal patches are ingestion-only (pending-row touch); only
+      // terminal statuses become sidebar-visible activities.
+      if (status !== "completed" && status !== "failed" && status !== "killed") {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: status === "failed" ? "error" : "info",
+          kind: "task.updated",
+          summary:
+            status === "failed"
+              ? "Task failed"
+              : status === "killed"
+                ? "Task stopped"
+                : "Task completed",
+          payload: {
+            taskId: event.payload.taskId,
+            // Align with task.completed wire shape (killed ≈ stopped).
+            status: status === "killed" ? "stopped" : status,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "thread.state.changed": {
       if (event.payload.state !== "compacted") {
         return [];

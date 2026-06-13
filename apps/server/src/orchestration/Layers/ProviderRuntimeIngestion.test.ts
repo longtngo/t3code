@@ -519,6 +519,68 @@ describe("ProviderRuntimeIngestion", () => {
     });
     await harness.drain();
     expect(await harness.pendingTasks()).toHaveLength(0);
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-killed",
+      ),
+    );
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-running",
+      ),
+    ).toBe(false);
+    const terminalActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-killed",
+    );
+    expect(terminalActivity).toMatchObject({
+      kind: "task.updated",
+      summary: "Task stopped",
+      payload: { taskId: "task-bg-3", status: "stopped" },
+    });
+  });
+
+  it("projects a terminal task.updated into a thread activity", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "task.started",
+      eventId: asEventId("evt-task-started-updated-only"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      payload: { taskId: RuntimeTaskId.make("task-updated-only"), description: "Run tests" },
+    });
+    harness.emit({
+      type: "task.updated",
+      eventId: asEventId("evt-task-updated-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+      payload: { taskId: RuntimeTaskId.make("task-updated-only"), status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-completed",
+      ),
+    );
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "task.completed",
+      ),
+    ).toBe(false);
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-completed",
+      ),
+    ).toMatchObject({
+      kind: "task.updated",
+      summary: "Task completed",
+      payload: { taskId: "task-updated-only", status: "completed" },
+    });
   });
 
   it("tracks last turn activity for the stall watchdog and clears it on terminal events", async () => {
