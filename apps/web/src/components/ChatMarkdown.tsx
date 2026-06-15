@@ -281,6 +281,16 @@ function InlineFilePathChip({
     [openFileViewer, text, cwd, environmentId, kind],
   );
 
+  const copyPath = useCallback(() => {
+    if (typeof navigator === "undefined" || navigator.clipboard == null) return;
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toastManager.add({ type: "success", title: "Path copied" }))
+      .catch(() =>
+        toastManager.add({ type: "error", title: "Couldn't copy path" }),
+      );
+  }, [text]);
+
   const basename = inlinePathBasename(text);
   const dir = text.slice(0, text.length - basename.length);
 
@@ -348,6 +358,7 @@ function InlineFilePathChip({
         <MenuPopup align="end">
           <MenuItem onClick={() => open("markdown")}>Open as Markdown</MenuItem>
           <MenuItem onClick={() => open("html")}>Open as HTML</MenuItem>
+          <MenuItem onClick={copyPath}>Copy path</MenuItem>
         </MenuPopup>
       </Menu>
     </span>

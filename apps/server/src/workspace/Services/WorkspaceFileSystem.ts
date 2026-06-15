@@ -51,26 +51,29 @@ export interface WorkspaceFileSystemShape {
   /**
    * Read a file as UTF-8 text.
    *
-   * Resolves relative paths against `cwd` and expands a leading `~`. Unlike
-   * {@link WorkspaceFileSystemShape.writeFile}, absolute paths outside the
-   * workspace root are allowed (report/temp files commonly live outside it).
-   * Files larger than a fixed byte cap are rejected rather than read.
+   * Resolves relative paths against `cwd` and expands a leading `~`. Reads are
+   * sandboxed to the home directory, the OS temp dir, and any `allowedRoots` the
+   * caller trusts (the workspace roots of known projects). The client `cwd` is
+   * used only to resolve relative paths, never to authorize them. Files larger
+   * than a fixed byte cap are rejected rather than read.
    */
   readonly readFile: (
     input: ProjectReadFileInput,
+    allowedRoots?: readonly string[],
   ) => Effect.Effect<ProjectReadFileResult, WorkspaceFileSystemError>;
 
   /**
    * Read a markdown file and render it to a self-contained HTML document.
    *
-   * Resolves and size-caps the path exactly like {@link readFile}. The generated
-   * HTML is cached per process, keyed by resolved path; cache hits are validated
-   * by file mtime + size (fast path) and content hash (touch-without-change),
-   * so an unchanged file is converted at most once. Returns the cached document
-   * with `fromCache: true` when reused.
+   * Resolves, sandboxes, and size-caps the path exactly like {@link readFile}.
+   * The generated HTML is cached per process, keyed by resolved path; cache hits
+   * are validated by file mtime + size (fast path) and content hash
+   * (touch-without-change), so an unchanged file is converted at most once.
+   * Returns the cached document with `fromCache: true` when reused.
    */
   readonly readFileAsHtml: (
     input: ProjectRenderMarkdownHtmlInput,
+    allowedRoots?: readonly string[],
   ) => Effect.Effect<ProjectRenderMarkdownHtmlResult, WorkspaceFileSystemError>;
 }
 

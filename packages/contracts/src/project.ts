@@ -57,8 +57,9 @@ export class ProjectWriteFileError extends Schema.TaggedErrorClass<ProjectWriteF
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 4096;
 
 export const ProjectReadFileInput = Schema.Struct({
-  // Working directory used to resolve relative paths. Absolute paths and `~`
-  // expansion are honored regardless of cwd (report/temp files live outside it).
+  // Working directory used only to resolve relative paths (and `~` expansion).
+  // Reads are sandboxed server-side to the home directory, the OS temp dir, and
+  // the workspace roots of known projects — the cwd does not widen that boundary.
   cwd: TrimmedNonEmptyString,
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });
@@ -79,7 +80,7 @@ export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFil
 ) {}
 
 // Render a markdown file to a self-contained HTML document on demand. Same path
-// resolution/validation as ProjectReadFileInput (absolute and `~` paths honored).
+// resolution and read sandbox as ProjectReadFileInput.
 export const ProjectRenderMarkdownHtmlInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),

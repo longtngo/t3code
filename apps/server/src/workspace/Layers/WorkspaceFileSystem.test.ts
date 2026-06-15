@@ -155,7 +155,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
 
-    it.effect("reads an absolute file located outside the workspace root", () =>
+    it.effect("reads an absolute file in the OS temp dir (an allowed root)", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem;
         const cwd = yield* makeTempDir;
@@ -168,6 +168,73 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
 
         expect(result.contents).toBe("# Decisions\n");
         expect(result.resolvedPath).toBe(absolutePath);
+      }),
+    );
+
+    it.effect("rejects an absolute path outside every allowed root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+
+        // /etc is under neither home nor the OS temp dir, and no trusted root is
+        // passed — the lexical gate rejects it before any filesystem access.
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, path: "/etc/some-nonexistent-sandbox-target" })
+          .pipe(Effect.flip);
+
+        expect(error.detail).toContain("outside the allowed read roots");
+      }),
+    );
+
+    it.effect("does not let a malicious client cwd widen the sandbox", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+
+        // A cwd of "/" must NOT widen the sandbox: with no trusted root passed,
+        // /etc stays out of bounds even though it is nominally under cwd.
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd: "/", path: "/etc/some-nonexistent-sandbox-target" })
+          .pipe(Effect.flip);
+
+        expect(error.detail).toContain("outside the allowed read roots");
+      }),
+    );
+
+    it.effect("reads a file under an explicitly trusted project root", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const projectRoot = yield* makeTempDir;
+        const path = yield* Path.Path;
+        const absolutePath = path.join(projectRoot, "README.md");
+        yield* writeTextFile(projectRoot, "README.md", "# Project\n");
+
+        const result = yield* workspaceFileSystem.readFile({ cwd, path: absolutePath }, [
+          projectRoot,
+        ]);
+
+        expect(result.contents).toBe("# Project\n");
+      }),
+    );
+
+    it.effect("rejects a symlink under an allowed root that escapes it", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const cwd = yield* makeTempDir;
+        const path = yield* Path.Path;
+        const linkPath = path.join(cwd, "escape.md");
+
+        // /etc/hosts exists on darwin + linux and is outside home/temp. The link
+        // itself is under the allowed temp root, so it passes the lexical gate;
+        // the realpath gate must catch the escape.
+        yield* fileSystem.symlink("/etc/hosts", linkPath).pipe(Effect.orDie);
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, path: linkPath })
+          .pipe(Effect.flip);
+
+        expect(error.detail).toContain("outside the allowed read roots");
       }),
     );
 

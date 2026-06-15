@@ -124,6 +124,75 @@ const KIND_BADGE: Record<FileViewerKind, { label: string; className: string }> =
   },
 };
 
+/**
+ * Editable, URI-like path field for the preview header. Shows the full resolved
+ * path (the obscurity layer is gone — reads are instead sandboxed server-side to
+ * the home dir, OS temp dir, and known project roots), and lets the user retype
+ * any path to retarget the preview. Enter commits,
+ * Escape reverts, blur commits. Resyncs to `value` whenever the loaded path
+ * changes and the field isn't being edited.
+ */
+function AddressBar({
+  value,
+  onSubmit,
+}: {
+  value: string;
+  onSubmit: (path: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [editing, setEditing] = useState(false);
+  // Set by Escape so the blur it triggers reverts instead of submitting. A ref
+  // (not state) because it must be read synchronously inside the blur handler.
+  const revertOnBlurRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  // The single commit point: both Enter and focus-loss route through blur, so
+  // the path is submitted at most once per edit. Escape sets revertOnBlurRef so
+  // its blur reverts the draft instead.
+  const commit = useCallback(() => {
+    setEditing(false);
+    const next = draft.trim();
+    if (revertOnBlurRef.current || !next || next === value) {
+      revertOnBlurRef.current = false;
+      setDraft(value);
+      return;
+    }
+    onSubmit(next);
+  }, [draft, value, onSubmit]);
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      spellCheck={false}
+      autoComplete="off"
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={(event) => {
+        setEditing(true);
+        event.target.select();
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          // Blur drives the commit; Enter just relinquishes focus.
+          event.preventDefault();
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          revertOnBlurRef.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+      title={value}
+      aria-label="File path"
+      className="min-w-0 flex-1 truncate rounded bg-transparent px-1 py-0.5 font-mono text-[12px] text-muted-foreground/80 outline-none hover:bg-muted/40 focus:bg-muted/60 focus:text-foreground/90"
+    />
+  );
+}
+
 /** A single segment of the MD/HTML view toggle. */
 function ViewModeButton({
   label,
@@ -271,6 +340,21 @@ export function FileViewerContent({
     setHistory((entries) => (entries.length > 1 ? entries.slice(0, -1) : entries));
   }, []);
 
+  // Retarget the preview to a path typed into the address bar. Relative paths
+  // resolve (server-side) against the current file's directory; absolute / `~`
+  // paths pass straight through. Pushes a history entry so Back still works.
+  const navigateTo = useCallback((raw: string) => {
+    const trimmed = raw.trim().replace(/^file:\/\//, "");
+    if (!trimmed) return;
+    const kind = inferFileViewerKind(trimmed) ?? "markdown";
+    setHistory((entries) => {
+      // Skip a no-op self-navigation so the same file isn't pushed twice.
+      const last = entries[entries.length - 1];
+      if (last && last.path === trimmed) return entries;
+      return [...entries, { path: trimmed, cwd: navBaseCwdRef.current, kind, view: "markdown" }];
+    });
+  }, []);
+
   // Open the currently-loaded HTML in a new browser tab — the "full view"
   // escape hatch. Reuses the loaded contents; runs in the user-gesture context
   // so window.open isn't blocked.
@@ -327,11 +411,9 @@ export function FileViewerContent({
           >
             {badge.label}
           </Badge>
-          <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] text-muted-foreground/80">
             <FileTextIcon className="size-3.5 shrink-0" />
-            <span className="truncate" title={state.resolvedPath ?? current.path}>
-              {basenameOf(current.path)}
-            </span>
+            <AddressBar value={state.resolvedPath ?? current.path} onSubmit={navigateTo} />
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">

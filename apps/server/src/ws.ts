@@ -241,6 +241,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+
+      // Workspace roots of the projects the server actually knows about. Used to
+      // authorize file-preview reads outside `$HOME`/temp — derived from
+      // server-side state, never from the client-supplied `cwd` (which would let
+      // a caller pass `cwd: "/"` and read anything). Fails safe to no extra
+      // roots if the read model can't be loaded.
+      const trustedProjectRoots = projectionSnapshotQuery.getCommandReadModel().pipe(
+        Effect.map((readModel) => readModel.projects.map((project) => project.workspaceRoot)),
+        Effect.orElseSucceed(() => [] as string[]),
+      );
       const orchestrationEngine = yield* OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const keybindings = yield* Keybindings;
@@ -1188,7 +1198,8 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.projectsReadFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsReadFile,
-            workspaceFileSystem.readFile(input).pipe(
+            trustedProjectRoots.pipe(
+              Effect.flatMap((roots) => workspaceFileSystem.readFile(input, roots)),
               Effect.mapError(
                 (cause) =>
                   new ProjectReadFileError({
@@ -1202,7 +1213,8 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.projectsRenderMarkdownHtml]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsRenderMarkdownHtml,
-            workspaceFileSystem.readFileAsHtml(input).pipe(
+            trustedProjectRoots.pipe(
+              Effect.flatMap((roots) => workspaceFileSystem.readFileAsHtml(input, roots)),
               Effect.mapError(
                 (cause) =>
                   new ProjectRenderMarkdownHtmlError({
