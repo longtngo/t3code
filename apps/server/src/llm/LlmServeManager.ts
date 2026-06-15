@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalDateInEffect:off
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,6 +28,8 @@ const PORT_MAX = 8799;
 const DEFAULT_BUDGET_FRACTION = 0.8;
 /** Cap the per-model dir walk used for the RAM estimate. */
 const MAX_DIR_ENTRIES = 64;
+/** How long a "load failed / crashed" error row lingers before reverting to offline. */
+const ERROR_TTL_MS = 20_000;
 
 // A launch is "loading" from spawn until it is observed serving (online is then
 // derived from ps + probe), and "stopping" once an unload is in flight. The entry is
@@ -154,7 +156,21 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
   const settings = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const registry = yield* Ref.make<ReadonlyMap<number, ManagedLaunch>>(new Map());
+  // Transient "this model's process exited unexpectedly" notices, keyed by modelId,
+  // so a crash/failed-load surfaces briefly instead of silently reverting to offline.
+  const recentErrors = yield* Ref.make<ReadonlyMap<string, { reason: string; at: number }>>(
+    new Map(),
+  );
   const loadSemaphore = yield* Semaphore.make(1);
+
+  const recordError = (modelId: string, reason: string) =>
+    Ref.update(recentErrors, (m) => new Map(m).set(modelId, { reason, at: Date.now() }));
+  const clearError = (modelId: string) =>
+    Ref.update(recentErrors, (m) => {
+      const next = new Map(m);
+      next.delete(modelId);
+      return next;
+    });
 
   const setEntry = (pid: number, launch: ManagedLaunch) =>
     Ref.update(registry, (m) => new Map(m).set(pid, launch));
@@ -202,13 +218,26 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
       Effect.catchCause(() => Effect.succeed(null)),
     );
 
-  // Remove the registry entry when the process exits on its own (crash / external
-  // kill). A deliberate unload deletes the entry itself after closing the scope; this
-  // handler covers the spontaneous-exit path (the forked fiber is interrupted by that
-  // scope close, so its `andThen` is skipped — no double delete).
+  // Handle a process that exits on its own (crash / failed load / external kill): record
+  // a transient error for the model, then remove the entry. A deliberate unload deletes
+  // the entry itself after closing the scope, which INTERRUPTS this forked fiber before
+  // its `andThen` runs — so no error is recorded for an intentional stop and there's no
+  // double delete. (The `stopping` guard is belt-and-suspenders for the rare race where
+  // the process exits naturally just as an unload begins.)
   const supervise = (pid: number, launch: ManagedLaunch) =>
     Effect.result(launch.child.exitCode).pipe(
-      Effect.andThen(() => deleteEntry(pid)),
+      Effect.andThen(() =>
+        Ref.get(registry).pipe(
+          Effect.flatMap((m) => {
+            const stopping = m.get(pid)?.state === "stopping";
+            return stopping
+              ? deleteEntry(pid)
+              : recordError(launch.modelId, "mlx-serve exited unexpectedly").pipe(
+                  Effect.andThen(deleteEntry(pid)),
+                );
+          }),
+        ),
+      ),
       Effect.catchCause(() => Effect.void),
     );
 
@@ -274,6 +303,22 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
       });
     }
 
+    // 4. Surface recent unexpected exits as transient error rows (only while the model
+    //    is otherwise offline — a reload supersedes it), pruning expired notices.
+    const errors = yield* Ref.get(recentErrors);
+    const nowMs = Date.now();
+    for (const [modelId, err] of errors) {
+      if (nowMs - err.at > ERROR_TTL_MS) {
+        yield* clearError(modelId);
+        continue;
+      }
+      for (const [key, model] of byPath) {
+        if (model.modelId === modelId && model.status === "offline") {
+          byPath.set(key, { ...model, status: "error", loadError: err.reason });
+        }
+      }
+    }
+
     const models = Array.from(byPath.values());
     const provider: LlmProvider = {
       name: "mlx-serve",
@@ -297,6 +342,8 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
         if (!dirs.some((d) => d.name === modelId)) {
           return yield* new LlmServeError({ kind: "not_found", reason: `Unknown model: ${modelId}` });
         }
+        // A fresh load attempt supersedes any lingering crash notice for this model.
+        yield* clearError(modelId);
         const modelsRoot = realpathOrSelf(modelsDir);
         const modelPath = realpathOrSelf(path.join(modelsDir, modelId));
         if (path.dirname(modelPath) !== modelsRoot) {
