@@ -283,6 +283,7 @@ function createMockEnvironmentApi(input: {
     review: {} as EnvironmentApi["review"],
     accountUsage: {} as EnvironmentApi["accountUsage"],
     hostMetrics: {} as EnvironmentApi["hostMetrics"],
+    llmModels: {} as EnvironmentApi["llmModels"],
     orchestration: {
       dispatchCommand: input.dispatchCommand,
       getTurnDiff: (() => {

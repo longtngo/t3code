@@ -88,6 +88,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import type { AuthenticatedSession } from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
+import * as LlmModels from "./diagnostics/LlmModels.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscoveryLayer from "./sourceControl/SourceControlDiscovery.ts";
@@ -193,6 +194,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
   [WS_METHODS.subscribeHostMetrics, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeLlmModels, AuthOrchestrationReadScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -1490,6 +1492,12 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeHostMetrics,
             Effect.succeed(HostMetrics.hostMetricsStream(input.intervalMs ?? 1500)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subscribeLlmModels]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeLlmModels,
+            Effect.succeed(LlmModels.llmModelsStream(input.intervalMs ?? 4000)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>

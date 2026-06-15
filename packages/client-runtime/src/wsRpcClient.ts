@@ -163,6 +163,9 @@ export interface WsRpcClient {
   readonly hostMetrics: {
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeHostMetrics>;
   };
+  readonly llmModels: {
+    readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeLlmModels>;
+  };
   readonly cloud: {
     readonly getRelayClientStatus: RpcUnaryNoArgMethod<typeof WS_METHODS.cloudGetRelayClientStatus>;
     readonly installRelayClient: (
@@ -356,6 +359,14 @@ export function createWsRpcClient(
           (client) => client[WS_METHODS.subscribeHostMetrics]({}),
           listener,
           subscriptionOptions(options, WS_METHODS.subscribeHostMetrics),
+        ),
+    },
+    llmModels: {
+      subscribe: (listener, options) =>
+        transport.subscribe(
+          (client) => client[WS_METHODS.subscribeLlmModels]({}),
+          listener,
+          subscriptionOptions(options, WS_METHODS.subscribeLlmModels),
         ),
     },
     cloud: {

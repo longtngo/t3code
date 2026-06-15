@@ -85,7 +85,7 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import type { HostMetricsSample } from "./rpc.ts";
+import type { HostMetricsSample, LlmModelsSample } from "./rpc.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -652,6 +652,19 @@ export interface EnvironmentApi {
      */
     subscribe: (
       callback: (sample: HostMetricsSample) => void,
+      options?: {
+        onResubscribe?: () => void;
+      },
+    ) => () => void;
+  };
+  llmModels: {
+    /**
+     * Subscribe to the set of locally-loaded LLMs across configured providers.
+     * The server probes only while subscribed; the returned function unsubscribes
+     * and stops probing. Samples arrive every few seconds.
+     */
+    subscribe: (
+      callback: (sample: LlmModelsSample) => void,
       options?: {
         onResubscribe?: () => void;
       },

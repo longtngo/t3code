@@ -423,6 +423,21 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Local-LLM providers probed for loaded models by the toolbar "LLM" indicator.
+  // Each entry's `${baseUrl}/v1/models` is polled while a client is subscribed.
+  // Seeded with mlx-serve at its conventional local port; edit to add/remove
+  // providers (see the local-LLM-providers runbook). An empty array disables the
+  // indicator's probing (it then reports no providers).
+  llmProviders: Schema.Array(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      baseUrl: TrimmedNonEmptyString,
+    }),
+  ).pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed([{ name: "mlx-serve", baseUrl: "http://127.0.0.1:8765" }]),
+    ),
+  ),
   // Opt-in open-access mode: when true the server authenticates every client
   // automatically with administrative scopes — it disables authentication,
   // not just the pairing UI (pairing is the only bootstrap method, so there

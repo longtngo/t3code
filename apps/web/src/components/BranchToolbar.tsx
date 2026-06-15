@@ -30,6 +30,8 @@ import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSele
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { HostMetrics } from "./chat/HostMetrics";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
+import { LlmModels } from "./chat/LlmModels";
+import { useLlmModels, useLlmModelsEnabled } from "~/hooks/useLlmModels";
 import { UsageMeter } from "./chat/UsageMeter";
 import { Button } from "./ui/button";
 import {
@@ -225,6 +227,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   const handleUsageRefresh = useCallback(async () => {
     await readEnvironmentApi(environmentId)?.accountUsage.refresh();
   }, [environmentId]);
+  const [llmModelsEnabled, setLlmModelsEnabled] = useLlmModelsEnabled();
+  const { sample: llmModelsSample, streaming: llmModelsStreaming } = useLlmModels(
+    environmentId,
+    llmModelsEnabled,
+  );
   const [hostMetricsEnabled, setHostMetricsEnabled] = useHostMetricsEnabled();
   const { sample: hostMetricsSample, streaming: hostMetricsStreaming } = useHostMetrics(
     environmentId,
@@ -334,6 +341,12 @@ export const BranchToolbar = memo(function BranchToolbar({
           streaming={hostMetricsStreaming}
           enabled={hostMetricsEnabled}
           onToggle={setHostMetricsEnabled}
+        />
+        <LlmModels
+          sample={llmModelsSample}
+          streaming={llmModelsStreaming}
+          enabled={llmModelsEnabled}
+          onToggle={setLlmModelsEnabled}
         />
       </div>
     </div>
