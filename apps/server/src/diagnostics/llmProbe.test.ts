@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 
-import { dedupeProviders, parseModelsResponse } from "./LlmModels.ts";
+import { parseModelsResponse } from "./llmProbe.ts";
 
 // Captured verbatim from a live `mlx-serve --serve` /v1/models response.
 const REAL_MLX_SERVE_RESPONSE = {
@@ -69,15 +69,9 @@ it("returns [] for unexpected payloads rather than throwing", () => {
   expect(parseModelsResponse("<html>404</html>")).toEqual([]);
 });
 
-it("dedupes providers that share name + baseUrl, preserving order", () => {
-  const deduped = dedupeProviders([
-    { name: "mlx-serve", baseUrl: "http://127.0.0.1:8765" },
-    { name: "mlx-serve", baseUrl: "http://127.0.0.1:8766" },
-    { name: "mlx-serve", baseUrl: "http://127.0.0.1:8765" },
-  ]);
-  expect(deduped).toHaveLength(2);
-  expect(deduped.map((p) => p.baseUrl)).toEqual([
-    "http://127.0.0.1:8765",
-    "http://127.0.0.1:8766",
-  ]);
+it("sets status from the loaded flag", () => {
+  const [online] = parseModelsResponse({ data: [{ id: "m", loaded: true }] });
+  expect(online?.status).toBe("online");
+  const [served] = parseModelsResponse({ data: [{ id: "m" }] });
+  expect(served?.status).toBe("online"); // served == loaded fallback
 });

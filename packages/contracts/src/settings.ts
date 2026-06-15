@@ -379,6 +379,32 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+/**
+ * Configuration for the sidebar local-model manager (mlx-serve). Models are
+ * discovered by scanning `modelsDir`; loading spawns an mlx-serve process with
+ * `defaultArgs` (plus any per-model `args`); a load is refused when it would push
+ * resident memory past `ramBudgetBytes`. The serving host is always loopback and the
+ * port range is a fixed internal constant.
+ */
+export const LocalModelsSettings = Schema.Struct({
+  /** Directory scanned for loadable model subdirectories. `~` is expanded server-side. */
+  modelsDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/llm/models"))),
+  /** RAM budget in bytes; 0 ⇒ the server uses ~80% of total system memory. */
+  ramBudgetBytes: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  /** Default mlx-serve launch args (host/port/model are added by the manager). */
+  defaultArgs: Schema.Array(TrimmedString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(["--reasoning-budget", "0", "--no-pld"])),
+  ),
+  /** Optional per-model launch-arg overrides, keyed by model-directory basename. */
+  perModel: Schema.Record(
+    TrimmedNonEmptyString,
+    Schema.Struct({
+      args: Schema.optional(Schema.Array(TrimmedString)),
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type LocalModelsSettings = typeof LocalModelsSettings.Type;
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 
 export const ServerSettings = Schema.Struct({
@@ -423,21 +449,8 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // Local-LLM providers probed for loaded models by the toolbar "LLM" indicator.
-  // Each entry's `${baseUrl}/v1/models` is polled while a client is subscribed.
-  // Seeded with mlx-serve at its conventional local port; edit to add/remove
-  // providers (see the local-LLM-providers runbook). An empty array disables the
-  // indicator's probing (it then reports no providers).
-  llmProviders: Schema.Array(
-    Schema.Struct({
-      name: TrimmedNonEmptyString,
-      baseUrl: TrimmedNonEmptyString,
-    }),
-  ).pipe(
-    Schema.withDecodingDefault(
-      Effect.succeed([{ name: "mlx-serve", baseUrl: "http://127.0.0.1:8765" }]),
-    ),
-  ),
+  // Sidebar local-model manager (mlx-serve) configuration.
+  localModels: LocalModelsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Opt-in open-access mode: when true the server authenticates every client
   // automatically with administrative scopes — it disables authentication,
   // not just the pairing UI (pairing is the only bootstrap method, so there

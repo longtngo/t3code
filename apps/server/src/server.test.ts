@@ -138,6 +138,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -610,20 +611,38 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
-          readHistory: (input) =>
-            Effect.succeed({
-              readAt: TEST_EPOCH,
-              windowMs: input.windowMs,
-              bucketMs: input.bucketMs,
-              sampleIntervalMs: 5_000,
-              retainedSampleCount: 0,
-              totalCpuSecondsApprox: 0,
-              buckets: [],
-              topProcesses: [],
-              error: Option.none(),
+        // Merged into one provide so the buildAppUnderTest pipe stays within the
+        // 20-argument typed-overload limit.
+        Layer.mergeAll(
+          Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+            readHistory: (input) =>
+              Effect.succeed({
+                readAt: TEST_EPOCH,
+                windowMs: input.windowMs,
+                bucketMs: input.bucketMs,
+                sampleIntervalMs: 5_000,
+                retainedSampleCount: 0,
+                totalCpuSecondsApprox: 0,
+                buckets: [],
+                topProcesses: [],
+                error: Option.none(),
+              }),
+          }),
+          Layer.mock(LlmServeManager)({
+            list: Effect.succeed({
+              provider: {
+                name: "mlx-serve",
+                baseUrl: "http://127.0.0.1",
+                reachable: true,
+                models: [],
+              },
+              ramBudgetBytes: 0,
+              ramUsedBytes: 0,
             }),
-        }),
+            load: () => Effect.succeed({ pid: 0, port: 0 }),
+            unload: () => Effect.succeed({ ok: true as const }),
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({

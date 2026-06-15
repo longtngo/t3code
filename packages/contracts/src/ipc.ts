@@ -669,6 +669,10 @@ export interface EnvironmentApi {
         onResubscribe?: () => void;
       },
     ) => () => void;
+    /** Load (spawn) a local model by its directory-basename id. */
+    load: (input: { modelId: string }) => Promise<{ pid: number; port: number }>;
+    /** Unload (kill) the local model served by the given PID. */
+    unload: (input: { pid: number }) => Promise<{ ok: true }>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

@@ -165,6 +165,8 @@ export interface WsRpcClient {
   };
   readonly llmModels: {
     readonly subscribe: RpcStreamMethod<typeof WS_METHODS.subscribeLlmModels>;
+    readonly load: RpcUnaryMethod<typeof WS_METHODS.llmServeLoad>;
+    readonly unload: RpcUnaryMethod<typeof WS_METHODS.llmServeUnload>;
   };
   readonly cloud: {
     readonly getRelayClientStatus: RpcUnaryNoArgMethod<typeof WS_METHODS.cloudGetRelayClientStatus>;
@@ -368,6 +370,8 @@ export function createWsRpcClient(
           listener,
           subscriptionOptions(options, WS_METHODS.subscribeLlmModels),
         ),
+      load: (input) => transport.request((client) => client[WS_METHODS.llmServeLoad](input)),
+      unload: (input) => transport.request((client) => client[WS_METHODS.llmServeUnload](input)),
     },
     cloud: {
       getRelayClientStatus: () =>

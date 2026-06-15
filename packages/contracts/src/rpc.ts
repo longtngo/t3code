@@ -190,6 +190,10 @@ export const WS_METHODS = {
   // Account usage methods
   accountUsageRefresh: "account.usage.refresh",
 
+  // Local-model manager actions (mlx-serve load/unload)
+  llmServeLoad: "llmServe.load",
+  llmServeUnload: "llmServe.unload",
+
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -678,6 +682,24 @@ export const LlmModel = Schema.Struct({
   /** Mixture-of-experts architecture. */
   isMoe: Schema.optional(Schema.Boolean),
   capabilities: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Manager state. Optional for back-compat with the read-only path; when present it
+   * is the source of truth for the UI (it distinguishes loading/stopping/error from a
+   * bare loaded/offline). `loaded` stays as `status === "online"`.
+   */
+  status: Schema.optional(
+    Schema.Literals(["online", "offline", "loading", "stopping", "error"]),
+  ),
+  /** PID of the mlx-serve process serving this model (online/loading/stopping). */
+  pid: Schema.optional(Schema.Number),
+  /** Port the serving process is bound to. */
+  port: Schema.optional(Schema.Number),
+  /** True when t3code launched (and thus supervises) this process. */
+  managed: Schema.optional(Schema.Boolean),
+  /** Stable id used by load/unload actions (the model directory basename). */
+  modelId: Schema.optional(Schema.String),
+  /** Failure detail when `status === "error"`. */
+  loadError: Schema.optional(Schema.String),
 });
 export type LlmModel = typeof LlmModel.Type;
 
@@ -703,8 +725,43 @@ export const LlmModelsSample = Schema.Struct({
   /** Sample wall-clock time (epoch ms). */
   ts: Schema.Number,
   providers: Schema.Array(LlmProvider),
+  /** Configured RAM budget for managed loads, in bytes (omitted if unknown). */
+  ramBudgetBytes: Schema.optional(Schema.Number),
+  /** Sum of resident bytes across online managed/external models. */
+  ramUsedBytes: Schema.optional(Schema.Number),
 });
 export type LlmModelsSample = typeof LlmModelsSample.Type;
+
+/** Why a load/unload action failed (non-authorization). */
+export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("LlmServeError", {
+  kind: Schema.Literals([
+    "budget_exceeded",
+    "already_online",
+    "no_free_port",
+    "not_found",
+    "spawn_failed",
+    "not_mlx_process",
+  ]),
+  reason: Schema.String,
+}) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+/** Load (spawn) a local model by its directory-basename id. */
+export const WsLlmServeLoadRpc = Rpc.make(WS_METHODS.llmServeLoad, {
+  payload: Schema.Struct({ modelId: Schema.String }),
+  success: Schema.Struct({ pid: Schema.Number, port: Schema.Number }),
+  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
+});
+
+/** Unload (kill) a local model by the PID serving it. */
+export const WsLlmServeUnloadRpc = Rpc.make(WS_METHODS.llmServeUnload, {
+  payload: Schema.Struct({ pid: Schema.Number }),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
+});
 
 /**
  * Streaming subscription for locally-loaded LLMs across the configured providers.
@@ -772,6 +829,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeHostMetricsRpc,
   WsSubscribeLlmModelsRpc,
+  WsLlmServeLoadRpc,
+  WsLlmServeUnloadRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

@@ -80,6 +80,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import { layer as LlmServeManagerLive } from "./llm/LlmServeManager.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -317,7 +318,13 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeDependenciesLive = LlmServeManagerLive.pipe(
+  // The manager is the base so the core (merged below) provides ServerSettingsService
+  // *into* it; its HttpClient is satisfied locally and ChildProcessSpawner comes from
+  // the outer platform layer (like the other diagnostics services), so it leaks no new
+  // requirement into the CLI / test layers.
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
   Layer.provideMerge(ProcessResourceMonitor.layer),

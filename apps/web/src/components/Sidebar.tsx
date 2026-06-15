@@ -200,6 +200,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { SidebarLocalModels } from "./sidebar/SidebarLocalModels";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -2544,6 +2545,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-2">
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
+      <SidebarLocalModels />
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton

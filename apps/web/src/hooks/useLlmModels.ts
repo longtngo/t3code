@@ -3,48 +3,6 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { readEnvironmentApi } from "~/environmentApi";
 import type { LlmModelsSample } from "~/lib/llmModels";
 
-const STORAGE_KEY = "t3code:llm-models-enabled";
-
-let enabledListeners: Array<() => void> = [];
-
-function emitEnabledChange() {
-  for (const listener of enabledListeners) listener();
-}
-
-function hasStorage() {
-  return typeof window !== "undefined" && typeof localStorage !== "undefined";
-}
-
-/** Default on so the indicator is discoverable; the toggle is for opting out. */
-function getStoredEnabled(): boolean {
-  if (!hasStorage()) return true;
-  return localStorage.getItem(STORAGE_KEY) !== "false";
-}
-
-function subscribeEnabled(listener: () => void): () => void {
-  if (typeof window === "undefined") return () => {};
-  enabledListeners.push(listener);
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) emitEnabledChange();
-  };
-  window.addEventListener("storage", handleStorage);
-  return () => {
-    enabledListeners = enabledListeners.filter((entry) => entry !== listener);
-    window.removeEventListener("storage", handleStorage);
-  };
-}
-
-/** Persisted (per-client, cross-tab) toggle for whether local-model probing streams. */
-export function useLlmModelsEnabled(): readonly [boolean, (next: boolean) => void] {
-  const enabled = useSyncExternalStore(subscribeEnabled, getStoredEnabled, () => true);
-  const setEnabled = useCallback((next: boolean) => {
-    if (!hasStorage()) return;
-    localStorage.setItem(STORAGE_KEY, next ? "true" : "false");
-    emitEnabledChange();
-  }, []);
-  return [enabled, setEnabled] as const;
-}
-
 function subscribeVisibility(listener: () => void): () => void {
   if (typeof document === "undefined") return () => {};
   document.addEventListener("visibilitychange", listener);
@@ -67,11 +25,11 @@ export interface LlmModelsState {
 }
 
 /**
- * Subscribe to the environment's local-LLM probe stream while `enabled` and the tab
- * is visible. Tears down on disable, environment change, or unmount — which stops
- * the server-side probing too.
+ * Subscribe to the environment's local-model probe stream while `enabled` and the tab
+ * is visible. Tears down on disable, environment change, or unmount — which stops the
+ * server-side probing too.
  */
-export function useLlmModels(environmentId: EnvironmentId, enabled: boolean): LlmModelsState {
+export function useLlmModels(environmentId: EnvironmentId, enabled = true): LlmModelsState {
   const [sample, setSample] = useState<LlmModelsSample | null>(null);
   const visible = useDocumentVisible();
   const active = enabled && visible;
@@ -90,4 +48,61 @@ export function useLlmModels(environmentId: EnvironmentId, enabled: boolean): Ll
   }, [environmentId, active]);
 
   return { sample, streaming: active && sample !== null };
+}
+
+export interface LlmModelActions {
+  /** PID currently being unloaded, or modelId currently being loaded (for per-row spinners). */
+  readonly pending: ReadonlySet<string>;
+  readonly load: (modelId: string) => Promise<void>;
+  readonly unload: (pid: number) => Promise<void>;
+}
+
+/**
+ * Load/unload actions for the local-model manager, tracking in-flight keys so rows
+ * can show a spinner and ignore double-clicks. `onError` surfaces a typed failure
+ * (e.g. budget exceeded) to the caller for a toast.
+ */
+export function useLlmModelActions(
+  environmentId: EnvironmentId,
+  onError?: (message: string) => void,
+): LlmModelActions {
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+
+  const withPending = useCallback(
+    async (key: string, run: () => Promise<unknown>) => {
+      setPending((prev) => new Set(prev).add(key));
+      try {
+        await run();
+      } catch (error) {
+        onError?.(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPending((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [onError],
+  );
+
+  const load = useCallback(
+    (modelId: string) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return Promise.resolve();
+      return withPending(`load:${modelId}`, () => api.llmModels.load({ modelId }));
+    },
+    [environmentId, withPending],
+  );
+
+  const unload = useCallback(
+    (pid: number) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return Promise.resolve();
+      return withPending(`unload:${pid}`, () => api.llmModels.unload({ pid }));
+    },
+    [environmentId, withPending],
+  );
+
+  return { pending, load, unload };
 }

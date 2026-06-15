@@ -89,6 +89,7 @@ import type { AuthenticatedSession } from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as LlmModels from "./diagnostics/LlmModels.ts";
+import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscoveryLayer from "./sourceControl/SourceControlDiscovery.ts";
@@ -195,6 +196,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
   [WS_METHODS.subscribeHostMetrics, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeLlmModels, AuthOrchestrationReadScope],
+  [WS_METHODS.llmServeLoad, AuthOrchestrationOperateScope],
+  [WS_METHODS.llmServeUnload, AuthOrchestrationOperateScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -289,6 +292,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1500,6 +1504,14 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             Effect.succeed(LlmModels.llmModelsStream(input.intervalMs ?? 4000)),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.llmServeLoad]: (input) =>
+          observeRpcEffect(WS_METHODS.llmServeLoad, llmServeManager.load(input.modelId), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.llmServeUnload]: (input) =>
+          observeRpcEffect(WS_METHODS.llmServeUnload, llmServeManager.unload(input.pid), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,

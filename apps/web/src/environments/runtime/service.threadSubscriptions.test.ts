@@ -89,6 +89,8 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
     },
     llmModels: {
       subscribe: vi.fn(() => () => undefined),
+      load: vi.fn(),
+      unload: vi.fn(),
     },
     cloud: {
       getRelayClientStatus: vi.fn(),
