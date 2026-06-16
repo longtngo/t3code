@@ -1336,6 +1336,55 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("renders a markdown file as a sandboxed HTML document via /viewer", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-viewer-" });
+      const filePath = path.join(dir, "report.md");
+      yield* fileSystem.writeFileString(filePath, "# Hello Viewer\n\nBody text.");
+
+      yield* buildAppUnderTest({ config: { devUrl: new URL("http://127.0.0.1:5173") } });
+
+      const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+      const response = yield* HttpClient.get(`/viewer${encodedPath}`, {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+
+      assert.equal(response.status, 200);
+      assert.include(response.headers["content-type"] ?? "", "text/html");
+      // Served as a sandboxed top-level page (opaque origin, no app-storage access).
+      assert.include(response.headers["content-security-policy"] ?? "", "sandbox");
+      const body = yield* response.text;
+      assert.include(body, "Hello Viewer");
+      assert.include(body, "<");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects unsupported file types on /viewer", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { devUrl: new URL("http://127.0.0.1:5173") } });
+
+      const response = yield* HttpClient.get("/viewer/etc/hosts", {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+
+      assert.equal(response.status, 400);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("returns 404 for a markdown file outside the read sandbox via /viewer", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { devUrl: new URL("http://127.0.0.1:5173") } });
+
+      const response = yield* HttpClient.get("/viewer/etc/not-allowed.md", {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+
+      assert.equal(response.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves the public environment descriptor without requiring auth", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

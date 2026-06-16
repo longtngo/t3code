@@ -336,4 +336,34 @@ describe("FileViewerSidebar", () => {
       await screen.unmount();
     }
   });
+
+  it("opens markdown in a new tab via a real /viewer URL", async () => {
+    installMarkdownApi();
+    const openSpy = vi.spyOn(window, "open").mockReturnValue({} as Window);
+
+    const screen = await render(<FileViewerSheetHarness />);
+    try {
+      useFileViewerStore.getState().openFileViewer({
+        path: "notes.md",
+        cwd: "/repo/project",
+        environmentId: ENVIRONMENT_ID,
+        kind: "markdown",
+      });
+
+      // The pop-out escape hatch is offered in markdown view, not just HTML.
+      const popOut = page.getByRole("button", { name: "Open in new tab" });
+      await expect.element(popOut).toBeInTheDocument();
+
+      await popOut.click();
+      // It opens the real, refreshable viewer route for the resolved path —
+      // same-origin (loopback test host) so the URL is used over srcdoc.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      const openedUrl = String(openSpy.mock.calls[0]?.[0]);
+      expect(openedUrl).toContain("/viewer/repo/project/notes.md");
+      expect(openSpy.mock.calls[0]?.[1]).toBe("_blank");
+    } finally {
+      openSpy.mockRestore();
+      await screen.unmount();
+    }
+  });
 });

@@ -59,8 +59,8 @@ export type SidebarItem = AgentSidebarItem | BackgroundSidebarItem;
 
 /** Aggregate activity counts for the tasks-panel toggle indicator. */
 export interface TaskActivitySummary {
-  /** Running plan steps + running agents + running background processes. */
-  readonly activeCount: number;
+  /** Completed plan steps + completed agents + completed background processes. */
+  readonly completedCount: number;
   /** All tracked plan steps + agents + background processes. */
   readonly totalCount: number;
   /** Whether any tracked item is currently running (drives the spinner). */
@@ -70,24 +70,29 @@ export interface TaskActivitySummary {
 /**
  * Combine the three activity sources backing the tasks panel — TodoWrite plan
  * steps, agents/subagents, and background processes (terminals) — into a single
- * active/total summary for the permanent toggle above the composer.
+ * completed/total summary for the permanent toggle on the composer's task bar.
  *
  * Pass the *visible* agent/background lists (post dismissal + auto-clear) so the
- * badge matches what the panel renders. An item is "active" when its status is
- * `running`; plan-step activity is supplied pre-counted since plan steps use a
- * different status vocabulary (`inProgress`).
+ * badge matches what the panel renders. Counts use the `completed` status only
+ * (a `failed` item is tracked in the total but is not "completed"). Plan-step
+ * counts are supplied pre-counted since plan steps use a different status
+ * vocabulary (`completed` / `inProgress`).
  */
 export function summarizeTaskActivity(input: {
+  readonly planStepsCompleted: number;
   readonly planStepsActive: number;
   readonly planStepsTotal: number;
   readonly agents: ReadonlyArray<Pick<AgentSidebarItem, "status">>;
   readonly background: ReadonlyArray<Pick<BackgroundSidebarItem, "status">>;
 }): TaskActivitySummary {
+  const agentsCompleted = input.agents.filter((item) => item.status === "completed").length;
+  const backgroundCompleted = input.background.filter((item) => item.status === "completed").length;
   const agentsActive = input.agents.filter((item) => item.status === "running").length;
   const backgroundActive = input.background.filter((item) => item.status === "running").length;
-  const activeCount = input.planStepsActive + agentsActive + backgroundActive;
+  const completedCount = input.planStepsCompleted + agentsCompleted + backgroundCompleted;
   const totalCount = input.planStepsTotal + input.agents.length + input.background.length;
-  return { activeCount, totalCount, hasActive: activeCount > 0 };
+  const hasActive = input.planStepsActive + agentsActive + backgroundActive > 0;
+  return { completedCount, totalCount, hasActive };
 }
 
 /** Dismissal key for a TodoWrite plan step in the task sidebar. */

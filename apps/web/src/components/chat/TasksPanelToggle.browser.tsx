@@ -10,7 +10,7 @@ function renderToggle(props?: Partial<Parameters<typeof TasksPanelToggle>[0]>) {
       open={false}
       onToggle={vi.fn()}
       label="Tasks"
-      activeCount={0}
+      completedCount={0}
       totalCount={0}
       hasActive={false}
       {...props}
@@ -31,13 +31,13 @@ describe("TasksPanelToggle", () => {
     expect(toggle()?.querySelector(".animate-spin")).toBeNull();
   });
 
-  it("shows the active/total count when items are tracked", async () => {
-    await renderToggle({ activeCount: 2, totalCount: 5 });
+  it("shows the completed/total count when items are tracked", async () => {
+    await renderToggle({ completedCount: 2, totalCount: 5 });
     expect(toggle()?.textContent).toContain("2/5");
   });
 
   it("shows the spinner whenever any tracked item is running", async () => {
-    await renderToggle({ activeCount: 1, totalCount: 3, hasActive: true });
+    await renderToggle({ completedCount: 1, totalCount: 3, hasActive: true });
     expect(toggle()).not.toBeNull();
     expect(toggle()?.querySelector(".animate-spin")).not.toBeNull();
   });

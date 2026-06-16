@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
   ExternalLinkIcon,
@@ -14,7 +14,9 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
+import { type EnvironmentId } from "@t3tools/contracts";
 import { readEnvironmentApi } from "~/environmentApi";
+import { getEnvironmentHttpBaseUrl } from "~/environments/runtime/catalog";
 import { toastManager } from "./ui/toast";
 import {
   type FileViewerKind,
@@ -97,6 +99,34 @@ interface ViewerEntry {
 /** True when the entry is displayed as HTML (raw `.html` or md rendered to HTML). */
 function isHtmlView(entry: ViewerEntry): boolean {
   return entry.kind === "html" || entry.view === "html";
+}
+
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/**
+ * Build the absolute `/viewer/<abs-path>` URL the "Open in new tab" action opens,
+ * or null when the environment isn't reachable as a real page from a new tab.
+ *
+ * The new tab is only authenticated when it can reach the server with a session:
+ * a same-origin tab (web) carries the session cookie, and a loopback server
+ * trusts the request (the desktop app opens an external browser). Remote, non-
+ * loopback servers would reject the cookieless tab, so we return null there and
+ * the caller falls back to the in-memory srcdoc pop-out.
+ */
+function buildViewerUrl(environmentId: EnvironmentId, absolutePath: string | null): string | null {
+  if (!absolutePath || !absolutePath.startsWith("/")) return null;
+  const base = getEnvironmentHttpBaseUrl(environmentId) ?? window.location.origin;
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(base);
+  } catch {
+    return null;
+  }
+  const reachable =
+    LOOPBACK_HOSTNAMES.has(baseUrl.hostname) || baseUrl.origin === window.location.origin;
+  if (!reachable) return null;
+  const encodedPath = absolutePath.split("/").map(encodeURIComponent).join("/");
+  return new URL(`/viewer${encodedPath}`, baseUrl).toString();
 }
 
 interface LoadState {
@@ -188,7 +218,7 @@ function AddressBar({
       }}
       title={value}
       aria-label="File path"
-      className="min-w-0 flex-1 truncate rounded bg-transparent px-1 py-0.5 font-mono text-[12px] text-muted-foreground/80 outline-none hover:bg-muted/40 focus:bg-muted/60 focus:text-foreground/90"
+      className="min-w-0 flex-1 truncate rounded-md border border-border/60 bg-muted/50 px-2 py-1 font-mono text-[12px] text-muted-foreground/90 outline-none hover:bg-muted/70 focus:border-ring/45 focus:bg-muted/80 focus:text-foreground/90"
     />
   );
 }
@@ -355,10 +385,30 @@ export function FileViewerContent({
     });
   }, []);
 
-  // Open the currently-loaded HTML in a new browser tab — the "full view"
-  // escape hatch. Reuses the loaded contents; runs in the user-gesture context
-  // so window.open isn't blocked.
+  // The real `/viewer/<abs-path>` URL for this file, when a new tab can reach it
+  // (see buildViewerUrl). Null ⇒ fall back to the in-memory srcdoc pop-out.
+  const viewerUrl = useMemo(
+    () => buildViewerUrl(request.environmentId, state.resolvedPath),
+    [request.environmentId, state.resolvedPath],
+  );
+
+  // Open the file in a new browser tab — the "full view" escape hatch. Prefers a
+  // real, refreshable `/viewer` URL (the server renders markdown / serves html on
+  // each load, so reloading picks up file edits); falls back to writing the
+  // loaded contents into a sandboxed iframe when no reachable URL exists. Runs in
+  // the user-gesture context so window.open isn't blocked.
   const handlePopOut = useCallback(() => {
+    if (viewerUrl) {
+      const opened = window.open(viewerUrl, "_blank");
+      if (!opened) {
+        toastManager.add({
+          type: "error",
+          title: "Pop-up blocked",
+          description: "Allow pop-ups for this site to open the file in a new tab.",
+        });
+      }
+      return;
+    }
     const win = window.open("", "_blank");
     if (!win) {
       toastManager.add({
@@ -384,7 +434,7 @@ export function FileViewerContent({
     iframe.srcdoc = state.contents.trim().length > 0 ? state.contents : EMPTY_HTML_PLACEHOLDER;
     win.document.title = current.path;
     win.document.body.appendChild(iframe);
-  }, [current.path, state.contents]);
+  }, [current.path, state.contents, viewerUrl]);
 
   const badge = KIND_BADGE[current.kind];
   const markdownCwd = state.resolvedPath ? dirnameOf(state.resolvedPath) : current.cwd;
@@ -393,7 +443,7 @@ export function FileViewerContent({
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-card/50">
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {canGoBack ? (
             <Button
               size="icon-xs"
@@ -435,7 +485,10 @@ export function FileViewerContent({
               />
             </div>
           ) : null}
-          {isHtmlView(current) && state.status === "loaded" ? (
+          {/* Pop-out needs renderable output: a real /viewer URL (server renders
+              markdown) or already-HTML contents for the srcdoc fallback. In raw
+              markdown view without a reachable URL there's nothing good to show. */}
+          {state.status === "loaded" && (viewerUrl !== null || isHtmlView(current)) ? (
             <Button
               size="icon-xs"
               variant="ghost"

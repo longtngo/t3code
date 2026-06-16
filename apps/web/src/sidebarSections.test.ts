@@ -209,35 +209,38 @@ describe("isAutoCleared / visibleSidebarItems", () => {
 });
 
 describe("summarizeTaskActivity", () => {
-  it("sums plan steps, agents, and background into active/total counts", () => {
+  it("sums plan steps, agents, and background into completed/total counts", () => {
     const summary = summarizeTaskActivity({
+      planStepsCompleted: 2,
       planStepsActive: 1,
-      planStepsTotal: 3,
+      planStepsTotal: 4,
       agents: [{ status: "running" }, { status: "completed" }],
-      background: [{ status: "running" }, { status: "running" }, { status: "failed" }],
+      background: [{ status: "running" }, { status: "completed" }, { status: "failed" }],
     });
-    // active: 1 plan + 1 agent + 2 background = 4
-    expect(summary.activeCount).toBe(4);
-    // total: 3 plan + 2 agents + 3 background = 8
-    expect(summary.totalCount).toBe(8);
+    // completed: 2 plan + 1 agent + 1 background = 4
+    expect(summary.completedCount).toBe(4);
+    // total: 4 plan + 2 agents + 3 background = 9
+    expect(summary.totalCount).toBe(9);
     expect(summary.hasActive).toBe(true);
   });
 
-  it("reports no activity when nothing is running", () => {
+  it("excludes failed items from the completed count but keeps them in the total", () => {
     const summary = summarizeTaskActivity({
+      planStepsCompleted: 0,
       planStepsActive: 0,
-      planStepsTotal: 2,
-      agents: [{ status: "completed" }],
-      background: [{ status: "failed" }],
+      planStepsTotal: 0,
+      agents: [{ status: "failed" }],
+      background: [{ status: "failed" }, { status: "completed" }],
     });
-    expect(summary.activeCount).toBe(0);
-    expect(summary.totalCount).toBe(4);
+    expect(summary.completedCount).toBe(1);
+    expect(summary.totalCount).toBe(3);
     expect(summary.hasActive).toBe(false);
   });
 
   it("flags activity from running background or agents even with no plan steps", () => {
     expect(
       summarizeTaskActivity({
+        planStepsCompleted: 0,
         planStepsActive: 0,
         planStepsTotal: 0,
         agents: [],
@@ -246,6 +249,7 @@ describe("summarizeTaskActivity", () => {
     ).toBe(true);
     expect(
       summarizeTaskActivity({
+        planStepsCompleted: 0,
         planStepsActive: 0,
         planStepsTotal: 0,
         agents: [{ status: "running" }],
@@ -256,12 +260,13 @@ describe("summarizeTaskActivity", () => {
 
   it("is empty when there is no tracked activity at all", () => {
     const summary = summarizeTaskActivity({
+      planStepsCompleted: 0,
       planStepsActive: 0,
       planStepsTotal: 0,
       agents: [],
       background: [],
     });
-    expect(summary).toEqual({ activeCount: 0, totalCount: 0, hasActive: false });
+    expect(summary).toEqual({ completedCount: 0, totalCount: 0, hasActive: false });
   });
 });
 

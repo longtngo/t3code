@@ -160,7 +160,6 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
-import { TasksPanelToggle } from "./chat/TasksPanelToggle";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -1677,20 +1676,23 @@ export default function ChatView(props: ChatViewProps) {
   const sidebarDetailOpen = planSidebarOpen && selectedSidebarDetail !== null;
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const planStepsTotal = activePlan?.steps.length ?? 0;
+  const planStepsCompleted =
+    activePlan?.steps.filter((step) => step.status === "completed").length ?? 0;
   const planStepsActive =
     activePlan?.steps.filter((step) => step.status === "inProgress").length ?? 0;
   // Aggregate the three tasks-panel sources (plan steps + agents + background
-  // processes) into the active/total counts shown by the permanent toggle above
-  // the composer. Visible lists keep the badge in sync with the panel contents.
+  // processes) into the completed/total counts shown by the permanent toggle on
+  // the composer task bar. Visible lists keep the badge in sync with the panel.
   const tasksActivitySummary = useMemo(
     () =>
       summarizeTaskActivity({
+        planStepsCompleted,
         planStepsActive,
         planStepsTotal,
         agents: visibleAgentItems,
         background: visibleBackgroundItems,
       }),
-    [planStepsActive, planStepsTotal, visibleAgentItems, visibleBackgroundItems],
+    [planStepsCompleted, planStepsActive, planStepsTotal, visibleAgentItems, visibleBackgroundItems],
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -2584,6 +2586,19 @@ export default function ChatView(props: ChatViewProps) {
     planSidebarDismissedForTurnRef.current =
       activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
   }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  // Stable object for ChatComposer's memo; the task bar lives inside the
+  // composer border so the toggle aligns with the input and gets a backdrop.
+  const composerTasksBar = useMemo(
+    () => ({
+      open: planSidebarOpen,
+      onToggle: togglePlanSidebar,
+      label: planSidebarLabel,
+      completedCount: tasksActivitySummary.completedCount,
+      totalCount: tasksActivitySummary.totalCount,
+      hasActive: tasksActivitySummary.hasActive,
+    }),
+    [planSidebarOpen, togglePlanSidebar, planSidebarLabel, tasksActivitySummary],
+  );
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -4061,23 +4076,12 @@ export default function ChatView(props: ChatViewProps) {
                 : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
             )}
           >
-            {/* Permanent tasks-panel toggle: aggregates plan steps + agents +
-                background processes, spinner shows while any are running. */}
-            <div className="mb-1.5 flex items-center">
-              <TasksPanelToggle
-                open={planSidebarOpen}
-                onToggle={togglePlanSidebar}
-                label={planSidebarLabel}
-                activeCount={tasksActivitySummary.activeCount}
-                totalCount={tasksActivitySummary.totalCount}
-                hasActive={tasksActivitySummary.hasActive}
-              />
-            </div>
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <ChatComposer
                   composerRef={composerRef}
+                  tasksBar={composerTasksBar}
                   composerDraftTarget={composerDraftTarget}
                   environmentId={environmentId}
                   routeKind={routeKind}
