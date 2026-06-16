@@ -198,10 +198,13 @@ describe("isRecoverableThreadResumeError", () => {
 
 describe("openCodexThread", () => {
   it("falls back to thread/start when resume fails recoverably", async () => {
-    const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+    const calls: Array<{
+      method: "thread/start" | "thread/resume" | "thread/fork";
+      payload: unknown;
+    }> = [];
     const started = makeThreadOpenResponse("fresh-thread");
     const client = {
-      request: <M extends "thread/start" | "thread/resume">(
+      request: <M extends "thread/start" | "thread/resume" | "thread/fork">(
         method: M,
         payload: CodexRpc.ClientRequestParamsByMethod[M],
       ) => {
@@ -239,7 +242,7 @@ describe("openCodexThread", () => {
 
   it("propagates non-recoverable resume failures", async () => {
     const client = {
-      request: <M extends "thread/start" | "thread/resume">(
+      request: <M extends "thread/start" | "thread/resume" | "thread/fork">(
         method: M,
         _payload: CodexRpc.ClientRequestParamsByMethod[M],
       ) => {

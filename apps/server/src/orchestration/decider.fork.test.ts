@@ -133,13 +133,18 @@ const forkCommand = (forkBeforeMessageId: string) =>
     createdAt: NOW,
   }) as const;
 
-const expectForked = (event: Omit<OrchestrationEvent, "sequence"> | ReadonlyArray<unknown>) => {
-  expect(Array.isArray(event)).toBe(false);
-  const single = event as Omit<OrchestrationEvent, "sequence">;
-  if (single.type !== "thread.forked") {
-    throw new Error(`expected thread.forked, got ${single.type}`);
+// Extract keeps the discriminated payload (Omit<union> would collapse it).
+type ForkedEvent = Extract<OrchestrationEvent, { type: "thread.forked" }>;
+
+const expectForked = (event: unknown): ForkedEvent => {
+  if (Array.isArray(event)) {
+    throw new Error("expected a single thread.forked event, got an array");
   }
-  return single;
+  const single = event as { type?: unknown };
+  if (single.type !== "thread.forked") {
+    throw new Error(`expected thread.forked, got ${String(single.type)}`);
+  }
+  return single as ForkedEvent;
 };
 
 it.layer(NodeServices.layer)("decider thread.fork", (it) => {
