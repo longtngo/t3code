@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+      # Work on this fork lands on `personal` by direct push (no PR), so CI must
+      # run here too — otherwise the full test suite never executes on the trunk.
+      - personal
 
 jobs:
   check:

@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Pre-push gate. Activated via `git config core.hooksPath .githooks`, set by the
+# root package.json `prepare` script (no husky dependency).
+#
+# Runs the FAST static gate (typecheck + lint). Thanks to the contract-typed
+# wsApi mock, typecheck now catches RPC/mock desync — the class of bug that once
+# rode an unrelated feature onto the trunk and sat red undetected. The full
+# unit + browser suites run in CI on push to `main`/`personal`.
+#
+# To run the complete gate locally instead, use `pnpm verify`.
+# Bypass in a pinch with `git push --no-verify`.
+set -e
+
+echo "pre-push: typecheck + lint (full suite runs in CI)…"
+pnpm run typecheck
+pnpm run lint
