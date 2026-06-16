@@ -9,7 +9,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { DiffIcon, ListTodoIcon, LoaderIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger, TooltipWrapperTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -36,17 +36,12 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
-  tasksPanelOpen: boolean;
-  planStepsCompleted: number;
-  planStepsTotal: number;
-  planHasActiveStep: boolean;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
-  onToggleTasksPanel: () => void;
 }
 
 export function shouldShowOpenInPicker(input: {
@@ -79,17 +74,12 @@ export const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
-  tasksPanelOpen,
-  planStepsCompleted,
-  planStepsTotal,
-  planHasActiveStep,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleTerminal,
   onToggleDiff,
-  onToggleTasksPanel,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const showOpenInPicker = shouldShowOpenInPicker({
@@ -197,31 +187,6 @@ export const ChatHeader = memo(function ChatHeader({
               : diffToggleShortcutLabel
                 ? `Toggle diff panel (${diffToggleShortcutLabel})`
                 : "Toggle diff panel"}
-          </TooltipPopup>
-        </Tooltip>
-        <Tooltip>
-          <TooltipWrapperTrigger className="shrink-0">
-            <Toggle
-              className="shrink-0 gap-1"
-              pressed={tasksPanelOpen}
-              onPressedChange={onToggleTasksPanel}
-              aria-label="Toggle tasks panel"
-              variant="outline"
-              size="xs"
-            >
-              <ListTodoIcon className="size-3" />
-              {planStepsTotal > 0 ? (
-                <span className="text-[10px] leading-none tabular-nums">
-                  {planStepsCompleted}/{planStepsTotal}
-                </span>
-              ) : null}
-              {planHasActiveStep ? (
-                <LoaderIcon className="size-3 animate-spin text-blue-400" />
-              ) : null}
-            </Toggle>
-          </TooltipWrapperTrigger>
-          <TooltipPopup side="bottom">
-            {`Toggle tasks panel (${planStepsCompleted}/${planStepsTotal})`}
           </TooltipPopup>
         </Tooltip>
       </div>

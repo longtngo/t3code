@@ -7,6 +7,7 @@ import {
   deriveBackgroundItems,
   isAutoCleared,
   sortSidebarItems,
+  summarizeTaskActivity,
   visibleSidebarItems,
   type SidebarItem,
 } from "./sidebarSections";
@@ -204,6 +205,63 @@ describe("isAutoCleared / visibleSidebarItems", () => {
     ];
     const visible = visibleSidebarItems(items, new Set(["dismissed"]), now, 6);
     expect(visible.map((i) => i.id)).toEqual(["keep"]);
+  });
+});
+
+describe("summarizeTaskActivity", () => {
+  it("sums plan steps, agents, and background into active/total counts", () => {
+    const summary = summarizeTaskActivity({
+      planStepsActive: 1,
+      planStepsTotal: 3,
+      agents: [{ status: "running" }, { status: "completed" }],
+      background: [{ status: "running" }, { status: "running" }, { status: "failed" }],
+    });
+    // active: 1 plan + 1 agent + 2 background = 4
+    expect(summary.activeCount).toBe(4);
+    // total: 3 plan + 2 agents + 3 background = 8
+    expect(summary.totalCount).toBe(8);
+    expect(summary.hasActive).toBe(true);
+  });
+
+  it("reports no activity when nothing is running", () => {
+    const summary = summarizeTaskActivity({
+      planStepsActive: 0,
+      planStepsTotal: 2,
+      agents: [{ status: "completed" }],
+      background: [{ status: "failed" }],
+    });
+    expect(summary.activeCount).toBe(0);
+    expect(summary.totalCount).toBe(4);
+    expect(summary.hasActive).toBe(false);
+  });
+
+  it("flags activity from running background or agents even with no plan steps", () => {
+    expect(
+      summarizeTaskActivity({
+        planStepsActive: 0,
+        planStepsTotal: 0,
+        agents: [],
+        background: [{ status: "running" }],
+      }).hasActive,
+    ).toBe(true);
+    expect(
+      summarizeTaskActivity({
+        planStepsActive: 0,
+        planStepsTotal: 0,
+        agents: [{ status: "running" }],
+        background: [],
+      }).hasActive,
+    ).toBe(true);
+  });
+
+  it("is empty when there is no tracked activity at all", () => {
+    const summary = summarizeTaskActivity({
+      planStepsActive: 0,
+      planStepsTotal: 0,
+      agents: [],
+      background: [],
+    });
+    expect(summary).toEqual({ activeCount: 0, totalCount: 0, hasActive: false });
   });
 });
 

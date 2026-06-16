@@ -105,7 +105,12 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import { SidebarDetailPanel } from "./SidebarDetailPanel";
-import { deriveAgentItems, deriveBackgroundItems, visibleSidebarItems } from "../sidebarSections";
+import {
+  deriveAgentItems,
+  deriveBackgroundItems,
+  summarizeTaskActivity,
+  visibleSidebarItems,
+} from "../sidebarSections";
 import { useSidebarViewStore } from "../sidebarViewStore";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
@@ -155,6 +160,7 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
+import { TasksPanelToggle } from "./chat/TasksPanelToggle";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -1671,9 +1677,21 @@ export default function ChatView(props: ChatViewProps) {
   const sidebarDetailOpen = planSidebarOpen && selectedSidebarDetail !== null;
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const planStepsTotal = activePlan?.steps.length ?? 0;
-  const planStepsCompleted =
-    activePlan?.steps.filter((step) => step.status === "completed").length ?? 0;
-  const planHasActiveStep = activePlan?.steps.some((step) => step.status === "inProgress") ?? false;
+  const planStepsActive =
+    activePlan?.steps.filter((step) => step.status === "inProgress").length ?? 0;
+  // Aggregate the three tasks-panel sources (plan steps + agents + background
+  // processes) into the active/total counts shown by the permanent toggle above
+  // the composer. Visible lists keep the badge in sync with the panel contents.
+  const tasksActivitySummary = useMemo(
+    () =>
+      summarizeTaskActivity({
+        planStepsActive,
+        planStepsTotal,
+        agents: visibleAgentItems,
+        background: visibleBackgroundItems,
+      }),
+    [planStepsActive, planStepsTotal, visibleAgentItems, visibleBackgroundItems],
+  );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3971,17 +3989,12 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
-          tasksPanelOpen={planSidebarOpen}
-          planStepsCompleted={planStepsCompleted}
-          planStepsTotal={planStepsTotal}
-          planHasActiveStep={planHasActiveStep}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
-          onToggleTasksPanel={togglePlanSidebar}
         />
       </header>
 
@@ -4048,6 +4061,18 @@ export default function ChatView(props: ChatViewProps) {
                 : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
             )}
           >
+            {/* Permanent tasks-panel toggle: aggregates plan steps + agents +
+                background processes, spinner shows while any are running. */}
+            <div className="mb-1.5 flex items-center">
+              <TasksPanelToggle
+                open={planSidebarOpen}
+                onToggle={togglePlanSidebar}
+                label={planSidebarLabel}
+                activeCount={tasksActivitySummary.activeCount}
+                totalCount={tasksActivitySummary.totalCount}
+                hasActive={tasksActivitySummary.hasActive}
+              />
+            </div>
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">

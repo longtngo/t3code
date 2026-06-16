@@ -57,6 +57,39 @@ export interface BackgroundSidebarItem {
 
 export type SidebarItem = AgentSidebarItem | BackgroundSidebarItem;
 
+/** Aggregate activity counts for the tasks-panel toggle indicator. */
+export interface TaskActivitySummary {
+  /** Running plan steps + running agents + running background processes. */
+  readonly activeCount: number;
+  /** All tracked plan steps + agents + background processes. */
+  readonly totalCount: number;
+  /** Whether any tracked item is currently running (drives the spinner). */
+  readonly hasActive: boolean;
+}
+
+/**
+ * Combine the three activity sources backing the tasks panel — TodoWrite plan
+ * steps, agents/subagents, and background processes (terminals) — into a single
+ * active/total summary for the permanent toggle above the composer.
+ *
+ * Pass the *visible* agent/background lists (post dismissal + auto-clear) so the
+ * badge matches what the panel renders. An item is "active" when its status is
+ * `running`; plan-step activity is supplied pre-counted since plan steps use a
+ * different status vocabulary (`inProgress`).
+ */
+export function summarizeTaskActivity(input: {
+  readonly planStepsActive: number;
+  readonly planStepsTotal: number;
+  readonly agents: ReadonlyArray<Pick<AgentSidebarItem, "status">>;
+  readonly background: ReadonlyArray<Pick<BackgroundSidebarItem, "status">>;
+}): TaskActivitySummary {
+  const agentsActive = input.agents.filter((item) => item.status === "running").length;
+  const backgroundActive = input.background.filter((item) => item.status === "running").length;
+  const activeCount = input.planStepsActive + agentsActive + backgroundActive;
+  const totalCount = input.planStepsTotal + input.agents.length + input.background.length;
+  return { activeCount, totalCount, hasActive: activeCount > 0 };
+}
+
 /** Dismissal key for a TodoWrite plan step in the task sidebar. */
 export function planStepDismissKey(step: string): string {
   return `plan:${step}`;
