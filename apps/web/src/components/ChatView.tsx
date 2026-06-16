@@ -3964,6 +3964,78 @@ export default function ChatView(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
+  const onForkUserMessage = useCallback(
+    async (messageId: MessageId) => {
+      if (!activeThread || !isServerThread) {
+        return;
+      }
+      const api = readEnvironmentApi(environmentId);
+      if (!api) {
+        return;
+      }
+      const forkIndex = activeThread.messages.findIndex((message) => message.id === messageId);
+      const sourceMessage = forkIndex >= 0 ? activeThread.messages[forkIndex] : undefined;
+      if (!sourceMessage) {
+        return;
+      }
+      if (phase === "running" || isSendBusy || isConnecting) {
+        setThreadError(activeThread.id, "Interrupt the current turn before forking this thread.");
+        return;
+      }
+
+      const forkThreadId = newThreadId();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.fork",
+          commandId: newCommandId(),
+          sourceThreadId: activeThread.id,
+          newThreadId: forkThreadId,
+          forkBeforeMessageId: messageId,
+          title: `${activeThread.title} (fork)`,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to fork this thread.",
+        );
+        return;
+      }
+
+      // Pre-fill the fork's composer with the clicked message (unsent) so the
+      // user can tweak it before starting the new line of conversation.
+      setComposerDraftPrompt(
+        scopeThreadRef(activeThread.environmentId, forkThreadId),
+        sourceMessage.text,
+      );
+
+      await navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId, threadId: forkThreadId },
+      });
+
+      toastManager.add({
+        type: "success",
+        title: "Forked into a new thread",
+        description:
+          forkIndex > 0
+            ? "The fork carries the prior conversation context. Edit the prompt and send to continue."
+            : "Edit the prompt and send to start the forked conversation.",
+      });
+    },
+    [
+      activeThread,
+      environmentId,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      navigate,
+      phase,
+      setComposerDraftPrompt,
+      setThreadError,
+    ],
+  );
+
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -4042,6 +4114,7 @@ export default function ChatView(props: ChatViewProps) {
               onOpenTurnDiff={onOpenTurnDiff}
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRevertUserMessage={onRevertUserMessage}
+              onForkUserMessage={onForkUserMessage}
               isRevertingCheckpoint={isRevertingCheckpoint}
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}

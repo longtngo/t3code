@@ -10,7 +10,10 @@ import * as Effect from "effect/Effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
-function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
+export function invariantError(
+  commandType: string,
+  detail: string,
+): OrchestrationCommandInvariantError {
   return new OrchestrationCommandInvariantError({
     commandType,
     detail,

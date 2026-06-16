@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  invariantError,
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
@@ -240,6 +241,89 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.fork": {
+      const sourceThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.newThreadId,
+      });
+
+      const forkIndex = sourceThread.messages.findIndex(
+        (message) => message.id === command.forkBeforeMessageId,
+      );
+      if (forkIndex < 0) {
+        return yield* invariantError(
+          command.type,
+          `Message '${command.forkBeforeMessageId}' does not exist in thread '${command.sourceThreadId}'.`,
+        );
+      }
+
+      // Clone every message strictly before the clicked one ("up to that point").
+      const slice = sourceThread.messages.slice(0, forkIndex);
+
+      // Refuse to fork mid-stream: the last cloned message must be settled, else
+      // we would freeze a half-written assistant message into the fork.
+      const lastSliceMessage = slice.at(-1);
+      if (lastSliceMessage?.streaming === true) {
+        return yield* invariantError(
+          command.type,
+          `Cannot fork thread '${command.sourceThreadId}' while a response is still streaming.`,
+        );
+      }
+
+      // Precise agent-resume anchor: the provider id of the last assistant message
+      // kept in the slice. Absent on older threads / non-anchoring providers.
+      const anchor = slice.findLast(
+        (message) => message.role === "assistant" && typeof message.providerMessageId === "string",
+      )?.providerMessageId;
+
+      // Deferred resume directive — a *reference*, not the parent cursor itself
+      // (the opaque provider resumeCursor lives in the provider layer, not the
+      // orchestration read model). The fork's first session start resolves the
+      // parent's live cursor from `sourceThreadId` and forks it at `resumeSessionAt`.
+      const forkResume =
+        slice.length > 0
+          ? {
+              fork: true as const,
+              sourceThreadId: command.sourceThreadId,
+              ...(anchor ? { resumeSessionAt: anchor } : {}),
+            }
+          : undefined;
+
+      const forkContextApproximate = slice.length > 0 && anchor === undefined;
+
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.newThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.forked",
+        payload: {
+          threadId: command.newThreadId,
+          sourceThreadId: command.sourceThreadId,
+          projectId: sourceThread.projectId,
+          title: command.title,
+          modelSelection: sourceThread.modelSelection,
+          runtimeMode: sourceThread.runtimeMode,
+          interactionMode: sourceThread.interactionMode,
+          branch: sourceThread.branch,
+          worktreePath: sourceThread.worktreePath,
+          messages: slice,
+          ...(forkResume !== undefined ? { forkResume } : {}),
+          forkContextApproximate,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -649,6 +733,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: "",
           turnId: command.turnId ?? null,
           streaming: false,
+          ...(command.providerMessageId !== undefined
+            ? { providerMessageId: command.providerMessageId }
+            : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

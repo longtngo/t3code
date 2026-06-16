@@ -57,6 +57,33 @@ type ProviderIntentEvent = Extract<
   }
 >;
 
+/**
+ * Decode a thread's one-shot `pendingForkResume` directive (set by the projector
+ * when handling `thread.forked`) into a `forkFrom` reference for session start.
+ * Returns undefined for anything that is not a well-formed fork directive.
+ */
+function readPendingForkResume(
+  value: unknown,
+): { readonly sourceThreadId: ThreadId; readonly resumeSessionAt?: string } | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const directive = value as {
+    fork?: unknown;
+    sourceThreadId?: unknown;
+    resumeSessionAt?: unknown;
+  };
+  if (directive.fork !== true || typeof directive.sourceThreadId !== "string") {
+    return undefined;
+  }
+  return {
+    sourceThreadId: directive.sourceThreadId as ThreadId,
+    ...(typeof directive.resumeSessionAt === "string"
+      ? { resumeSessionAt: directive.resumeSessionAt }
+      : {}),
+  };
+}
+
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -464,6 +491,10 @@ const make = Effect.gen(function* () {
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
+      readonly forkFrom?: {
+        readonly sourceThreadId: ThreadId;
+        readonly resumeSessionAt?: string;
+      };
     }) =>
       providerService.startSession(threadId, {
         threadId,
@@ -472,6 +503,7 @@ const make = Effect.gen(function* () {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input?.forkFrom !== undefined ? { forkFrom: input.forkFrom } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
@@ -568,7 +600,10 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    // First session for a forked thread: carry the parent agent context over by
+    // forking the source thread's session (consumed once; cleared on session-set).
+    const forkFrom = readPendingForkResume(thread.pendingForkResume);
+    const startedSession = yield* startProviderSession(forkFrom ? { forkFrom } : undefined);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });

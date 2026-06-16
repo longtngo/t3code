@@ -131,6 +131,9 @@ interface ClaudeResumeState {
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
+  // When true, resume into a NEW session id (Claude SDK `forkSession`) rather
+  // than continuing the resumed session — leaves the parent transcript intact.
+  readonly fork?: boolean;
 }
 
 interface ClaudeTurnState {
@@ -505,6 +508,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     sessionId?: unknown;
     resumeSessionAt?: unknown;
     turnCount?: unknown;
+    fork?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -530,6 +534,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
       ? { turnCount: turnCountValue }
       : {}),
+    ...(cursor.fork === true ? { fork: true } : {}),
   };
 }
 
@@ -3338,6 +3343,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
+        // Fork: resume the parent session into a NEW session id so the original
+        // transcript is never appended to. `resumeSessionAt` (when an anchor is
+        // known) truncates the forked context to a specific message.
+        ...(resumeState?.fork && existingResumeSessionId ? { forkSession: true } : {}),
+        ...(resumeState?.fork && resumeState.resumeSessionAt
+          ? { resumeSessionAt: resumeState.resumeSessionAt }
+          : {}),
         includePartialMessages: true,
         canUseTool,
         env: claudeEnvironment,
@@ -3404,6 +3416,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...(sessionId ? { resume: sessionId } : {}),
           ...(resumeState?.resumeSessionAt ? { resumeSessionAt: resumeState.resumeSessionAt } : {}),
           turnCount: resumeState?.turnCount ?? 0,
+          // Keep forking until the SDK assigns the fork's own session id (set on
+          // the first turn's init message); a restart before then must still fork,
+          // never append to the parent transcript.
+          ...(resumeState?.fork && existingResumeSessionId ? { fork: true } : {}),
         },
         createdAt: startedAt,
         updatedAt: startedAt,

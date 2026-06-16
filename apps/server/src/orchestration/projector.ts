@@ -17,6 +17,7 @@ import {
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
+  ThreadForkedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -281,6 +282,54 @@ export function projectEvent(
         };
       });
 
+    case "thread.forked":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadForkedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread: OrchestrationThread = yield* decodeForEvent(
+          OrchestrationThread,
+          {
+            id: payload.threadId,
+            projectId: payload.projectId,
+            title: payload.title,
+            modelSelection: payload.modelSelection,
+            runtimeMode: payload.runtimeMode,
+            interactionMode: payload.interactionMode,
+            branch: payload.branch,
+            worktreePath: payload.worktreePath,
+            latestTurn: null,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            archivedAt: null,
+            deletedAt: null,
+            // Cloned conversation history, applied as a complete array (capped),
+            // not via the streaming-accumulation path.
+            messages: payload.messages.slice(-MAX_THREAD_MESSAGES),
+            activities: [],
+            checkpoints: [],
+            session: null,
+            // Consumed once by the fork's first provider session start, then
+            // cleared on `thread.session-set`.
+            ...(payload.forkResume !== undefined
+              ? { pendingForkResume: payload.forkResume }
+              : {}),
+          },
+          event.type,
+          "thread",
+        );
+        const existing = nextBase.threads.find((entry) => entry.id === thread.id);
+        return {
+          ...nextBase,
+          threads: existing
+            ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
+            : [...nextBase.threads, thread],
+        };
+      });
+
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -379,6 +428,9 @@ export function projectEvent(
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
+            ...(payload.providerMessageId !== undefined
+              ? { providerMessageId: payload.providerMessageId }
+              : {}),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
           },
@@ -402,6 +454,9 @@ export function projectEvent(
                     turnId: message.turnId,
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
+                      : {}),
+                    ...(message.providerMessageId !== undefined
+                      ? { providerMessageId: message.providerMessageId }
                       : {}),
                   }
                 : entry,
@@ -442,6 +497,9 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            // A session now exists for this thread; the one-shot fork resume
+            // directive (if any) has been consumed by the session start.
+            pendingForkResume: undefined,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {

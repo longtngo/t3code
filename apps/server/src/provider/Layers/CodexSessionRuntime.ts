@@ -258,6 +258,14 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
+function readResumeCursorFork(resumeCursor: ProviderSession["resumeCursor"]): boolean {
+  return (
+    resumeCursor !== null &&
+    typeof resumeCursor === "object" &&
+    (resumeCursor as { fork?: unknown }).fork === true
+  );
+}
+
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
@@ -418,9 +426,10 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 
 type CodexThreadOpenResponse =
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"];
+  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"]
+  | CodexRpc.ClientRequestResponsesByMethod["thread/fork"];
 
-type CodexThreadOpenMethod = "thread/start" | "thread/resume";
+type CodexThreadOpenMethod = "thread/start" | "thread/resume" | "thread/fork";
 
 interface CodexThreadOpenClient {
   readonly request: <M extends CodexThreadOpenMethod>(
@@ -437,6 +446,9 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  // When set, fork this parent Codex thread into a new one (carries the parent
+  // context, leaves the original intact) instead of resuming it in place.
+  readonly forkThreadId?: string | undefined;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -445,6 +457,29 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
   });
+
+  if (input.forkThreadId !== undefined) {
+    // ThreadForkParams shares ThreadStartParams' config fields (cwd/approval/
+    // sandbox/model/serviceTier); the only difference is the required parent
+    // `threadId`. The config enums are structurally identical literal unions.
+    const forkParams: EffectCodexSchema.V2ThreadForkParams = {
+      ...startParams,
+      threadId: input.forkThreadId,
+    } as EffectCodexSchema.V2ThreadForkParams;
+    return input.client
+      .request("thread/fork", forkParams)
+      .pipe(
+        Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+          Effect.logWarning("codex app-server thread fork fell back to fresh start", {
+            threadId: input.threadId,
+            requestedRuntimeMode: input.runtimeMode,
+            forkThreadId: input.forkThreadId,
+            recoverable: true,
+            cause: error.message,
+          }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+        ),
+      );
+  }
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
@@ -1194,6 +1229,8 @@ export const makeCodexSessionRuntime = (
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
+      const parentThreadId = readResumeCursorThreadId(options.resumeCursor);
+      const isFork = readResumeCursorFork(options.resumeCursor);
       const opened = yield* openCodexThread({
         client,
         threadId: options.threadId,
@@ -1201,7 +1238,10 @@ export const makeCodexSessionRuntime = (
         cwd: options.cwd,
         requestedModel,
         serviceTier: options.serviceTier,
-        resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        // A fork carries the parent thread id; resume it as a fork (new thread)
+        // rather than continuing it in place so the original stays intact.
+        resumeThreadId: isFork ? undefined : parentThreadId,
+        forkThreadId: isFork ? parentThreadId : undefined,
       });
 
       const providerThreadId = opened.thread.id;

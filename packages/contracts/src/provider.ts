@@ -58,6 +58,16 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  // Fork directive: start this session by forking another thread's agent
+  // session (its resume cursor is resolved from the source thread's persisted
+  // binding) so the parent conversation context carries over. `resumeSessionAt`
+  // truncates the forked context to a specific provider message anchor.
+  forkFrom: Schema.optional(
+    Schema.Struct({
+      sourceThreadId: ThreadId,
+      resumeSessionAt: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,

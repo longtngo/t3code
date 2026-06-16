@@ -542,7 +542,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        // Fork: resolve the parent thread's resume cursor and fork it. Falls back
+        // to a fresh start when the parent has no compatible cursor (the caller
+        // already flagged the fork's context as approximate in that case).
+        const forkParentBinding = input.forkFrom
+          ? Option.getOrUndefined(yield* directory.getBinding(input.forkFrom.sourceThreadId))
+          : undefined;
+        const forkParentCursor =
+          forkParentBinding?.providerInstanceId === resolvedInstanceId
+            ? forkParentBinding.resumeCursor
+            : undefined;
+        const forkedResumeCursor =
+          input.forkFrom !== undefined &&
+          forkParentCursor !== null &&
+          typeof forkParentCursor === "object"
+            ? {
+                ...(forkParentCursor as Record<string, unknown>),
+                fork: true,
+                ...(input.forkFrom.resumeSessionAt !== undefined
+                  ? { resumeSessionAt: input.forkFrom.resumeSessionAt }
+                  : {}),
+              }
+            : undefined;
         const effectiveResumeCursor =
+          forkedResumeCursor ??
           input.resumeCursor ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? persistedBinding.resumeCursor
