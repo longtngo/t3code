@@ -1261,8 +1261,7 @@ usageLayer("CodexAdapterLive account usage", (it) => {
             ServerConfig.layerTest(process.cwd(), process.cwd()),
             ServerSettingsService.layerTest(),
             providerSessionDirectoryTestLayer,
-            NodeServices.layer,
-          ),
+          ).pipe(Layer.provideMerge(NodeServices.layer)),
         ),
       );
 
