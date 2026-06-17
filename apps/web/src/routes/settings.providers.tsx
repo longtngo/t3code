@@ -1,11 +1,14 @@
+import { lazy, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { ProviderSettingsPanel } from "../components/settings/SettingsPanels";
-
-function SettingsProvidersRoute() {
-  return <ProviderSettingsPanel />;
-}
+const ProviderSettingsPanel = lazy(() =>
+  import("../components/settings/SettingsPanels").then((m) => ({ default: m.ProviderSettingsPanel })),
+);
 
 export const Route = createFileRoute("/settings/providers")({
-  component: SettingsProvidersRoute,
+  component: () => (
+    <Suspense fallback={null}>
+      <ProviderSettingsPanel />
+    </Suspense>
+  ),
 });

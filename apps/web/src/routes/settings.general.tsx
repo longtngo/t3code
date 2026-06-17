@@ -1,11 +1,14 @@
+import { lazy, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { GeneralSettingsPanel } from "../components/settings/SettingsPanels";
-
-function SettingsGeneralRoute() {
-  return <GeneralSettingsPanel />;
-}
+const GeneralSettingsPanel = lazy(() =>
+  import("../components/settings/SettingsPanels").then((m) => ({ default: m.GeneralSettingsPanel })),
+);
 
 export const Route = createFileRoute("/settings/general")({
-  component: SettingsGeneralRoute,
+  component: () => (
+    <Suspense fallback={null}>
+      <GeneralSettingsPanel />
+    </Suspense>
+  ),
 });

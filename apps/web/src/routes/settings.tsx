@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
-import { useSettingsRestore } from "../components/settings/SettingsPanels";
+import { useSettingsRestore } from "../components/settings/useSettingsRestore";
 import { Button } from "../components/ui/button";
 import { SidebarInset, SidebarTrigger } from "../components/ui/sidebar";
 import { isElectron } from "../env";
