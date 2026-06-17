@@ -1288,6 +1288,38 @@ function applyEnvironmentOrchestrationEvent(
       return writeThreadState(state, nextThread, previousThread);
     }
 
+    case "thread.forked": {
+      // A forked thread materializes client-side just like a created one, but it
+      // arrives pre-populated with the cloned conversation. Without this case the
+      // event falls through to a no-op and the forked thread never appears
+      // (navigating to it shows an empty NoActiveThreadState).
+      const previousThread = getThreadFromEnvironmentState(state, event.payload.threadId);
+      const nextThread = mapThread(
+        {
+          id: event.payload.threadId,
+          projectId: event.payload.projectId,
+          title: event.payload.title,
+          modelSelection: event.payload.modelSelection,
+          runtimeMode: event.payload.runtimeMode,
+          interactionMode: event.payload.interactionMode,
+          branch: event.payload.branch,
+          worktreePath: event.payload.worktreePath,
+          latestTurn: null,
+          createdAt: event.payload.createdAt,
+          updatedAt: event.payload.updatedAt,
+          archivedAt: null,
+          deletedAt: null,
+          messages: event.payload.messages,
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+          session: null,
+        },
+        environmentId,
+      );
+      return writeThreadState(state, nextThread, previousThread);
+    }
+
     case "thread.deleted":
       return removeThreadState(state, event.payload.threadId);
 

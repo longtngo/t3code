@@ -604,6 +604,65 @@ describe("incremental orchestration updates", () => {
     ]);
   });
 
+  it("applies thread.forked by creating the new thread with the cloned messages", () => {
+    const sourceThreadId = ThreadId.make("thread-1");
+    const forkedThreadId = ThreadId.make("thread-forked");
+    const state = withActiveEnvironmentState(
+      localEnvironmentStateOf(makeState(makeThread({ id: sourceThreadId }))),
+    );
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.forked", {
+        threadId: forkedThreadId,
+        sourceThreadId,
+        projectId: ProjectId.make("project-1"),
+        title: "Thread (fork)",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        messages: [
+          {
+            id: MessageId.make("m1"),
+            role: "user",
+            text: "hello",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+          },
+          {
+            id: MessageId.make("m2"),
+            role: "assistant",
+            text: "hi",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+          },
+        ],
+        forkContextApproximate: false,
+        createdAt: "2026-02-27T00:00:01.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    const forked = selectThreadByRef(next, scopeThreadRef(localEnvironmentId, forkedThreadId));
+    expect(forked).toBeDefined();
+    expect(forked?.title).toBe("Thread (fork)");
+    expect(forked?.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+    // Original thread stays intact.
+    expect(
+      selectThreadExistsByRef(next, scopeThreadRef(localEnvironmentId, sourceThreadId)),
+    ).toBe(true);
+  });
+
   it("updates only the affected thread for message events", () => {
     const thread1 = makeThread({
       id: ThreadId.make("thread-1"),
