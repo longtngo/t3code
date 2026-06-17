@@ -1507,7 +1507,14 @@ async function waitForInteractionModeButton(
   return waitForElement(
     () =>
       Array.from(document.querySelectorAll("button")).find(
-        (button) => button.textContent?.trim() === expectedLabel,
+        (button) =>
+          button.textContent?.trim() === expectedLabel &&
+          // Disambiguate from the tasks-panel toggle, whose own label also reads
+          // "Plan" in plan mode (so its textContent collides). The interaction-mode
+          // button is the one whose aria-label describes switching modes.
+          /(enter plan mode|return to normal build mode)/.test(
+            button.getAttribute("aria-label") ?? "",
+          ),
       ) as HTMLButtonElement | null,
     `Unable to find ${expectedLabel} interaction mode button.`,
   );
