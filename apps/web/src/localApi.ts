@@ -6,6 +6,7 @@ import { resetSourceControlDiscoveryStateForTests } from "./lib/sourceControlDis
 import { resetRequestLatencyStateForTests } from "./rpc/requestLatencyState";
 import { resetServerStateForTests } from "./rpc/serverState";
 import { resetWsConnectionStateForTests } from "./rpc/wsConnectionState";
+import { __resetClientSettingsPersistenceForTests } from "./hooks/useSettings";
 import {
   resetSavedEnvironmentRegistryStoreForTests,
   resetSavedEnvironmentRuntimeStoreForTests,
@@ -197,7 +198,6 @@ export function ensureLocalApi(): LocalApi {
 
 export async function __resetLocalApiForTests() {
   cachedApi = undefined;
-  const { __resetClientSettingsPersistenceForTests } = await import("./hooks/useSettings");
   __resetClientSettingsPersistenceForTests();
   await resetEnvironmentServiceForTests();
   resetVcsStatusStateForTests();

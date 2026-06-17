@@ -5,6 +5,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { playwright } from "vite-plus/test/browser-playwright";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
+import { visualizer } from "rollup-plugin-visualizer";
 import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
@@ -117,6 +118,18 @@ export default defineConfig(() => {
         presets: [reactCompilerPreset()],
       }),
       tailwindcss(),
+      // Bundle analyzer — gated behind ANALYZE so it is zero-cost by default.
+      // Run `ANALYZE=1 pnpm --filter @t3tools/web build` to emit dist/stats.html.
+      ...(process.env.ANALYZE
+        ? [
+            visualizer({
+              filename: "dist/stats.html",
+              template: "treemap",
+              gzipSize: true,
+              brotliSize: false,
+            }),
+          ]
+        : []),
     ],
     optimizeDeps: {
       include: [

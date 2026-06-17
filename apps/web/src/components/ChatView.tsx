@@ -36,7 +36,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useVcsStatus } from "~/lib/vcsStatusState";
@@ -112,7 +112,9 @@ import {
   visibleSidebarItems,
 } from "../sidebarSections";
 import { useSidebarViewStore } from "../sidebarViewStore";
-import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+// xterm + the terminal addons are ~65 KB gzip and only needed once a thread
+// terminal is actually opened, so defer the chunk until the drawer mounts.
+const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -794,33 +796,35 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 
   return (
     <div className={visible ? undefined : "hidden"}>
-      <ThreadTerminalDrawer
-        threadRef={threadRef}
-        threadId={threadId}
-        cwd={cwd}
-        worktreePath={effectiveWorktreePath}
-        runtimeEnv={runtimeEnv}
-        visible={visible}
-        height={terminalUiState.terminalHeight}
-        // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
-        terminalIds={terminalUiState.terminalIds}
-        activeTerminalId={terminalUiState.activeTerminalId}
-        terminalGroups={terminalUiState.terminalGroups}
-        activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
-        focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
-        onSplitTerminal={splitTerminal}
-        onNewTerminal={createNewTerminal}
-        splitShortcutLabel={visible ? splitShortcutLabel : undefined}
-        newShortcutLabel={visible ? newShortcutLabel : undefined}
-        closeShortcutLabel={visible ? closeShortcutLabel : undefined}
-        keybindings={keybindings}
-        onActiveTerminalChange={activateTerminal}
-        onCloseTerminal={closeTerminal}
-        onHeightChange={setTerminalHeight}
-        onAddTerminalContext={handleAddTerminalContext}
-        terminalLabelsById={terminalLabelsById}
-        terminalLaunchLocationsById={terminalLaunchLocationsById}
-      />
+      <Suspense fallback={null}>
+        <ThreadTerminalDrawer
+          threadRef={threadRef}
+          threadId={threadId}
+          cwd={cwd}
+          worktreePath={effectiveWorktreePath}
+          runtimeEnv={runtimeEnv}
+          visible={visible}
+          height={terminalUiState.terminalHeight}
+          // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
+          terminalIds={terminalUiState.terminalIds}
+          activeTerminalId={terminalUiState.activeTerminalId}
+          terminalGroups={terminalUiState.terminalGroups}
+          activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
+          focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
+          onSplitTerminal={splitTerminal}
+          onNewTerminal={createNewTerminal}
+          splitShortcutLabel={visible ? splitShortcutLabel : undefined}
+          newShortcutLabel={visible ? newShortcutLabel : undefined}
+          closeShortcutLabel={visible ? closeShortcutLabel : undefined}
+          keybindings={keybindings}
+          onActiveTerminalChange={activateTerminal}
+          onCloseTerminal={closeTerminal}
+          onHeightChange={setTerminalHeight}
+          onAddTerminalContext={handleAddTerminalContext}
+          terminalLabelsById={terminalLabelsById}
+          terminalLaunchLocationsById={terminalLaunchLocationsById}
+        />
+      </Suspense>
     </div>
   );
 });
