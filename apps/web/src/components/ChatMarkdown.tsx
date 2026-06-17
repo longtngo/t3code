@@ -70,6 +70,7 @@ import {
   type FileViewerKind,
   type FileViewerView,
 } from "../fileViewerStore";
+import { classifyFileViewerKind, languageForPath } from "../lib/codeFileTypes";
 import { cn } from "../lib/utils";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -223,18 +224,17 @@ function nodeToPlainText(node: ReactNode): string {
   return "";
 }
 
-type InlineCodePathKind = "html" | "markdown";
-
 // Characters that never appear in legitimate file paths — their presence means
 // the inline code is markup/code, not a path, so no affordance is shown.
 const NON_PATH_CHARS_PATTERN = /[<>|*"`]/;
 
 /**
- * Classify a single-line inline-code string as an openable HTML or markdown
- * path. Conservative: requires a single whitespace-free token ending in a known
- * extension, with no markup characters.
+ * Classify a single-line inline-code string as an openable file path (and how the
+ * viewer should render it), or null. Conservative: requires a single
+ * whitespace-free token with no markup characters and no URL scheme; the
+ * extension→kind decision itself lives in {@link classifyFileViewerKind}.
  */
-function classifyInlineCodePath(raw: string): InlineCodePathKind | null {
+function classifyInlineCodePath(raw: string): FileViewerKind | null {
   const text = raw.trim();
   if (text.length === 0 || /\s/.test(text) || NON_PATH_CHARS_PATTERN.test(text)) {
     return null;
@@ -244,16 +244,61 @@ function classifyInlineCodePath(raw: string): InlineCodePathKind | null {
   if (text.includes("://")) {
     return null;
   }
-  const lower = text.toLowerCase();
-  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
-  return null;
+  return classifyFileViewerKind(text);
 }
 
 function inlinePathBasename(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
+}
+
+/**
+ * Shared shell for the markdown/code chip: a body button that opens the viewer
+ * plus a caret-triggered dropdown menu. Only the menu items (and caret tooltip)
+ * differ between the two kinds.
+ */
+function FileChipWithMenu({
+  label,
+  basename,
+  caretTitle,
+  onOpen,
+  children,
+}: {
+  label: ReactNode;
+  basename: string;
+  caretTitle: string;
+  onOpen: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <span className="chat-markdown-file-chip chat-markdown-file-chip-group">
+      <button
+        type="button"
+        className="chat-markdown-file-chip-main"
+        onClick={onOpen}
+        title={`Open ${basename}`}
+        aria-label={`Open ${basename}`}
+      >
+        {label}
+      </button>
+      <Menu>
+        <MenuTrigger
+          render={
+            <button
+              type="button"
+              className="chat-markdown-file-chip-caret"
+              title={caretTitle}
+              aria-label={`View options for ${basename}`}
+            />
+          }
+        >
+          <ChevronDownIcon className="size-3.5" />
+        </MenuTrigger>
+        <MenuPopup align="end">{children}</MenuPopup>
+      </Menu>
+    </span>
+  );
 }
 
 /**
@@ -273,6 +318,7 @@ function InlineFilePathChip({
   cwd: string | undefined;
   environmentId: EnvironmentId;
 }) {
+  const { resolvedTheme } = useTheme();
   const openFileViewer = useFileViewerStore((state) => state.openFileViewer);
   const open = useCallback(
     (view: FileViewerView) => {
@@ -293,18 +339,26 @@ function InlineFilePathChip({
 
   const basename = inlinePathBasename(text);
   const dir = text.slice(0, text.length - basename.length);
+  const dotIndex = basename.lastIndexOf(".");
+  // The short ext label: literal "html"/"md" for those kinds, else the real
+  // extension (e.g. "py", "txt") so a code chip reads at a glance.
+  const extLabel =
+    kind === "html" ? "html" : kind === "markdown" ? "md" : basename.slice(dotIndex + 1).toLowerCase();
 
   const label = (
     <>
       <span className="chat-markdown-file-chip-type">
-        {kind === "html" ? (
+        {kind === "code" ? (
+          // Real per-filetype icon (Python/Go/…), matching code-block headers.
+          <VscodeEntryIcon pathValue={text} kind="file" theme={resolvedTheme} className="size-3.5" />
+        ) : kind === "html" ? (
           <FileCodeIcon className="size-3.5" />
         ) : (
           <FileTextIcon className="size-3.5" />
         )}
       </span>
       <span className={`chat-markdown-file-chip-ext chat-markdown-file-chip-ext-${kind}`}>
-        {kind === "html" ? "html" : "md"}
+        {extLabel}
       </span>
       <span className="chat-markdown-file-chip-path">
         {dir ? <span className="chat-markdown-file-chip-dir">{dir}</span> : null}
@@ -329,39 +383,36 @@ function InlineFilePathChip({
     );
   }
 
-  // Markdown: the chip body opens the default Markdown view; a distinct trailing
-  // caret (its own button, not a split region) chooses Markdown vs generated HTML.
-  return (
-    <span className="chat-markdown-file-chip chat-markdown-file-chip-group">
-      <button
-        type="button"
-        className="chat-markdown-file-chip-main"
-        onClick={() => open("markdown")}
-        title={`Open ${basename}`}
-        aria-label={`Open ${basename}`}
+  // Code/text files have a single (syntax-highlighted) view; the chip body opens
+  // it and the caret dropdown offers View + Copy path. `view` is ignored for code,
+  // so the body opens with the store's default view.
+  if (kind === "code") {
+    return (
+      <FileChipWithMenu
+        label={label}
+        basename={basename}
+        caretTitle={`Options for ${basename}`}
+        onOpen={() => open("markdown")}
       >
-        {label}
-      </button>
-      <Menu>
-        <MenuTrigger
-          render={
-            <button
-              type="button"
-              className="chat-markdown-file-chip-caret"
-              title={`View ${basename} as Markdown or HTML`}
-              aria-label={`View options for ${basename}`}
-            />
-          }
-        >
-          <ChevronDownIcon className="size-3.5" />
-        </MenuTrigger>
-        <MenuPopup align="end">
-          <MenuItem onClick={() => open("markdown")}>Open as Markdown</MenuItem>
-          <MenuItem onClick={() => open("html")}>Open as HTML</MenuItem>
-          <MenuItem onClick={copyPath}>Copy path</MenuItem>
-        </MenuPopup>
-      </Menu>
-    </span>
+        <MenuItem onClick={() => open("markdown")}>View in side panel</MenuItem>
+        <MenuItem onClick={copyPath}>Copy path</MenuItem>
+      </FileChipWithMenu>
+    );
+  }
+
+  // Markdown: the chip body opens the default Markdown view; the caret dropdown
+  // chooses Markdown vs generated HTML.
+  return (
+    <FileChipWithMenu
+      label={label}
+      basename={basename}
+      caretTitle={`View ${basename} as Markdown or HTML`}
+      onOpen={() => open("markdown")}
+    >
+      <MenuItem onClick={() => open("markdown")}>Open as Markdown</MenuItem>
+      <MenuItem onClick={() => open("html")}>Open as HTML</MenuItem>
+      <MenuItem onClick={copyPath}>Copy path</MenuItem>
+    </FileChipWithMenu>
   );
 }
 
@@ -870,6 +921,36 @@ function UncachedShikiCodeBlock({
 
   return (
     <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+  );
+}
+
+/**
+ * Standalone syntax-highlighted view of a whole file's contents, for the file
+ * viewer side panel. Reuses the same Shiki highlighter + LRU cache as fenced code
+ * blocks, deriving the language from the file path. Self-contained: it resolves the
+ * active theme and brings its own error boundary + Suspense fallback, because the
+ * viewer panel that renders it has no boundary of its own (and the underlying
+ * highlighter suspends via `use()`). The fallback shows the raw text, so a
+ * highlighting failure degrades to a readable plain view.
+ */
+export function HighlightedCodeView({ code, path }: { code: string; path: string }) {
+  const { resolvedTheme } = useTheme();
+  const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const language = languageForPath(path);
+  const fallback = <pre className="chat-markdown-file-code-fallback">{code}</pre>;
+  return (
+    <div className="chat-markdown-file-code">
+      <CodeHighlightErrorBoundary fallback={fallback}>
+        <Suspense fallback={fallback}>
+          <SuspenseShikiCodeBlock
+            className={`language-${language}`}
+            code={code}
+            themeName={diffThemeName}
+            isStreaming={false}
+          />
+        </Suspense>
+      </CodeHighlightErrorBoundary>
+    </div>
   );
 }
 

@@ -13,7 +13,8 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
-import ChatMarkdown from "./ChatMarkdown";
+import ChatMarkdown, { HighlightedCodeView } from "./ChatMarkdown";
+import { classifyFileViewerKind } from "../lib/codeFileTypes";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { readEnvironmentApi } from "~/environmentApi";
 import { getEnvironmentHttpBaseUrl } from "~/environments/runtime/catalog";
@@ -35,12 +36,13 @@ function dirnameOf(path: string): string | undefined {
   return separatorIndex > 0 ? path.slice(0, separatorIndex) : undefined;
 }
 
-/** Infer how to render a path from its extension (used for intra-report links). */
+/**
+ * Infer how to render a path from its extension (used for intra-report links and
+ * the address bar). Delegates to the shared classifier so the chip detector and the
+ * viewer agree on what is openable.
+ */
 export function inferFileViewerKind(path: string): FileViewerKind | null {
-  const lower = (path.split(/[?#]/)[0] ?? path).toLowerCase();
-  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
-  return null;
+  return classifyFileViewerKind(path);
 }
 
 const EMPTY_HTML_PLACEHOLDER =
@@ -67,6 +69,10 @@ const LINK_INTERCEPTOR_SCRIPT =
   "var t=document.getElementById(id)||document.getElementsByName(id)[0];" +
   "if(t&&t.scrollIntoView)t.scrollIntoView();return;}" +
   "if(/^[a-z][a-z0-9+.-]*:/i.test(href))return;" + // scheme (http:, mailto:, data:…)
+  // Only markdown/html report links navigate inside the panel. Code/text files
+  // (openable from the chat chip and address bar) are intentionally NOT navigable
+  // from within a rendered report — reports rarely link to raw source, and this
+  // keeps the embedded interceptor free of the large code-extension allow-list.
   "if(/\\.(html?|markdown|md)([?#]|$)/i.test(href)){" + // openable → open in the panel
   "e.preventDefault();parent.postMessage({__t3FileViewerNav:true,href:href},'*');return;}" +
   "e.preventDefault();" + // other relative link: can't resolve in srcdoc, so block it
@@ -151,6 +157,10 @@ const KIND_BADGE: Record<FileViewerKind, { label: string; className: string }> =
   html: {
     label: "HTML",
     className: "bg-orange-500/10 text-orange-400",
+  },
+  code: {
+    label: "Code",
+    className: "bg-emerald-500/10 text-emerald-400",
   },
 };
 
@@ -587,6 +597,15 @@ export function FileViewerContent({
           <ScrollArea className="h-full">
             <div className="p-4">
               <ChatMarkdown text={state.contents} cwd={markdownCwd} isStreaming={false} />
+            </div>
+          </ScrollArea>
+        ) : null}
+        {state.status === "loaded" && !isEmpty && current.kind === "code" ? (
+          // Raw text/code file: render the source with the shared Shiki highlighter,
+          // language inferred from the path. Single view (no MD/HTML toggle).
+          <ScrollArea className="h-full">
+            <div className="p-4">
+              <HighlightedCodeView code={state.contents} path={current.path} />
             </div>
           </ScrollArea>
         ) : null}

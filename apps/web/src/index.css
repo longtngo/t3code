@@ -527,6 +527,11 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, #60a5fa 14%, transparent);
 }
 
+.chat-markdown-file-chip-ext-code {
+  color: var(--color-emerald-400, #34d399);
+  background: color-mix(in srgb, #34d399 14%, transparent);
+}
+
 .chat-markdown-file-chip-path {
   display: inline-flex;
   align-items: baseline;
@@ -716,6 +721,27 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-shiki .shiki {
   background: transparent !important;
+}
+
+/* Whole-file syntax-highlighted view in the file viewer side panel. The `.chat-markdown pre`
+   rules are scoped under `.chat-markdown`, which this view does not wrap with, so restate the
+   parts a full-panel code view needs. Vertical scroll is handled by the panel's ScrollArea;
+   the pre scrolls horizontally for long lines. */
+.chat-markdown-file-code .shiki,
+.chat-markdown-file-code-fallback {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.chat-markdown-file-code-fallback {
+  color: var(--foreground);
 }
 
 /* Diagnostics-style tables: row separators only, uppercase headers, and a

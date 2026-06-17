@@ -84,9 +84,9 @@ describe("classifyViewerPath", () => {
   it("classifies markdown extensions and decodes the suffix", () => {
     expect(classifyViewerPath("/Users/me/report.md")).toEqual({
       absolutePath: "/Users/me/report.md",
-      isMarkdown: true,
+      kind: "markdown",
     });
-    expect(classifyViewerPath("/Users/me/notes.MARKDOWN")?.isMarkdown).toBe(true);
+    expect(classifyViewerPath("/Users/me/notes.MARKDOWN")?.kind).toBe("markdown");
     // Percent-encoded segments (e.g. spaces) are decoded back to the real path.
     expect(classifyViewerPath("/Users/me/my%20report.md")?.absolutePath).toBe(
       "/Users/me/my report.md",
@@ -96,9 +96,19 @@ describe("classifyViewerPath", () => {
   it("classifies html extensions", () => {
     expect(classifyViewerPath("/tmp/out.html")).toEqual({
       absolutePath: "/tmp/out.html",
-      isMarkdown: false,
+      kind: "html",
     });
-    expect(classifyViewerPath("/tmp/out.HTM")?.isMarkdown).toBe(false);
+    expect(classifyViewerPath("/tmp/out.HTM")?.kind).toBe("html");
+  });
+
+  it("classifies text/code extensions as text", () => {
+    expect(classifyViewerPath("/Users/me/notes.txt")).toEqual({
+      absolutePath: "/Users/me/notes.txt",
+      kind: "text",
+    });
+    expect(classifyViewerPath("/Users/me/validate_sql_qa.py")?.kind).toBe("text");
+    expect(classifyViewerPath("/tmp/server.LOG")?.kind).toBe("text");
+    expect(classifyViewerPath("/a/Component.tsx")?.kind).toBe("text");
   });
 
   it("rejects relative paths and malformed encodings", () => {
@@ -107,7 +117,8 @@ describe("classifyViewerPath", () => {
     expect(classifyViewerPath("/Users/me/%E0%A4%A.md")).toBeNull();
   });
 
-  it("rejects unsupported and extension-less files", () => {
+  it("rejects unsupported, secret, and extension-less files", () => {
+    expect(classifyViewerPath("/Users/me/photo.png")).toBeNull();
     expect(classifyViewerPath("/Users/me/secret.env")).toBeNull();
     expect(classifyViewerPath("/Users/me/Makefile")).toBeNull();
     // A dot in a parent directory is not an extension of the final segment.

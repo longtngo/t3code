@@ -1,13 +1,18 @@
 import { create } from "zustand";
 import type { EnvironmentId } from "@t3tools/contracts";
 
-/** The source file's intrinsic type (from its extension). */
-export type FileViewerKind = "html" | "markdown";
+/**
+ * The source file's intrinsic type (from its extension): a markdown document, a
+ * raw HTML document, or any other text/code file (`"code"`, rendered with syntax
+ * highlighting).
+ */
+export type FileViewerKind = "html" | "markdown" | "code";
 
 /**
  * How a markdown file is displayed: as in-app rendered markdown (`"markdown"`)
  * or as a backend-generated standalone HTML document (`"html"`). Ignored for
- * `kind === "html"` files, which only ever render as HTML.
+ * `kind === "html"` (always HTML) and `kind === "code"` (always the highlighted
+ * source) files.
  */
 export type FileViewerView = "markdown" | "html";
 
