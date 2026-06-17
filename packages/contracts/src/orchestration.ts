@@ -515,8 +515,9 @@ const ThreadForkCommand = Schema.Struct({
   sourceThreadId: ThreadId,
   // Client-generated id for the new (forked) thread.
   newThreadId: ThreadId,
-  // Clone every message strictly BEFORE this (clicked user) message.
-  forkBeforeMessageId: MessageId,
+  // Clone every message strictly BEFORE this (clicked user) message. Omit to
+  // fork the ENTIRE session (clone every message, fork point = end of thread).
+  forkBeforeMessageId: Schema.optional(MessageId),
   title: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
 });

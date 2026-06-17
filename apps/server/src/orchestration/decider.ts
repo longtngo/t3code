@@ -259,17 +259,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.newThreadId,
       });
 
-      const forkIndex = sourceThread.messages.findIndex(
-        (message) => message.id === command.forkBeforeMessageId,
-      );
-      if (forkIndex < 0) {
+      // No forkBeforeMessageId ⇒ fork the ENTIRE session (clone every message,
+      // fork point = end of thread). Otherwise fork strictly before the clicked one.
+      const wholeSession = command.forkBeforeMessageId === undefined;
+      const forkIndex = wholeSession
+        ? sourceThread.messages.length
+        : sourceThread.messages.findIndex(
+            (message) => message.id === command.forkBeforeMessageId,
+          );
+      if (!wholeSession && forkIndex < 0) {
         return yield* invariantError(
           command.type,
           `Message '${command.forkBeforeMessageId}' does not exist in thread '${command.sourceThreadId}'.`,
         );
       }
 
-      // Clone every message strictly before the clicked one ("up to that point").
+      // Clone messages "up to that point" — everything before the clicked message,
+      // or the whole conversation when forking the entire session.
       const slice = sourceThread.messages.slice(0, forkIndex);
 
       // Refuse to fork mid-stream: the last cloned message must be settled, else
@@ -301,7 +307,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             }
           : undefined;
 
-      const forkContextApproximate = slice.length > 0 && anchor === undefined;
+      // A whole-session fork carries the parent's complete session (forkSession at
+      // the parent's latest cursor) and clones the complete message list — so there
+      // is no display/context mismatch. Only a mid-conversation fork lacking a
+      // precise anchor is approximate.
+      const forkContextApproximate = !wholeSession && slice.length > 0 && anchor === undefined;
 
       return {
         ...(yield* withEventBase({

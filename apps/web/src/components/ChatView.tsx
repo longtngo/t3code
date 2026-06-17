@@ -3964,18 +3964,16 @@ export default function ChatView(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
-  const onForkUserMessage = useCallback(
-    async (messageId: MessageId) => {
+  // Shared fork dispatch for both the per-message fork (clone before a clicked
+  // message, pre-fill its text) and the whole-session fork (omit the message id
+  // ⇒ clone the entire conversation; no pre-fill).
+  const forkActiveThread = useCallback(
+    async (options: { forkBeforeMessageId?: MessageId; prefillText?: string }) => {
       if (!activeThread || !isServerThread) {
         return;
       }
       const api = readEnvironmentApi(environmentId);
       if (!api) {
-        return;
-      }
-      const forkIndex = activeThread.messages.findIndex((message) => message.id === messageId);
-      const sourceMessage = forkIndex >= 0 ? activeThread.messages[forkIndex] : undefined;
-      if (!sourceMessage) {
         return;
       }
       if (phase === "running" || isSendBusy || isConnecting) {
@@ -3990,7 +3988,9 @@ export default function ChatView(props: ChatViewProps) {
           commandId: newCommandId(),
           sourceThreadId: activeThread.id,
           newThreadId: forkThreadId,
-          forkBeforeMessageId: messageId,
+          ...(options.forkBeforeMessageId !== undefined
+            ? { forkBeforeMessageId: options.forkBeforeMessageId }
+            : {}),
           title: `${activeThread.title} (fork)`,
           createdAt: new Date().toISOString(),
         });
@@ -4002,12 +4002,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
-      // Pre-fill the fork's composer with the clicked message (unsent) so the
-      // user can tweak it before starting the new line of conversation.
-      setComposerDraftPrompt(
-        scopeThreadRef(activeThread.environmentId, forkThreadId),
-        sourceMessage.text,
-      );
+      if (options.prefillText !== undefined) {
+        // Pre-fill the fork's composer (unsent) so the user can tweak before sending.
+        setComposerDraftPrompt(
+          scopeThreadRef(activeThread.environmentId, forkThreadId),
+          options.prefillText,
+        );
+      }
 
       await navigate({
         to: "/$environmentId/$threadId",
@@ -4018,9 +4019,9 @@ export default function ChatView(props: ChatViewProps) {
         type: "success",
         title: "Forked into a new thread",
         description:
-          forkIndex > 0
-            ? "The fork carries the prior conversation context. Edit the prompt and send to continue."
-            : "Edit the prompt and send to start the forked conversation.",
+          options.prefillText !== undefined
+            ? "Edit the pre-filled prompt and send to continue the forked conversation."
+            : "The fork carries the full conversation — continue where you left off.",
       });
     },
     [
@@ -4035,6 +4036,29 @@ export default function ChatView(props: ChatViewProps) {
       setThreadError,
     ],
   );
+
+  const onForkUserMessage = useCallback(
+    (messageId: MessageId) => {
+      const sourceMessage = activeThread?.messages.find((message) => message.id === messageId);
+      if (!sourceMessage) {
+        return;
+      }
+      void forkActiveThread({ forkBeforeMessageId: messageId, prefillText: sourceMessage.text });
+    },
+    [activeThread, forkActiveThread],
+  );
+
+  const onForkThread = useCallback(() => {
+    void forkActiveThread({});
+  }, [forkActiveThread]);
+
+  const forkThreadDisabled =
+    !isServerThread ||
+    activeThread === undefined ||
+    activeThread.messages.length === 0 ||
+    phase === "running" ||
+    isSendBusy ||
+    isConnecting;
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -4082,6 +4106,8 @@ export default function ChatView(props: ChatViewProps) {
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onForkThread={onForkThread}
+          forkThreadDisabled={forkThreadDisabled}
         />
       </header>
 

@@ -9,8 +9,9 @@ import { scopeThreadRef } from "@t3tools/client-runtime";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
-import { DiffIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, GitForkIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger, TooltipWrapperTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
@@ -42,6 +43,8 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
+  onForkThread: () => void;
+  forkThreadDisabled: boolean;
 }
 
 export function shouldShowOpenInPicker(input: {
@@ -80,6 +83,8 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
   onToggleTerminal,
   onToggleDiff,
+  onForkThread,
+  forkThreadDisabled,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const showOpenInPicker = shouldShowOpenInPicker({
@@ -145,6 +150,26 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        <Tooltip>
+          <TooltipWrapperTrigger className="shrink-0">
+            <Button
+              type="button"
+              className="shrink-0"
+              variant="outline"
+              size="xs"
+              onClick={onForkThread}
+              disabled={forkThreadDisabled}
+              aria-label="Fork entire conversation into a new thread"
+            >
+              <GitForkIcon className="size-3" />
+            </Button>
+          </TooltipWrapperTrigger>
+          <TooltipPopup side="bottom">
+            {forkThreadDisabled
+              ? "Fork the entire conversation (available once this thread has messages and is idle)."
+              : "Fork the entire conversation into a new thread"}
+          </TooltipPopup>
+        </Tooltip>
         <Tooltip>
           <TooltipWrapperTrigger className="shrink-0">
             <Toggle

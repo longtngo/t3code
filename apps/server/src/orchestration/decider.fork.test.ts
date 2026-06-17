@@ -122,13 +122,15 @@ const seedReadModel = (messages: ReadonlyArray<SeedMessage>) =>
     return model;
   });
 
-const forkCommand = (forkBeforeMessageId: string) =>
+const forkCommand = (forkBeforeMessageId?: string) =>
   ({
     type: "thread.fork",
     commandId: asCommandId("cmd-fork"),
     sourceThreadId: SOURCE_THREAD_ID,
     newThreadId: asThreadId("thread-fork-new"),
-    forkBeforeMessageId: asMessageId(forkBeforeMessageId),
+    ...(forkBeforeMessageId !== undefined
+      ? { forkBeforeMessageId: asMessageId(forkBeforeMessageId) }
+      : {}),
     title: "Source Thread (fork)",
     createdAt: NOW,
   }) as const;
@@ -207,6 +209,38 @@ it.layer(NodeServices.layer)("decider thread.fork", (it) => {
       expect((forked.payload.forkResume as { resumeSessionAt?: string }).resumeSessionAt).toBe(
         undefined,
       );
+    }),
+  );
+
+  it.effect("forks the entire session (no forkBeforeMessageId) with full, precise context", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel([
+        { id: "m1", role: "user", text: "hello" },
+        { id: "m2", role: "assistant", text: "hi" },
+        { id: "m3", role: "user", text: "again" },
+        { id: "m4", role: "assistant", text: "sure" },
+      ]);
+      const forked = expectForked(
+        yield* decideOrchestrationCommand({ command: forkCommand(), readModel }),
+      );
+      // Every message is cloned, first to last.
+      expect(forked.payload.messages.map((message) => message.id)).toEqual(["m1", "m2", "m3", "m4"]);
+      // Whole-session fork carries the full parent context ⇒ not approximate.
+      expect(forked.payload.forkContextApproximate).toBe(false);
+      expect(forked.payload.forkResume).toMatchObject({ fork: true });
+    }),
+  );
+
+  it.effect("refuses a whole-session fork while the final message is streaming", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel([
+        { id: "m1", role: "user", text: "hello" },
+        { id: "m2", role: "assistant", text: "partial", streaming: true },
+      ]);
+      const error = yield* Effect.flip(
+        decideOrchestrationCommand({ command: forkCommand(), readModel }),
+      );
+      expect(error.message).toContain("still streaming");
     }),
   );
 

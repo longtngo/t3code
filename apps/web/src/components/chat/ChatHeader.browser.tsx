@@ -33,6 +33,8 @@ function renderHeader(props?: Partial<Parameters<typeof ChatHeader>[0]>) {
         onDeleteProjectScript={vi.fn()}
         onToggleTerminal={vi.fn()}
         onToggleDiff={vi.fn()}
+        onForkThread={vi.fn()}
+        forkThreadDisabled={false}
         {...props}
       />
     </SidebarProvider>,
