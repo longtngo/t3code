@@ -18,10 +18,10 @@ interface SamplerState {
 
 /**
  * A per-subscriber stream of local-model samples. Each tick asks the
- * `LlmServeManager` for the current managed mlx-serve snapshot (which scans `ps`,
- * the models dir, and probes online processes). The manager's `list` is total, so
- * the stream's error channel stays `never`. The stream ends when the subscriber's
- * scope closes — no background work runs without a listener.
+ * `LlmServeManager` for the current managed snapshot (one provider per enabled engine —
+ * it scans `ps`, the models dirs, and probes online processes). The manager's `list` is
+ * total, so the stream's error channel stays `never`. The stream ends when the
+ * subscriber's scope closes — no background work runs without a listener.
  */
 export function llmModelsStream(
   intervalMs: number,
@@ -34,11 +34,11 @@ export function llmModelsStream(
     Effect.gen(function* () {
       yield* Effect.sleep(state.first ? bootstrap : interval);
       const manager = yield* LlmServeManager;
-      const { provider, ramBudgetBytes, ramUsedBytes } = yield* manager.list;
+      const { providers, ramBudgetBytes, ramUsedBytes } = yield* manager.list;
       const now = yield* DateTime.now;
       const sample: LlmModelsSample = {
         ts: DateTime.toEpochMillis(now),
-        providers: [provider],
+        providers,
         ramBudgetBytes,
         ramUsedBytes,
       };

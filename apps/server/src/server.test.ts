@@ -630,12 +630,14 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(LlmServeManager)({
             list: Effect.succeed({
-              provider: {
-                name: "mlx-serve",
-                baseUrl: "http://127.0.0.1",
-                reachable: true,
-                models: [],
-              },
+              providers: [
+                {
+                  name: "mlx-serve",
+                  baseUrl: "http://127.0.0.1",
+                  reachable: true,
+                  models: [],
+                },
+              ],
               ramBudgetBytes: 0,
               ramUsedBytes: 0,
             }),

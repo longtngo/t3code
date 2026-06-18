@@ -47,9 +47,10 @@ function sortModels(models: readonly LlmModel[]): LlmModel[] {
   });
 }
 
-function ModelMeta(props: { model: LlmModel }) {
-  const { model } = props;
+function ModelMeta(props: { model: LlmModel; showEngine: boolean }) {
+  const { model, showEngine } = props;
   const parts: string[] = [];
+  if (showEngine && model.engine) parts.push(model.engine);
   if (model.quantization) parts.push(model.quantization);
   if (model.isMoe) parts.push("MoE");
   if (model.contextLength) parts.push(formatContext(model.contextLength));
@@ -62,10 +63,11 @@ function ModelMeta(props: { model: LlmModel }) {
 function ModelRow(props: {
   model: LlmModel;
   busy: boolean;
+  showEngine: boolean;
   onLoad: () => void;
   onUnload: () => void;
 }) {
-  const { model, busy } = props;
+  const { model, busy, showEngine } = props;
   const status = modelStatus(model);
   const transitional = status === "loading" || status === "stopping" || busy;
   const clickable = !transitional && (status === "online" || status === "offline" || status === "error");
@@ -107,7 +109,7 @@ function ModelRow(props: {
         <span className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}>
           {model.modelId ?? model.id}
         </span>
-        <ModelMeta model={model} />
+        <ModelMeta model={model} showEngine={showEngine} />
       </span>
     </button>
   );
@@ -124,6 +126,12 @@ export function SidebarLocalModels() {
 
   const models = useMemo(
     () => sortModels(sample?.providers.flatMap((p) => p.models) ?? []),
+    [sample],
+  );
+  // Show the engine tag on each row only when more than one engine contributes models,
+  // so a single-engine setup stays uncluttered.
+  const showEngine = useMemo(
+    () => (sample?.providers.filter((p) => p.models.length > 0).length ?? 0) > 1,
     [sample],
   );
   const resident = countResident(sample);
@@ -165,8 +173,9 @@ export function SidebarLocalModels() {
           ) : (
             models.map((model) => (
               <ModelRow
-                key={model.modelId ?? model.id}
+                key={`${model.engine ?? "?"}:${model.modelId ?? model.id}`}
                 model={model}
+                showEngine={showEngine}
                 busy={
                   (model.modelId != null && actions.pending.has(`load:${model.modelId}`)) ||
                   (model.pid != null && actions.pending.has(`unload:${model.pid}`))
@@ -199,7 +208,7 @@ export function SidebarLocalModels() {
           <AlertDialogHeader>
             <AlertDialogTitle>Unload {confirm?.model.modelId ?? confirm?.model.id}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops the mlx-serve process (pid {confirm?.pid})
+              This stops the {confirm?.model.engine ?? "local-model"} process (pid {confirm?.pid})
               {confirm?.model.sizeBytes ? ` and frees ~${formatBytes(confirm.model.sizeBytes)}` : ""}.
             </AlertDialogDescription>
           </AlertDialogHeader>

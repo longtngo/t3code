@@ -696,10 +696,12 @@ export const LlmModel = Schema.Struct({
   port: Schema.optional(Schema.Number),
   /** True when t3code launched (and thus supervises) this process. */
   managed: Schema.optional(Schema.Boolean),
-  /** Stable id used by load/unload actions (the model directory basename). */
+  /** Stable id used by load/unload actions (mlx: model-dir basename; ds4: GGUF filename). */
   modelId: Schema.optional(Schema.String),
   /** Failure detail when `status === "error"`. */
   loadError: Schema.optional(Schema.String),
+  /** Owning local engine (display/labelling only; load resolves the engine server-side). */
+  engine: Schema.optional(Schema.Literals(["mlx-serve", "ds4"])),
 });
 export type LlmModel = typeof LlmModel.Type;
 
@@ -740,7 +742,7 @@ export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("Llm
     "no_free_port",
     "not_found",
     "spawn_failed",
-    "not_mlx_process",
+    "not_managed_process",
   ]),
   reason: Schema.String,
 }) {

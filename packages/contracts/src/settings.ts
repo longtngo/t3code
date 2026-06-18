@@ -386,14 +386,41 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
  * resident memory past `ramBudgetBytes`. The serving host is always loopback and the
  * port range is a fixed internal constant.
  */
+/**
+ * ds4 / DeepSeek V4 Flash engine config. Models are single GGUF *files* discovered by
+ * globbing `*.gguf` in `modelsDir`; loading spawns `ds4-server -m <file> --host <loopback>
+ * --port <auto>` with `defaultArgs` (plus any per-model `args`). Disabled by default so a
+ * vanilla checkout / CI never globs a non-existent dir or spawns anything.
+ */
+export const Ds4Settings = Schema.Struct({
+  /** When false (default) the engine is skipped entirely — no discovery, probe, or spawn. */
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** ds4-server binary; resolved on PATH by default. `~` is expanded server-side. */
+  binaryPath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("ds4-server"))),
+  /** Directory globbed for `*.gguf` model files. `~` is expanded server-side. */
+  modelsDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/ds4/gguf"))),
+  /** Default ds4-server launch args (host/port/model are added by the manager). */
+  defaultArgs: Schema.Array(TrimmedString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Optional per-model launch-arg overrides, keyed by GGUF filename. */
+  perModel: Schema.Record(
+    TrimmedNonEmptyString,
+    Schema.Struct({ args: Schema.optional(Schema.Array(TrimmedString)) }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type Ds4Settings = typeof Ds4Settings.Type;
+
 export const LocalModelsSettings = Schema.Struct({
   /** Directory scanned for loadable model subdirectories. `~` is expanded server-side. */
   modelsDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/llm/models"))),
   /** RAM budget in bytes; 0 ⇒ the server uses ~80% of total system memory. */
   ramBudgetBytes: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  /** Default mlx-serve launch args (host/port/model are added by the manager). */
+  /**
+   * Default mlx-serve launch args (host/port/model are added by the manager).
+   * `--no-pld` was dropped 2026-06-18: mlx-serve 26.6.8+ adaptive Prompt-Lookup Decoding
+   * ties or beats it everywhere, so PLD is left at its (on) default.
+   */
   defaultArgs: Schema.Array(TrimmedString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(["--reasoning-budget", "0", "--no-pld"])),
+    Schema.withDecodingDefault(Effect.succeed(["--reasoning-budget", "0"])),
   ),
   /** Optional per-model launch-arg overrides, keyed by model-directory basename. */
   perModel: Schema.Record(
@@ -402,6 +429,13 @@ export const LocalModelsSettings = Schema.Struct({
       args: Schema.optional(Schema.Array(TrimmedString)),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * Optional second local-model engine: ds4 / DeepSeek V4 Flash (`ds4-server`, an
+   * OpenAI-compatible HTTP server serving a single GGUF *file* via `-m`). Defaults are
+   * generic and `enabled:false` — a shared package must not bake a personal filesystem
+   * layout into a cross-fork default. Enable + point at real paths in the live settings.
+   */
+  ds4: Ds4Settings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type LocalModelsSettings = typeof LocalModelsSettings.Type;
 
