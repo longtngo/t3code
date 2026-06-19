@@ -32,6 +32,23 @@ export function countAvailable(sample: LlmModelsSample | null): number {
   return eachModel(sample).length;
 }
 
+const STATUS_RANK: Record<ModelStatus, number> = {
+  online: 0,
+  loading: 1,
+  stopping: 2,
+  error: 3,
+  offline: 4,
+};
+
+/** Order models for display: online first, then transitional/error, offline last; ties by id. */
+export function sortByStatus(models: readonly LlmModel[]): LlmModel[] {
+  return [...models].sort((a, b) => {
+    const byStatus = STATUS_RANK[modelStatus(a)] - STATUS_RANK[modelStatus(b)];
+    if (byStatus !== 0) return byStatus;
+    return (a.modelId ?? a.id).localeCompare(b.modelId ?? b.id);
+  });
+}
+
 /** Compact token-count label, e.g. 163223 -> "163k ctx", 1_050_000 -> "1.1M ctx". */
 export function formatContext(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens <= 0) return "";

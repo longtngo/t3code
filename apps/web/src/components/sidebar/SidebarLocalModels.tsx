@@ -7,9 +7,10 @@ import {
   type ModelStatus,
   countBusy,
   countResident,
-  formatContext,
   modelStatus,
+  sortByStatus,
 } from "~/lib/llmModels";
+import { MODEL_DOT_CLASS, ModelMeta } from "../llm/modelPresentation";
 import { useLlmModelActions, useLlmModels } from "~/hooks/useLlmModels";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import {
@@ -23,42 +24,6 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-
-const DOT_CLASS: Record<ModelStatus, string> = {
-  online: "bg-green-500",
-  loading: "bg-amber-500",
-  stopping: "bg-amber-500",
-  offline: "bg-muted-foreground/40",
-  error: "bg-red-500",
-};
-
-function sortModels(models: readonly LlmModel[]): LlmModel[] {
-  const rank: Record<ModelStatus, number> = {
-    online: 0,
-    loading: 1,
-    stopping: 2,
-    error: 3,
-    offline: 4,
-  };
-  return [...models].sort((a, b) => {
-    const byStatus = rank[modelStatus(a)] - rank[modelStatus(b)];
-    if (byStatus !== 0) return byStatus;
-    return (a.modelId ?? a.id).localeCompare(b.modelId ?? b.id);
-  });
-}
-
-function ModelMeta(props: { model: LlmModel; showEngine: boolean }) {
-  const { model, showEngine } = props;
-  const parts: string[] = [];
-  if (showEngine && model.engine) parts.push(model.engine);
-  if (model.quantization) parts.push(model.quantization);
-  if (model.isMoe) parts.push("MoE");
-  if (model.contextLength) parts.push(formatContext(model.contextLength));
-  if (model.sizeBytes) parts.push(formatBytes(model.sizeBytes));
-  if (model.managed === false && modelStatus(model) === "online") parts.push("external");
-  if (parts.length === 0) return null;
-  return <div className="truncate text-[10px] text-muted-foreground/60">{parts.join(" · ")}</div>;
-}
 
 function ModelRow(props: {
   model: LlmModel;
@@ -103,7 +68,7 @@ function ModelRow(props: {
       {transitional ? (
         <Loader2Icon className="size-3 shrink-0 animate-spin text-amber-500" />
       ) : (
-        <span className={cn("size-1.5 shrink-0 rounded-full", DOT_CLASS[status])} aria-hidden />
+        <span className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])} aria-hidden />
       )}
       <span className="min-w-0 flex-1">
         <span className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}>
@@ -125,7 +90,7 @@ export function SidebarLocalModels() {
   const actions = useLlmModelActions(environmentId ?? ("" as never), setActionError);
 
   const models = useMemo(
-    () => sortModels(sample?.providers.flatMap((p) => p.models) ?? []),
+    () => sortByStatus(sample?.providers.flatMap((p) => p.models) ?? []),
     [sample],
   );
   // Show the engine tag on each row only when more than one engine contributes models,
@@ -153,7 +118,7 @@ export function SidebarLocalModels() {
           >
             <CpuIcon className="size-3.5" />
             <span className="text-xs">Local models</span>
-            <span className={cn("size-1.5 rounded-full", DOT_CLASS[headerStatus])} aria-hidden />
+            <span className={cn("size-1.5 rounded-full", MODEL_DOT_CLASS[headerStatus])} aria-hidden />
             {resident > 0 ? (
               <span className="text-[10px] tabular-nums text-muted-foreground/60">{resident}</span>
             ) : null}

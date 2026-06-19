@@ -216,4 +216,30 @@ describe("serverSettings helpers", () => {
       config: { homePath: "~/.codex" },
     });
   });
+
+  it("replaces localModels so dropped perModel/ds4 keys are cleared (not deep-merged)", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      localModels: {
+        ...DEFAULT_SERVER_SETTINGS.localModels,
+        modelsDir: "~/llm/models",
+        defaultArgs: ["--reasoning-budget", "0"],
+        perModel: { "model-a": { args: ["--kv-quant", "8"] } },
+        ds4: { ...DEFAULT_SERVER_SETTINGS.localModels.ds4, enabled: true, perModel: { x: {} } },
+      },
+    };
+
+    const next = applyServerSettingsPatch(current, {
+      localModels: {
+        ...current.localModels,
+        perModel: {}, // the user removed the only override
+        ds4: { ...current.localModels.ds4, perModel: {} },
+      },
+    }).localModels;
+
+    // A deep merge would have kept "model-a" / "x"; a replacement clears them.
+    expect(next.perModel).toEqual({});
+    expect(next.ds4.perModel).toEqual({});
+    expect(next.ds4.enabled).toBe(true);
+  });
 });

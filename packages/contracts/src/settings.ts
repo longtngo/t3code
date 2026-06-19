@@ -589,6 +589,11 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-object replacement (like providerInstances): the local-model engine config is
+  // small and the web UI sends a fully-formed `localModels` every edit. A replacement (not a
+  // deep merge) is required so that removing a `perModel` / `ds4.perModel` key actually
+  // persists — deepMerge never deletes keys.
+  localModels: Schema.optionalKey(LocalModelsSettings),
   disableAuthentication: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

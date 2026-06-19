@@ -106,6 +106,8 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    // Whole-object replacement so dropped perModel/ds4 keys persist (deepMerge never deletes).
+    ...(patch.localModels !== undefined ? { localModels: patch.localModels } : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
   };
   if (!selectionPatch) {
