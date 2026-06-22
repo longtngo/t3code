@@ -2,17 +2,17 @@ import { useMemo, useState } from "react";
 import { ChevronRightIcon, CpuIcon, Loader2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatBytes } from "~/lib/hostMetrics";
-import {
-  type LlmModel,
-  type ModelStatus,
-  countBusy,
-  countResident,
-  modelStatus,
-  sortByStatus,
-} from "~/lib/llmModels";
-import { MODEL_DOT_CLASS, ModelMeta } from "../llm/modelPresentation";
+import { formatContext, type ModelStatus } from "~/lib/llmModels";
+import { MODEL_DOT_CLASS } from "../llm/modelPresentation";
 import { useLlmModelActions, useLlmModels } from "~/hooks/useLlmModels";
+import { useSettings } from "~/hooks/useSettings";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
+import {
+  type SidebarRow,
+  countBusy,
+  countOnline,
+  mergeConfigsWithSample,
+} from "./sidebarLocalModels.logic";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -25,17 +25,23 @@ import {
 import { Button } from "../ui/button";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
+function rowMeta(row: SidebarRow): string {
+  const parts = [row.providerName];
+  if (row.contextWindow) parts.push(formatContext(row.contextWindow));
+  if (row.sizeBytes) parts.push(formatBytes(row.sizeBytes));
+  return parts.join(" · ");
+}
+
 function ModelRow(props: {
-  model: LlmModel;
+  row: SidebarRow;
   busy: boolean;
-  showEngine: boolean;
   onLoad: () => void;
   onUnload: () => void;
 }) {
-  const { model, busy, showEngine } = props;
-  const status = modelStatus(model);
+  const { row, busy } = props;
+  const status = row.status;
   const transitional = status === "loading" || status === "stopping" || busy;
-  const clickable = !transitional && (status === "online" || status === "offline" || status === "error");
+  const clickable = row.loadable && !transitional && (status === "online" || status === "offline" || status === "error");
 
   const onClick = () => {
     if (!clickable) return;
@@ -43,15 +49,16 @@ function ModelRow(props: {
     else props.onLoad();
   };
 
-  const title =
-    status === "online"
+  const title = !row.loadable
+    ? `${row.providerName} is external / probe-only — t3code can't load it`
+    : status === "online"
       ? "Click to unload"
       : status === "loading"
         ? "Loading…"
         : status === "stopping"
           ? "Stopping…"
           : status === "error"
-            ? (model.loadError ?? "Failed — click to retry")
+            ? "Failed — click to retry"
             : "Click to load";
 
   return (
@@ -72,9 +79,9 @@ function ModelRow(props: {
       )}
       <span className="min-w-0 flex-1">
         <span className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}>
-          {model.modelId ?? model.id}
+          {row.name}
         </span>
-        <ModelMeta model={model} showEngine={showEngine} />
+        <span className="block truncate text-[10px] text-muted-foreground/60">{rowMeta(row)}</span>
       </span>
     </button>
   );
@@ -83,28 +90,20 @@ function ModelRow(props: {
 export function SidebarLocalModels() {
   const environmentId = usePrimaryEnvironmentId();
   const [expanded, setExpanded] = useState(false);
-  const [confirm, setConfirm] = useState<{ model: LlmModel; pid: number } | null>(null);
+  const [confirm, setConfirm] = useState<SidebarRow | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const models = useSettings((s) => s.localLlm.models);
   const { sample } = useLlmModels(environmentId ?? ("" as never), environmentId != null);
   const actions = useLlmModelActions(environmentId ?? ("" as never), setActionError);
 
-  const models = useMemo(
-    () => sortByStatus(sample?.providers.flatMap((p) => p.models) ?? []),
-    [sample],
-  );
-  // Show the engine tag on each row only when more than one engine contributes models,
-  // so a single-engine setup stays uncluttered.
-  const showEngine = useMemo(
-    () => (sample?.providers.filter((p) => p.models.length > 0).length ?? 0) > 1,
-    [sample],
-  );
-  const resident = countResident(sample);
-  const busy = countBusy(sample);
+  const rows = useMemo(() => mergeConfigsWithSample(models, sample), [models, sample]);
+  const online = countOnline(rows);
+  const busy = countBusy(rows);
 
   if (environmentId == null) return null;
 
-  const headerStatus: ModelStatus = resident > 0 ? "online" : busy > 0 ? "loading" : "offline";
+  const headerStatus: ModelStatus = online > 0 ? "online" : busy > 0 ? "loading" : "offline";
 
   return (
     <>
@@ -119,8 +118,8 @@ export function SidebarLocalModels() {
             <CpuIcon className="size-3.5" />
             <span className="text-xs">Local models</span>
             <span className={cn("size-1.5 rounded-full", MODEL_DOT_CLASS[headerStatus])} aria-hidden />
-            {resident > 0 ? (
-              <span className="text-[10px] tabular-nums text-muted-foreground/60">{resident}</span>
+            {online > 0 ? (
+              <span className="text-[10px] tabular-nums text-muted-foreground/60">{online}</span>
             ) : null}
             <ChevronRightIcon
               className={cn("ml-auto size-3.5 transition-transform", expanded && "rotate-90")}
@@ -131,29 +130,24 @@ export function SidebarLocalModels() {
 
       {expanded ? (
         <div className="max-h-64 overflow-y-auto px-1 pb-1">
-          {models.length === 0 ? (
+          {rows.length === 0 ? (
             <div className="px-2 py-1.5 text-[11px] text-muted-foreground/60">
-              {sample == null ? "Connecting…" : "No models found in the models directory."}
+              No model configs yet. Add one in Settings → Local LLM.
             </div>
           ) : (
-            models.map((model) => (
+            rows.map((row) => (
               <ModelRow
-                key={`${model.engine ?? "?"}:${model.modelId ?? model.id}`}
-                model={model}
-                showEngine={showEngine}
+                key={row.configId}
+                row={row}
                 busy={
-                  (model.modelId != null && actions.pending.has(`load:${model.modelId}`)) ||
-                  (model.pid != null && actions.pending.has(`unload:${model.pid}`))
+                  actions.pending.has(`load:${row.configId}`) ||
+                  actions.pending.has(`unload:${row.configId}`)
                 }
                 onLoad={() => {
-                  if (model.modelId) {
-                    setActionError(null);
-                    void actions.load(model.modelId);
-                  }
+                  setActionError(null);
+                  void actions.load(row.configId);
                 }}
-                onUnload={() => {
-                  if (model.pid != null) setConfirm({ model, pid: model.pid });
-                }}
+                onUnload={() => setConfirm(row)}
               />
             ))
           )}
@@ -171,10 +165,11 @@ export function SidebarLocalModels() {
       <AlertDialog open={confirm != null} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Unload {confirm?.model.modelId ?? confirm?.model.id}?</AlertDialogTitle>
+            <AlertDialogTitle>Unload {confirm?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops the {confirm?.model.engine ?? "local-model"} process (pid {confirm?.pid})
-              {confirm?.model.sizeBytes ? ` and frees ~${formatBytes(confirm.model.sizeBytes)}` : ""}.
+              This stops the {confirm?.providerName ?? "local-model"} process
+              {confirm?.pid != null ? ` (pid ${confirm.pid})` : ""}
+              {confirm?.sizeBytes ? ` and frees ~${formatBytes(confirm.sizeBytes)}` : ""}.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -182,7 +177,7 @@ export function SidebarLocalModels() {
             <Button
               variant="destructive"
               onClick={() => {
-                if (confirm) void actions.unload(confirm.pid);
+                if (confirm) void actions.unload(confirm.configId);
                 setConfirm(null);
               }}
             >

@@ -553,4 +553,65 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("migrates legacy localModels into localLlm on read", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+
+      const next = yield* serverSettings.updateSettings({
+        localModels: {
+          modelsDir: "~/llm/models",
+          ramBudgetBytes: 0,
+          defaultArgs: ["--reasoning-budget", "0"],
+          perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
+          ds4: {
+            enabled: true,
+            binaryPath: "ds4-server",
+            modelsDir: "~/ds4/gguf",
+            defaultArgs: [],
+            perModel: {},
+          },
+        },
+      });
+
+      const cfg = next.localLlm.models.find((m) => m.modelId === "gemma-4-12B-it-4bit");
+      assert.isDefined(cfg);
+      assert.deepEqual(cfg?.argsOverride, ["--kv-quant 8"]);
+      assert.isTrue(next.localLlm.providers.ds4?.visible);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("writing localLlm retires legacy localModels so deletions cannot resurrect", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+
+      // Seed a meaningful legacy localModels (would otherwise migrate on read).
+      yield* serverSettings.updateSettings({
+        localModels: {
+          modelsDir: "~/llm/models",
+          ramBudgetBytes: 0,
+          defaultArgs: [],
+          perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
+          ds4: { enabled: false, binaryPath: "ds4-server", modelsDir: "~/ds4/gguf", defaultArgs: [], perModel: {} },
+        },
+      });
+
+      // User then directly edits localLlm down to a single config.
+      const afterWrite = yield* serverSettings.updateSettings({
+        localLlm: {
+          ramBudgetBytes: 0,
+          providers: {},
+          models: [{ id: "keep", name: "Keep", providerId: "mlx-serve", modelId: "gemma-4-12B-it-4bit", visible: true }],
+        },
+      });
+      // localModels was retired to default — so a later read won't re-migrate.
+      assert.deepEqual(afterWrite.localModels.perModel, {});
+
+      // Now delete the last config: empty localLlm must persist, not resurrect the legacy one.
+      const afterDelete = yield* serverSettings.updateSettings({
+        localLlm: { ramBudgetBytes: 0, providers: {}, models: [] },
+      });
+      assert.deepEqual(afterDelete.localLlm.models, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });

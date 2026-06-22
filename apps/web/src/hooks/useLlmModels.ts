@@ -51,10 +51,10 @@ export function useLlmModels(environmentId: EnvironmentId, enabled = true): LlmM
 }
 
 export interface LlmModelActions {
-  /** PID currently being unloaded, or modelId currently being loaded (for per-row spinners). */
+  /** Config ids with a load/unload in flight (for per-row spinners + double-click guards). */
   readonly pending: ReadonlySet<string>;
-  readonly load: (modelId: string) => Promise<void>;
-  readonly unload: (pid: number) => Promise<void>;
+  readonly load: (configId: string) => Promise<void>;
+  readonly unload: (configId: string) => Promise<void>;
 }
 
 /**
@@ -87,19 +87,19 @@ export function useLlmModelActions(
   );
 
   const load = useCallback(
-    (modelId: string) => {
+    (configId: string) => {
       const api = readEnvironmentApi(environmentId);
       if (!api) return Promise.resolve();
-      return withPending(`load:${modelId}`, () => api.llmModels.load({ modelId }));
+      return withPending(`load:${configId}`, () => api.llmModels.load({ configId }));
     },
     [environmentId, withPending],
   );
 
   const unload = useCallback(
-    (pid: number) => {
+    (configId: string) => {
       const api = readEnvironmentApi(environmentId);
       if (!api) return Promise.resolve();
-      return withPending(`unload:${pid}`, () => api.llmModels.unload({ pid }));
+      return withPending(`unload:${configId}`, () => api.llmModels.unload({ configId }));
     },
     [environmentId, withPending],
   );

@@ -696,8 +696,12 @@ export const LlmModel = Schema.Struct({
   port: Schema.optional(Schema.Number),
   /** True when t3code launched (and thus supervises) this process. */
   managed: Schema.optional(Schema.Boolean),
-  /** Stable id used by load/unload actions (mlx: model-dir basename; ds4: GGUF filename). */
+  /** Catalog model id this row is for (mlx dir basename / ds4 GGUF / catalog id). */
   modelId: Schema.optional(Schema.String),
+  /** Stable id of the model config (LocalLlmModelConfig.id); load/unload address this. */
+  configId: Schema.optional(Schema.String),
+  /** User-given config name, for display. */
+  configName: Schema.optional(Schema.String),
   /** Failure detail when `status === "error"`. */
   loadError: Schema.optional(Schema.String),
   /** Owning local engine (display/labelling only; load resolves the engine server-side). */
@@ -743,6 +747,8 @@ export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("Llm
     "not_found",
     "spawn_failed",
     "not_managed_process",
+    // Attempted to load a config whose provider is external/probe-only (not spawnable).
+    "external_not_managed",
   ]),
   reason: Schema.String,
 }) {
@@ -751,16 +757,20 @@ export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("Llm
   }
 }
 
-/** Load (spawn) a local model by its directory-basename id. */
+/** Payload for loading/unloading a local model config (addressed by config id). */
+export const LlmServeLoadPayload = Schema.Struct({ configId: Schema.String });
+export const LlmServeUnloadPayload = Schema.Struct({ configId: Schema.String });
+
+/** Load (spawn) the managed model config identified by `configId`. */
 export const WsLlmServeLoadRpc = Rpc.make(WS_METHODS.llmServeLoad, {
-  payload: Schema.Struct({ modelId: Schema.String }),
+  payload: LlmServeLoadPayload,
   success: Schema.Struct({ pid: Schema.Number, port: Schema.Number }),
   error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
 });
 
-/** Unload (kill) a local model by the PID serving it. */
+/** Unload (kill) the managed model config identified by `configId`. */
 export const WsLlmServeUnloadRpc = Rpc.make(WS_METHODS.llmServeUnload, {
-  payload: Schema.Struct({ pid: Schema.Number }),
+  payload: LlmServeUnloadPayload,
   success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
 });

@@ -242,4 +242,32 @@ describe("serverSettings helpers", () => {
     expect(next.ds4.perModel).toEqual({});
     expect(next.ds4.enabled).toBe(true);
   });
+
+  it("replaces localLlm so a deleted model config and cleared provider override persist", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      localLlm: {
+        ramBudgetBytes: 0,
+        providers: { "mlx-serve": { visible: true, modelsDir: "~/m" }, ds4: { visible: false } },
+        models: [
+          { id: "a", name: "A", providerId: "mlx-serve", modelId: "x", visible: true },
+          { id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true },
+        ],
+      },
+    } as never;
+
+    const next = applyServerSettingsPatch(current, {
+      localLlm: {
+        ramBudgetBytes: 0,
+        providers: { "mlx-serve": { visible: true } }, // dropped modelsDir + the ds4 override
+        models: [{ id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true }], // deleted "a"
+      },
+    } as never).localLlm;
+
+    // A deep merge would keep model "a", leave the array shape corrupt, and keep ds4/modelsDir.
+    expect(Array.isArray(next.models)).toBe(true);
+    expect(next.models.map((m) => m.id)).toEqual(["b"]);
+    expect(next.providers["mlx-serve"]!.modelsDir).toBeUndefined();
+    expect(next.providers.ds4).toBeUndefined();
+  });
 });

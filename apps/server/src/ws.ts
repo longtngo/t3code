@@ -1505,11 +1505,11 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.llmServeLoad]: (input) =>
-          observeRpcEffect(WS_METHODS.llmServeLoad, llmServeManager.load(input.modelId), {
+          observeRpcEffect(WS_METHODS.llmServeLoad, llmServeManager.load(input.configId), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.llmServeUnload]: (input) =>
-          observeRpcEffect(WS_METHODS.llmServeUnload, llmServeManager.unload(input.pid), {
+          observeRpcEffect(WS_METHODS.llmServeUnload, llmServeManager.unload(input.configId), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>

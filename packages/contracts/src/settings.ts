@@ -439,6 +439,63 @@ export const LocalModelsSettings = Schema.Struct({
 });
 export type LocalModelsSettings = typeof LocalModelsSettings.Type;
 
+/**
+ * Per-catalog-provider overrides for the local-LLM overhaul. Sparse: only fields
+ * the user changed are stored; everything else falls back to the build-time
+ * catalog (`@t3tools/shared/localLlm`). `visible` is visibility-only — a hidden
+ * provider stays fully configurable and usable, it just drops out of model-config
+ * pickers. Keyed by catalog provider id in `LocalLlmSettings.providers`.
+ */
+export const LocalLlmProviderConfig = Schema.Struct({
+  visible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  host: Schema.optional(TrimmedString),
+  port: Schema.optional(Schema.Number),
+  /** managed engines: executable override. `~` expanded server-side. */
+  binaryPath: Schema.optional(TrimmedString),
+  /** managed engines: directory holding model resources. `~` expanded server-side. */
+  modelsDir: Schema.optional(TrimmedString),
+  /** external providers: probe URL override (otherwise host:port from catalog). */
+  baseUrl: Schema.optional(TrimmedString),
+  /** Overrides the catalog `defaultArgs` when present (grouped tokens). */
+  defaultArgs: Schema.optional(Schema.Array(TrimmedString)),
+});
+export type LocalLlmProviderConfig = typeof LocalLlmProviderConfig.Type;
+
+/**
+ * A user-created pairing of a catalog model with a catalog provider. Drives both
+ * the sidebar load/unload list and the Providers-tab env-var presets. `port` is a
+ * stable per-config port for managed engines (one model per port) so status can be
+ * re-probed across restarts; `argsOverride` overrides the provider defaults for
+ * this config only; `contextWindow` owns the engine's `--ctx-size`/`--ctx` flag.
+ */
+export const LocalLlmModelConfig = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  providerId: TrimmedNonEmptyString,
+  modelId: TrimmedNonEmptyString,
+  contextWindow: Schema.optional(Schema.Number),
+  visible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  port: Schema.optional(Schema.Number),
+  argsOverride: Schema.optional(Schema.Array(TrimmedString)),
+  modelPathOverride: Schema.optional(TrimmedString),
+});
+export type LocalLlmModelConfig = typeof LocalLlmModelConfig.Type;
+
+/**
+ * Replacement for `LocalModelsSettings`: provider overrides keyed by catalog id +
+ * an ordered list of model configs. `localModels` is migrated into this on first
+ * decode (see localLlmMigration.ts) and then retired.
+ */
+export const LocalLlmSettings = Schema.Struct({
+  /** RAM budget in bytes; 0 ⇒ the server uses ~80% of total system memory. */
+  ramBudgetBytes: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  providers: Schema.Record(TrimmedNonEmptyString, LocalLlmProviderConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  models: Schema.Array(LocalLlmModelConfig).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type LocalLlmSettings = typeof LocalLlmSettings.Type;
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 
 export const ServerSettings = Schema.Struct({
@@ -484,7 +541,10 @@ export const ServerSettings = Schema.Struct({
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Sidebar local-model manager (mlx-serve) configuration.
+  // DEPRECATED: read only to migrate into `localLlm` on first decode.
   localModels: LocalModelsSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Local LLM overhaul: catalog-driven provider overrides + user model configs.
+  localLlm: LocalLlmSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Opt-in open-access mode: when true the server authenticates every client
   // automatically with administrative scopes — it disables authentication,
   // not just the pairing UI (pairing is the only bootstrap method, so there
@@ -594,6 +654,10 @@ export const ServerSettingsPatch = Schema.Struct({
   // deep merge) is required so that removing a `perModel` / `ds4.perModel` key actually
   // persists — deepMerge never deletes keys.
   localModels: Schema.optionalKey(LocalModelsSettings),
+  // Whole-object replacement (same rationale as localModels): the web UI sends a
+  // fully-formed `localLlm` every edit, and replacement is required so removing a
+  // provider override or model config actually persists.
+  localLlm: Schema.optionalKey(LocalLlmSettings),
   disableAuthentication: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

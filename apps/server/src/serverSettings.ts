@@ -48,6 +48,7 @@ import { ServerConfig } from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { migrateLocalModels } from "@t3tools/shared/localLlm";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 
 const encodeServerSettings = Schema.encodeEffect(ServerSettings);
@@ -232,6 +233,31 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
         DEFAULT_GIT_TEXT_GENERATION_MODEL,
     } satisfies ModelSelection,
   };
+}
+
+/**
+ * Read-time migration of the deprecated `localModels` into `localLlm` (the local
+ * LLM overhaul). Applied alongside `resolveTextGenerationProvider`: when `localLlm`
+ * is still empty but the legacy `localModels` carries real user data, surface a
+ * migrated `localLlm`. Idempotent — once `localLlm` has providers/models it wins.
+ */
+function migrateLocalLlmSettings(settings: ServerSettings): ServerSettings {
+  const llm = settings.localLlm;
+  if (llm.models.length > 0 || Object.keys(llm.providers).length > 0) return settings;
+
+  const lm = settings.localModels;
+  const def = DEFAULT_SERVER_SETTINGS.localModels;
+  const meaningful =
+    Object.keys(lm.perModel).length > 0 ||
+    lm.ds4.enabled ||
+    Object.keys(lm.ds4.perModel).length > 0 ||
+    lm.modelsDir !== def.modelsDir ||
+    lm.ds4.modelsDir !== def.ds4.modelsDir ||
+    lm.ds4.binaryPath !== def.ds4.binaryPath ||
+    lm.defaultArgs.join(" ") !== def.defaultArgs.join(" ");
+  if (!meaningful) return settings;
+
+  return { ...settings, localLlm: migrateLocalModels(lm) };
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
@@ -566,22 +592,28 @@ const makeServerSettings = Effect.gen(function* () {
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),
+      Effect.map(migrateLocalLlmSettings),
     ),
     getRawSettings: getSettingsFromCache,
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
-          const nextPersisted = yield* persistProviderEnvironmentSecrets(
-            current,
-            applyServerSettingsPatch(current, patch),
-          );
+          const patched = applyServerSettingsPatch(current, patch);
+          // Retire the deprecated `localModels` once the user writes `localLlm` directly, so
+          // the read-time migration can't resurrect deleted configs from the stale legacy blob.
+          // (No caller patches both fields at once — the web UI only ever sends `localLlm`.)
+          const retired =
+            patch.localLlm !== undefined
+              ? { ...patched, localModels: DEFAULT_SERVER_SETTINGS.localModels }
+              : patched;
+          const nextPersisted = yield* persistProviderEnvironmentSecrets(current, retired);
           const next = yield* normalizeServerSettings(nextPersisted);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
           const materialized = yield* materializeProviderEnvironmentSecrets(next);
-          return resolveTextGenerationProvider(materialized);
+          return migrateLocalLlmSettings(resolveTextGenerationProvider(materialized));
         }),
       ),
     get streamChanges() {
@@ -596,6 +628,7 @@ const makeServerSettings = Effect.gen(function* () {
           ),
         ),
         Stream.map(resolveTextGenerationProvider),
+        Stream.map(migrateLocalLlmSettings),
       );
     },
   } satisfies ServerSettingsShape;

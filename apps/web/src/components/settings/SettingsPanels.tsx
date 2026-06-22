@@ -1,4 +1,4 @@
-import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -57,6 +57,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { PresetDialog } from "./providers/PresetDialog";
 import {
   canOneClickUpdateProviderCandidate,
   collectProviderUpdateCandidates,
@@ -864,6 +865,7 @@ export function ProviderSettingsPanel() {
   const serverProviders = useServerProviders();
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [isPresetDialogOpen, setIsPresetDialogOpen] = useState(false);
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
@@ -1132,6 +1134,15 @@ export function ProviderSettingsPanel() {
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={() => setIsPresetDialogOpen(true)}
+              aria-label="Apply a local-LLM preset"
+            >
+              <SparklesIcon className="size-3" /> Presets
+            </Button>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1275,6 +1286,22 @@ export function ProviderSettingsPanel() {
       <AddProviderInstanceDialog
         open={isAddInstanceDialogOpen}
         onOpenChange={setIsAddInstanceDialogOpen}
+      />
+      <PresetDialog
+        open={isPresetDialogOpen}
+        onOpenChange={setIsPresetDialogOpen}
+        models={settings.localLlm.models}
+        settings={settings.localLlm}
+        targets={rows.map((row) => ({
+          id: String(row.instanceId),
+          label: row.instance.displayName ?? String(row.driver),
+          driver: String(row.driver),
+          environment: row.instance.environment ?? [],
+        }))}
+        onApply={(targetId, mergedEnv) => {
+          const row = rows.find((r) => String(r.instanceId) === targetId);
+          if (row) updateProviderInstance(row, { ...row.instance, environment: mergedEnv });
+        }}
       />
     </SettingsPageContainer>
   );
