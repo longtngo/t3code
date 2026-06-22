@@ -92,6 +92,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       load: vi.fn(),
       unload: vi.fn(),
     },
+    resourceQueue: {
+      get: vi.fn(),
+    },
     cloud: {
       getRelayClientStatus: vi.fn(),
       installRelayClient: vi.fn(),

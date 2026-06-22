@@ -85,7 +85,7 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import type { HostMetricsSample, LlmModelsSample } from "./rpc.ts";
+import type { HostMetricsSample, LlmModelsSample, ResourceQueueSnapshot } from "./rpc.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -673,6 +673,14 @@ export interface EnvironmentApi {
     load: (input: { configId: string }) => Promise<{ pid: number; port: number }>;
     /** Unload (kill) the managed model config identified by `configId`. */
     unload: (input: { configId: string }) => Promise<{ ok: true }>;
+  };
+  resourceQueue: {
+    /**
+     * One-shot read of the local resource-broker queue (`resctl status`). The client
+     * polls this — slowly in the background, faster while the popover is open. Resolves
+     * with `available:false` (not a rejection) when the broker CLI is absent.
+     */
+    get: () => Promise<ResourceQueueSnapshot>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

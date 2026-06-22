@@ -64,6 +64,9 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       load: rpcClient.llmModels.load,
       unload: rpcClient.llmModels.unload,
     },
+    resourceQueue: {
+      get: rpcClient.resourceQueue.get,
+    },
     orchestration: {
       dispatchCommand: rpcClient.orchestration.dispatchCommand,
       getTurnDiff: rpcClient.orchestration.getTurnDiff,

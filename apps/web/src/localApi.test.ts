@@ -110,6 +110,9 @@ const rpcClientMock = {
     load: vi.fn(),
     unload: vi.fn(),
   },
+  resourceQueue: {
+    get: vi.fn(),
+  },
   server: {
     getConfig: vi.fn(),
     refreshProviders: vi.fn(),
