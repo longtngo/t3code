@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFs from "node:fs";
 import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -23,6 +25,47 @@ function logPathHydrationWarning(message: string, error?: unknown): void {
   );
 }
 
+/**
+ * Well-known user/tool bin directories a login shell normally adds to PATH but
+ * a minimal launchd/systemd PATH omits. Used only as a last resort when the
+ * login-shell read fails and no cached PATH is available, so binaries installed
+ * here (e.g. `claude` in `~/.local/bin`) stay reachable. Only directories that
+ * actually exist are returned.
+ */
+function existingUserBinDirs(
+  platform: NodeJS.Platform,
+  homeDir: string,
+  dirExists: (path: string) => boolean,
+): ReadonlyArray<string> {
+  if (platform !== "darwin" && platform !== "linux") return [];
+  const candidates = [
+    `${homeDir}/.local/bin`,
+    `${homeDir}/.bun/bin`,
+    `${homeDir}/.cargo/bin`,
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+  ];
+  return candidates.filter((dir) => dirExists(dir));
+}
+
+function defaultReadCachedPath(cachePath: string): string | undefined {
+  try {
+    const value = NodeFs.readFileSync(cachePath, "utf8").trim();
+    return value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultWriteCachedPath(cachePath: string, value: string): void {
+  try {
+    NodeFs.writeFileSync(cachePath, value, "utf8");
+  } catch (error) {
+    logPathHydrationWarning(`Failed to cache hydrated PATH at ${cachePath}.`, error);
+  }
+}
+
 export function fixPath(
   options: {
     env?: NodeJS.ProcessEnv;
@@ -33,6 +76,12 @@ export function fixPath(
     readLaunchctlPath?: typeof readPathFromLaunchctl;
     userShell?: string;
     logWarning?: (message: string, error?: unknown) => void;
+    /** File used to persist (and on failure reuse) the last good hydrated PATH. */
+    cachePath?: string;
+    homeDir?: string;
+    dirExists?: (path: string) => boolean;
+    readCachedPath?: (cachePath: string) => string | undefined;
+    writeCachedPath?: (cachePath: string, value: string) => void;
   } = {},
 ): void {
   const platform = options.platform ?? process.platform;
@@ -58,6 +107,11 @@ export function fixPath(
 
     if (platform !== "darwin" && platform !== "linux") return;
 
+    const homeDir = options.homeDir ?? NodeOS.homedir();
+    const dirExists = options.dirExists ?? ((path) => NodeFs.existsSync(path));
+    const readCachedPath = options.readCachedPath ?? defaultReadCachedPath;
+    const writeCachedPath = options.writeCachedPath ?? defaultWriteCachedPath;
+
     let shellPath: string | undefined;
     for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
       try {
@@ -75,9 +129,29 @@ export function fixPath(
       platform === "darwin" && !shellPath
         ? (options.readLaunchctlPath ?? readPathFromLaunchctl)()
         : undefined;
-    const mergedPath = mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform);
+
+    // A fresh login-shell read is authoritative. When it (and launchctl) fail —
+    // e.g. the `zsh -ilc` probe times out under load while a service restarts —
+    // fall back to the last PATH we successfully hydrated, then to well-known
+    // user bin dirs, instead of collapsing to the minimal launchd PATH (which
+    // would drop ~/.local/bin and make CLIs like `claude` look "not on PATH").
+    const discoveredPath = shellPath ?? launchctlPath;
+    const cachedPath =
+      !discoveredPath && options.cachePath ? readCachedPath(options.cachePath) : undefined;
+    const fallbackDirs =
+      !discoveredPath && !cachedPath ? existingUserBinDirs(platform, homeDir, dirExists) : [];
+
+    const preferredPath =
+      [discoveredPath ?? cachedPath, ...fallbackDirs].filter(Boolean).join(":") || undefined;
+    const mergedPath = mergePathEntries(preferredPath, env.PATH, platform);
     if (mergedPath) {
       env.PATH = mergedPath;
+    }
+
+    // Persist only after an authoritative shell read, so a degraded boot (which
+    // used the cache or a fallback) never overwrites a known-good cached PATH.
+    if (shellPath && mergedPath && options.cachePath) {
+      writeCachedPath(options.cachePath, mergedPath);
     }
   } catch (error) {
     logWarning("Failed to hydrate PATH from the user environment.", error);

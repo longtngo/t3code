@@ -360,7 +360,7 @@ export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
-    fixPath();
+    fixPath({ cachePath: `${config.providerStatusCacheDir}/resolved-path` });
 
     const httpListeningLayer = Layer.effectDiscard(
       Effect.gen(function* () {
