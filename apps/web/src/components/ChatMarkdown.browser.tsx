@@ -581,31 +581,18 @@ describe("ChatMarkdown", () => {
     const longCell =
       "This service has been experiencing intermittent latency spikes during peak traffic hours and the on-call team is investigating.";
 
-    it("truncates cells by default and expands them from the footer toggle", async () => {
+    it("wraps cells to fit the column by default instead of truncating", async () => {
       const source = ["| Name | Notes |", "| --- | --- |", `| api | ${longCell} |`].join("\n");
       const screen = await render(<ChatMarkdown text={source} cwd="/repo/project" />);
 
       try {
-        const container = document.querySelector(".chat-markdown-table-container");
-        expect(container?.getAttribute("data-expanded")).toBe("false");
-
         const noteCell = [...document.querySelectorAll(".chat-markdown td")].at(-1)!;
-        expect(getComputedStyle(noteCell).whiteSpace).toBe("nowrap");
-        expect(noteCell.scrollWidth).toBeGreaterThan(noteCell.clientWidth);
-
-        const expandButton = page.getByRole("button", { name: "Expand table cells" });
-        await expect.element(expandButton).not.toHaveAttribute("title");
-        await expandButton.hover();
-        await vi.waitFor(() => {
-          const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
-          expect(tooltip?.textContent).toContain("Expand table cells");
-        });
-        await expandButton.click();
-        expect(container?.getAttribute("data-expanded")).toBe("true");
-        expect(getComputedStyle(noteCell).whiteSpace).not.toBe("nowrap");
-
-        await page.getByRole("button", { name: "Collapse table cells" }).click();
-        expect(container?.getAttribute("data-expanded")).toBe("false");
+        // Cells wrap to fit by default — no ellipsis truncation, no clipped overflow.
+        expect(getComputedStyle(noteCell).whiteSpace).toBe("normal");
+        expect(getComputedStyle(noteCell).textOverflow).not.toBe("ellipsis");
+        expect(noteCell.scrollWidth).toBeLessThanOrEqual(noteCell.clientWidth + 1);
+        // The full text stays in the DOM (nothing hidden behind the ellipsis).
+        expect(noteCell.textContent).toContain("on-call team is investigating");
 
         const copyButton = page.getByRole("button", { name: "Copy table" });
         await expect.element(copyButton).not.toHaveAttribute("title");
@@ -620,34 +607,31 @@ describe("ChatMarkdown", () => {
       }
     });
 
-    it("retains column widths when cells expand", async () => {
-      const source = [
-        "| ID | Owner | Status | Priority | Region | Summary | Long Description | Metrics | Payload | Notes |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-        '| 1001 | Ada Lovelace | Active | High | us-west-2 | Payment workflow migration | This cell has enough text to wrap across several lines when expanded without shrinking its column. | Requests: 128,440; Error rate: 0.04%; P95: 212ms | `{ "feature": "billing", "version": 3 }` | Needs post-release monitoring for 24 hours. |',
-      ].join("\n");
+    it("opens a full-width overlay from the footer expand button", async () => {
+      const source = ["| Name | Notes |", "| --- | --- |", `| api | ${longCell} |`].join("\n");
       const screen = await render(<ChatMarkdown text={source} cwd="/repo/project" />);
 
       try {
-        const viewport = document.querySelector(
-          '.chat-markdown-table-container [data-slot="scroll-area-viewport"]',
-        )!;
-        const table = viewport.querySelector("table")!;
-        const collapsedWidths = [...table.querySelectorAll("thead th")].map(
-          (cell) => cell.getBoundingClientRect().width,
-        );
-        expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
-
-        await page.getByRole("button", { name: "Expand table cells" }).click();
-
-        const expandedWidths = [...table.querySelectorAll("thead th")].map(
-          (cell) => cell.getBoundingClientRect().width,
-        );
-        expect(expandedWidths).toHaveLength(collapsedWidths.length);
-        expandedWidths.forEach((width, index) => {
-          expect(width).toBeGreaterThanOrEqual(collapsedWidths[index]! - 1);
+        const expandButton = page.getByRole("button", { name: "Expand table" });
+        await expect.element(expandButton).not.toHaveAttribute("title");
+        await expandButton.hover();
+        await vi.waitFor(() => {
+          const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
+          expect(tooltip?.textContent).toContain("Expand table");
         });
-        expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+
+        await expandButton.click();
+        await vi.waitFor(() => {
+          expect(document.querySelector('[data-slot="dialog-popup"]')).not.toBeNull();
+        });
+        const dialogTable = document.querySelector('[data-slot="dialog-popup"] table');
+        expect(dialogTable).not.toBeNull();
+        expect(dialogTable!.textContent).toContain("on-call team is investigating");
+
+        await page.getByRole("button", { name: "Close" }).click();
+        await vi.waitFor(() => {
+          expect(document.querySelector('[data-slot="dialog-popup"]')).toBeNull();
+        });
       } finally {
         await screen.unmount();
       }
