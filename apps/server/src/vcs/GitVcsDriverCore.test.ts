@@ -7,16 +7,21 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 
-import { GitCommandError } from "@t3tools/contracts";
+import { CheckpointRef, GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
 import { splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import * as VcsDriver from "./VcsDriver.ts";
+import * as VcsProcess from "./VcsProcess.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-git-vcs-driver-test-",
 });
-const TestLayer = GitVcsDriver.layer.pipe(
+// Provide both services: GitVcsDriver.GitVcsDriver (raw git via `git()` helper) and
+// VcsDriver.VcsDriver (which carries the checkpoint ops under test).
+const TestLayer = Layer.mergeAll(GitVcsDriver.vcsLayer, GitVcsDriver.layer).pipe(
   Layer.provide(ServerConfigLayer),
+  Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
 );
 
@@ -448,6 +453,190 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           timeoutMs: 10_000,
         });
         assert.notEqual(originMain.exitCode, 0);
+      }),
+    );
+  });
+
+  describe("checkpoint capture index seeding", () => {
+    const cpRef = (name: string) => CheckpointRef.make(`refs/t3/checkpoints/${name}`);
+
+    const getCheckpoints = Effect.gen(function* () {
+      const vcs = yield* VcsDriver.VcsDriver;
+      const checkpoints = vcs.checkpoints;
+      if (!checkpoints) {
+        throw new Error("git VcsDriver should expose checkpoint ops");
+      }
+      return checkpoints;
+    });
+
+    it.effect("captures modified, untracked, and deleted paths from the working tree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeTextFile(cwd, "keep.txt", "v1\n");
+        yield* git(cwd, ["add", "keep.txt"]);
+        yield* git(cwd, ["commit", "-m", "add keep"]);
+
+        yield* writeTextFile(cwd, "keep.txt", "v2\n");
+        yield* writeTextFile(cwd, "new.txt", "fresh\n");
+        yield* git(cwd, ["rm", "README.md"]);
+
+        const ref = cpRef("seed/working-tree");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.equal(yield* git(cwd, ["show", `${ref}:keep.txt`]), "v2");
+        assert.equal(yield* git(cwd, ["show", `${ref}:new.txt`]), "fresh");
+        const tree = yield* git(cwd, ["ls-tree", "-r", "--name-only", ref]);
+        assert.notInclude(tree.split("\n"), "README.md");
+      }),
+    );
+
+    // Regression guard for the review's correctness finding: when the real index
+    // marks a tracked file skip-worktree, `git add -A` would skip it and freeze
+    // the checkpoint at the stale INDEX blob. The capture must record DISK content.
+    it.effect("captures disk content for skip-worktree files, not the stale index blob", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeTextFile(cwd, "cfg.txt", "committed\n");
+        yield* git(cwd, ["add", "cfg.txt"]);
+        yield* git(cwd, ["commit", "-m", "add cfg"]);
+        yield* git(cwd, ["update-index", "--skip-worktree", "cfg.txt"]);
+        yield* writeTextFile(cwd, "cfg.txt", "local-only\n");
+
+        const ref = cpRef("seed/skip-worktree");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.equal(yield* git(cwd, ["show", `${ref}:cfg.txt`]), "local-only");
+      }),
+    );
+
+    it.effect("captures disk content for assume-unchanged files", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeTextFile(cwd, "cfg.txt", "committed\n");
+        yield* git(cwd, ["add", "cfg.txt"]);
+        yield* git(cwd, ["commit", "-m", "add cfg"]);
+        yield* git(cwd, ["update-index", "--assume-unchanged", "cfg.txt"]);
+        yield* writeTextFile(cwd, "cfg.txt", "local-only\n");
+
+        const ref = cpRef("seed/assume-unchanged");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.equal(yield* git(cwd, ["show", `${ref}:cfg.txt`]), "local-only");
+      }),
+    );
+
+    it.effect("captures untracked files when the repo has no index yet (fallback)", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const checkpoints = yield* getCheckpoints;
+        yield* git(cwd, ["init"]);
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
+        yield* writeTextFile(cwd, "scratch.txt", "data\n");
+
+        const ref = cpRef("seed/no-index");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: ref }));
+        assert.equal(yield* git(cwd, ["show", `${ref}:scratch.txt`]), "data");
+      }),
+    );
+
+    // The fast path (copy the real index) must produce the SAME tree as the old
+    // read-tree HEAD seed — the equivalence the whole change rests on.
+    it.effect("produces the same tree as a read-tree HEAD seed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+        const pathService = yield* Path.Path;
+
+        yield* writeTextFile(cwd, "README.md", "# changed\n");
+        yield* writeTextFile(cwd, "nested/new.txt", "nested\n");
+
+        const refIndexDir = yield* makeTmpDir("ref-index-");
+        const refEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          GIT_INDEX_FILE: pathService.join(refIndexDir, "index"),
+        };
+        yield* git(cwd, ["read-tree", "HEAD"], refEnv);
+        yield* git(cwd, ["add", "-A", "--", "."], refEnv);
+        const expectedTree = yield* git(cwd, ["write-tree"], refEnv);
+
+        const ref = cpRef("seed/equivalence");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+        const actualTree = yield* git(cwd, ["rev-parse", `${ref}^{tree}`]);
+
+        assert.equal(actualTree, expectedTree);
+      }),
+    );
+
+    // Fast path must reconcile to disk: a file staged then edited is captured at
+    // its on-disk content, not the staged blob copied in from the real index.
+    it.effect("captures disk content for a file modified after staging", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeTextFile(cwd, "f.txt", "staged\n");
+        yield* git(cwd, ["add", "f.txt"]);
+        yield* writeTextFile(cwd, "f.txt", "modified\n");
+
+        const ref = cpRef("seed/staged-then-modified");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.equal(yield* git(cwd, ["show", `${ref}:f.txt`]), "modified");
+      }),
+    );
+
+    // The index exists (staged file) but there is no HEAD yet: the fast path must
+    // still produce a valid root checkpoint, and the partial-copy fallback must not
+    // run `git add -A` on a corrupt index.
+    it.effect("captures a root checkpoint when the index has staged files but no HEAD", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const checkpoints = yield* getCheckpoints;
+        yield* git(cwd, ["init"]);
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
+        yield* writeTextFile(cwd, "staged.txt", "content\n");
+        yield* git(cwd, ["add", "staged.txt"]);
+
+        const ref = cpRef("seed/no-head-staged");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.isTrue(yield* checkpoints.hasCheckpointRef({ cwd, checkpointRef: ref }));
+        assert.equal(yield* git(cwd, ["show", `${ref}:staged.txt`]), "content");
+      }),
+    );
+
+    // A linked worktree has its own index under .git/worktrees/<name>/; capture must
+    // seed from that, not the main worktree's index (`rev-parse --git-path index`).
+    it.effect("captures from a linked worktree using the worktree-correct index", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const checkpoints = yield* getCheckpoints;
+
+        const worktreeDir = pathService.join(yield* makeTmpDir("linked-wt-"), "wt");
+        yield* git(cwd, ["worktree", "add", "-b", "wt-branch", worktreeDir]);
+        yield* writeTextFile(worktreeDir, "wt-only.txt", "in-worktree\n");
+
+        const ref = cpRef("seed/worktree");
+        yield* checkpoints.captureCheckpoint({ cwd: worktreeDir, checkpointRef: ref });
+
+        assert.equal(yield* git(worktreeDir, ["show", `${ref}:wt-only.txt`]), "in-worktree");
       }),
     );
   });

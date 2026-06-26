@@ -605,6 +605,41 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
     });
 
+  // The worktree-correct path to the real index. NOT `<gitCommonDir>/index`: a linked
+  // worktree has its own index under `.git/worktrees/<name>/`, while the common dir's
+  // index belongs to the main worktree.
+  const resolveGitIndexPath = (cwd: string) =>
+    Effect.gen(function* () {
+      const result = yield* execute({
+        operation: "GitVcsDriver.checkpoints.resolveGitIndexPath",
+        cwd,
+        args: ["rev-parse", "--git-path", "index"],
+      });
+      const indexPath = result.stdout.trim();
+      return path.isAbsolute(indexPath) ? indexPath : path.resolve(cwd, indexPath);
+    });
+
+  // `git add -A` honours the skip-worktree / assume-unchanged index bits — it skips
+  // those paths. Seeding the checkpoint index from a real index that carries them
+  // would freeze those files at their stale index blob instead of their on-disk
+  // content, so we fall back to the read-tree HEAD seed when any are present. In
+  // `git ls-files -v` output, assume-unchanged shows a lowercase status letter and
+  // skip-worktree shows `S`; a truncated listing is treated conservatively as "has
+  // bits" so we never silently take the unsafe fast path.
+  const realIndexHasSkipBits = (cwd: string) =>
+    execute({
+      operation: "GitVcsDriver.checkpoints.detectSkipWorktreeBits",
+      cwd,
+      args: ["ls-files", "-v"],
+      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+    }).pipe(
+      Effect.map(
+        (result) =>
+          result.stdoutTruncated ||
+          result.stdout.split("\n").some((line) => /^[a-zS]/.test(line)),
+      ),
+    );
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
@@ -624,14 +659,46 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         .pipe(Effect.ignore);
 
       yield* Effect.gen(function* () {
-        const headExists = yield* hasHeadCommit(input.cwd);
-        if (headExists) {
-          yield* execute({
-            operation,
-            cwd: input.cwd,
-            args: ["read-tree", "HEAD"],
-            env: commitEnv,
-          });
+        // Seed the throwaway index so `git add -A` can use git's stat cache and skip
+        // re-hashing unchanged files; otherwise every capture re-reads the entire
+        // working tree and can exceed the process timeout on large repos. Copying the
+        // real index inherits its warm stat cache. These queries read the REAL index,
+        // so they must run with the plain process env — never `commitEnv`, which
+        // points GIT_INDEX_FILE at the throwaway temp index.
+        const realIndexPath = yield* resolveGitIndexPath(input.cwd);
+        const realIndexExists = yield* fileSystem
+          .exists(realIndexPath)
+          .pipe(Effect.orElseSucceed(() => false));
+        const canSeedFromRealIndex =
+          realIndexExists && !(yield* realIndexHasSkipBits(input.cwd));
+
+        // The copy can fail (disk, permissions); on any failure fall back to the
+        // read-tree HEAD seed, which still produces a correct (just slower) checkpoint.
+        let seededFromRealIndex = false;
+        if (canSeedFromRealIndex) {
+          seededFromRealIndex = yield* fileSystem
+            .copyFile(realIndexPath, tempIndexPath)
+            .pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+        }
+
+        if (!seededFromRealIndex) {
+          // A failed copy can leave a partial temp index on disk. Discard it so the
+          // fallback seeds a clean index: `read-tree HEAD` would overwrite it, but a
+          // repo with no HEAD would otherwise run `git add -A` on corrupt bytes and
+          // fail the whole capture.
+          yield* fileSystem.remove(tempIndexPath, { force: true }).pipe(Effect.ignore);
+          const headExists = yield* hasHeadCommit(input.cwd);
+          if (headExists) {
+            yield* execute({
+              operation,
+              cwd: input.cwd,
+              args: ["read-tree", "HEAD"],
+              env: commitEnv,
+            });
+          }
         }
 
         yield* execute({
