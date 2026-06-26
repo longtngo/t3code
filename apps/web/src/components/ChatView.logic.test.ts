@@ -18,8 +18,10 @@ import {
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
+  nextStopAction,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
+  shouldHardStopAfterGrace,
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -791,5 +793,33 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         threadError: null,
       }),
     ).toBe(true);
+  });
+});
+
+describe("Stop-button escalation", () => {
+  it("interrupts on the first press and hard-stops on the next press for the same thread", () => {
+    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: null })).toBe("interrupt");
+    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: "t1" })).toBe("hardStop");
+  });
+
+  it("treats a press on a different thread as a fresh interrupt", () => {
+    expect(nextStopAction({ threadId: "t2", alreadyEscalatedThreadId: "t1" })).toBe("interrupt");
+  });
+
+  it("auto-escalates after the grace only while the same thread's turn is still running", () => {
+    expect(
+      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false }),
+    ).toBe(true);
+    // Interrupt was honoured and the turn settled → no hard stop.
+    expect(
+      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: true }),
+    ).toBe(false);
+    // Escalation was cleared / belongs to another thread → no hard stop.
+    expect(
+      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: null, latestTurnSettled: false }),
+    ).toBe(false);
+    expect(
+      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t2", latestTurnSettled: false }),
+    ).toBe(false);
   });
 });

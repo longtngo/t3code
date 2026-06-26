@@ -85,6 +85,18 @@ const TURN_ACTIVITY_IGNORED_TYPES: ReadonlySet<string> = new Set([
   "account.rate-limits.updated",
 ]);
 
+// Foreground tool item types whose `item.started`→`item.completed` span means the turn is
+// legitimately blocked waiting on a tool result (Bash, Edit/Write, tool/MCP calls). While such an
+// item is open the stall watchdog must NOT trip. `assistant_message`/`reasoning` are deliberately
+// excluded: they stream via content deltas (no lingering open item), so a stall there is a genuine
+// SDK wedge the watchdog SHOULD still catch.
+const FOREGROUND_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "command_execution",
+  "file_change",
+  "dynamic_tool_call",
+  "collab_agent_tool_call",
+]);
+
 // Backstop against leaked tracker entries. A turn normally clears via a terminal
 // event, but some paths end a turn without one (e.g. a runtime.error that leaves
 // the projection's activeTurnId set). A real active turn refreshes far more
@@ -110,6 +122,36 @@ function pruneStaleTurnActivity(
     next.delete(threadId);
   }
   return next;
+}
+
+// Track foreground tool items that are open (started, not yet completed) so the stall watchdog
+// can tell "blocked on a tool" from "SDK wedged". Add on `item.started` for a tool item, remove on
+// its `item.completed`. Guarded on `itemId` presence (it is `Schema.optional`) — a malformed item
+// event without an id is simply not tracked rather than leaking; any residual id is cleared when
+// the turn's snapshot entry is deleted on its terminal event (or the TTL prune).
+function nextOpenToolItemIds(
+  existing: ReadonlySet<string>,
+  event: ProviderRuntimeEvent,
+): ReadonlySet<string> {
+  const itemId = event.itemId;
+  if (itemId === undefined) {
+    return existing;
+  }
+  if (event.type === "item.started") {
+    if (!FOREGROUND_TOOL_ITEM_TYPES.has(event.payload.itemType) || existing.has(itemId)) {
+      return existing;
+    }
+    return new Set(existing).add(itemId);
+  }
+  if (event.type === "item.completed") {
+    if (!existing.has(itemId)) {
+      return existing;
+    }
+    const next = new Set(existing);
+    next.delete(itemId);
+    return next;
+  }
+  return existing;
 }
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -866,6 +908,7 @@ const make = Effect.gen(function* () {
           lastEventAt,
           lastEventType: event.type,
           synthetic: event.raw?.method === SYNTHETIC_TURN_START_METHOD,
+          openToolItemIds: new Set<string>(),
         });
         return next;
       }
@@ -878,7 +921,12 @@ const make = Effect.gen(function* () {
         return base;
       }
       const next = new Map(base);
-      next.set(threadId, { ...existing, lastEventAt, lastEventType: event.type });
+      next.set(threadId, {
+        ...existing,
+        lastEventAt,
+        lastEventType: event.type,
+        openToolItemIds: nextOpenToolItemIds(existing.openToolItemIds, event),
+      });
       return next;
     });
 

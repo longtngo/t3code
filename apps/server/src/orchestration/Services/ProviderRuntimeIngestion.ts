@@ -19,6 +19,13 @@ import type { ThreadId, TurnId } from "@t3tools/contracts";
  * is the provider runtime event `type` (e.g. "item.completed"). `synthetic` marks a
  * background/synthetic turn (auto-started for agent responses between user prompts),
  * which the watchdog must not "resume" with a user-visible continue message.
+ *
+ * `openToolItemIds` is the set of foreground tool items (Bash/Edit/tool calls) that have
+ * `item.started` but not yet `item.completed` — i.e. the turn is legitimately blocked waiting
+ * on a tool result. The watchdog must NOT trip while this is non-empty. It is tracked as a set
+ * (not a flag/counter) because `lastEventType` alone is unreliable: a `thread.token-usage.updated`
+ * or `content.delta` lands microseconds after the tool's `item.updated` and would otherwise erase
+ * the in-flight signal.
  */
 export interface TurnActivitySnapshot {
   readonly threadId: ThreadId;
@@ -26,6 +33,7 @@ export interface TurnActivitySnapshot {
   readonly lastEventAt: number;
   readonly lastEventType: string;
   readonly synthetic: boolean;
+  readonly openToolItemIds: ReadonlySet<string>;
 }
 
 /**

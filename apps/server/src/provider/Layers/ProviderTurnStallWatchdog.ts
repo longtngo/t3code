@@ -46,10 +46,6 @@ const DEFAULT_MAX_RECOVERY_ATTEMPTS = 3;
 // bound it so the watchdog fiber can never wedge.
 const DISPATCH_TIMEOUT = Duration.seconds(30);
 
-// Last-event types that mean the SDK is legitimately waiting on an in-flight
-// foreground tool/item (not stalled): don't trip on these.
-const IN_FLIGHT_LAST_EVENT_TYPES: ReadonlySet<string> = new Set(["item.started", "item.updated"]);
-
 export interface ProviderTurnStallWatchdogLiveOptions {
   readonly stallThresholdMs?: number;
   readonly sweepIntervalMs?: number;
@@ -238,7 +234,11 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
         !shell.hasPendingApprovals &&
         !shell.hasPendingUserInput &&
         nowMs - entry.lastEventAt >= stallThresholdMs &&
-        !IN_FLIGHT_LAST_EVENT_TYPES.has(entry.lastEventType)
+        // A non-empty open-tool set means the turn is legitimately blocked on an in-flight
+        // foreground tool (Bash/Edit/tool call), not a wedged SDK — don't trip. This replaces the
+        // old `lastEventType ∈ {item.started,item.updated}` heuristic, which a `token-usage`/
+        // `content.delta` event landing just after the tool's `item.updated` would silently defeat.
+        entry.openToolItemIds.size === 0
       );
     };
 

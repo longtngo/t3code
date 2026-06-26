@@ -183,11 +183,13 @@ import {
   PullRequestDialogState,
   cloneComposerImageForRetry,
   deriveLockedProvider,
+  nextStopAction,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldHardStopAfterGrace,
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -211,6 +213,12 @@ import {
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+// How long after a cooperative Stop (turn.interrupt) to auto-escalate to a hard session.stop when
+// the turn is still running — a turn wedged in a tool never honours the cooperative interrupt.
+// Independent of the server-side interrupt bound (it just abandons a stuck control request); this
+// is the client deciding the cooperative attempt has had long enough and moving to a hard stop.
+const INTERRUPT_ESCALATION_MS = 6000;
+
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
@@ -957,6 +965,19 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
+  // Stop-button escalation: the thread we've already sent a cooperative interrupt for, the pending
+  // auto-escalation timer, and a live mirror of whether the active turn is still running (read
+  // inside the timer, which can't see fresh render state).
+  const interruptEscalatedThreadRef = useRef<string | null>(null);
+  const interruptEscalationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestTurnSettledRef = useRef(true);
+  const clearInterruptEscalation = useCallback(() => {
+    if (interruptEscalationTimerRef.current !== null) {
+      clearTimeout(interruptEscalationTimerRef.current);
+      interruptEscalationTimerRef.current = null;
+    }
+    interruptEscalatedThreadRef.current = null;
+  }, []);
 
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
@@ -1149,6 +1170,15 @@ export default function ChatView(props: ChatViewProps) {
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  // Keep the timer-visible mirror in sync, and drop a pending escalation once the turn settles.
+  useEffect(() => {
+    latestTurnSettledRef.current = latestTurnSettled;
+    if (latestTurnSettled) {
+      clearInterruptEscalation();
+    }
+  }, [latestTurnSettled, clearInterruptEscalation]);
+  // Switching threads (or unmounting) drops any escalation pending for the previous thread.
+  useEffect(() => clearInterruptEscalation, [activeThreadId, clearInterruptEscalation]);
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
@@ -3353,13 +3383,56 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  const dispatchHardStop = useCallback(
+    (threadId: ThreadId) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api) return;
+      void api.orchestration.dispatchCommand({
+        type: "thread.session.stop",
+        commandId: newCommandId(),
+        threadId,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [environmentId],
+  );
+
   const onInterrupt = async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
+    const threadId = activeThread.id;
+
+    // A second Stop press for this thread (or any press after we already interrupted it) escalates
+    // straight to a hard session.stop, which force-kills a turn wedged in a tool.
+    if (
+      nextStopAction({ threadId, alreadyEscalatedThreadId: interruptEscalatedThreadRef.current }) ===
+      "hardStop"
+    ) {
+      clearInterruptEscalation();
+      dispatchHardStop(threadId);
+      return;
+    }
+
+    // First press: cooperative interrupt, then auto-escalate to a hard stop if the turn is still
+    // running after a grace — so a single Stop press reliably stops even a wedged turn.
+    interruptEscalatedThreadRef.current = threadId;
+    interruptEscalationTimerRef.current = setTimeout(() => {
+      interruptEscalationTimerRef.current = null;
+      const escalate = shouldHardStopAfterGrace({
+        threadId,
+        escalatedThreadId: interruptEscalatedThreadRef.current,
+        latestTurnSettled: latestTurnSettledRef.current,
+      });
+      interruptEscalatedThreadRef.current = null;
+      if (escalate) {
+        dispatchHardStop(threadId);
+      }
+    }, INTERRUPT_ESCALATION_MS);
+
     await api.orchestration.dispatchCommand({
       type: "thread.turn.interrupt",
       commandId: newCommandId(),
-      threadId: activeThread.id,
+      threadId,
       createdAt: new Date().toISOString(),
     });
   };

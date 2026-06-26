@@ -95,6 +95,17 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+
+// Backstop for awaiting the stream fiber's interruption during session stop. `query.close()` arms
+// the SDK's own stdin-EOF → SIGTERM → SIGKILL(~5 s) teardown, after which the async iterator
+// settles and the interrupt completes on its own. This bound guarantees stopSessionInternal can
+// never deadlock waiting on a stream fiber parked in a wedged subprocess's `.next()`.
+const STOP_INTERRUPT_GRACE = Duration.seconds(8);
+
+// Bound for the cooperative `query.interrupt()` SDK control request, which awaits a response the
+// subprocess won't send while wedged in a tool. Abandoning the await unblocks the reactor worker so
+// a hard `session.stop` can follow.
+const INTERRUPT_REQUEST_GRACE = Duration.seconds(8);
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -2871,12 +2882,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     yield* Queue.shutdown(context.promptQueue);
 
-    const streamFiber = context.streamFiber;
-    context.streamFiber = undefined;
-    if (streamFiber && streamFiber.pollUnsafe() === undefined) {
-      yield* Fiber.interrupt(streamFiber);
-    }
-
+    // Close the SDK query FIRST. close() is non-blocking and arms the SDK's own teardown
+    // (stdin EOF → SIGTERM → SIGKILL after ~5 s), which is what actually frees a subprocess wedged
+    // mid-tool. It MUST run before interrupting the stream fiber: that fiber is parked in the SDK
+    // async iterator's `.next()`, and `Fiber.interrupt` awaits the fiber — which can only complete
+    // once the subprocess dies and the iterator settles. Interrupting first therefore deadlocks and
+    // close() is never reached (the live bug). Order: kill, THEN reap the consumer.
     yield* Effect.try({
       try: () => context.query.close(),
       catch: (cause) =>
@@ -2891,6 +2902,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
       ),
     );
+
+    const streamFiber = context.streamFiber;
+    context.streamFiber = undefined;
+    if (streamFiber && streamFiber.pollUnsafe() === undefined) {
+      // Bounded: after close()'s SIGKILL the iterator settles and this completes promptly; the
+      // timeout is only a backstop so a pathological never-settling fiber can't wedge the stop.
+      yield* Fiber.interrupt(streamFiber).pipe(
+        Effect.timeoutOption(STOP_INTERRUPT_GRACE),
+        Effect.asVoid,
+      );
+    }
 
     const updatedAt = yield* nowIso;
     context.session = {
@@ -3688,10 +3710,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
       const context = yield* requireSession(threadId);
+      // `query.interrupt()` sends an SDK control request and AWAITS the subprocess's control
+      // response. A subprocess wedged inside a hung foreground tool never sends it, so an unbounded
+      // await here hangs `interruptTurn` — which runs on the single reactor command worker, so
+      // every later command (incl. the watchdog's / user's `session.stop`) queues behind it forever.
+      // Bound it: the control message was already written, so abandoning the await just means the
+      // cooperative interrupt didn't land — the caller (Stop button) then escalates to a hard
+      // `session.stop`, which force-kills via the SDK teardown.
       yield* Effect.tryPromise({
         try: () => context.query.interrupt(),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-      });
+      }).pipe(Effect.timeoutOption(INTERRUPT_REQUEST_GRACE), Effect.asVoid);
     },
   );
 

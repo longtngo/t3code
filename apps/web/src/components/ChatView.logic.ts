@@ -421,3 +421,31 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );
 }
+
+/**
+ * Decide what a Stop-button press should dispatch. The first press for a thread sends a
+ * cooperative `thread.turn.interrupt`; any subsequent press (while that interrupt is still
+ * pending escalation) goes straight to a hard `thread.session.stop`, which force-kills a turn
+ * wedged in a tool.
+ */
+export type StopAction = "interrupt" | "hardStop";
+
+export function nextStopAction(input: {
+  readonly threadId: string;
+  readonly alreadyEscalatedThreadId: string | null;
+}): StopAction {
+  return input.alreadyEscalatedThreadId === input.threadId ? "hardStop" : "interrupt";
+}
+
+/**
+ * After the cooperative-interrupt grace elapses, escalate to a hard stop only when the escalation
+ * still belongs to this thread AND its turn is still running (an honoured interrupt would have
+ * settled it).
+ */
+export function shouldHardStopAfterGrace(input: {
+  readonly threadId: string;
+  readonly escalatedThreadId: string | null;
+  readonly latestTurnSettled: boolean;
+}): boolean {
+  return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
+}

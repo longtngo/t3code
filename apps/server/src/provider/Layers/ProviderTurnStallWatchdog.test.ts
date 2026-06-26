@@ -203,6 +203,7 @@ function staleEntry(
     lastEventAt: nowMs - 60_000,
     lastEventType: "item.completed",
     synthetic: false,
+    openToolItemIds: new Set<string>(),
     ...overrides,
   };
 }
@@ -238,26 +239,37 @@ describe("ProviderTurnStallWatchdog", () => {
     }),
   );
 
-  it.live("does not trip while a foreground tool is in flight (last event item.started)", () =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("thread-stall-inflight");
-      const turnId = TurnId.make("turn-stall-inflight");
-      const nowMs = yield* nowMillis;
-      const harness = createHarness({
-        activity: new Map([
-          [threadId, staleEntry(threadId, turnId, nowMs, { lastEventType: "item.started" })],
-        ]),
-        shells: new Map([
-          [threadId, makeShell(threadId, { status: "running", activeTurnId: turnId })],
-        ]),
-      });
+  it.live(
+    "does not trip while a foreground tool is in flight, even when a later token-usage event is the last seen (regression)",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-stall-inflight");
+        const turnId = TurnId.make("turn-stall-inflight");
+        const nowMs = yield* nowMillis;
+        // Reproduces the live incident: an in-flight command_execution whose `item.updated` was
+        // immediately followed by a `thread.token-usage.updated` (so lastEventType is NOT an
+        // in-flight type), then silence. The open-tool set must still suppress the trip.
+        const harness = createHarness({
+          activity: new Map([
+            [
+              threadId,
+              staleEntry(threadId, turnId, nowMs, {
+                lastEventType: "thread.token-usage.updated",
+                openToolItemIds: new Set<string>(["toolu_inflight"]),
+              }),
+            ],
+          ]),
+          shells: new Map([
+            [threadId, makeShell(threadId, { status: "running", activeTurnId: turnId })],
+          ]),
+        });
 
-      yield* startWatchdog.pipe(Effect.provide(harness.layer));
-      yield* drainFibers;
-      yield* drainFibers;
+        yield* startWatchdog.pipe(Effect.provide(harness.layer));
+        yield* drainFibers;
+        yield* drainFibers;
 
-      expect(harness.dispatched.some((c) => c.type === "thread.session.stop")).toBe(false);
-    }),
+        expect(harness.dispatched.some((c) => c.type === "thread.session.stop")).toBe(false);
+      }),
   );
 
   it.live("does not trip a synthetic (background) turn", () =>

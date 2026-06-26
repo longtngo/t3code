@@ -657,6 +657,65 @@ describe("ProviderRuntimeIngestion", () => {
     expect(activity).toHaveLength(0);
   });
 
+  it("tracks open foreground-tool items across an interleaved token-usage event", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-tool-track-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId("turn-tool"),
+    });
+    await harness.drain();
+    expect((await harness.listTurnActivity())[0]!.openToolItemIds.size).toBe(0);
+
+    // A Bash command goes in flight (item.started, no completion yet).
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-tool-track-item-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId: asTurnId("turn-tool"),
+      itemId: asItemId("toolu_cmd"),
+      payload: { itemType: "command_execution", status: "inProgress" },
+    });
+    await harness.drain();
+    let activity = await harness.listTurnActivity();
+    expect([...activity[0]!.openToolItemIds]).toEqual(["toolu_cmd"]);
+
+    // The exact incident race: a token-usage event lands right after, moving lastEventType off
+    // the in-flight item — the open-tool set must STILL show the command as open.
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-tool-track-usage"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.001Z",
+      threadId: asThreadId("thread-1"),
+      payload: { usage: { usedTokens: 100, inputTokens: 90, outputTokens: 10, lastUsedTokens: 100 } },
+    });
+    await harness.drain();
+    activity = await harness.listTurnActivity();
+    expect(activity[0]!.lastEventType).toBe("thread.token-usage.updated");
+    expect([...activity[0]!.openToolItemIds]).toEqual(["toolu_cmd"]);
+
+    // When the command completes the open-tool set empties.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-tool-track-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-tool"),
+      itemId: asItemId("toolu_cmd"),
+      payload: { itemType: "command_execution", status: "completed" },
+    });
+    await harness.drain();
+    expect((await harness.listTurnActivity())[0]!.openToolItemIds.size).toBe(0);
+  });
+
   it("prunes stale turn-activity entries past the TTL backstop", async () => {
     const harness = await createHarness();
 

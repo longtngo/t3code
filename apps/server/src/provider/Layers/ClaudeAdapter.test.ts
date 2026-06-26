@@ -100,8 +100,15 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     }
   }
 
+  // When set, `interrupt()` never resolves — modelling a subprocess wedged in a tool that never
+  // sends the interrupt control-response.
+  public hangInterrupt = false;
+
   readonly interrupt = async (): Promise<void> => {
     this.interruptCalls.push(undefined);
+    if (this.hangInterrupt) {
+      await new Promise<never>(() => {});
+    }
   };
 
   readonly setModel = async (model?: string): Promise<void> => {
@@ -2095,6 +2102,76 @@ describe("ClaudeAdapterLive", () => {
       const sessions = yield* adapter.listSessions();
       assert.equal(sessions.length, 0);
       assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("bounds a cooperative interrupt whose control-response never arrives", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const drain = yield* Stream.runForEach(adapter.streamEvents, () => Effect.void).pipe(
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      // The subprocess is wedged: it will never answer the interrupt control request.
+      harness.query.hangInterrupt = true;
+
+      // Pre-fix this awaits forever (and, running on the single reactor worker, blocks every later
+      // command). Post-fix it is bounded — fork it, advance past the grace, and it must complete.
+      const interruptFiber = yield* adapter.interruptTurn(THREAD_ID, undefined).pipe(
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(Duration.seconds(9));
+      // Joins only if interruptTurn returned; pre-fix this hangs (test times out).
+      yield* Fiber.join(interruptFiber);
+      assert.equal(harness.query.interruptCalls.length, 1);
+
+      yield* Fiber.interrupt(drain);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("stops promptly while the stream fiber is parked on a wedged subprocess", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const drain = yield* Stream.runForEach(adapter.streamEvents, () => Effect.void).pipe(
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      // sendTurn forks the SDK-stream fiber. With no emit/fail/finish, the fake's async iterator
+      // parks on a never-resolving `.next()` — exactly the live wedge (a subprocess stuck in a
+      // hung Bash tool). Pre-fix, stopSession's `Fiber.interrupt(streamFiber)` ran BEFORE
+      // `query.close()` and deadlocked here; post-fix close() runs first and settles the iterator.
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+      yield* Effect.yieldNow;
+
+      // The bound: if stopSession can't return, this times out and the test fails.
+      yield* adapter.stopSession(THREAD_ID).pipe(Effect.timeout("4 seconds"));
+
+      // It used the SDK's own teardown (close → SIGKILL), not the cooperative interrupt.
+      assert.equal(harness.query.closeCalls, 1);
+      assert.equal(harness.query.interruptCalls.length, 0);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+
+      yield* Fiber.interrupt(drain);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
