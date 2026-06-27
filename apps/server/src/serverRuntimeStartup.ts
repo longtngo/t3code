@@ -25,6 +25,7 @@ import * as DateTime from "effect/DateTime";
 import { ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { reconcileInterruptedTurnsOnBoot } from "./orchestration/BootTurnReconciler.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor.ts";
@@ -337,6 +338,21 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         Effect.forkScoped,
       ),
     );
+
+    // Clear sessions/turns orphaned by a prior process (a hard restart SIGKILLs
+    // turns mid-flight, leaving a stuck "Working" spinner). Runs before the
+    // reactors so there's no race with a freshly-starting session, and is
+    // disabled with T3CODE_BOOT_RECONCILE=0. Never blocks boot on failure.
+    if (process.env.T3CODE_BOOT_RECONCILE !== "0") {
+      yield* runStartupPhase(
+        "turns.reconcile",
+        reconcileInterruptedTurnsOnBoot().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("boot.turns-reconcile.failed", { cause }).pipe(Effect.as(0)),
+          ),
+        ),
+      );
+    }
 
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
     yield* runStartupPhase(
