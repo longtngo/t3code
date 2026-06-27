@@ -17,9 +17,9 @@ describe("getReconnectDelayMs", () => {
     expect(getReconnectDelayMs(6)).toBe(64_000);
   });
 
-  it("returns null when retry index exceeds maxRetries", () => {
-    expect(getReconnectDelayMs(7)).toBeNull();
-    expect(getReconnectDelayMs(100)).toBeNull();
+  it("returns the capped delay for all retry indices (infinite retries)", () => {
+    expect(getReconnectDelayMs(7)).toBe(64_000);
+    expect(getReconnectDelayMs(100)).toBe(64_000);
   });
 
   it("returns null for negative indices", () => {
@@ -60,6 +60,6 @@ describe("DEFAULT_RECONNECT_BACKOFF", () => {
     expect(DEFAULT_RECONNECT_BACKOFF.initialDelayMs).toBe(1_000);
     expect(DEFAULT_RECONNECT_BACKOFF.backoffFactor).toBe(2);
     expect(DEFAULT_RECONNECT_BACKOFF.maxDelayMs).toBe(64_000);
-    expect(DEFAULT_RECONNECT_BACKOFF.maxRetries).toBe(7);
+    expect(DEFAULT_RECONNECT_BACKOFF.maxRetries).toBeNull();
   });
 });

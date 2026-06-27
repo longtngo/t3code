@@ -10,8 +10,9 @@ export type WsReconnectPhase = "attempting" | "exhausted" | "idle" | "waiting";
 export const WS_RECONNECT_INITIAL_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.initialDelayMs;
 export const WS_RECONNECT_BACKOFF_FACTOR = DEFAULT_RECONNECT_BACKOFF.backoffFactor;
 export const WS_RECONNECT_MAX_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.maxDelayMs;
-export const WS_RECONNECT_MAX_RETRIES = DEFAULT_RECONNECT_BACKOFF.maxRetries!;
-export const WS_RECONNECT_MAX_ATTEMPTS = WS_RECONNECT_MAX_RETRIES + 1;
+// Display-only: the reconnect UI no longer shows a finite attempt ceiling
+// (retries are unbounded). Kept for back-compat of the status shape.
+export const WS_RECONNECT_MAX_ATTEMPTS = 8;
 
 export interface WsConnectionStatus {
   readonly attemptCount: number;
@@ -213,6 +214,9 @@ function applyDisconnectState(
   metadata?: WsConnectionMetadata,
 ): WsConnectionStatus {
   const disconnectedAt = current.disconnectedAt ?? isoNow();
+  // NOTE: the `exhausted` branch of `reconnectPhase === "exhausted"` below is currently
+  // unreachable in practice because `maxRetries` is null (infinite retries).  It is kept
+  // as a defensive fallback for a future finite `maxRetries` configuration.
   const nextRetryDelayMs =
     current.nextRetryAt !== null || current.reconnectPhase === "exhausted"
       ? null

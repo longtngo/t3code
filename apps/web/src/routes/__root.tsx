@@ -21,6 +21,7 @@ import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
 } from "../components/WebSocketConnectionSurface";
+import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { Button } from "../components/ui/button";
 import {
   AnchoredToastProvider,
@@ -145,6 +146,12 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
+        {/* OutboxFlushCoordinator is mounted unconditionally (outside the
+            primaryEnvironmentAuthenticated guard) so it stays alive through logout
+            and can observe the primary-id → null transition to clear the outbox.
+            It is safe to run while unauthenticated: it no-ops when disconnected,
+            when the queue is empty, or when no primary environment api is available. */}
+        <OutboxFlushCoordinator />
         {primaryEnvironmentAuthenticated ? <SlowRpcAckToastCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>{appShell}</WebSocketConnectionSurface>

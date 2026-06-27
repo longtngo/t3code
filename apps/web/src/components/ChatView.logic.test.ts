@@ -15,16 +15,82 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
+  decideSendDisposition,
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   nextStopAction,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
+  shouldClearOutboxOnPrimaryChange,
   shouldHardStopAfterGrace,
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
+
+describe("decideSendDisposition", () => {
+  it("dispatches when connected", () => {
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "connected", isPrimaryEnvironment: true }),
+    ).toBe("dispatch");
+  });
+  it("queues when previously connected and now in an outage (primary env)", () => {
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "reconnecting", isPrimaryEnvironment: true }),
+    ).toBe("queue");
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "offline", isPrimaryEnvironment: true }),
+    ).toBe("queue");
+  });
+  it("dispatches before the first successful connection (so tests/initial load are not mis-queued)", () => {
+    expect(
+      decideSendDisposition({ hasConnected: false, uiState: "connecting", isPrimaryEnvironment: true }),
+    ).toBe("dispatch");
+  });
+  it("dispatches on a never-connected error state (first attempt failed)", () => {
+    expect(
+      decideSendDisposition({ hasConnected: false, uiState: "error", isPrimaryEnvironment: true }),
+    ).toBe("dispatch");
+  });
+  it("queues on a post-connection error state (connection was lost) for primary env", () => {
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "error", isPrimaryEnvironment: true }),
+    ).toBe("queue");
+  });
+  it("always dispatches for non-primary environments, even during an outage", () => {
+    // Non-primary threads go to a different server — queueing then flushing via
+    // the primary server would route to the wrong server.
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "reconnecting", isPrimaryEnvironment: false }),
+    ).toBe("dispatch");
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "offline", isPrimaryEnvironment: false }),
+    ).toBe("dispatch");
+    expect(
+      decideSendDisposition({ hasConnected: true, uiState: "error", isPrimaryEnvironment: false }),
+    ).toBe("dispatch");
+  });
+});
+
+describe("shouldClearOutboxOnPrimaryChange", () => {
+  it("clears when the primary environment id transitions to a different defined value", () => {
+    expect(shouldClearOutboxOnPrimaryChange("env-a", "env-b")).toBe(true);
+  });
+  it("clears when the primary environment id transitions to null (logout)", () => {
+    expect(shouldClearOutboxOnPrimaryChange("env-a", null)).toBe(true);
+    expect(shouldClearOutboxOnPrimaryChange("env-a", undefined)).toBe(true);
+  });
+  it("does not clear on the initial undefined→first-value transition (initial mount)", () => {
+    expect(shouldClearOutboxOnPrimaryChange(undefined, "env-a")).toBe(false);
+    expect(shouldClearOutboxOnPrimaryChange(null, "env-a")).toBe(false);
+  });
+  it("does not clear when the value stays the same", () => {
+    expect(shouldClearOutboxOnPrimaryChange("env-a", "env-a")).toBe(false);
+  });
+  it("does not clear when transitioning from null to null", () => {
+    expect(shouldClearOutboxOnPrimaryChange(null, null)).toBe(false);
+  });
+});
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 

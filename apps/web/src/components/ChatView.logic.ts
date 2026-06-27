@@ -9,6 +9,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import type { WsConnectionUiState } from "../rpc/wsConnectionState";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadSession } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -448,4 +449,43 @@ export function shouldHardStopAfterGrace(input: {
   readonly latestTurnSettled: boolean;
 }): boolean {
   return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
+}
+
+/**
+ * Decide whether to dispatch a command immediately or queue it for offline delivery.
+ * Queue only when ALL of the following hold:
+ *   - the thread belongs to the PRIMARY environment (non-primary threads live on a different
+ *     server; queueing them would flush via the primary server → wrong target → data loss), AND
+ *   - the connection has previously succeeded (hasConnected), AND
+ *   - the connection is currently in an outage state.
+ * This avoids mis-queuing commands during initial load, tests, or cross-environment sends.
+ */
+export function decideSendDisposition(input: {
+  readonly hasConnected: boolean;
+  readonly uiState: WsConnectionUiState;
+  readonly isPrimaryEnvironment: boolean;
+}): "dispatch" | "queue" {
+  return input.isPrimaryEnvironment && input.hasConnected && input.uiState !== "connected"
+    ? "queue"
+    : "dispatch";
+}
+
+/**
+ * Pure helper: returns true when the outbox should be cleared due to a primary-environment
+ * change (env switch) or logout (transition to null/undefined).
+ *
+ * Rules:
+ * - Clear when `prev` was a defined value and `next` is a DIFFERENT value or null/undefined.
+ * - Do NOT clear on the initial undefined/null → first-value transition (coordinator mount).
+ * - Do NOT clear when the value stays the same.
+ */
+export function shouldClearOutboxOnPrimaryChange(
+  prev: string | null | undefined,
+  next: string | null | undefined,
+): boolean {
+  if (prev === null || prev === undefined) {
+    // Initial mount — never clear on the first population.
+    return false;
+  }
+  return prev !== next;
 }

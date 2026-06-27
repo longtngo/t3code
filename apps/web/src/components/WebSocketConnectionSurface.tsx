@@ -8,13 +8,36 @@ import {
   type WsConnectionStatus,
   type WsConnectionUiState,
   useWsConnectionStatus,
-  WS_RECONNECT_MAX_ATTEMPTS,
 } from "../rpc/wsConnectionState";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 
 const FORCED_WS_RECONNECT_DEBOUNCE_MS = 5_000;
 type WsAutoReconnectTrigger = "focus" | "online";
+
+export const WS_OUTAGE_GRACE_MS = 3_000;
+export const WS_OFFLINE_GRACE_MS = 0;
+
+export function outageGraceMs(uiState: WsConnectionUiState): number {
+  return uiState === "offline" ? WS_OFFLINE_GRACE_MS : WS_OUTAGE_GRACE_MS;
+}
+
+export function shouldSurfaceOutage(
+  status: WsConnectionStatus,
+  nowMs: number,
+  graceMs: number,
+): boolean {
+  // NOTE: the `exhausted` early-return below is currently unreachable because `maxRetries`
+  // is null (infinite retries), so `reconnectPhase` never reaches "exhausted".  It is kept
+  // as a defensive fallback for a future finite `maxRetries` configuration.
+  if (status.reconnectPhase === "exhausted") {
+    return true;
+  }
+  if (status.disconnectedAt === null) {
+    return false;
+  }
+  return nowMs - new Date(status.disconnectedAt).getTime() >= graceMs;
+}
 
 const connectionTimeFormatter = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
@@ -24,7 +47,7 @@ const connectionTimeFormatter = new Intl.DateTimeFormat(undefined, {
   second: "2-digit",
 });
 
-function formatConnectionMoment(isoDate: string | null): string | null {
+export function formatConnectionMoment(isoDate: string | null): string | null {
   if (!isoDate) {
     return null;
   }
@@ -32,7 +55,7 @@ function formatConnectionMoment(isoDate: string | null): string | null {
   return connectionTimeFormatter.format(new Date(isoDate));
 }
 
-function formatRetryCountdown(nextRetryAt: string, nowMs: number): string {
+export function formatRetryCountdown(nextRetryAt: string, nowMs: number): string {
   const remainingMs = Math.max(0, new Date(nextRetryAt).getTime() - nowMs);
   return `${Math.max(1, Math.ceil(remainingMs / 1000))}s`;
 }
@@ -42,11 +65,7 @@ function describeOfflineToast(): string {
 }
 
 function formatReconnectAttemptLabel(status: WsConnectionStatus): string {
-  const reconnectAttempt = Math.max(
-    1,
-    Math.min(status.reconnectAttemptCount, WS_RECONNECT_MAX_ATTEMPTS),
-  );
-  return `Attempt ${reconnectAttempt}/${status.reconnectMaxAttempts}`;
+  return `Attempt ${Math.max(1, status.reconnectAttemptCount)}`;
 }
 
 function describeExhaustedToast(): string {
@@ -153,6 +172,7 @@ export function WebSocketConnectionCoordinator() {
   const toastResetTimerRef = useRef<number | null>(null);
   const previousUiStateRef = useRef<WsConnectionUiState>(getWsConnectionUiState(status));
   const previousDisconnectedAtRef = useRef<string | null>(status.disconnectedAt);
+  const outageSurfacedRef = useRef(false);
 
   const runReconnect = useEffectEvent((showFailureToast: boolean) => {
     if (toastResetTimerRef.current !== null) {
@@ -221,19 +241,13 @@ export function WebSocketConnectionCoordinator() {
   }, []);
 
   useEffect(() => {
-    if (status.reconnectPhase !== "waiting" || status.nextRetryAt === null) {
+    if (getWsConnectionUiState(status) === "connected") {
       return;
     }
-
     setNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [status.nextRetryAt, status.reconnectPhase]);
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [status]);
 
   useEffect(() => {
     if (
@@ -275,15 +289,19 @@ export function WebSocketConnectionCoordinator() {
     const shouldShowOfflineToast = uiState === "offline" && status.disconnectedAt !== null;
     const shouldShowExhaustedToast = status.hasConnected && status.reconnectPhase === "exhausted";
 
-    if (
-      toastResetTimerRef.current !== null &&
-      (shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast)
-    ) {
+    const isOutage = shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast;
+    const surfaced =
+      isOutage && shouldSurfaceOutage(status, nowMs, outageGraceMs(uiState));
+    if (surfaced) {
+      outageSurfacedRef.current = true;
+    }
+
+    if (toastResetTimerRef.current !== null && surfaced) {
       window.clearTimeout(toastResetTimerRef.current);
       toastResetTimerRef.current = null;
     }
 
-    if (shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast) {
+    if (surfaced) {
       const toastPayload = shouldShowOfflineToast
         ? stackedThreadToast({
             data: {
@@ -338,7 +356,8 @@ export function WebSocketConnectionCoordinator() {
     if (
       uiState === "connected" &&
       (previousUiState === "offline" || previousUiState === "reconnecting") &&
-      previousDisconnectedAt !== null
+      previousDisconnectedAt !== null &&
+      outageSurfacedRef.current
     ) {
       const successToast = {
         description: describeRecoveredToast(previousDisconnectedAt, status.connectedAt),
@@ -361,6 +380,9 @@ export function WebSocketConnectionCoordinator() {
         toastIdRef.current = null;
         toastResetTimerRef.current = null;
       }, 8_250);
+    }
+    if (uiState === "connected") {
+      outageSurfacedRef.current = false;
     }
 
     previousUiStateRef.current = uiState;

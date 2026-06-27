@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { WsConnectionStatus } from "../rpc/wsConnectionState";
-import { shouldAutoReconnect, shouldRestartStalledReconnect } from "./WebSocketConnectionSurface";
+import {
+  outageGraceMs,
+  shouldAutoReconnect,
+  shouldRestartStalledReconnect,
+  shouldSurfaceOutage,
+  WS_OUTAGE_GRACE_MS,
+} from "./WebSocketConnectionSurface";
 
 function makeStatus(overrides: Partial<WsConnectionStatus> = {}): WsConnectionStatus {
   return {
@@ -110,5 +116,39 @@ describe("WebSocketConnectionSurface.logic", () => {
         "2026-04-03T20:00:01.000Z",
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldSurfaceOutage", () => {
+  const start = Date.parse("2026-04-03T20:00:00.000Z");
+  it("stays silent before the grace window elapses", () => {
+    const status = makeStatus({
+      hasConnected: true,
+      disconnectedAt: new Date(start).toISOString(),
+      reconnectPhase: "waiting",
+    });
+    expect(shouldSurfaceOutage(status, start + 1_000, WS_OUTAGE_GRACE_MS)).toBe(false);
+  });
+  it("surfaces once the grace window elapses", () => {
+    const status = makeStatus({
+      hasConnected: true,
+      disconnectedAt: new Date(start).toISOString(),
+      reconnectPhase: "waiting",
+    });
+    expect(shouldSurfaceOutage(status, start + 3_000, WS_OUTAGE_GRACE_MS)).toBe(true);
+  });
+  it("surfaces immediately when exhausted regardless of timing", () => {
+    const status = makeStatus({ hasConnected: true, reconnectPhase: "exhausted" });
+    expect(shouldSurfaceOutage(status, start, WS_OUTAGE_GRACE_MS)).toBe(true);
+  });
+  it("stays silent when there is no active outage", () => {
+    expect(shouldSurfaceOutage(makeStatus({ disconnectedAt: null }), start, 0)).toBe(false);
+  });
+});
+
+describe("outageGraceMs", () => {
+  it("surfaces offline immediately and other outages after the window", () => {
+    expect(outageGraceMs("offline")).toBe(0);
+    expect(outageGraceMs("reconnecting")).toBe(WS_OUTAGE_GRACE_MS);
   });
 });

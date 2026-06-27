@@ -15,13 +15,13 @@ export interface ReconnectBackoffConfig {
 /**
  * Sensible defaults for WebSocket reconnect backoff.
  *
- * - 1 s initial delay, doubling each retry, capped at 64 s, up to 7 retries.
+ * - 1 s initial delay, doubling each retry, capped at 64 s, retries forever at the capped delay.
  */
 export const DEFAULT_RECONNECT_BACKOFF: ReconnectBackoffConfig = {
   initialDelayMs: 1_000,
   backoffFactor: 2,
   maxDelayMs: 64_000,
-  maxRetries: 7,
+  maxRetries: null,
 };
 
 /**

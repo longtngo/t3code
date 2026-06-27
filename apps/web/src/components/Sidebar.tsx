@@ -202,6 +202,7 @@ import {
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 import { SidebarLocalModels } from "./sidebar/SidebarLocalModels";
 import { SidebarResourceQueue } from "./sidebar/SidebarResourceQueue";
+import SidebarConnectionStatus from "./sidebar/SidebarConnectionStatus";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -2498,6 +2499,7 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
+      <SidebarConnectionStatus compact className="md:hidden" />
       <Tooltip>
         <TooltipTrigger
           render={
@@ -2548,6 +2550,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarUpdatePill />
       <SidebarResourceQueue />
       <SidebarLocalModels />
+      <SidebarConnectionStatus />
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton

@@ -72,6 +72,7 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
+import { useCommandOutbox } from "../../rpc/commandOutbox";
 import { SkillInlineText } from "./SkillInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
@@ -345,6 +346,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const isQueued = useCommandOutbox((s) => s.queue.some((q) => q.messageId === row.message.id));
 
   return (
     <div className="flex justify-end">
@@ -396,9 +398,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <ForkUserMessageButton messageId={row.message.id} />
                 {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
               </div>
-              <p className="text-right text-xs text-muted-foreground/50">
-                {formatTimestamp(row.message.createdAt, ctx.timestampFormat)}
-              </p>
+              <div className="flex items-center justify-end gap-2">
+                {isQueued && (
+                  <p className="text-right text-xs text-muted-foreground/50 italic">
+                    Queued · sends when reconnected
+                  </p>
+                )}
+                <p className="text-right text-xs text-muted-foreground/50">
+                  {formatTimestamp(row.message.createdAt, ctx.timestampFormat)}
+                </p>
+              </div>
             </>
           }
         />

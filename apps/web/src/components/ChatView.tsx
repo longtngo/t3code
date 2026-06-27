@@ -22,6 +22,7 @@ import {
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import {
+  isTransportConnectionErrorMessage,
   parseScopedThreadKey,
   scopedThreadKey,
   scopeProjectRef,
@@ -183,6 +184,7 @@ import {
   PullRequestDialogState,
   cloneComposerImageForRetry,
   deriveLockedProvider,
+  decideSendDisposition,
   nextStopAction,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
@@ -193,6 +195,14 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
+import {
+  enqueueCommand,
+  useCommandOutbox,
+} from "../rpc/commandOutbox";
+import {
+  getWsConnectionStatus,
+  getWsConnectionUiState,
+} from "../rpc/wsConnectionState";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
@@ -2772,6 +2782,12 @@ export default function ChatView(props: ChatViewProps) {
       setOptimisticUserMessages((existing) =>
         existing.filter((message) => !serverIds.has(message.id)),
       );
+      // Belt-and-suspenders dequeue: once the server has echoed the message,
+      // drop any matching outbox entry so the flusher can't re-send it.
+      const removedIds = new Set(removedMessages.map((m) => m.id));
+      useCommandOutbox.setState((s) => ({
+        queue: s.queue.filter((q) => !removedIds.has(q.messageId)),
+      }));
     }, 0);
     for (const removedMessage of removedMessages) {
       const previewUrls = collectUserMessageBlobPreviewUrls(removedMessage);
@@ -3184,6 +3200,7 @@ export default function ChatView(props: ChatViewProps) {
       composerTerminalContextsSnapshot,
     );
     const messageIdForSend = newMessageId();
+    const commandIdForSend = newCommandId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
@@ -3248,6 +3265,13 @@ export default function ChatView(props: ChatViewProps) {
     composerRef.current?.resetCursorState();
 
     let turnStartSucceeded = false;
+    // Hoisted so the transport-error catch can enqueue without re-building the command.
+    // Typed as the specific turn-start shape so it can be cast to QueueableCommand for enqueue.
+    let capturedTurnStartCommand:
+      | (Parameters<typeof api.orchestration.dispatchCommand>[0] & {
+          type: "thread.turn.start";
+        })
+      | undefined;
     await (async () => {
       let firstComposerImageName: string | null = null;
       if (composerImagesSnapshot.length > 0) {
@@ -3326,13 +3350,13 @@ export default function ChatView(props: ChatViewProps) {
       if (!isQueuedSend) {
         beginLocalDispatch({ preparingWorktree: false });
       }
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
+      capturedTurnStartCommand = {
+        type: "thread.turn.start" as const,
+        commandId: commandIdForSend,
         threadId: threadIdForSend,
         message: {
           messageId: messageIdForSend,
-          role: "user",
+          role: "user" as const,
           text: outgoingMessageText,
           attachments: turnAttachments,
         },
@@ -3342,9 +3366,43 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode,
         ...(bootstrap ? { bootstrap } : {}),
         createdAt: messageCreatedAt,
+      };
+      const turnStartCommand = capturedTurnStartCommand;
+      const wsStatus = getWsConnectionStatus();
+      const isPrimaryEnvironment = environmentId === primaryEnvironmentId;
+      const disposition = decideSendDisposition({
+        hasConnected: wsStatus.hasConnected,
+        uiState: getWsConnectionUiState(wsStatus),
+        isPrimaryEnvironment,
       });
-      turnStartSucceeded = true;
+      if (disposition === "queue") {
+        enqueueCommand(turnStartCommand as Parameters<typeof enqueueCommand>[0], messageIdForSend);
+        turnStartSucceeded = true; // keep the optimistic bubble; do NOT revert
+        resetLocalDispatch(); // free the composer busy state — the message is queued, not in-flight
+      } else {
+        await api.orchestration.dispatchCommand(turnStartCommand);
+        turnStartSucceeded = true;
+      }
     })().catch(async (err: unknown) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      // Transport error while the command was in-flight: queue it so a
+      // reconnect will retry, and keep the optimistic bubble visible.
+      // Only queue for the primary environment — a non-primary thread's server
+      // is separate; queueing then flushing via primary would route to the wrong
+      // server. For non-primary, fall through to the revert+thread-error path.
+      const isPrimaryEnvironment = environmentId === primaryEnvironmentId;
+      if (
+        !turnStartSucceeded &&
+        capturedTurnStartCommand &&
+        isPrimaryEnvironment &&
+        isTransportConnectionErrorMessage(errorMessage)
+      ) {
+        enqueueCommand(
+          capturedTurnStartCommand as Parameters<typeof enqueueCommand>[0],
+          messageIdForSend,
+        );
+        return; // do NOT revert the draft or show a thread error
+      }
       if (
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&

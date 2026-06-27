@@ -10,7 +10,6 @@ import {
   recordWsConnectionOpened,
   resetWsConnectionStateForTests,
   setBrowserOnlineStatus,
-  WS_RECONNECT_MAX_ATTEMPTS,
 } from "./wsConnectionState";
 
 describe("wsConnectionState", () => {
@@ -92,16 +91,16 @@ describe("wsConnectionState", () => {
     });
   });
 
-  it("marks the reconnect cycle as exhausted after the final attempt fails", () => {
-    for (let attempt = 0; attempt < WS_RECONNECT_MAX_ATTEMPTS; attempt += 1) {
-      recordWsConnectionAttempt("ws://localhost:3020/ws");
-      recordWsConnectionErrored("Unable to connect to the T3 server WebSocket.");
+  it("never marks the reconnect cycle as exhausted with infinite retries", () => {
+    recordWsConnectionAttempt("wss://x");
+    recordWsConnectionOpened();
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      recordWsConnectionAttempt("wss://x");
+      recordWsConnectionErrored("boom");
     }
-
     expect(getWsConnectionStatus()).toMatchObject({
-      nextRetryAt: null,
-      reconnectAttemptCount: WS_RECONNECT_MAX_ATTEMPTS,
-      reconnectPhase: "exhausted",
+      reconnectPhase: "waiting",
     });
+    expect(getWsConnectionStatus().nextRetryAt).not.toBeNull();
   });
 });
