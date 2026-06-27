@@ -17,7 +17,6 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import {
-  SlowRpcAckToastCoordinator,
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
 } from "../components/WebSocketConnectionSurface";
@@ -152,7 +151,6 @@ function RootRouteView() {
             It is safe to run while unauthenticated: it no-ops when disconnected,
             when the queue is empty, or when no primary environment api is available. */}
         <OutboxFlushCoordinator />
-        {primaryEnvironmentAuthenticated ? <SlowRpcAckToastCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>{appShell}</WebSocketConnectionSurface>
         ) : (
