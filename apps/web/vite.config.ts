@@ -6,6 +6,7 @@ import { playwright } from "vite-plus/test/browser-playwright";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
 import { visualizer } from "rollup-plugin-visualizer";
+import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
@@ -107,6 +108,61 @@ const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
 export default defineConfig(() => {
   return {
     plugins: [
+      VitePWA({
+        registerType: "prompt",
+        injectRegister: false,
+        manifest: {
+          name: "T3 Code",
+          short_name: "T3 Code",
+          description: "T3 Code — an agentic coding workspace.",
+          start_url: "/",
+          scope: "/",
+          display: "standalone",
+          background_color: "#161616",
+          theme_color: "#161616",
+          icons: [
+            { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+            { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+            {
+              src: "/pwa-maskable-512x512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "maskable",
+            },
+          ],
+        },
+        workbox: {
+          // Precache only the small, always-needed shell. The large hashed JS/CSS
+          // chunks (incl. lazy Shiki language + wasm bundles, ~16 MB total) are
+          // runtime-cached on first use instead of blocking SW install on 16 MB.
+          globPatterns: ["index.html", "manifest.webmanifest", "**/*.{css,woff2,ico,png,svg}"],
+          cleanupOutdatedCaches: true,
+          navigateFallback: "index.html",
+          // Deny server-owned top-level routes so the SPA shell never replaces a
+          // server-rendered response. `/viewer` is opened as a real navigation
+          // (window.open) and must reach the server. `/pair` is a CLIENT route, so it
+          // is intentionally absent (it needs the shell). `/ws` is a WebSocket upgrade
+          // the service worker never sees.
+          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/, /^\/viewer/],
+          runtimeCaching: [
+            {
+              // Content-hashed build assets (JS/CSS) — deliberately NOT precached (the
+              // full precache would be ~16 MB of lazy Shiki/wasm chunks). CacheFirst is
+              // safe because the URL changes whenever content changes; bounded so old
+              // builds' chunks are evicted. This is load-bearing, not redundant with the
+              // shell precache, which contains no JS.
+              urlPattern: ({ url }) => url.pathname.startsWith("/assets/"),
+              handler: "CacheFirst",
+              options: {
+                cacheName: "t3code-assets",
+                expiration: { maxEntries: 300, maxAgeSeconds: 30 * 24 * 60 * 60, purgeOnQuotaError: true },
+                cacheableResponse: { statuses: [0, 200] },
+              },
+            },
+          ],
+        },
+        devOptions: { enabled: false },
+      }),
       tanstackRouter(),
       react(),
       babel({

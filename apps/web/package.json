@@ -67,7 +67,9 @@
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.0.0",
     "vite": "catalog:",
+    "vite-plugin-pwa": "^1.3.0",
     "vite-plus": "catalog:",
-    "vitest-browser-react": "^2.0.5"
+    "vitest-browser-react": "^2.0.5",
+    "workbox-window": "^7.4.1"
   }
 }

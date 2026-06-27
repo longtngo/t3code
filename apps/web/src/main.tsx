@@ -34,6 +34,12 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
+// Register the PWA service worker for the installable web app. Skipped in Electron
+// (file:// shell) and in dev (no service worker is generated there).
+if (!isElectron && import.meta.env.PROD) {
+  void import("./lib/registerPwa").then((m) => m.registerPwa());
+}
+
 document.title = APP_DISPLAY_NAME;
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
