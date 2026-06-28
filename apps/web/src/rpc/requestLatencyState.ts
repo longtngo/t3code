@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "./atomRegistry";
@@ -126,8 +125,4 @@ export function resetRequestLatencyStateForTests(): void {
 
 export function setSlowRpcAckThresholdMsForTests(thresholdMs: number): void {
   slowRpcAckThresholdMs = thresholdMs;
-}
-
-export function useSlowRpcAckRequests(): ReadonlyArray<SlowRpcAckRequest> {
-  return useAtomValue(slowRpcAckRequestsAtom);
 }

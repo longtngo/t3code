@@ -16,9 +16,9 @@ function buildTitle(
   status: WsConnectionStatus,
   uiState: WsConnectionUiState,
   label: string,
+  endpoint: string | null,
 ): string {
   if (uiState === "connected") {
-    const endpoint = connectionEndpointLabel(status.connectionLabel, status.socketUrl);
     const since = formatConnectionMoment(status.connectedAt);
     return ["Connected", endpoint ? `to ${endpoint}` : null, since ? `since ${since}` : null]
       .filter(Boolean)
@@ -62,14 +62,19 @@ export default function SidebarConnectionStatus() {
   return (
     <div
       className="flex flex-col gap-0.5 px-2 py-1 text-xs"
-      title={buildTitle(status, uiState, tone.label)}
+      title={buildTitle(status, uiState, tone.label, endpoint)}
     >
       <div className="flex items-center gap-2 text-muted-foreground">
         <span
           aria-hidden
           className={`inline-block size-2 rounded-full ${tone.colorClass} ${tone.pulse ? "animate-pulse" : ""}`}
         />
-        <span>{tone.label}</span>
+        {/* Label only (not the per-second countdown) carries the live region, so screen
+            readers announce state changes — the signal the removed toasts used to give —
+            without re-announcing the ticking "Retry in Ns". */}
+        <span role="status" aria-live="polite">
+          {tone.label}
+        </span>
       </div>
       {detail ? (
         <span className="truncate pl-4 text-[10px] text-muted-foreground/60" title={detail}>
