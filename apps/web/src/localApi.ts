@@ -3,7 +3,6 @@ import type { WsRpcClient } from "@t3tools/client-runtime";
 
 import { resetVcsStatusStateForTests } from "./lib/vcsStatusState";
 import { resetSourceControlDiscoveryStateForTests } from "./lib/sourceControlDiscoveryState";
-import { resetRequestLatencyStateForTests } from "./rpc/requestLatencyState";
 import { resetServerStateForTests } from "./rpc/serverState";
 import { resetWsConnectionStateForTests } from "./rpc/wsConnectionState";
 import { __resetClientSettingsPersistenceForTests } from "./hooks/useSettings";
@@ -202,7 +201,6 @@ export async function __resetLocalApiForTests() {
   await resetEnvironmentServiceForTests();
   resetVcsStatusStateForTests();
   resetSourceControlDiscoveryStateForTests();
-  resetRequestLatencyStateForTests();
   resetSavedEnvironmentRegistryStoreForTests();
   resetSavedEnvironmentRuntimeStoreForTests();
   resetServerStateForTests();

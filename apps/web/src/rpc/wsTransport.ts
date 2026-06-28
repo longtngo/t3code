@@ -8,11 +8,6 @@ import { createWsRpcProtocolLayer as createSharedWsRpcProtocolLayer } from "@t3t
 
 import { ClientTracingLive } from "../observability/clientTracing";
 import {
-  acknowledgeRpcRequest,
-  clearAllTrackedRpcRequests,
-  trackRpcRequestSent,
-} from "./requestLatencyState";
-import {
   recordWsConnectionAttempt,
   recordWsConnectionClosed,
   recordWsConnectionErrored,
@@ -28,21 +23,14 @@ function createWsRpcProtocolLayer(
       onAttempt: recordWsConnectionAttempt,
       onOpen: recordWsConnectionOpened,
       onError: (message) => {
-        clearAllTrackedRpcRequests();
         recordWsConnectionErrored(message);
       },
       onClose: (details, context) => {
-        clearAllTrackedRpcRequests();
         if (context.intentional) {
           return;
         }
         recordWsConnectionClosed(details);
       },
-    },
-    requestTelemetry: {
-      onRequestSent: trackRpcRequestSent,
-      onRequestAcknowledged: acknowledgeRpcRequest,
-      onClearTrackedRequests: clearAllTrackedRpcRequests,
     },
   });
 }
@@ -50,7 +38,6 @@ function createWsRpcProtocolLayer(
 const webWsTransportOptions = {
   tracingLayer: ClientTracingLive,
   createProtocolLayer: createWsRpcProtocolLayer,
-  onBeforeReconnect: () => clearAllTrackedRpcRequests(),
 } satisfies WsTransportOptions;
 
 export class WsTransport extends BaseWsTransport {

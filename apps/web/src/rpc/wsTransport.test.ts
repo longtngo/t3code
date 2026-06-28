@@ -7,11 +7,6 @@ import {
   configureClientTracing,
 } from "../observability/clientTracing";
 import {
-  getSlowRpcAckRequests,
-  resetRequestLatencyStateForTests,
-  setSlowRpcAckThresholdMsForTests,
-} from "../rpc/requestLatencyState";
-import {
   getWsConnectionStatus,
   getWsConnectionUiState,
   resetWsConnectionStateForTests,
@@ -120,7 +115,6 @@ beforeEach(() => {
   vi.useRealTimers();
   sockets.length = 0;
   transports.length = 0;
-  resetRequestLatencyStateForTests();
   resetWsConnectionStateForTests();
 
   Object.defineProperty(globalThis, "window", {
@@ -148,7 +142,6 @@ afterEach(async () => {
   transports.length = 0;
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
-  resetRequestLatencyStateForTests();
   resetWsConnectionStateForTests();
   await __resetClientTracingForTests();
   vi.restoreAllMocks();
@@ -260,112 +253,6 @@ describe("WsTransport (web instrumentation)", () => {
 
     await transport.dispose();
   });
-
-  it("marks unary requests as slow until the first server ack arrives", async () => {
-    const slowAckThresholdMs = 25;
-    setSlowRpcAckThresholdMsForTests(slowAckThresholdMs);
-    const transport = createTransport("ws://localhost:3020");
-
-    const requestPromise = transport.request((client) =>
-      client[WS_METHODS.serverUpsertKeybinding]({
-        command: "terminal.toggle",
-        key: "ctrl+k",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(sockets).toHaveLength(1);
-    });
-
-    const socket = getSocket();
-    socket.open();
-
-    await waitFor(() => {
-      expect(socket.sent).toHaveLength(1);
-    });
-
-    const requestMessage = JSON.parse(socket.sent[0] ?? "{}") as { id: string };
-    await waitFor(() => {
-      expect(getSlowRpcAckRequests()).toMatchObject([
-        {
-          requestId: requestMessage.id,
-          tag: WS_METHODS.serverUpsertKeybinding,
-        },
-      ]);
-    }, 1_000);
-
-    socket.serverMessage(
-      JSON.stringify({
-        _tag: "Exit",
-        requestId: requestMessage.id,
-        exit: {
-          _tag: "Success",
-          value: {
-            keybindings: [],
-            issues: [],
-          },
-        },
-      }),
-    );
-
-    await expect(requestPromise).resolves.toEqual({
-      keybindings: [],
-      issues: [],
-    });
-    expect(getSlowRpcAckRequests()).toEqual([]);
-
-    await transport.dispose();
-  }, 5_000);
-
-  it("clears slow unary request tracking when the transport reconnects", async () => {
-    const slowAckThresholdMs = 25;
-    setSlowRpcAckThresholdMsForTests(slowAckThresholdMs);
-    const transport = createTransport("ws://localhost:3020");
-
-    const requestPromise = transport.request((client) =>
-      client[WS_METHODS.serverUpsertKeybinding]({
-        command: "terminal.toggle",
-        key: "ctrl+k",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(sockets).toHaveLength(1);
-    });
-
-    const firstSocket = getSocket();
-    firstSocket.open();
-
-    await waitFor(() => {
-      expect(firstSocket.sent).toHaveLength(1);
-    });
-
-    const firstRequest = JSON.parse(firstSocket.sent[0] ?? "{}") as { id: string };
-
-    await waitFor(() => {
-      expect(getSlowRpcAckRequests()).toMatchObject([
-        {
-          requestId: firstRequest.id,
-          tag: WS_METHODS.serverUpsertKeybinding,
-        },
-      ]);
-    }, 1_000);
-
-    void requestPromise.catch(() => undefined);
-
-    await transport.reconnect();
-
-    expect(getSlowRpcAckRequests()).toEqual([]);
-
-    await waitFor(() => {
-      expect(sockets).toHaveLength(2);
-    });
-
-    const secondSocket = getSocket();
-    secondSocket.open();
-
-    await transport.dispose();
-  }, 5_000);
 
   it("propagates OTLP trace ids for ws transport requests when client tracing is enabled", async () => {
     await configureClientTracing({
