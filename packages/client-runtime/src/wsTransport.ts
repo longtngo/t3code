@@ -32,10 +32,6 @@ export interface WsTransportOptions {
     lifecycleHandlers?: WsProtocolLifecycleHandlers,
   ) => Layer.Layer<RpcClient.Protocol, never, never>;
   readonly logWarning?: (message: string, metadata: { readonly error: string }) => void;
-  /**
-   * Invoked at the start of {@link WsTransport.reconnect} before the session is replaced.
-   */
-  readonly onBeforeReconnect?: () => void;
 }
 
 interface SubscribeOptions {
@@ -253,12 +249,6 @@ export class WsTransport {
     const reconnectOperation = this.reconnectChain.then(async () => {
       if (this.disposed) {
         throw new Error("Transport disposed");
-      }
-
-      try {
-        this.options?.onBeforeReconnect?.();
-      } catch {
-        // Ignore hook failures so reconnect can proceed.
       }
 
       this.lastHeartbeatPongAt = null;

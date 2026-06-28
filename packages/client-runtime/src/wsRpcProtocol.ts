@@ -45,12 +45,6 @@ export interface WsProtocolLifecycleHandlers {
   ) => void;
 }
 
-export interface WsRpcProtocolRequestTelemetry {
-  readonly onRequestSent?: (requestId: string, tag: string) => void;
-  readonly onRequestAcknowledged?: (requestId: string) => void;
-  readonly onClearTrackedRequests?: () => void;
-}
-
 export interface WsRpcProtocolOptions {
   /** Backoff configuration for reconnect retries. */
   readonly backoff?: ReconnectBackoffConfig;
@@ -59,8 +53,6 @@ export interface WsRpcProtocolOptions {
    * Use for additive telemetry (connection state, clearing request trackers on disconnect).
    */
   readonly telemetryLifecycle?: WsProtocolLifecycleHandlers;
-  /** Optional hooks around outbound requests and inbound RPC responses (latency tracking, etc.). */
-  readonly requestTelemetry?: WsRpcProtocolRequestTelemetry;
 }
 
 export const makeWsRpcProtocolClient = RpcClient.make(WsRpcGroup);
@@ -199,7 +191,6 @@ export function createWsRpcProtocolLayer(
 ) {
   const lifecycle = resolveLifecycleHandlers(handlers, options?.telemetryLifecycle);
   const backoff = options?.backoff ?? DEFAULT_RECONNECT_BACKOFF;
-  const requestTelemetry = options?.requestTelemetry;
   const resolvedUrl =
     typeof url === "function"
       ? Effect.promise(() => url()).pipe(
@@ -280,25 +271,13 @@ export function createWsRpcProtocolLayer(
       }),
       (protocol) => ({
         ...protocol,
-        run: (clientId, writeResponse) =>
-          protocol.run(clientId, (response) => {
-            if (response._tag === "Chunk" || response._tag === "Exit") {
-              requestTelemetry?.onRequestAcknowledged?.(response.requestId);
-            } else if (response._tag === "ClientProtocolError" || response._tag === "Defect") {
-              requestTelemetry?.onClearTrackedRequests?.();
-            }
-            return writeResponse(response);
-          }),
         send: (clientId, request, transferables) => {
-          if (request._tag === "Request") {
-            requestTelemetry?.onRequestSent?.(request.id, request.tag);
-            if (lifecycle.isActive()) {
-              handlers?.onRequestStart?.({
-                id: request.id,
-                tag: request.tag,
-                stream: false,
-              });
-            }
+          if (request._tag === "Request" && lifecycle.isActive()) {
+            handlers?.onRequestStart?.({
+              id: request.id,
+              tag: request.tag,
+              stream: false,
+            });
           }
           return protocol.send(clientId, request, transferables);
         },
