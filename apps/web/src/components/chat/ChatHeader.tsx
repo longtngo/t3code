@@ -16,6 +16,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger, TooltipWrapperTrigger } from "..
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
+import ChatHeaderConnectionDot from "./ChatHeaderConnectionDot";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 
@@ -97,6 +98,7 @@ export const ChatHeader = memo(function ChatHeader({
     <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden sm:flex-1 sm:flex-nowrap sm:gap-3">
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+        <ChatHeaderConnectionDot className="md:hidden" />
         <Tooltip>
           <TooltipTrigger
             render={
