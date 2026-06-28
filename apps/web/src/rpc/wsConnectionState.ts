@@ -10,9 +10,6 @@ export type WsReconnectPhase = "attempting" | "exhausted" | "idle" | "waiting";
 export const WS_RECONNECT_INITIAL_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.initialDelayMs;
 export const WS_RECONNECT_BACKOFF_FACTOR = DEFAULT_RECONNECT_BACKOFF.backoffFactor;
 export const WS_RECONNECT_MAX_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.maxDelayMs;
-// Display-only: the reconnect UI no longer shows a finite attempt ceiling
-// (retries are unbounded). Kept for back-compat of the status shape.
-export const WS_RECONNECT_MAX_ATTEMPTS = 8;
 
 export interface WsConnectionStatus {
   readonly attemptCount: number;
@@ -28,7 +25,6 @@ export interface WsConnectionStatus {
   readonly online: boolean;
   readonly phase: "idle" | "connecting" | "connected" | "disconnected";
   readonly reconnectAttemptCount: number;
-  readonly reconnectMaxAttempts: number;
   readonly reconnectPhase: WsReconnectPhase;
   readonly socketUrl: string | null;
 }
@@ -47,7 +43,6 @@ const INITIAL_WS_CONNECTION_STATUS = Object.freeze<WsConnectionStatus>({
   online: typeof navigator === "undefined" ? true : navigator.onLine !== false,
   phase: "idle",
   reconnectAttemptCount: 0,
-  reconnectMaxAttempts: WS_RECONNECT_MAX_ATTEMPTS,
   reconnectPhase: "idle",
   socketUrl: null,
 });

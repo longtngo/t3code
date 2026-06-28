@@ -21,7 +21,6 @@ function makeStatus(overrides: Partial<WsConnectionStatus> = {}): WsConnectionSt
     online: true,
     phase: "idle",
     reconnectAttemptCount: 0,
-    reconnectMaxAttempts: 8,
     reconnectPhase: "idle",
     socketUrl: null,
     ...overrides,
