@@ -1,15 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { DEFAULT_RECONNECT_BACKOFF, getReconnectDelayMs } from "@t3tools/client-runtime";
+import { getReconnectDelayMs } from "@t3tools/client-runtime";
 import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "./atomRegistry";
 
 export type WsConnectionUiState = "connected" | "connecting" | "error" | "offline" | "reconnecting";
 export type WsReconnectPhase = "attempting" | "exhausted" | "idle" | "waiting";
-
-export const WS_RECONNECT_INITIAL_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.initialDelayMs;
-export const WS_RECONNECT_BACKOFF_FACTOR = DEFAULT_RECONNECT_BACKOFF.backoffFactor;
-export const WS_RECONNECT_MAX_DELAY_MS = DEFAULT_RECONNECT_BACKOFF.maxDelayMs;
 
 export interface WsConnectionStatus {
   readonly attemptCount: number;
