@@ -1178,6 +1178,14 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  // A coalesced batch of events, in ascending sequence order. Long agentic turns
+  // emit many discrete activity events; batching bursts into one frame cuts the
+  // wire frame count on the active path (and the reconnect resume). The client
+  // applies each event exactly as it does a single `event` item.
+  Schema.Struct({
+    kind: Schema.Literal("events"),
+    events: Schema.Array(OrchestrationEvent),
+  }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 

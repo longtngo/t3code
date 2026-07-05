@@ -405,6 +405,8 @@ describe("retainThreadDetailSubscription", () => {
     emit({ kind: "event", event: { sequence: 6 } });
     emit({ kind: "event", event: { sequence: 9 } });
     emit({ kind: "event", event: { sequence: 6 } });
+    // A coalesced batch applies its fresh events and dedups any already-applied ones.
+    emit({ kind: "events", events: [{ sequence: 9 }, { sequence: 12 }, { sequence: 15 }] });
 
     await Promise.resolve();
     expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
@@ -530,9 +532,10 @@ describe("retainThreadDetailSubscription", () => {
       fromSequenceExclusive: undefined,
     });
 
-    // Apply an event so the subscription has a high-water mark to resume from.
+    // Apply a coalesced batch so the subscription has a high-water mark to resume
+    // from (the resume cursor must be the batch's max sequence).
     const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
-    emit({ kind: "event", event: { sequence: 42 } });
+    emit({ kind: "events", events: [{ sequence: 40 }, { sequence: 42 }] });
 
     await disconnectSavedEnvironment(environmentId);
     expect(mockThreadUnsubscribe).toHaveBeenCalledTimes(1);

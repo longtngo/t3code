@@ -433,14 +433,21 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
         );
         return;
       }
-      // Apply each thread event once, monotonically. `sequence > lastApplied` both
-      // preserves order and dedups the read/live overlap the server may send on a
-      // resume. The thread stream is a sparse subset of the global sequence axis,
-      // so there is deliberately no contiguity/gap check here.
-      if (item.event.sequence > entry.lastAppliedSequence) {
-        applyRecoveredEventBatch([item.event], entry.environmentId);
-        entry.lastAppliedSequence = item.event.sequence;
+      // A single `event` or a coalesced `events` batch. Apply the fresh ones (past
+      // the high-water mark) together, in one store update. `sequence > lastApplied`
+      // both preserves order and dedups the read/live overlap on resume. The thread
+      // stream is a sparse subset of the global sequence axis, so there is
+      // deliberately no contiguity/gap check here.
+      const incoming = item.kind === "events" ? item.events : [item.event];
+      const fresh = incoming.filter((event) => event.sequence > entry.lastAppliedSequence);
+      if (fresh.length === 0) {
+        return;
       }
+      applyRecoveredEventBatch(fresh, entry.environmentId);
+      entry.lastAppliedSequence = Math.max(
+        entry.lastAppliedSequence,
+        ...fresh.map((event) => event.sequence),
+      );
     },
   );
   return true;

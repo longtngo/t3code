@@ -126,6 +126,15 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
  */
 const RESUME_MAX_MISSED_EVENTS = 500;
 
+/**
+ * Activity batching: coalesce a burst of thread events emitted within this window
+ * into one wire frame (up to {@link ACTIVITY_BATCH_MAX_EVENTS}), cutting the frame
+ * count on long agentic turns. The window is short enough to be imperceptible for
+ * live activity display; isolated events still flush promptly.
+ */
+const ACTIVITY_BATCH_WINDOW = Duration.millis(20);
+const ACTIVITY_BATCH_MAX_EVENTS = 64;
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -981,7 +990,10 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadEvent),
-                Stream.map((event) => ({ kind: "event" as const, event })),
+                // Coalesce bursts within a turn into one batch frame; isolated events
+                // flush after the short window. The client applies each in order.
+                Stream.groupedWithin(ACTIVITY_BATCH_MAX_EVENTS, ACTIVITY_BATCH_WINDOW),
+                Stream.map((chunk) => ({ kind: "events" as const, events: Array.from(chunk) })),
               );
 
               // Incremental reconnect: when the client sends its last-seen sequence,
@@ -1004,10 +1016,13 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   ),
                 );
                 if (missed.length < RESUME_MAX_MISSED_EVENTS) {
-                  const missedThreadEvents = missed
-                    .filter(isThisThreadEvent)
-                    .map((event) => ({ kind: "event" as const, event }));
-                  return Stream.concat(Stream.fromIterable(missedThreadEvents), liveStream);
+                  const missedThreadEvents = missed.filter(isThisThreadEvent);
+                  // Deliver all missed events in a single batch frame, then the live tail.
+                  const resumeStream =
+                    missedThreadEvents.length > 0
+                      ? Stream.make({ kind: "events" as const, events: missedThreadEvents })
+                      : Stream.empty;
+                  return Stream.concat(resumeStream, liveStream);
                 }
                 // Window too large to serve completely — fall through to the snapshot.
               }

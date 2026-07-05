@@ -253,31 +253,32 @@ export function createThreadDetailManager(config: ThreadDetailManagerConfig) {
       return;
     }
 
-    const current = getSnapshot({
-      environmentId: entries.get(targetKey)?.target.environmentId ?? null,
-      threadId,
-    }).data;
+    // A single `event` or a coalesced `events` batch — apply each in order.
+    const events = item.kind === "events" ? item.events : [item.event];
+    for (const event of events) {
+      const current = getSnapshot({
+        environmentId: entries.get(targetKey)?.target.environmentId ?? null,
+        threadId,
+      }).data;
 
-    if (current === null) {
-      if (item.event.type === "thread.deleted") {
+      if (current === null) {
+        if (event.type === "thread.deleted") {
+          setDeleted(targetKey);
+        }
+        continue;
+      }
+
+      const result = applyThreadDetailEvent(
+        current,
+        event,
+        config.limits ?? DEFAULT_THREAD_DETAIL_LIMITS,
+      );
+
+      if (result.kind === "updated") {
+        setData(targetKey, result.thread);
+      } else if (result.kind === "deleted") {
         setDeleted(targetKey);
       }
-      return;
-    }
-
-    const result = applyThreadDetailEvent(
-      current,
-      item.event,
-      config.limits ?? DEFAULT_THREAD_DETAIL_LIMITS,
-    );
-
-    if (result.kind === "updated") {
-      setData(targetKey, result.thread);
-      return;
-    }
-
-    if (result.kind === "deleted") {
-      setDeleted(targetKey);
     }
   }
 

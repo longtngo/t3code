@@ -259,6 +259,26 @@ The corrected design drops the coordinator (it stays dormant) for a simple monot
   `thread.activity-appended` frames within a turn, flushing on the same boundaries.
 - **Gate:** frame count on the Phase-0 agentic-turn scenario drops materially.
 
+#### Phase 4 implementation notes (2026-07-05, shipped)
+
+**Data-driven scope note.** The spec framed this as extending the assistant-text buffering, but that
+buffering already handles the big win — collapsing per-token *text deltas* into one message
+(`bufferedAssistantTextByMessageId`). `thread.activity-appended` events are **discrete** domain events
+(one per tool step / result / reasoning block via `runtimeEventToActivities`), not a token firehose, and
+each append has load-bearing side effects (drives the sidebar shell refetch + background-task recording,
+`ProviderRuntimeIngestion.ts` comment). So batching them at the *domain* level is both low-value (frame
+overhead is ~a few % of a turn on a server→client push stream — content bytes are unchanged) and risky.
+
+**What was built — safe wire-level batching (no domain-event change):**
+- **Contract:** `OrchestrationThreadStreamItem` gains a `{ kind: "events", events: [...] }` batch variant.
+- **Server (`ws.ts`):** the live thread-event stream is coalesced with `Stream.groupedWithin(64, 20ms)`
+  and emitted as batch frames; a burst within a turn ships as one frame, isolated events flush after the
+  20 ms window (imperceptible). The Phase 3 reconnect resume also now ships all missed events as **one**
+  batch frame instead of N. Domain events are untouched — only the wire framing coalesces.
+- **Client (`service.ts`):** applies a `single event` or an `events` batch identically — filter to the
+  fresh events past the high-water mark (dedup), apply them in one store update, advance the mark.
+- **Tests:** batch apply + dedup + reconnect-cursor-from-batch-max; existing subscribe/reconnect tests pass.
+
 ### Phase 5 — Attachment relief
 - Client-side image resize/re-encode before upload (canvas on web/desktop, RN image API on mobile),
   with a sensible default quality/size cap.
