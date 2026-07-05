@@ -40,6 +40,7 @@ import {
   shouldUseLocalFilePath,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import { resizeImageForUpload } from "~/lib/imageResize";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -1691,13 +1692,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (toUpload.length > 0) {
       const api = readEnvironmentApi(environmentId);
       for (const file of toUpload) {
-        const name = file.name || "file";
-        if (!api || file.size > ATTACHMENT_UPLOAD_MAX_BYTES) {
+        // Downscale large images before the size check, so a big photo that
+        // shrinks under the cap can still upload (and costs far fewer bytes).
+        const prepared = await resizeImageForUpload(file);
+        const name = prepared.name || file.name || "file";
+        if (!api || prepared.size > ATTACHMENT_UPLOAD_MAX_BYTES) {
           unresolved.push(name);
           continue;
         }
         try {
-          const dataUrl = await readFileAsDataUrl(file);
+          const dataUrl = await readFileAsDataUrl(prepared);
           const result = await api.attachments.upload({
             threadId: activeThreadId,
             fileName: name,

@@ -286,6 +286,31 @@ overhead is ~a few % of a turn on a server→client push stream — content byte
 - (Chunking is deferred unless the byte budget shows single-frame uploads are still a problem.)
 - **Gate:** a representative phone-photo upload's on-wire size drops several-fold.
 
+#### Phase 5 implementation notes (2026-07-05, shipped)
+
+**What was built — client-side image downscale (web/desktop):** `apps/web/src/lib/imageResize.ts`
+(`resizeImageForUpload`) decodes an image via `createImageBitmap`, caps the longest edge at 2048 px,
+and re-encodes as JPEG (quality 0.85) on a canvas. It's wired into the composer upload
+(`ChatComposer.tsx`) **before** the `ATTACHMENT_UPLOAD_MAX_BYTES` check, so a large photo that shrinks
+under the 20 MB cap can now upload at all. Guards keep it safe: it returns the *original* file for
+non-images, small images (< 512 KB), unsupported environments (no canvas), or when the re-encode would
+not actually shrink it — so upload behavior never regresses. A phone photo (several MB to the 20 MB cap)
+typically drops to a few hundred KB — ~90 %+ off, dwarfing every other lever — and it also cuts the
+vision tokens the provider sees. Tests: pure dimension math + node passthrough cases, plus a real
+in-browser canvas resize test.
+
+**Deferred (follow-ups), each a deliberate data-driven scope cut:**
+- **base64 → binary attachment field.** The spec assumed Phase 1's MsgPack made this free, but the RPC
+  Schema layer sits *above* serialization and would still encode `Uint8Array` to a transport-safe value
+  (and the browser-test JSON fallback can't carry raw bytes). After the resize the base64 33 % overhead
+  is a few hundred KB — small next to the ~90 % the resize already saved — so it wasn't worth the
+  Schema/JSON-fallback complexity here.
+- **Mobile (React Native) resize** — the RN composer uploads via a separate path and needs a native
+  image API (e.g. expo-image-manipulator), not canvas.
+- **Inline (non-upload) image sends** — resizing images embedded directly in a message would also cut
+  bytes + vision tokens, but touches more sites with vision-quality trade-offs.
+- **Attachment chunking** — unnecessary once photos are resized to a few hundred KB.
+
 ### Phase 6 — Adaptive escalation (Tier B)
 - Detect constrained links via RN NetInfo (cellular / low `effectiveType`) and `navigator.connection.saveData`.
 - On a measured-constrained link, escalate to a more aggressive image-downscale tier (Phase 5). Everything
