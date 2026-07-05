@@ -51,6 +51,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
@@ -3904,6 +3905,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("counts websocket connections by negotiated wire format", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { cookie } = yield* bootstrapBrowserSession();
+      const cookieHeader = cookie?.split(";")[0] ?? "";
+      const baseUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+
+      // One msgpack connection and one JSON connection so both tags are recorded.
+      yield* Effect.scoped(
+        withWsRpcClient(
+          appendSessionCookieToWsUrl(
+            `${baseUrl}?${WIRE_FORMAT_QUERY_PARAM}=${WIRE_FORMAT_MSGPACK_DEFLATE}`,
+            cookieHeader,
+          ),
+          (client) => client[WS_METHODS.serverGetConfig]({}),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(appendSessionCookieToWsUrl(baseUrl, cookieHeader), (client) =>
+          client[WS_METHODS.serverGetConfig]({}),
+        ),
+      );
+
+      const snapshots = yield* Metric.snapshot;
+      const recordedWireFormat = (wireFormat: string) =>
+        snapshots.some(
+          (snapshot) =>
+            snapshot.id === "t3_ws_connections_total" &&
+            snapshot.attributes?.wireFormat === wireFormat,
+        );
+      assert.isTrue(
+        recordedWireFormat(WIRE_FORMAT_MSGPACK_DEFLATE),
+        "expected a msgpack-deflate connection to be counted",
+      );
+      assert.isTrue(recordedWireFormat("json"), "expected a json connection to be counted");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

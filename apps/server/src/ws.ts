@@ -72,6 +72,7 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import { increment, wsConnectionsTotal } from "./observability/Metrics.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderService } from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -1636,7 +1637,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const sessions = yield* SessionStore.SessionStore;
         // Handshake negotiation: honor the client's advertised wire format, falling
         // back to JSON for clients that don't request compressed msgpack (e.g. a
-        // lagging separately-deployed mobile build).
+        // lagging separately-deployed mobile build). JSON is a load-bearing
+        // compatibility fallback, NOT deprecated-for-removal — it is what a client
+        // drops to when it can't confirm msgpack support, and the only format the
+        // browser test harness (msw) can carry. wsConnectionsTotal below records the
+        // json-vs-msgpack split so any future removal is data-gated, not guessed.
         const requestUrl = HttpServerRequest.toURL(request);
         const wantsMsgPack =
           Option.isSome(requestUrl) &&
@@ -1645,6 +1650,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const serializationLayer = wantsMsgPack
           ? layerCompressedMsgPack
           : RpcSerialization.layerJson;
+        yield* increment(wsConnectionsTotal, {
+          wireFormat: wantsMsgPack ? WIRE_FORMAT_MSGPACK_DEFLATE : "json",
+        });
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchTags({
             ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
