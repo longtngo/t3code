@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 
 import { outcomeFromExit } from "./Attributes.ts";
 import { metricAttributes, rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
+import { recordMethodBytes, wireByteMeterEnabled } from "./WireByteMeter.ts";
 
 const RPC_SPAN_PREFIX = "ws.rpc";
 const DEFAULT_RPC_SPAN_ATTRIBUTES = {
@@ -91,7 +92,11 @@ export const observeRpcEffect = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Effect.Effect<A, E, R> => {
-  const instrumented = effect.pipe(
+  const metered = wireByteMeterEnabled()
+    ? effect.pipe(Effect.tap((value) => Effect.sync(() => recordMethodBytes(method, value))))
+    : effect;
+
+  const instrumented = metered.pipe(
     withMetrics({
       counter: rpcRequestsTotal,
       timer: rpcRequestDuration,
@@ -104,15 +109,24 @@ export const observeRpcEffect = <A, E, R>(
   return withRpcEffectTracing(method, instrumented, traceAttributes);
 };
 
+const meterRpcStream = <A, E, R>(
+  method: string,
+  stream: Stream.Stream<A, E, R>,
+): Stream.Stream<A, E, R> =>
+  wireByteMeterEnabled()
+    ? stream.pipe(Stream.tap((value) => Effect.sync(() => recordMethodBytes(method, value))))
+    : stream;
+
 export const observeRpcStream = <A, E, R>(
   method: string,
   stream: Stream.Stream<A, E, R>,
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Stream.Stream<A, E, R> => {
+  const metered = meterRpcStream(method, stream);
   const instrumented = Stream.unwrap(
     Effect.gen(function* () {
       const startedAt = yield* Clock.currentTimeNanos;
-      return stream.pipe(Stream.onExit((exit) => recordRpcStreamMetrics(method, startedAt, exit)));
+      return metered.pipe(Stream.onExit((exit) => recordRpcStreamMetrics(method, startedAt, exit)));
     }),
   );
 
@@ -134,7 +148,7 @@ export const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectErro
         return yield* Effect.failCause(exit.cause);
       }
 
-      return exit.value.pipe(
+      return meterRpcStream(method, exit.value).pipe(
         Stream.onExit((streamExit) => recordRpcStreamMetrics(method, startedAt, streamExit)),
       );
     }),

@@ -7,6 +7,11 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import {
+  frameByteLength,
+  getSharedWireMeter,
+  wireMeterLoggingEnabled,
+} from "./observability/wireMeter.ts";
+import {
   DEFAULT_RECONNECT_BACKOFF,
   getReconnectDelayMs,
   type ReconnectBackoffConfig,
@@ -210,6 +215,19 @@ export function createWsRpcProtocolLayer(
       lifecycle.onAttempt(socketUrl);
       const socket = new globalThis.WebSocket(socketUrl, protocols);
 
+      // Phase 0 low-bandwidth measurement: count raw on-wire bytes in/out. The
+      // meter is always on (a byte-length + add per frame) and readable from the
+      // console via `globalThis.__t3WireMeter`; it only *logs* when enabled.
+      const wireMeter = getSharedWireMeter();
+      const originalSend = socket.send.bind(socket);
+      socket.send = (data) => {
+        wireMeter.record("sent", frameByteLength(data));
+        // `data` is contextually the union across WebSocket.send's overloads, which is
+        // wider than the single bound signature under some DOM libs (SharedArrayBuffer
+        // skew). It is exactly what the original send expected, so pass it straight on.
+        originalSend(data as Parameters<typeof originalSend>[0]);
+      };
+
       socket.addEventListener(
         "open",
         () => {
@@ -225,6 +243,7 @@ export function createWsRpcProtocolLayer(
         { once: true },
       );
       socket.addEventListener("message", (event) => {
+        wireMeter.record("recv", frameByteLength(event.data));
         try {
           const message = JSON.parse(String(event.data)) as { readonly _tag?: string };
           if (message._tag === "Pong") {
@@ -237,6 +256,10 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "close",
         (event) => {
+          if (wireMeterLoggingEnabled()) {
+            // @effect-diagnostics-next-line globalConsole:off - dev-only bandwidth instrument, no Effect runtime in this DOM/RN close callback.
+            console.info(`[wire-meter] socket closed — ${wireMeter.format()}`);
+          }
           lifecycle.onClose(
             {
               code: event.code,

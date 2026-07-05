@@ -94,6 +94,41 @@ the aggressive image default proves universally acceptable — see §3).
   idle with the app backgrounded; one representative agentic turn (several tool calls + a long message).
 - **Gate:** baseline numbers recorded before Phase 1; re-run after each phase to quantify the delta.
 
+#### Recorded baseline (2026-07-05, `node scripts/wire-budget.ts`)
+
+Current JSON transport, with a JSON+deflate column showing the headroom per-message deflate
+alone would recover (only applied above the ~1KB threshold):
+
+| Frame | JSON | JSON+deflate |
+|---|---|---|
+| host-metrics sample | 285 B | 285 B (—) |
+| llm-models sample | 440 B | 440 B (—) |
+| activity-appended (tool step) | 673 B | 673 B (—) |
+| activity-appended (assistant message) | 2.7 KB | 327 B (−88%) |
+| thread snapshot (24 activities) | 7.6 KB | 703 B (−91%) |
+| attachment upload (~768 KB photo) | 1.00 MB | 758 KB (−26%) |
+
+| Scenario | JSON | JSON+deflate |
+|---|---|---|
+| 10× reconnect on one thread | 75.5 KB | 6.9 KB (−91%) |
+| 10-min backgrounded idle | 175.8 KB | 175.8 KB (−0%) |
+| agentic turn (12 tool steps) | 10.6 KB | 8.2 KB (−23%) |
+
+**Baseline findings that shape the later phases:**
+1. **Idle drain is immune to compression.** The 10-min backgrounded idle budget (175.8 KB) gets
+   *zero* benefit from deflate because every host-metrics/llm-models frame is under the 1 KB
+   threshold. Only **Phase 2** (pause when hidden) removes this cost — it does not overlap with
+   Phase 1 at all.
+2. **Reconnect and large frames compress 88–91%.** Phase 1's deflate is decisive for the snapshot
+   and long-message frames; **Phase 3** (incremental replay) then removes the reconnect re-download
+   entirely rather than just compressing it.
+3. **A base64 photo only deflates ~26%** (it recovers base64's 33% overhead, no more — a real JPEG
+   is already compressed). So **Phase 1** (binary via MsgPack, dropping base64) plus **Phase 5**
+   (client-side resize) are the real levers for attachments, not compression of the base64 blob.
+
+The live wire meter (`globalThis.__t3WireMeter` on the client; `T3CODE_WIRE_METER=1` per-method on
+the server) validates these modelled numbers against the real app when running end-to-end.
+
 ### Phase 1 — Compression: MsgPack + deflate (both)
 - **MsgPack:** replace `RpcSerialization.layerJson` with `layerMsgPack` at both ends
   (`wsRpcProtocol.ts:296`, `ws.ts:1577`). Confirmed available in `effect@4.0.0-beta.78`.
