@@ -42,6 +42,31 @@ export const WIRE_FORMAT_QUERY_PARAM = "fmt";
 export const WIRE_FORMAT_MSGPACK_DEFLATE = "msgpack-deflate";
 
 /**
+ * The always-available fallback wire format. JSON is NOT deprecated-for-removal:
+ * it is the compatibility floor a client drops to when it cannot confirm the
+ * server understands compressed msgpack (see {@link WS_CAPABILITIES_PATH}), and
+ * the only format msw's WebSocket mock can carry, so the browser test suite runs
+ * on it. Removing it would break both.
+ */
+export const WIRE_FORMAT_JSON = "json";
+
+/**
+ * Wire formats this build's server can decode, advertised at {@link WS_CAPABILITIES_PATH}.
+ * A client probes this list before opening the socket and only speaks msgpack when
+ * the list contains {@link WIRE_FORMAT_MSGPACK_DEFLATE}; otherwise it stays on JSON.
+ */
+export const SUPPORTED_WIRE_FORMATS = [WIRE_FORMAT_JSON, WIRE_FORMAT_MSGPACK_DEFLATE] as const;
+
+/**
+ * Unauthenticated capability-probe endpoint. Returns `{ wireFormats: [...] }` so a
+ * newer client can learn whether an independently-deployed server understands
+ * compressed msgpack BEFORE it commits to sending binary frames the server might
+ * not parse. An old server without this route 404s, which the client reads as
+ * "JSON only" — the safe default.
+ */
+export const WS_CAPABILITIES_PATH = "/ws/capabilities";
+
+/**
  * Frames larger than this (in msgpack bytes) are DEFLATE-compressed; smaller ones
  * ship raw because deflate's fixed overhead would make them bigger. Mirrors the
  * Phase 0 benchmark's threshold.

@@ -3,6 +3,9 @@ export {
   COMPRESSED_MSGPACK_DEFLATE_THRESHOLD_BYTES,
   layerCompressedMsgPack,
   makeCompressedMsgPackSerialization,
+  SUPPORTED_WIRE_FORMATS,
+  WIRE_FORMAT_JSON,
   WIRE_FORMAT_MSGPACK_DEFLATE,
   WIRE_FORMAT_QUERY_PARAM,
+  WS_CAPABILITIES_PATH,
 } from "./compressedMsgPack.ts";

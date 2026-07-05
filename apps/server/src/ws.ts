@@ -51,7 +51,12 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+import {
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerRespondable,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
@@ -110,8 +115,10 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 import {
   layerCompressedMsgPack,
+  SUPPORTED_WIRE_FORMATS,
   WIRE_FORMAT_MSGPACK_DEFLATE,
   WIRE_FORMAT_QUERY_PARAM,
+  WS_CAPABILITIES_PATH,
 } from "@t3tools/shared/rpcSerialization";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
@@ -1607,6 +1614,17 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
     }),
   );
 
+// Unauthenticated capability probe. Advertises the wire formats this server can
+// decode so a newer, separately-deployed client can confirm compressed-msgpack
+// support BEFORE it opens the socket and commits to sending binary frames. An
+// older server has no such route and 404s, which the client reads as "JSON only"
+// — the safe fallback. Reveals nothing sensitive, so it needs no auth.
+const wsCapabilitiesRouteLayer = HttpRouter.add(
+  "GET",
+  WS_CAPABILITIES_PATH,
+  HttpServerResponse.jsonUnsafe({ wireFormats: [...SUPPORTED_WIRE_FORMATS] }),
+);
+
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.succeed(
     HttpRouter.add(
@@ -1677,4 +1695,4 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       ),
     ),
   ),
-);
+).pipe(Layer.merge(wsCapabilitiesRouteLayer));

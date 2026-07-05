@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { setAdvertisedWireFormat } from "./wsRpcProtocol.ts";
+import { resetWireFormatNegotiation, setAdvertisedWireFormat } from "./wsRpcProtocol.ts";
 import { formatErrorMessage, WsTransport } from "./wsTransport.ts";
 
 type WsEventType = "open" | "message" | "close" | "error";
@@ -197,18 +197,128 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
-  it("advertises the compressed-msgpack wire format in the handshake url by default", async () => {
+  it("advertises the compressed-msgpack wire format in the handshake url once the server confirms support", async () => {
+    // Preferring msgpack no longer sends binary blindly: the client probes the
+    // server's capability endpoint first. Mock a server that supports it.
+    const capabilitiesFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ wireFormats: ["json", "msgpack-deflate"] }),
+    }));
+    globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
     setAdvertisedWireFormat("msgpack-deflate");
+    resetWireFormatNegotiation();
     const transport = createTransport("ws://localhost:3020/?token=secret-token");
 
     await waitFor(() => {
       expect(sockets).toHaveLength(1);
     });
 
+    expect(capabilitiesFetch).toHaveBeenCalledWith(
+      "http://localhost:3020/ws/capabilities",
+      expect.objectContaining({ method: "GET" }),
+    );
     expect(getSocket().url).toBe(
       "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate",
     );
     await transport.dispose();
+  });
+
+  it("falls back to JSON when the server has no capability endpoint (older server)", async () => {
+    // An older server 404s the probe route; the client must NOT send binary frames.
+    const capabilitiesFetch = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({}),
+    }));
+    globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
+    setAdvertisedWireFormat("msgpack-deflate");
+    resetWireFormatNegotiation();
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token");
+    await transport.dispose();
+  });
+
+  it("falls back to JSON when the capability probe rejects (network error / CORS)", async () => {
+    const capabilitiesFetch = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
+    setAdvertisedWireFormat("msgpack-deflate");
+    resetWireFormatNegotiation();
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token");
+    await transport.dispose();
+  });
+
+  it("re-probes on a later connection after a transient probe failure (does not pin JSON)", async () => {
+    setAdvertisedWireFormat("msgpack-deflate");
+    resetWireFormatNegotiation();
+
+    // First connection: the probe fails transiently → JSON, and the failure is
+    // NOT cached, so a later connection to the same origin can still upgrade.
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("offline");
+    }) as unknown as typeof globalThis.fetch;
+    const first = createTransport("ws://localhost:3020/?token=secret-token");
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+    expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token");
+    await first.dispose();
+
+    // Network recovers: the second connection re-probes and upgrades to msgpack.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ wireFormats: ["json", "msgpack-deflate"] }),
+    })) as unknown as typeof globalThis.fetch;
+    const second = createTransport("ws://localhost:3020/?token=secret-token");
+    await waitFor(() => {
+      expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate");
+    });
+    await second.dispose();
+  });
+
+  it("does not leak a live socket when disposed during the capability probe", async () => {
+    setAdvertisedWireFormat("msgpack-deflate");
+    resetWireFormatNegotiation();
+
+    // A probe we resolve by hand, so we can dispose while it is still in flight.
+    let releaseProbe: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    globalThis.fetch = vi.fn(async () => {
+      await gate;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ wireFormats: ["json", "msgpack-deflate"] }),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+    // Dispose starts while the probe is unresolved; it awaits the in-flight init.
+    const disposal = transport.dispose();
+    releaseProbe();
+    await disposal;
+
+    // The session built after dispose (if any) must have been torn down — never a
+    // lingering OPEN socket.
+    for (const socket of sockets) {
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    }
   });
 
   it("uses an explicit secure websocket base url", async () => {

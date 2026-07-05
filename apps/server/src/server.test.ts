@@ -1278,6 +1278,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect(
+    "advertises supported wire formats at GET /ws/capabilities without authentication",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const response = yield* HttpClient.get("/ws/capabilities");
+        assert.equal(response.status, 200);
+        const body = yield* responseJsonEffect<{ readonly wireFormats: ReadonlyArray<string> }>(
+          response,
+        );
+        // Order matters to the client only in that msgpack must be present to opt in.
+        assert.deepEqual([...body.wireFormats].sort(), ["json", "msgpack-deflate"]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("redirects to dev URL when configured", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

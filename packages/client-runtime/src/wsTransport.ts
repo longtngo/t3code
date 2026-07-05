@@ -12,9 +12,11 @@ import { isTransportConnectionErrorMessage } from "./transportError.ts";
 import {
   createWsRpcProtocolLayer,
   makeWsRpcProtocolClient,
+  negotiateWireFormat,
   type WsProtocolLifecycleHandlers,
   type WsRpcProtocolClient,
   type WsRpcProtocolSocketUrlProvider,
+  type WsWireFormat,
 } from "./wsRpcProtocol.ts";
 
 export interface WsTransportOptions {
@@ -25,11 +27,14 @@ export interface WsTransportOptions {
   readonly tracingLayer?: Layer.Layer<never, never, never>;
   /**
    * Override protocol construction (defaults to {@link createWsRpcProtocolLayer}).
-   * The web app supplies its instrumented layer factory.
+   * The web app supplies its instrumented layer factory. `wireFormat` is the
+   * format the transport negotiated for this connection; the factory must build
+   * its serialization codec from it.
    */
   readonly createProtocolLayer?: (
     url: WsRpcProtocolSocketUrlProvider,
     lifecycleHandlers?: WsProtocolLifecycleHandlers,
+    wireFormat?: WsWireFormat,
   ) => Layer.Layer<RpcClient.Protocol, never, never>;
   readonly logWarning?: (message: string, metadata: { readonly error: string }) => void;
 }
@@ -47,6 +52,8 @@ interface TransportSession {
   readonly clientPromise: Promise<WsRpcProtocolClient>;
   readonly clientScope: Scope.Closeable;
   readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
+  /** Identifies this session against {@link WsTransport}'s `activeSessionId`. */
+  readonly sessionId: number;
 }
 
 /**
@@ -98,7 +105,12 @@ export class WsTransport {
     (info: { readonly tag: string }) => void
   >();
   private reconnectChain: Promise<void> = Promise.resolve();
-  private session: TransportSession;
+  // The session is created lazily: the wire format must be negotiated with the
+  // server (an async capability probe) BEFORE the runtime — and thus the
+  // serialization codec — is built synchronously. `sessionInit` de-dupes
+  // concurrent first-connect attempts.
+  private session: TransportSession | null = null;
+  private sessionInit: Promise<TransportSession> | null = null;
 
   constructor(
     url: WsRpcProtocolSocketUrlProvider,
@@ -108,7 +120,75 @@ export class WsTransport {
     this.url = url;
     this.lifecycleHandlers = lifecycleHandlers;
     this.options = options;
-    this.session = this.createSession();
+    // Start connecting eagerly (negotiate + open), matching the previous
+    // constructor-time behavior. Errors surface when a request/subscribe awaits.
+    void this.ensureSession().catch(() => undefined);
+  }
+
+  /**
+   * Return the current session, negotiating the wire format and creating the
+   * first session on demand. Concurrent callers share one in-flight init.
+   */
+  private async ensureSession(): Promise<TransportSession> {
+    if (this.disposed) {
+      throw new Error("Transport disposed");
+    }
+    if (this.session) {
+      return this.session;
+    }
+    if (!this.sessionInit) {
+      this.sessionInit = this.negotiateAndCreateSession().finally(() => {
+        this.sessionInit = null;
+      });
+    }
+    await this.sessionInit;
+    if (this.disposed) {
+      throw new Error("Transport disposed");
+    }
+    if (!this.session) {
+      throw new Error("Failed to establish transport session");
+    }
+    return this.session;
+  }
+
+  private async negotiateAndCreateSession(): Promise<TransportSession> {
+    const wireFormat = await this.resolveWireFormat();
+    return this.adoptSession(this.createSession(wireFormat));
+  }
+
+  /**
+   * Install `session` as the current one — but only if it hasn't already been
+   * superseded (by a reconnect that ran during the async negotiation) or the
+   * transport disposed. A stale or post-dispose session is torn down instead of
+   * being kept, which is what prevents a leaked open socket + runtime.
+   */
+  private async adoptSession(session: TransportSession): Promise<TransportSession> {
+    if (this.disposed || session.sessionId !== this.activeSessionId) {
+      await this.closeSession(session);
+      return session;
+    }
+    const previous = this.session;
+    this.session = session;
+    if (previous && previous !== session) {
+      await this.closeSession(previous);
+    }
+    return session;
+  }
+
+  /**
+   * Resolve the connection URL and negotiate its server's wire format. Any
+   * failure (bad URL, probe error) resolves to JSON — the safe fallback — so a
+   * client never sends binary frames a server hasn't confirmed it can decode.
+   * The negotiation is memoized per origin, so reconnects don't re-probe a
+   * server whose format is already known.
+   */
+  private async resolveWireFormat(): Promise<WsWireFormat> {
+    try {
+      const rawUrl = typeof this.url === "function" ? await this.url() : this.url;
+      return await negotiateWireFormat(rawUrl);
+    } catch {
+      return "json";
+    }
   }
 
   async request<TSuccess>(
@@ -118,7 +198,7 @@ export class WsTransport {
       throw new Error("Transport disposed");
     }
 
-    const session = this.session;
+    const session = await this.ensureSession();
     const client = await session.clientPromise;
     return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
   }
@@ -131,7 +211,7 @@ export class WsTransport {
       throw new Error("Transport disposed");
     }
 
-    const session = this.session;
+    const session = await this.ensureSession();
     const client = await session.clientPromise;
     await session.runtime.runPromise(
       Stream.runForEach(connect(client), (value) =>
@@ -184,7 +264,20 @@ export class WsTransport {
           return;
         }
 
-        const session = this.session;
+        let session: TransportSession;
+        try {
+          session = await this.ensureSession();
+        } catch {
+          // First-connect negotiation failed; retry after the backoff below.
+          if (!active || this.disposed) {
+            return;
+          }
+          await sleep(retryDelayMs);
+          continue;
+        }
+        if (!active || this.disposed) {
+          return;
+        }
         try {
           if (hasReceivedValue) {
             try {
@@ -252,9 +345,11 @@ export class WsTransport {
       }
 
       this.lastHeartbeatPongAt = null;
-      const previousSession = this.session;
-      this.session = this.createSession();
-      await this.closeSession(previousSession);
+      // Re-resolve the format (memoized per origin, so a confirmed server does
+      // not re-probe; a server that only briefly failed the first probe can now
+      // upgrade). adoptSession closes the session this replaces.
+      const wireFormat = await this.resolveWireFormat();
+      await this.adoptSession(this.createSession(wireFormat));
     });
 
     this.reconnectChain = reconnectOperation.catch(() => undefined);
@@ -273,7 +368,16 @@ export class WsTransport {
     }
 
     this.disposed = true;
-    await this.closeSession(this.session);
+    // Let any in-flight first-connect finish so adoptSession tears down the
+    // session it builds (adoptSession sees `disposed` and closes it) instead of
+    // leaking an open socket created after dispose.
+    const pendingInit = this.sessionInit;
+    if (pendingInit) {
+      await pendingInit.catch(() => undefined);
+    }
+    if (this.session) {
+      await this.closeSession(this.session);
+    }
   }
 
   private closeSession(session: TransportSession) {
@@ -284,36 +388,43 @@ export class WsTransport {
     });
   }
 
-  private createSession(): TransportSession {
-    const protocolFactory = this.options?.createProtocolLayer ?? createWsRpcProtocolLayer;
+  private createSession(wireFormat: WsWireFormat): TransportSession {
+    const protocolFactory =
+      this.options?.createProtocolLayer ??
+      ((url, handlers, format) =>
+        createWsRpcProtocolLayer(url, handlers, { wireFormat: format ?? "json" }));
     const sessionId = this.nextSessionId + 1;
     this.nextSessionId = sessionId;
     this.activeSessionId = sessionId;
     const lifecycleHandlers = this.lifecycleHandlers;
-    const protocolLayer = protocolFactory(this.url, {
-      ...lifecycleHandlers,
-      isActive: () =>
-        !this.disposed &&
-        this.activeSessionId === sessionId &&
-        (lifecycleHandlers?.isActive?.() ?? true),
-      isCloseIntentional: () =>
-        this.disposed ||
-        this.intentionalCloseDepth > 0 ||
-        lifecycleHandlers?.isCloseIntentional?.() === true,
-      onHeartbeatPong: () => {
-        this.lastHeartbeatPongAt = performance.now();
-        lifecycleHandlers?.onHeartbeatPong?.();
+    const protocolLayer = protocolFactory(
+      this.url,
+      {
+        ...lifecycleHandlers,
+        isActive: () =>
+          !this.disposed &&
+          this.activeSessionId === sessionId &&
+          (lifecycleHandlers?.isActive?.() ?? true),
+        isCloseIntentional: () =>
+          this.disposed ||
+          this.intentionalCloseDepth > 0 ||
+          lifecycleHandlers?.isCloseIntentional?.() === true,
+        onHeartbeatPong: () => {
+          this.lastHeartbeatPongAt = performance.now();
+          lifecycleHandlers?.onHeartbeatPong?.();
+        },
+        onRequestStart: (info) => {
+          lifecycleHandlers?.onRequestStart?.(info);
+          if (!info.stream) {
+            return;
+          }
+          for (const listener of this.streamRequestStartListeners) {
+            listener({ tag: info.tag });
+          }
+        },
       },
-      onRequestStart: (info) => {
-        lifecycleHandlers?.onRequestStart?.(info);
-        if (!info.stream) {
-          return;
-        }
-        for (const listener of this.streamRequestStartListeners) {
-          listener({ tag: info.tag });
-        }
-      },
-    });
+      wireFormat,
+    );
     const rootLayer = this.options?.tracingLayer
       ? Layer.mergeAll(protocolLayer, this.options.tracingLayer)
       : protocolLayer;
@@ -323,6 +434,7 @@ export class WsTransport {
       runtime,
       clientScope,
       clientPromise: runtime.runPromise(Scope.provide(clientScope)(makeWsRpcProtocolClient)),
+      sessionId,
     };
   }
 

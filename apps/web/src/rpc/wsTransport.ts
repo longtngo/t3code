@@ -3,6 +3,7 @@ import {
   type WsProtocolLifecycleHandlers,
   type WsRpcProtocolSocketUrlProvider,
   type WsTransportOptions,
+  type WsWireFormat,
 } from "@t3tools/client-runtime";
 import { createWsRpcProtocolLayer as createSharedWsRpcProtocolLayer } from "@t3tools/client-runtime";
 
@@ -17,8 +18,10 @@ import {
 function createWsRpcProtocolLayer(
   url: WsRpcProtocolSocketUrlProvider,
   handlers?: WsProtocolLifecycleHandlers,
+  wireFormat?: WsWireFormat,
 ) {
   return createSharedWsRpcProtocolLayer(url, handlers, {
+    wireFormat: wireFormat ?? "json",
     telemetryLifecycle: {
       onAttempt: recordWsConnectionAttempt,
       onOpen: recordWsConnectionOpened,
