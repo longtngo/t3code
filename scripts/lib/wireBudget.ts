@@ -19,6 +19,12 @@ import * as zlib from "node:zlib";
 export const HOST_METRICS_INTERVAL_SECONDS = 1.5;
 /** llm-models streams at 4s by default (ws.ts subscribeLlmModels). */
 export const LLM_MODELS_INTERVAL_SECONDS = 4;
+/**
+ * The RPC client sends a keep-alive Ping every 5s (Effect RpcClient makePinger,
+ * `Effect.delay("5 seconds")`), and the server answers with a Pong. This is the
+ * ONLY traffic an otherwise-idle connection carries.
+ */
+export const KEEPALIVE_PING_INTERVAL_SECONDS = 5;
 /** Phase 1 only deflates frames above this size; smaller frames pay overhead for nothing. */
 export const DEFLATE_THRESHOLD_BYTES = 1024;
 
@@ -58,6 +64,10 @@ export function measureFrame(value: unknown): FrameSizes {
 // Representative frames (plain objects mirroring the real contract shapes; byte
 // size is identical to the schema-encoded payload, which is what we measure).
 // ---------------------------------------------------------------------------
+
+/** The RPC keep-alive frames (Effect RpcMessage constPing / constPong). */
+export const pingFrame = { _tag: "Ping" } as const;
+export const pongFrame = { _tag: "Pong" } as const;
 
 export const hostMetricsFrame = {
   ts: 1_720_000_000_000,
@@ -197,7 +207,13 @@ export function reconnectBudgetBytes(reconnects: number, snapshotBytes: number):
   return reconnects * snapshotBytes;
 }
 
-/** A backgrounded phone still streams host-metrics + llm-models for the whole window. */
+/**
+ * A DESKTOP/WEB client with the sidebar open streams host-metrics + llm-models
+ * for the whole window (this is the pre-P2 case, before pause-when-hidden). NOTE:
+ * this is NOT the mobile idle profile — mobile never subscribes to host-metrics
+ * or llm-models (they are desktop/web sidebar features). See
+ * {@link keepAliveIdleBudgetBytes} for the actual mobile idle cost.
+ */
 export function idleBackgroundedBudgetBytes(
   windowSeconds: number,
   hostFrameBytes: number,
@@ -206,6 +222,22 @@ export function idleBackgroundedBudgetBytes(
   const hostFrames = Math.floor(windowSeconds / HOST_METRICS_INTERVAL_SECONDS);
   const llmFrames = Math.floor(windowSeconds / LLM_MODELS_INTERVAL_SECONDS);
   return hostFrames * hostFrameBytes + llmFrames * llmFrameBytes;
+}
+
+/**
+ * The actual mobile idle cost: an open connection with no active streams carries
+ * only the 5s RPC keep-alive (a Ping out, a Pong back). Both directions count
+ * against a phone's cellular data. NOTE the real-world floor is even lower —
+ * iOS/Android suspend the JS runtime a few seconds after backgrounding, so the
+ * ping timer stops firing entirely; this models the foreground-idle upper bound.
+ */
+export function keepAliveIdleBudgetBytes(
+  windowSeconds: number,
+  pingFrameBytes: number,
+  pongFrameBytes: number,
+): number {
+  const roundTrips = Math.floor(windowSeconds / KEEPALIVE_PING_INTERVAL_SECONDS);
+  return roundTrips * (pingFrameBytes + pongFrameBytes);
 }
 
 /** One agentic turn: K tool steps (one frame each) plus the final assistant message. */
@@ -242,6 +274,8 @@ export function computeBudgetReport(): BudgetReport {
   const message = measureFrame(assistantMessageFrame);
   const snapshot = measureFrame(threadSnapshotFrame);
   const attachment = measureFrame(attachmentUploadFrame());
+  const ping = measureFrame(pingFrame);
+  const pong = measureFrame(pongFrame);
 
   const frames: FrameRow[] = [
     { name: "host-metrics sample", sizes: host },
@@ -250,6 +284,8 @@ export function computeBudgetReport(): BudgetReport {
     { name: "activity-appended (assistant message)", sizes: message },
     { name: "thread snapshot (24 activities)", sizes: snapshot },
     { name: "attachment upload (~768KB photo)", sizes: attachment },
+    { name: "keep-alive Ping", sizes: ping },
+    { name: "keep-alive Pong", sizes: pong },
   ];
 
   const reconnects = 10;
@@ -265,7 +301,7 @@ export function computeBudgetReport(): BudgetReport {
       detail: `${reconnects} × full snapshot`,
     },
     {
-      name: `${idleSeconds / 60}-min backgrounded idle`,
+      name: `${idleSeconds / 60}-min idle w/ metrics sidebar (desktop/web, unpaused)`,
       json: idleBackgroundedBudgetBytes(idleSeconds, host.json, llm.json),
       jsonDeflated: idleBackgroundedBudgetBytes(idleSeconds, host.jsonDeflated, llm.jsonDeflated),
       msgpackDeflated: idleBackgroundedBudgetBytes(
@@ -274,6 +310,17 @@ export function computeBudgetReport(): BudgetReport {
         llm.msgpackDeflated,
       ),
       detail: `host@${HOST_METRICS_INTERVAL_SECONDS}s + llm@${LLM_MODELS_INTERVAL_SECONDS}s`,
+    },
+    {
+      name: `${idleSeconds / 60}-min mobile idle (keep-alive only)`,
+      json: keepAliveIdleBudgetBytes(idleSeconds, ping.json, pong.json),
+      jsonDeflated: keepAliveIdleBudgetBytes(idleSeconds, ping.jsonDeflated, pong.jsonDeflated),
+      msgpackDeflated: keepAliveIdleBudgetBytes(
+        idleSeconds,
+        ping.msgpackDeflated,
+        pong.msgpackDeflated,
+      ),
+      detail: `Ping+Pong @${KEEPALIVE_PING_INTERVAL_SECONDS}s (no metric streams on mobile; ~0 once JS suspends)`,
     },
     {
       name: `agentic turn (${toolSteps} tool steps)`,

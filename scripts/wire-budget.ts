@@ -28,6 +28,12 @@ function savedPercent(before: number, after: number): number {
   return before > 0 ? Math.round((1 - after / before) * 100) : 0;
 }
 
+/** "(-90%)" when msgpack is smaller, "(+27%)" when it is larger (tiny frames). */
+function fmtSaving(before: number, after: number): string {
+  const saved = savedPercent(before, after);
+  return `(${saved >= 0 ? "-" : "+"}${Math.abs(saved)}%)`;
+}
+
 function main(): void {
   const { frames, scenarios } = computeBudgetReport();
   const lines: string[] = [];
@@ -36,7 +42,7 @@ function main(): void {
   lines.push("", "Per-frame wire size", "", header, "-".repeat(84));
   for (const { name, sizes } of frames) {
     const jd = fmtBytes(sizes.jsonDeflated);
-    const md = `${fmtBytes(sizes.msgpackDeflated)} (-${savedPercent(sizes.json, sizes.msgpackDeflated)}%)`;
+    const md = `${fmtBytes(sizes.msgpackDeflated)} ${fmtSaving(sizes.json, sizes.msgpackDeflated)}`;
     lines.push(
       `${pad(name, 42)}${padLeft(fmtBytes(sizes.json), 11)}${padLeft(jd, 13)}${padLeft(md, 18)}`,
     );
@@ -45,7 +51,7 @@ function main(): void {
   lines.push("", "Scenario byte budgets", "", header, "-".repeat(84));
   for (const { name, json, jsonDeflated, msgpackDeflated, detail } of scenarios) {
     const jd = fmtBytes(jsonDeflated);
-    const md = `${fmtBytes(msgpackDeflated)} (-${savedPercent(json, msgpackDeflated)}%)`;
+    const md = `${fmtBytes(msgpackDeflated)} ${fmtSaving(json, msgpackDeflated)}`;
     lines.push(`${pad(name, 42)}${padLeft(fmtBytes(json), 11)}${padLeft(jd, 13)}${padLeft(md, 18)}`);
     lines.push(`  (${detail})`);
   }

@@ -3,12 +3,14 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFLATE_THRESHOLD_BYTES,
   HOST_METRICS_INTERVAL_SECONDS,
+  KEEPALIVE_PING_INTERVAL_SECONDS,
   LLM_MODELS_INTERVAL_SECONDS,
   agenticTurnBudgetBytes,
   attachmentUploadFrame,
   computeBudgetReport,
   idleBackgroundedBudgetBytes,
   jsonBytes,
+  keepAliveIdleBudgetBytes,
   measureFrame,
   reconnectBudgetBytes,
   threadSnapshotFrame,
@@ -48,6 +50,16 @@ describe("scenario budgets", () => {
   it("agentic-turn budget is K activity frames plus the message", () => {
     expect(agenticTurnBudgetBytes(12, 300, 2000)).toBe(12 * 300 + 2000);
   });
+
+  it("mobile idle is tiny keep-alive traffic, dwarfed by a metrics-sidebar stream", () => {
+    const seconds = 600;
+    const roundTrips = Math.floor(seconds / KEEPALIVE_PING_INTERVAL_SECONDS);
+    expect(keepAliveIdleBudgetBytes(seconds, 15, 15)).toBe(roundTrips * 30);
+    // The desktop/web metrics-sidebar idle (host+llm streams) is orders of
+    // magnitude larger than mobile's keep-alive-only idle — the point of FU5.
+    const metricsSidebarIdle = idleBackgroundedBudgetBytes(seconds, 300, 700);
+    expect(metricsSidebarIdle).toBeGreaterThan(keepAliveIdleBudgetBytes(seconds, 15, 15) * 20);
+  });
 });
 
 describe("attachmentUploadFrame", () => {
@@ -60,21 +72,38 @@ describe("attachmentUploadFrame", () => {
 });
 
 describe("computeBudgetReport", () => {
-  it("produces frame and scenario rows with positive, deflate-improving budgets", () => {
+  it("produces frame and scenario rows; compression wins on bulk, not tiny keep-alives", () => {
     const report = computeBudgetReport();
     expect(report.frames.length).toBeGreaterThan(0);
-    expect(report.scenarios.length).toBe(3);
+    expect(report.scenarios.length).toBe(4);
 
+    const keepAliveFrames = new Set(["keep-alive Ping", "keep-alive Pong"]);
     for (const frame of report.frames) {
       expect(frame.sizes.json).toBeGreaterThan(0);
       expect(frame.sizes.jsonDeflated).toBeLessThanOrEqual(frame.sizes.json);
-      // The actual Phase 1 wire format must beat the raw JSON baseline.
-      expect(frame.sizes.msgpackDeflated).toBeLessThan(frame.sizes.json);
+      if (keepAliveFrames.has(frame.name)) {
+        // The 5-byte framing header makes msgpack marginally LARGER than compact
+        // JSON for these ~15-byte frames — compression is counterproductive here,
+        // which is exactly why idle keep-alives are not a bandwidth target.
+        expect(frame.sizes.json).toBeLessThanOrEqual(16);
+      } else {
+        // Substantial frames: the actual Phase 1 wire format beats the JSON baseline.
+        expect(frame.sizes.msgpackDeflated).toBeLessThan(frame.sizes.json);
+      }
     }
+
+    const mobileIdle = report.scenarios.find((scenario) => scenario.name.includes("mobile idle"));
+    expect(mobileIdle).toBeDefined();
     for (const scenario of report.scenarios) {
       expect(scenario.json).toBeGreaterThan(0);
       expect(scenario.jsonDeflated).toBeLessThanOrEqual(scenario.json);
-      expect(scenario.msgpackDeflated).toBeLessThan(scenario.json);
+      if (scenario === mobileIdle) {
+        // Mobile idle is all tiny keep-alives, so msgpack does not win — but the
+        // whole scenario is negligible either way (a few KB over 10 minutes).
+        expect(scenario.json).toBeLessThan(10_000);
+      } else {
+        expect(scenario.msgpackDeflated).toBeLessThan(scenario.json);
+      }
     }
   });
 
@@ -93,5 +122,7 @@ describe("computeBudgetReport", () => {
     // here means the idle budget no longer models reality.
     expect(HOST_METRICS_INTERVAL_SECONDS).toBe(1.5);
     expect(LLM_MODELS_INTERVAL_SECONDS).toBe(4);
+    // Mirrors the Effect RpcClient keep-alive cadence (makePinger, 5s).
+    expect(KEEPALIVE_PING_INTERVAL_SECONDS).toBe(5);
   });
 });
