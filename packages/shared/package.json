@@ -154,6 +154,10 @@
     "./relayClient": {
       "types": "./src/relayClient.ts",
       "import": "./src/relayClient.ts"
+    },
+    "./rpcSerialization": {
+      "types": "./src/rpcSerialization/index.ts",
+      "import": "./src/rpcSerialization/index.ts"
     }
   },
   "scripts": {
@@ -165,7 +169,9 @@
     "@noble/hashes": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",
+    "fflate": "0.8.2",
     "jose": "catalog:",
+    "msgpackr": "2.0.2",
     "yaml": "catalog:"
   },
   "devDependencies": {

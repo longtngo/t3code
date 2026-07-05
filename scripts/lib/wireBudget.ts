@@ -7,11 +7,12 @@
  * re-runs the live meter) to quantify its delta. It is intentionally free of
  * runtime dependencies so it produces stable, CI-checkable numbers.
  *
- * The current wire is JSON, so the JSON column is the baseline. The JSON+deflate
- * column shows the headroom transport compression alone would recover; Phase 1
- * (MsgPack + deflate) adds a third column when `msgpackr` becomes a real dep.
+ * The JSON column is the pre-Phase-1 baseline; JSON+deflate shows the headroom
+ * per-message deflate alone recovers; the MsgPack+deflate column measures the
+ * *actual* Phase 1 wire format via the shared serialization (framing included).
  */
 
+import { makeCompressedMsgPackSerialization } from "@t3tools/shared/rpcSerialization";
 import * as zlib from "node:zlib";
 
 /** host-metrics streams at 1.5s by default (ws.ts subscribeHostMetrics). */
@@ -25,6 +26,8 @@ export interface FrameSizes {
   readonly json: number;
   /** Wire size under Phase 1's threshold rule: deflate only above the threshold. */
   readonly jsonDeflated: number;
+  /** Actual Phase 1 wire size: framed MessagePack, deflated above the threshold. */
+  readonly msgpackDeflated: number;
 }
 
 export function jsonBytes(value: unknown): number {
@@ -36,10 +39,19 @@ export function jsonDeflatedBytes(value: unknown): number {
   return zlib.deflateRawSync(Buffer.from(JSON.stringify(value))).length;
 }
 
+/** Exact on-wire size of one Phase 1 frame, via the real shared serialization. */
+export function msgpackDeflatedBytes(value: unknown): number {
+  const frame = makeCompressedMsgPackSerialization().makeUnsafe().encode(value);
+  if (frame === undefined) {
+    return 0;
+  }
+  return typeof frame === "string" ? Buffer.byteLength(frame) : frame.length;
+}
+
 export function measureFrame(value: unknown): FrameSizes {
   const json = jsonBytes(value);
   const jsonDeflated = json > DEFLATE_THRESHOLD_BYTES ? jsonDeflatedBytes(value) : json;
-  return { json, jsonDeflated };
+  return { json, jsonDeflated, msgpackDeflated: msgpackDeflatedBytes(value) };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +226,7 @@ export interface ScenarioRow {
   readonly name: string;
   readonly json: number;
   readonly jsonDeflated: number;
+  readonly msgpackDeflated: number;
   readonly detail: string;
 }
 
@@ -248,12 +261,18 @@ export function computeBudgetReport(): BudgetReport {
       name: `${reconnects}× reconnect on one thread`,
       json: reconnectBudgetBytes(reconnects, snapshot.json),
       jsonDeflated: reconnectBudgetBytes(reconnects, snapshot.jsonDeflated),
+      msgpackDeflated: reconnectBudgetBytes(reconnects, snapshot.msgpackDeflated),
       detail: `${reconnects} × full snapshot`,
     },
     {
       name: `${idleSeconds / 60}-min backgrounded idle`,
       json: idleBackgroundedBudgetBytes(idleSeconds, host.json, llm.json),
       jsonDeflated: idleBackgroundedBudgetBytes(idleSeconds, host.jsonDeflated, llm.jsonDeflated),
+      msgpackDeflated: idleBackgroundedBudgetBytes(
+        idleSeconds,
+        host.msgpackDeflated,
+        llm.msgpackDeflated,
+      ),
       detail: `host@${HOST_METRICS_INTERVAL_SECONDS}s + llm@${LLM_MODELS_INTERVAL_SECONDS}s`,
     },
     {
@@ -263,6 +282,11 @@ export function computeBudgetReport(): BudgetReport {
         toolSteps,
         activity.jsonDeflated,
         message.jsonDeflated,
+      ),
+      msgpackDeflated: agenticTurnBudgetBytes(
+        toolSteps,
+        activity.msgpackDeflated,
+        message.msgpackDeflated,
       ),
       detail: `${toolSteps} × activity + 1 message`,
     },

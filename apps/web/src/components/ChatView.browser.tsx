@@ -22,7 +22,7 @@ import {
   DEFAULT_TERMINAL_ID,
   ServerConfig as ServerConfigSchema,
 } from "@t3tools/contracts";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeThreadRef, setAdvertisedWireFormat } from "@t3tools/client-runtime";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -1709,6 +1709,10 @@ async function mountChatView(options: {
 
 describe("ChatView timeline estimator parity (full app)", () => {
   beforeAll(async () => {
+    // The msw WebSocket mock only transports text frames, so force the JSON wire
+    // format here; the production msgpack path is covered by the Node RPC
+    // round-trip test in apps/server/src/server.test.ts.
+    setAdvertisedWireFormat("json");
     fixture = buildFixture(
       createSnapshotForTargetUser({
         targetMessageId: "msg-user-bootstrap" as MessageId,

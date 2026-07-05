@@ -9,6 +9,9 @@ import { RpcMessage, RpcSchema, RpcSerialization, RpcServer } from "effect/unsta
 
 type RpcServerInstance = RpcServer.RpcServer<any>;
 
+// The browser tests force the JSON wire format (msw's WebSocket mock can't carry
+// the binary MessagePack frames production uses); msgpack is covered end-to-end by
+// the Node RPC round-trip test in apps/server/src/server.test.ts.
 type BrowserWsClient = {
   send: (data: string) => void;
 };

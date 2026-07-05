@@ -146,6 +146,32 @@ the server) validates these modelled numbers against the real app when running e
   round-trip tests across all three clients; deflate CPU/battery cost on mobile → mitigated by the size
   threshold and by Phase 3 shrinking the large snapshots that would cost the most to compress.
 
+#### Phase 1 implementation notes (2026-07-05, shipped)
+
+- **Codec:** a custom `RpcSerialization` (`@t3tools/shared/rpcSerialization`) using `msgpackr`
+  (`useRecords: true`) + `fflate` — the *same* deflate lib on both ends, so there is no cross-library
+  compatibility surface. Because deflated payloads aren't self-delimiting (unlike raw msgpack), the
+  serialization does its **own length-prefixed framing**: `[flags:u8][len:u32-BE][payload]`, deflating
+  only payloads above the 1 KB threshold (flag bit 0). Verified by unit tests (round-trip, multi-frame,
+  split-chunk reassembly, record continuity, native binary) and a real RpcClient↔RpcServer socket
+  round-trip test.
+- **Handshake negotiation:** client-driven via a `?fmt=msgpack-deflate` query param; the server reads it
+  (`HttpServerRequest.toURL`) and provides `layerCompressedMsgPack`, else falls back to
+  `RpcSerialization.layerJson`. This protects the realistic skew direction (a lagging mobile client that
+  doesn't advertise msgpack still gets JSON). The advertised format is a module-level setting
+  (`setAdvertisedWireFormat`) defaulting to msgpack — also a JSON kill-switch.
+- **Heartbeat:** the socket-level `Pong` sniff was a `JSON.parse` on the frame, which binary frames break.
+  Replaced with "any inbound frame refreshes liveness" — format-agnostic, and equivalent because idle
+  traffic is ping/pong only (esp. after Phase 2). Preserves `isHeartbeatFresh` (drives resume-reconnect).
+- **Browser-test caveat:** the web browser suite mocks the socket with **msw, which only transports text
+  frames** — it silently drops the client's binary msgpack. Those tests therefore force the JSON format
+  (`setAdvertisedWireFormat("json")`); the msgpack path is covered instead by the Node RPC round-trip
+  test and a browser-side codec round-trip test. This is a test-harness limitation, not a product gap.
+- **Re-measurement** (`node scripts/wire-budget.ts`, MsgPack+deflate column, the real codec):
+  thread snapshot 7.6 KB → **754 B (−90%)**; 10× reconnect 75.5 KB → **7.4 KB (−90%)**; 10-min idle
+  175.8 KB → **145 KB (−17%)** (small frames dominate — Phase 2 is the real lever there); agentic turn
+  10.6 KB → **7.3 KB (−32%)**. Small frames also shrink even without deflate (msgpack structure).
+
 ### Phase 2 — Quiet background subscriptions + cadence ramp
 - Client unsubscribes / pauses `host-metrics` and `llm-models` on `visibilitychange` hidden (web/desktop)
   and RN `AppState` background (mobile), resuming on foreground (reuse the existing app-resume reconnect

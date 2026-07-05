@@ -36,6 +36,11 @@ import {
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import {
+  layerCompressedMsgPack,
+  WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_QUERY_PARAM,
+} from "@t3tools/shared/rpcSerialization";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
@@ -857,9 +862,13 @@ const wsRpcProtocolLayer = (wsUrl: string) => {
       ) as unknown as globalThis.WebSocket,
   );
 
+  // Mirror the server's handshake negotiation: a client advertising the compressed
+  // format on the URL connects with it, everything else stays on JSON.
+  const wantsMsgPack =
+    new URL(url).searchParams.get(WIRE_FORMAT_QUERY_PARAM) === WIRE_FORMAT_MSGPACK_DEFLATE;
   return RpcClient.layerProtocolSocket().pipe(
     Layer.provide(Socket.layerWebSocket(url).pipe(Layer.provide(webSocketConstructorLayer))),
-    Layer.provide(RpcSerialization.layerJson),
+    Layer.provide(wantsMsgPack ? layerCompressedMsgPack : RpcSerialization.layerJson),
   );
 };
 
@@ -3849,6 +3858,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         yield* getWsServerUrl("/ws", { authenticated: false }),
         cookie?.split(";")[0] ?? "",
       );
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
+      );
+
+      assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
+      assert.equal(response.auth.policy, "desktop-managed-local");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("round-trips websocket rpc over the negotiated compressed-msgpack wire format", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { response: bootstrapResponse, cookie } = yield* bootstrapBrowserSession();
+      assert.equal(bootstrapResponse.status, 200);
+      assert.isDefined(cookie);
+
+      const wsUrl = appendSessionCookieToWsUrl(
+        `${yield* getWsServerUrl("/ws", { authenticated: false })}?${WIRE_FORMAT_QUERY_PARAM}=${WIRE_FORMAT_MSGPACK_DEFLATE}`,
+        cookie?.split(";")[0] ?? "",
+      );
+      // A full request→response round-trip proves the framed msgpack+deflate codec
+      // integrates with Effect RPC over a real socket (encode, frame, deflate, and
+      // decode all exercised end-to-end), and that the server negotiated the format.
       const response = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
       );

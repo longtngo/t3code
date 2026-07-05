@@ -1,4 +1,9 @@
 import { WsRpcGroup } from "@t3tools/contracts";
+import {
+  layerCompressedMsgPack,
+  WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_QUERY_PARAM,
+} from "@t3tools/shared/rpcSerialization";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -74,6 +79,18 @@ function formatSocketErrorMessage(error: unknown): string {
   return String(error);
 }
 
+export type WsWireFormat = "msgpack-deflate" | "json";
+
+// The client advertises compressed MessagePack at the handshake by default. Test
+// harnesses whose mock socket can't carry binary frames (msw's WebSocket) force
+// "json"; production always uses msgpack. This is also a usable kill-switch if
+// msgpack ever needs to be disabled without shipping a new client.
+let advertisedWireFormat: WsWireFormat = "msgpack-deflate";
+
+export function setAdvertisedWireFormat(format: WsWireFormat): void {
+  advertisedWireFormat = format;
+}
+
 function resolveWsRpcSocketUrl(rawUrl: string): string {
   const resolved = new URL(rawUrl);
   if (resolved.protocol !== "ws:" && resolved.protocol !== "wss:") {
@@ -81,6 +98,12 @@ function resolveWsRpcSocketUrl(rawUrl: string): string {
   }
 
   resolved.pathname = "/ws";
+  // Advertise the wire format at the handshake. A server that understands the
+  // param replies in kind; one that doesn't ignores it and stays on JSON. Only
+  // msgpack needs advertising — JSON is the server's default fallback.
+  if (advertisedWireFormat === "msgpack-deflate") {
+    resolved.searchParams.set(WIRE_FORMAT_QUERY_PARAM, WIRE_FORMAT_MSGPACK_DEFLATE);
+  }
   return resolved.toString();
 }
 
@@ -244,14 +267,11 @@ export function createWsRpcProtocolLayer(
       );
       socket.addEventListener("message", (event) => {
         wireMeter.record("recv", frameByteLength(event.data));
-        try {
-          const message = JSON.parse(String(event.data)) as { readonly _tag?: string };
-          if (message._tag === "Pong") {
-            lifecycle.onHeartbeatPong();
-          }
-        } catch {
-          // Ignore malformed messages here; the Effect RPC parser still owns protocol errors.
-        }
+        // Any inbound frame proves the link is alive, so it refreshes heartbeat
+        // liveness. The previous JSON `_tag === "Pong"` sniff can't read the binary
+        // MessagePack frames this client now uses; during idle the only traffic is
+        // ping/pong anyway, so "any frame" is an equivalent, format-agnostic signal.
+        lifecycle.onHeartbeatPong();
       });
       socket.addEventListener(
         "close",
@@ -315,7 +335,11 @@ export function createWsRpcProtocolLayer(
     }),
   );
 
+  const serializationLayer =
+    advertisedWireFormat === "msgpack-deflate"
+      ? layerCompressedMsgPack
+      : RpcSerialization.layerJson;
   return protocolLayer.pipe(
-    Layer.provide(Layer.mergeAll(socketLayer, RpcSerialization.layerJson, connectionHooksLayer)),
+    Layer.provide(Layer.mergeAll(socketLayer, serializationLayer, connectionHooksLayer)),
   );
 }

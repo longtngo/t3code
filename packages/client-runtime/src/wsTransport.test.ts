@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { setAdvertisedWireFormat } from "./wsRpcProtocol.ts";
 import { formatErrorMessage, WsTransport } from "./wsTransport.ts";
 
 type WsEventType = "open" | "message" | "close" | "error";
@@ -125,6 +126,10 @@ beforeEach(() => {
   });
 
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  // The MockWebSocket feeds JSON frames, so exercise the transport over JSON. The
+  // production msgpack path is covered by the shared serialization unit tests, the
+  // Node RPC round-trip test, and the browser codec test.
+  setAdvertisedWireFormat("json");
 });
 
 afterEach(async () => {
@@ -132,6 +137,7 @@ afterEach(async () => {
   transports.length = 0;
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
+  setAdvertisedWireFormat("msgpack-deflate");
   vi.restoreAllMocks();
 });
 
@@ -188,6 +194,20 @@ describe("WsTransport", () => {
     });
 
     expect(getSocket().url).toBe("ws://localhost:3020/ws?token=secret-token");
+    await transport.dispose();
+  });
+
+  it("advertises the compressed-msgpack wire format in the handshake url by default", async () => {
+    setAdvertisedWireFormat("msgpack-deflate");
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    expect(getSocket().url).toBe(
+      "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate",
+    );
     await transport.dispose();
   });
 

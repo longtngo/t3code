@@ -68,11 +68,24 @@ describe("computeBudgetReport", () => {
     for (const frame of report.frames) {
       expect(frame.sizes.json).toBeGreaterThan(0);
       expect(frame.sizes.jsonDeflated).toBeLessThanOrEqual(frame.sizes.json);
+      // The actual Phase 1 wire format must beat the raw JSON baseline.
+      expect(frame.sizes.msgpackDeflated).toBeLessThan(frame.sizes.json);
     }
     for (const scenario of report.scenarios) {
       expect(scenario.json).toBeGreaterThan(0);
       expect(scenario.jsonDeflated).toBeLessThanOrEqual(scenario.json);
+      expect(scenario.msgpackDeflated).toBeLessThan(scenario.json);
     }
+  });
+
+  it("measures the real Phase 1 wire frame (framed msgpack+deflate) below the JSON baseline", () => {
+    const report = computeBudgetReport();
+    const snapshot = report.frames.find((frame) =>
+      frame.name.includes("thread snapshot"),
+    );
+    // The large snapshot is the reconnect cost; msgpack+deflate should shrink it dramatically.
+    expect(snapshot).toBeDefined();
+    expect(snapshot!.sizes.msgpackDeflated).toBeLessThan(snapshot!.sizes.json / 2);
   });
 
   it("keeps the default cadence constants in sync with the server defaults", () => {

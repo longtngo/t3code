@@ -31,18 +31,22 @@ function savedPercent(before: number, after: number): number {
 function main(): void {
   const { frames, scenarios } = computeBudgetReport();
   const lines: string[] = [];
-  const header = `${pad("", 42)}${padLeft("JSON", 12)}${padLeft("JSON+deflate", 16)}`;
+  const header = `${pad("", 42)}${padLeft("JSON", 11)}${padLeft("JSON+defl", 13)}${padLeft("MsgPack+defl", 18)}`;
 
-  lines.push("", "Per-frame wire size (current JSON transport)", "", header, "-".repeat(70));
+  lines.push("", "Per-frame wire size", "", header, "-".repeat(84));
   for (const { name, sizes } of frames) {
-    const deflated = `${fmtBytes(sizes.jsonDeflated)} (-${savedPercent(sizes.json, sizes.jsonDeflated)}%)`;
-    lines.push(`${pad(name, 42)}${padLeft(fmtBytes(sizes.json), 12)}${padLeft(deflated, 16)}`);
+    const jd = fmtBytes(sizes.jsonDeflated);
+    const md = `${fmtBytes(sizes.msgpackDeflated)} (-${savedPercent(sizes.json, sizes.msgpackDeflated)}%)`;
+    lines.push(
+      `${pad(name, 42)}${padLeft(fmtBytes(sizes.json), 11)}${padLeft(jd, 13)}${padLeft(md, 18)}`,
+    );
   }
 
-  lines.push("", "Scenario byte budgets", "", header, "-".repeat(70));
-  for (const { name, json, jsonDeflated, detail } of scenarios) {
-    const deflated = `${fmtBytes(jsonDeflated)} (-${savedPercent(json, jsonDeflated)}%)`;
-    lines.push(`${pad(name, 42)}${padLeft(fmtBytes(json), 12)}${padLeft(deflated, 16)}`);
+  lines.push("", "Scenario byte budgets", "", header, "-".repeat(84));
+  for (const { name, json, jsonDeflated, msgpackDeflated, detail } of scenarios) {
+    const jd = fmtBytes(jsonDeflated);
+    const md = `${fmtBytes(msgpackDeflated)} (-${savedPercent(json, msgpackDeflated)}%)`;
+    lines.push(`${pad(name, 42)}${padLeft(fmtBytes(json), 11)}${padLeft(jd, 13)}${padLeft(md, 18)}`);
     lines.push(`  (${detail})`);
   }
   lines.push("");

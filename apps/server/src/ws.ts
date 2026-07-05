@@ -108,6 +108,11 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import {
+  layerCompressedMsgPack,
+  WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_QUERY_PARAM,
+} from "@t3tools/shared/rpcSerialization";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
@@ -1563,6 +1568,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const request = yield* HttpServerRequest.HttpServerRequest;
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
+        // Handshake negotiation: honor the client's advertised wire format, falling
+        // back to JSON for clients that don't request compressed msgpack (e.g. a
+        // lagging separately-deployed mobile build).
+        const requestUrl = HttpServerRequest.toURL(request);
+        const wantsMsgPack =
+          Option.isSome(requestUrl) &&
+          requestUrl.value.searchParams.get(WIRE_FORMAT_QUERY_PARAM) ===
+            WIRE_FORMAT_MSGPACK_DEFLATE;
+        const serializationLayer = wantsMsgPack
+          ? layerCompressedMsgPack
+          : RpcSerialization.layerJson;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchTags({
             ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
@@ -1574,7 +1590,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         }).pipe(
           Effect.provide(
             makeWsRpcLayer(session).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provideMerge(serializationLayer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscoveryLayer.layer.pipe(

@@ -11,6 +11,8 @@ import {
   getWsConnectionUiState,
   resetWsConnectionStateForTests,
 } from "../rpc/wsConnectionState";
+import { setAdvertisedWireFormat } from "@t3tools/client-runtime";
+
 import { WsTransport } from "./wsTransport";
 
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
@@ -135,6 +137,9 @@ beforeEach(() => {
   });
 
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  // The MockWebSocket speaks JSON; exercise the transport over JSON (msgpack is
+  // covered by the shared serialization, Node RPC round-trip, and browser codec tests).
+  setAdvertisedWireFormat("json");
 });
 
 afterEach(async () => {
@@ -142,6 +147,7 @@ afterEach(async () => {
   transports.length = 0;
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
+  setAdvertisedWireFormat("msgpack-deflate");
   resetWsConnectionStateForTests();
   await __resetClientTracingForTests();
   vi.restoreAllMocks();

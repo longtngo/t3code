@@ -40,6 +40,8 @@ import { getWsConnectionStatus } from "../rpc/wsConnectionState";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
+import { setAdvertisedWireFormat } from "@t3tools/client-runtime";
+
 import { BrowserWsRpcHarness } from "../../test/wsRpcHarness";
 
 vi.mock("../lib/vcsStatusState", () => {
@@ -495,6 +497,9 @@ async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
 
 describe("Keybindings update toast", () => {
   beforeAll(async () => {
+    // msw's WebSocket mock carries only text frames; force JSON here (msgpack is
+    // covered by the Node RPC round-trip test in apps/server/src/server.test.ts).
+    setAdvertisedWireFormat("json");
     fixture = buildFixture();
     await worker.start({
       onUnhandledRequest: "bypass",
