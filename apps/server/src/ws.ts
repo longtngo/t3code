@@ -996,20 +996,34 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
 
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(isThisThreadEvent),
-                // Coalesce bursts within a turn into one batch frame; isolated events
-                // flush after the short window. The client applies each in order.
-                Stream.groupedWithin(ACTIVITY_BATCH_MAX_EVENTS, ACTIVITY_BATCH_WINDOW),
-                Stream.map((chunk) => ({ kind: "events" as const, events: Array.from(chunk) })),
-              );
+              // Subscribe to the live tail BEFORE reading any history/snapshot
+              // below. The subscription starts buffering immediately (eager), so
+              // an event committed *during* the read still lands in it and is
+              // replayed after the history — closing the read-then-live lost-event
+              // window. The scope is the stream's (Stream.unwrap ties it to the
+              // subscription lifetime), so it is released when the client
+              // unsubscribes. Consumed exactly once below.
+              const liveEvents = yield* orchestrationEngine.subscribeDomainEvents;
+
+              // Live frames for this thread strictly after `afterSequence`. That
+              // bound dedups the read/live overlap: an event committed in the
+              // subscribe→read window is in BOTH the history read and this
+              // subscription, so we drop the ones the history already delivered.
+              const liveStreamAfter = (afterSequence: number) =>
+                liveEvents.pipe(
+                  Stream.filter((event) => event.sequence > afterSequence),
+                  Stream.filter(isThisThreadEvent),
+                  // Coalesce bursts within a turn into one batch frame; isolated
+                  // events flush after the short window. Applied in order.
+                  Stream.groupedWithin(ACTIVITY_BATCH_MAX_EVENTS, ACTIVITY_BATCH_WINDOW),
+                  Stream.map((chunk) => ({ kind: "events" as const, events: Array.from(chunk) })),
+                );
 
               // Incremental reconnect: when the client sends its last-seen sequence,
               // stream only the thread events it missed instead of a full snapshot.
               // The events are materialized so we can tell a complete window from one
               // truncated at the store's read cap — a too-large window falls through
-              // to the snapshot path rather than silently dropping the tail. The
-              // client dedups the read/live overlap by sequence.
+              // to the snapshot path rather than silently dropping the tail.
               if (input.fromSequenceExclusive !== undefined) {
                 const missed = yield* Stream.runCollect(
                   orchestrationEngine.readEvents(input.fromSequenceExclusive),
@@ -1025,12 +1039,19 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 );
                 if (missed.length < RESUME_MAX_MISSED_EVENTS) {
                   const missedThreadEvents = missed.filter(isThisThreadEvent);
+                  // The read covered every event up to this sequence (events are
+                  // returned in sequence order); the live tail resumes strictly
+                  // after it so nothing is sent twice or skipped.
+                  const readWatermark =
+                    missed.length > 0
+                      ? missed[missed.length - 1]!.sequence
+                      : input.fromSequenceExclusive;
                   // Deliver all missed events in a single batch frame, then the live tail.
                   const resumeStream =
                     missedThreadEvents.length > 0
                       ? Stream.make({ kind: "events" as const, events: missedThreadEvents })
                       : Stream.empty;
-                  return Stream.concat(resumeStream, liveStream);
+                  return Stream.concat(resumeStream, liveStreamAfter(readWatermark));
                 }
                 // Window too large to serve completely — fall through to the snapshot.
               }
@@ -1064,6 +1085,10 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 });
               }
 
+              // The snapshot reflects state up to snapshotSequence; the live tail
+              // resumes strictly after it. Because we subscribed above BEFORE this
+              // read, any event committed while the snapshot loaded is in the
+              // dequeue and is delivered here if it post-dates the snapshot.
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
@@ -1072,7 +1097,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                     thread: threadDetail.value,
                   },
                 }),
-                liveStream,
+                liveStreamAfter(snapshotSequence),
               );
             }),
             { "rpc.aggregate": "orchestration" },

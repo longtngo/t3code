@@ -415,6 +415,43 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("subscribeDomainEvents delivers events published before the stream is consumed", async () => {
+    // The read-then-live gap fix: a caller subscribes eagerly BEFORE reading a
+    // snapshot, so an event committed during the read still arrives. Here we
+    // subscribe, publish, THEN consume — a lazy (subscribe-on-run) stream would
+    // have missed the event; the eager subscription must have buffered it.
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    const eventTypes = await system.run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const liveStream = yield* engine.subscribeDomainEvents;
+
+          yield* engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make("cmd-project-eager-subscribe"),
+            projectId: asProjectId("project-eager-subscribe"),
+            title: "Eager Subscribe",
+            workspaceRoot: "/tmp/project-eager-subscribe",
+            defaultModelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            createdAt,
+          });
+
+          const collected = yield* liveStream.pipe(Stream.take(1), Stream.runCollect);
+          return Array.from(collected).map((event) => event.type);
+        }),
+      ),
+    );
+
+    expect(eventTypes).toEqual(["project.created"]);
+    await system.dispose();
+  });
+
   it("streams persisted domain events in order", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

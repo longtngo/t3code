@@ -13,6 +13,7 @@
 import type { OrchestrationCommand, OrchestrationEvent } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
@@ -51,6 +52,23 @@ export interface OrchestrationEngineShape {
    * This is a hot runtime stream (new events only), not a historical replay.
    */
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
+
+  /**
+   * Acquire a live domain-event stream whose subscription starts eagerly — the
+   * moment this effect is evaluated — rather than lazily when the stream is run
+   * (which is what {@link streamDomainEvents} does).
+   *
+   * This lets a caller subscribe to the live tail BEFORE it reads a historical
+   * snapshot, so no event published during the read is lost: such events buffer
+   * in the subscription and are delivered once the returned stream is consumed
+   * (the caller deduplicates the read/live overlap by sequence). The subscription
+   * is released when the surrounding scope closes.
+   */
+  readonly subscribeDomainEvents: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
 }
 
 /**

@@ -335,6 +335,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
       return Stream.fromPubSub(eventPubSub);
     },
+    // Eager subscription: `PubSub.subscribe` runs (and starts buffering) the
+    // moment this effect is evaluated, before the returned stream is consumed —
+    // so a caller can subscribe to the live tail before reading a snapshot and
+    // lose nothing in the read window. `fromEffectRepeat` ends the stream cleanly
+    // when the subscription shuts down (it excludes the Done signal).
+    subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
+      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+    ),
   } satisfies OrchestrationEngineShape;
 });
 
