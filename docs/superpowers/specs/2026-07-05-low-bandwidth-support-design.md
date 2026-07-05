@@ -216,6 +216,44 @@ so deferred.
   scenario.
 - **Gate:** Phase-0 "N reconnects" byte budget drops from ~N×full-thread to ~N×(events-since-cursor).
 
+#### Phase 3 implementation notes (2026-07-05, shipped)
+
+**Data-driven scope note:** Phase 1's compression already cut the 10-reconnect budget 75.5 KB → 7.4 KB
+(−90%). Phase 3's incremental resume takes the remaining ~754 B compressed snapshot per reconnect down
+to ~events-since (typically a few hundred bytes) — a real but smaller marginal win than the spec's
+uncompressed-JSON framing implied. It was still built in full (user-confirmed) for the architectural
+benefit of not re-snapshotting on every blip.
+
+**Design correction (an adversarial review caught a blocker in the first attempt).** The first cut
+reused the dormant `orchestrationRecovery` coordinator, whose gap check assumes a *contiguous global*
+event stream. But `subscribeThread` delivers a **filtered per-thread subset** of the global sequence
+axis, so consecutive delivered events are almost never `latestSequence + 1` apart — the coordinator
+would have fired "recover" (a full-snapshot resubscribe) on nearly every event, *increasing* bandwidth.
+The corrected design drops the coordinator (it stays dormant) for a simple monotonic high-water mark.
+
+**Mechanism (folds `readEvents` into `subscribeThread`):**
+- **Contract:** `subscribeThread` input gains an optional `fromSequenceExclusive` cursor.
+- **Server (`ws.ts`):** with the cursor, materialize the missed global events (`readEvents(cursor)`),
+  and only serve incrementally when the window is small enough to be complete
+  (`< RESUME_MAX_MISSED_EVENTS`, kept below the store's 1000 read cap); it then streams the missed
+  *thread* events (filtered) with no snapshot. A larger/older window **falls back to a full snapshot**
+  rather than silently dropping the tail past the read cap. No cursor → the existing snapshot path.
+- **Client (`service.ts`):** each subscription tracks `lastAppliedSequence` (a monotonic high-water
+  mark, persisted across reconnects). A reconnect resubscribes with `fromSequenceExclusive =
+  lastAppliedSequence`. Events apply when `sequence > lastAppliedSequence` (which preserves order AND
+  dedups the read/live overlap); there is deliberately **no contiguity/gap check** — the thread stream
+  is sparse on the global axis, and completeness is the server's responsibility (stream-all-or-snapshot).
+- **Removed** the now-dead `applyEnvironmentThreadDetailEvent` (superseded by the inline apply path).
+- **Tests:** a wiring test proves fresh-subscribe carries no cursor, sparse events (6→9) apply WITHOUT
+  a spurious resubscribe (the exact regression the review flagged), duplicates are ignored, and a
+  reconnect resumes from the applied high-water sequence; existing subscribe/reconnect tests still pass.
+- **Deferred (follow-ups):** (1) `subscribeShell` incremental resume — smaller per-reconnect and Phase 1
+  already compresses it; (2) the server read-then-live concat has a small pre-existing lost-event window
+  (an event committed after the read but published before the live subscribe) — it also exists in the
+  snapshot path today, so this change is no worse; the lossless fix (subscribe-live-first, then read
+  history, dedup) is a separate hardening for both paths; (3) the coordinator + its test are now fully
+  dormant and could be removed.
+
 ### Phase 4 — Activity batching
 - Extend the existing assistant-text buffering (`ProviderRuntimeIngestion.ts:1751-1797`) to coalesce
   `thread.activity-appended` frames within a turn, flushing on the same boundaries.

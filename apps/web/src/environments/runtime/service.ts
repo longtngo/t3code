@@ -112,6 +112,16 @@ type ThreadDetailSubscriptionEntry = {
   refCount: number;
   lastAccessedAt: number;
   evictionTimeoutId: ReturnType<typeof setTimeout> | null;
+  /**
+   * Highest global event sequence this subscription has applied (or the sequence
+   * of the last snapshot). Persists across reconnects so a reconnect resumes from
+   * it — the server streams only the thread events past this sequence instead of a
+   * full snapshot. `subscribeThread` delivers a per-thread *subset* of the global
+   * sequence axis, so this is a monotonic high-water mark, NOT a contiguity cursor:
+   * events are applied when `sequence > lastAppliedSequence` (which also dedups the
+   * read/live overlap on resume); there is no `+1` gap check to make.
+   */
+  lastAppliedSequence: number;
 };
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
@@ -405,14 +415,32 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
     return false;
   }
 
+  // Resume from the highest applied sequence on reconnect (the server streams only
+  // the events past it); a fresh subscription (nothing applied yet) omits the cursor
+  // and gets a full snapshot. The server itself falls back to a snapshot if the
+  // missed window is too large to serve incrementally.
+  const fromSequenceExclusive =
+    entry.lastAppliedSequence > 0 ? entry.lastAppliedSequence : undefined;
+
   entry.unsubscribe = connection.client.orchestration.subscribeThread(
-    { threadId: entry.threadId },
+    { threadId: entry.threadId, fromSequenceExclusive },
     (item) => {
       if (item.kind === "snapshot") {
         useStore.getState().syncServerThreadDetail(item.snapshot.thread, entry.environmentId);
+        entry.lastAppliedSequence = Math.max(
+          entry.lastAppliedSequence,
+          item.snapshot.snapshotSequence,
+        );
         return;
       }
-      applyEnvironmentThreadDetailEvent(item.event, entry.environmentId);
+      // Apply each thread event once, monotonically. `sequence > lastApplied` both
+      // preserves order and dedups the read/live overlap the server may send on a
+      // resume. The thread stream is a sparse subset of the global sequence axis,
+      // so there is deliberately no contiguity/gap check here.
+      if (item.event.sequence > entry.lastAppliedSequence) {
+        applyRecoveredEventBatch([item.event], entry.environmentId);
+        entry.lastAppliedSequence = item.event.sequence;
+      }
     },
   );
   return true;
@@ -598,6 +626,7 @@ export function retainThreadDetailSubscription(
     refCount: 1,
     lastAccessedAt: Date.now(),
     evictionTimeoutId: null,
+    lastAppliedSequence: 0,
   };
   threadDetailSubscriptions.set(key, entry);
   if (!attachThreadDetailSubscription(entry)) {
@@ -1100,13 +1129,6 @@ function applyRecoveredEventBatch(
   }
 
   reconcileThreadDetailSubscriptionEvictionForEnvironment(environmentId);
-}
-
-export function applyEnvironmentThreadDetailEvent(
-  event: OrchestrationEvent,
-  environmentId: EnvironmentId,
-) {
-  applyRecoveredEventBatch([event], environmentId);
 }
 
 /**

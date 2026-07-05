@@ -378,6 +378,42 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("subscribes without a cursor when fresh and applies sparse thread events without resubscribing", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-cursor");
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
+    // A fresh subscription carries no cursor, so the server sends a full snapshot.
+    expect(mockSubscribeThread.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      fromSequenceExclusive: undefined,
+    });
+
+    // The thread stream is a sparse subset of the global sequence axis, so gaps
+    // (6 -> 9) are normal and must NOT trigger a resubscribe; a duplicate (<= the
+    // high-water mark) is ignored. Any resubscribe here would be the contiguity-bug
+    // regression that turned incremental reconnect into snapshot storms.
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    emit({ kind: "event", event: { sequence: 6 } });
+    emit({ kind: "event", event: { sequence: 9 } });
+    emit({ kind: "event", event: { sequence: 6 } });
+
+    await Promise.resolve();
+    expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("does not start the primary connection until the known environment has an id", async () => {
     mockGetPrimaryKnownEnvironment.mockReturnValue({
       id: "env-1",
@@ -489,6 +525,14 @@ describe("retainThreadDetailSubscription", () => {
 
     const release = retainThreadDetailSubscription(environmentId, threadId);
     expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
+    expect(mockSubscribeThread.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      fromSequenceExclusive: undefined,
+    });
+
+    // Apply an event so the subscription has a high-water mark to resume from.
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    emit({ kind: "event", event: { sequence: 42 } });
 
     await disconnectSavedEnvironment(environmentId);
     expect(mockThreadUnsubscribe).toHaveBeenCalledTimes(1);
@@ -504,6 +548,11 @@ describe("retainThreadDetailSubscription", () => {
         createConnectionCallsBeforeReconnect + 1,
       );
       expect(mockSubscribeThread).toHaveBeenCalledTimes(2);
+    });
+    // Incremental reconnect: the resubscribe resumes from the applied sequence.
+    expect(mockSubscribeThread.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      fromSequenceExclusive: 42,
     });
 
     release();

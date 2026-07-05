@@ -118,6 +118,14 @@ const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError)
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
+/**
+ * Incremental-reconnect resume serves the events a client missed instead of a full
+ * snapshot, but only when that window is small enough to be read completely. Kept
+ * safely below the event store's read cap (1000) so the resume can never silently
+ * truncate; a larger/older gap falls back to a full snapshot.
+ */
+const RESUME_MAX_MISSED_EVENTS = 500;
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -966,6 +974,44 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              const isThisThreadEvent = (event: OrchestrationEvent) =>
+                event.aggregateKind === "thread" &&
+                event.aggregateId === input.threadId &&
+                isThreadDetailEvent(event);
+
+              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
+                Stream.filter(isThisThreadEvent),
+                Stream.map((event) => ({ kind: "event" as const, event })),
+              );
+
+              // Incremental reconnect: when the client sends its last-seen sequence,
+              // stream only the thread events it missed instead of a full snapshot.
+              // The events are materialized so we can tell a complete window from one
+              // truncated at the store's read cap — a too-large window falls through
+              // to the snapshot path rather than silently dropping the tail. The
+              // client dedups the read/live overlap by sequence.
+              if (input.fromSequenceExclusive !== undefined) {
+                const missed = yield* Stream.runCollect(
+                  orchestrationEngine.readEvents(input.fromSequenceExclusive),
+                ).pipe(
+                  Effect.map((chunk) => Array.from(chunk)),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: `Failed to resume thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
+                if (missed.length < RESUME_MAX_MISSED_EVENTS) {
+                  const missedThreadEvents = missed
+                    .filter(isThisThreadEvent)
+                    .map((event) => ({ kind: "event" as const, event }));
+                  return Stream.concat(Stream.fromIterable(missedThreadEvents), liveStream);
+                }
+                // Window too large to serve completely — fall through to the snapshot.
+              }
+
               const [threadDetail, snapshotSequence] = yield* Effect.all([
                 projectionSnapshotQuery.getThreadDetailById(input.threadId).pipe(
                   Effect.mapError(
@@ -994,19 +1040,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   cause: input.threadId,
                 });
               }
-
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(
-                  (event) =>
-                    event.aggregateKind === "thread" &&
-                    event.aggregateId === input.threadId &&
-                    isThreadDetailEvent(event),
-                ),
-                Stream.map((event) => ({
-                  kind: "event" as const,
-                  event,
-                })),
-              );
 
               return Stream.concat(
                 Stream.make({
