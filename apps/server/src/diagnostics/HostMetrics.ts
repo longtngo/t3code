@@ -17,6 +17,16 @@ const GPU_MAX_OUTPUT_BYTES = 2_000_000;
 const MIN_INTERVAL_MS = 500;
 /** First sample uses a short window so the UI fills in quickly instead of after a full tick. */
 const BOOTSTRAP_DELAY_MS = 300;
+/**
+ * Low-bandwidth cadence ramp: the stream starts at the requested interval (a fast,
+ * "feels live" first look) and relaxes toward this ceiling as it runs, so a
+ * long-lived idle-but-foreground subscription costs a fraction of the bytes. The
+ * client tears the stream down when the tab hides and resubscribes fresh when it
+ * shows again, so returning to the tab naturally resets the ramp to the fast rate.
+ */
+const RAMP_MAX_INTERVAL_MS = 5000;
+/** Each tick lengthens the next interval by this much until the ceiling is reached. */
+const RAMP_STEP_MS = 500;
 
 export interface CpuTimesSnapshot {
   readonly idle: number;
@@ -125,6 +135,17 @@ interface SamplerState {
   readonly prevCpu: CpuTimesSnapshot;
   /** The first tick uses a short window; subsequent ticks use the full interval. */
   readonly first: boolean;
+  /** Current inter-sample interval; ramps up toward {@link RAMP_MAX_INTERVAL_MS}. */
+  readonly intervalMs: number;
+}
+
+/**
+ * Next inter-sample interval for the cadence ramp: relax toward `maxMs` by one
+ * {@link RAMP_STEP_MS} step per tick. A start interval already at/above the ceiling
+ * never ramps down.
+ */
+export function rampSampleInterval(currentMs: number, maxMs: number): number {
+  return Math.min(maxMs, currentMs + RAMP_STEP_MS);
 }
 
 /**
@@ -137,13 +158,18 @@ interface SamplerState {
 export function hostMetricsStream(
   intervalMs: number,
 ): Stream.Stream<HostMetricsSample, never, ChildProcessSpawner.ChildProcessSpawner> {
-  const interval = Duration.millis(Math.max(MIN_INTERVAL_MS, Math.round(intervalMs)));
+  const startInterval = Math.max(MIN_INTERVAL_MS, Math.round(intervalMs));
+  const maxInterval = Math.max(startInterval, RAMP_MAX_INTERVAL_MS);
   const bootstrap = Duration.millis(BOOTSTRAP_DELAY_MS);
-  const initial: SamplerState = { prevCpu: readCpuTimes(), first: true };
+  const initial: SamplerState = {
+    prevCpu: readCpuTimes(),
+    first: true,
+    intervalMs: startInterval,
+  };
 
   return Stream.unfold(initial, (state) =>
     Effect.gen(function* () {
-      yield* Effect.sleep(state.first ? bootstrap : interval);
+      yield* Effect.sleep(state.first ? bootstrap : Duration.millis(state.intervalMs));
       const currentCpu = readCpuTimes();
       const cpu = cpuBusy(state.prevCpu, currentCpu);
       const gpu = yield* readGpu;
@@ -157,7 +183,15 @@ export function hostMetricsStream(
         // the whole sample each tick, never loses the host descriptor.
         host: HOST_INFO,
       };
-      const next: SamplerState = { prevCpu: currentCpu, first: false };
+      // Keep the first real interval at the fast rate, then relax toward the ceiling.
+      const nextInterval = state.first
+        ? state.intervalMs
+        : rampSampleInterval(state.intervalMs, maxInterval);
+      const next: SamplerState = {
+        prevCpu: currentCpu,
+        first: false,
+        intervalMs: nextInterval,
+      };
       return [sample, next] as const;
     }),
   );

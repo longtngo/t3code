@@ -183,6 +183,28 @@ the server) validates these modelled numbers against the real app when running e
 - **Gate:** Phase-0 "10-min backgrounded idle" byte budget drops to ~zero for these streams; the foreground
   idle budget drops as the interval ramps to 5s.
 
+#### Phase 2 implementation notes (2026-07-05, shipped)
+
+**Verified before building (the premise was mostly already true):**
+- **Pause-when-hidden is already shipped.** `useHostMetrics`, `useLlmModels`, and `useResourceQueue` on
+  web/desktop each tear their subscription down on `document.hidden` (each carries a "Pause … while the tab
+  is hidden so a backgrounded window costs nothing" comment) and re-establish on visible. So the primary
+  Phase 2 gate — the 10-min backgrounded-idle budget dropping to ~zero — was **already met**; unsubscribing
+  stops the server-side sampling entirely.
+- **Mobile does not stream these at all.** `apps/mobile` has no host-metrics / llm-models subscription, so
+  the "backgrounded phone still streams metrics" concern is moot for the actual low-bandwidth target.
+
+**What was actually built — the foreground cadence ramp (server-side):** `hostMetricsStream` now starts at
+the requested/fast interval (1.5s "feels live" first look) and relaxes toward a 5s ceiling by +500ms per
+tick (`rampSampleInterval`). Because the client already tears the stream down when the tab hides and
+resubscribes fresh when it shows, **returning to the tab is the ramp reset** — no client API change, no
+timers, no interaction plumbing. This is the whole remaining committed Phase 2 work; it benefits web/desktop
+foreground-idle (a web client on a metered link), since mobile doesn't stream metrics.
+
+**Deferred (follow-up):** resetting the ramp on in-tab *interaction* (vs. only on tab re-show) would need
+client-side interaction tracking + per-subscription `intervalMs` plumbing; low value for the modest saving,
+so deferred.
+
 ### Phase 3 — Incremental reconnect sync
 - Add `replayEvents` to the `WsRpcClient` orchestration interface (`packages/client-runtime/src/wsRpcClient.ts`),
   mapping to the existing server handler (`ws.ts:886-908`).
