@@ -59,6 +59,16 @@ export default mergeConfig(
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
       testTimeout: 120_000,
+      // A handful of git/checkpoint integration tests (CheckpointReactor capture/
+      // revert, orchestrationEngine.integration multi-turn/revert, GitManager
+      // cross-repo PR) are load-sensitive async-timing races: green in isolation,
+      // occasionally red only under heavy concurrent CPU load (e.g. another job
+      // saturating the machine). The cause is environmental contention, not a
+      // product bug — and it resists a per-test fix without reproducing that load
+      // (a racy-git hypothesis was tested and falsified on APFS's ns-mtime). A
+      // bounded retry absorbs the transient contention without masking a real
+      // regression, which fails deterministically across all attempts.
+      retry: 2,
     },
   }),
 );

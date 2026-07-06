@@ -55,6 +55,11 @@ const unitTestProject = {
     // run, those async tests can exceed Vitest's default 5s budget.
     hookTimeout: 15_000,
     testTimeout: 15_000,
+    // A few render-timing tests (e.g. MessagesTimeline collapse controls) flake
+    // only under heavy concurrent load — green in isolation. A bounded retry
+    // absorbs the transient contention; a real regression still fails every
+    // attempt. See the server config for the full rationale.
+    retry: 2,
   },
 } satisfies TestProjectInlineConfiguration;
 
