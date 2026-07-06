@@ -1,16 +1,19 @@
 import { WsRpcGroup } from "@t3tools/contracts";
 import {
-  layerCompressedMsgPack,
+  serializationLayerForWireFormat,
   WIRE_FORMAT_JSON,
   WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
   WIRE_FORMAT_QUERY_PARAM,
   WS_CAPABILITIES_PATH,
 } from "@t3tools/shared/rpcSerialization";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import * as Semaphore from "effect/Semaphore";
+import { RpcClient, RpcClientError } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import {
@@ -74,6 +77,36 @@ export interface WsRpcProtocolOptions {
   readonly wireFormat?: WsWireFormat;
 }
 
+/**
+ * Races a send against socket disconnect. If `disconnectLatch` opens (a disconnect)
+ * before the send resolves, the send is interrupted and this fails — so a frame
+ * already encoded against the dying connection's deflate window can never be flushed
+ * to the NEXT socket (whose window is fresh), which would desync the server's inflate.
+ *
+ * The latch is opened by `ConnectionHooks.onDisconnect`, which Effect runs during the
+ * socket's failure unwind BEFORE the retry re-opens the write latch on a new socket,
+ * so this race is won deterministically for a truly in-flight send. Exported for unit
+ * testing of that abandon behavior.
+ */
+export function abandonSendOnDisconnect<A, R>(
+  send: Effect.Effect<A, RpcClientError.RpcClientError, R>,
+  disconnectLatch: Latch.Latch,
+): Effect.Effect<A, RpcClientError.RpcClientError, R> {
+  return Effect.raceFirst(
+    send,
+    Effect.flatMap(disconnectLatch.await, () =>
+      Effect.fail(
+        new RpcClientError.RpcClientError({
+          reason: new RpcClientError.RpcClientDefect({
+            message: "send abandoned: socket disconnected before the frame was written",
+            cause: undefined,
+          }),
+        }),
+      ),
+    ),
+  );
+}
+
 export const makeWsRpcProtocolClient = RpcClient.make(WsRpcGroup);
 type RpcClientFactory = typeof makeWsRpcProtocolClient;
 export type WsRpcProtocolClient =
@@ -88,16 +121,25 @@ function formatSocketErrorMessage(error: unknown): string {
   return String(error);
 }
 
-export type WsWireFormat = "msgpack-deflate" | "json";
+export type WsWireFormat = "msgpack-deflate-stream" | "msgpack-deflate" | "json";
 
-// The format the client PREFERS. It is not sent blindly: the client only speaks
-// compressed msgpack after a capability probe confirms the server understands it
-// (see `negotiateWireFormat`), so a newer client can't wedge an older,
-// separately-deployed server by shipping binary frames it can't decode. Setting
-// this to "json" is a hard kill-switch — it forces JSON and skips the probe
+// Client preference order — the negotiator picks the FIRST of these the server ALSO
+// advertises (capped at `advertisedWireFormat`). Highest-compression first; JSON, the
+// always-safe floor, last.
+const CLIENT_WIRE_FORMAT_PREFERENCE: readonly WsWireFormat[] = [
+  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
+  WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_JSON,
+];
+
+// The format the client PREFERS (the ceiling of its precedence). It is not sent
+// blindly: the client only speaks a binary format after a capability probe confirms
+// the server understands it (see `negotiateWireFormat`), so a newer client can't
+// wedge an older, separately-deployed server by shipping frames it can't decode.
+// Setting this to "json" is a hard kill-switch — it forces JSON and skips the probe
 // entirely, which is also how test harnesses whose mock socket can't carry binary
 // frames (msw's WebSocket) pin the transport to JSON.
-let advertisedWireFormat: WsWireFormat = "msgpack-deflate";
+let advertisedWireFormat: WsWireFormat = WIRE_FORMAT_MSGPACK_DEFLATE_STREAM;
 
 export function setAdvertisedWireFormat(format: WsWireFormat): void {
   advertisedWireFormat = format;
@@ -155,7 +197,10 @@ function withProbeTimeout(
   });
 }
 
-async function probeServerWireFormat(httpOrigin: string): Promise<WireFormatProbeOutcome> {
+async function probeServerWireFormat(
+  httpOrigin: string,
+  preference: readonly WsWireFormat[],
+): Promise<WireFormatProbeOutcome> {
   if (typeof fetch !== "function") {
     return "unavailable"; // No fetch (some RN/test envs) → can't reach a verdict; retry later.
   }
@@ -170,18 +215,30 @@ async function probeServerWireFormat(httpOrigin: string): Promise<WireFormatProb
       return WIRE_FORMAT_JSON;
     }
     const body: unknown = await response.json();
-    const formats =
+    const serverFormats =
       typeof body === "object" &&
       body !== null &&
       Array.isArray((body as { wireFormats?: unknown }).wireFormats)
         ? (body as { wireFormats: unknown[] }).wireFormats
         : [];
-    return formats.includes(WIRE_FORMAT_MSGPACK_DEFLATE)
-      ? WIRE_FORMAT_MSGPACK_DEFLATE
-      : WIRE_FORMAT_JSON;
+    // Pick by CLIENT precedence (not server list order), and ONLY a format the server
+    // actually advertised — so the client never sends `?fmt=X` for an X the server
+    // can't decode. An old server without the stream format downgrades to per-frame
+    // or JSON here.
+    return preference.find((format) => serverFormats.includes(format)) ?? WIRE_FORMAT_JSON;
   } catch {
     return "unavailable"; // Network error / CORS / malformed JSON → retry on a later connection.
   }
+}
+
+/**
+ * The client's precedence list capped at {@link advertisedWireFormat}: the ceiling.
+ * So `setAdvertisedWireFormat(WIRE_FORMAT_MSGPACK_DEFLATE)` yields `[per-frame, json]`
+ * (never upgrades to stream), and the default (stream) yields the full list.
+ */
+function effectiveClientPreference(): readonly WsWireFormat[] {
+  const ceiling = CLIENT_WIRE_FORMAT_PREFERENCE.indexOf(advertisedWireFormat);
+  return ceiling > 0 ? CLIENT_WIRE_FORMAT_PREFERENCE.slice(ceiling) : CLIENT_WIRE_FORMAT_PREFERENCE;
 }
 
 /**
@@ -194,16 +251,17 @@ async function probeServerWireFormat(httpOrigin: string): Promise<WireFormatProb
  * connection re-probes once the network recovers.
  */
 export function negotiateWireFormat(wsUrl: string): Promise<WsWireFormat> {
-  if (advertisedWireFormat !== WIRE_FORMAT_MSGPACK_DEFLATE) {
-    return Promise.resolve(WIRE_FORMAT_JSON);
+  if (advertisedWireFormat === WIRE_FORMAT_JSON) {
+    return Promise.resolve(WIRE_FORMAT_JSON); // Kill-switch — force JSON, skip the probe.
   }
   const httpOrigin = httpOriginForWsUrl(wsUrl);
   if (httpOrigin === null) {
     return Promise.resolve(WIRE_FORMAT_JSON);
   }
+  const preference = effectiveClientPreference();
   let pending = wireFormatByOrigin.get(httpOrigin);
   if (pending === undefined) {
-    pending = withProbeTimeout(probeServerWireFormat(httpOrigin)).then((outcome) => {
+    pending = withProbeTimeout(probeServerWireFormat(httpOrigin, preference)).then((outcome) => {
       if (outcome === "unavailable") {
         // Don't pin a transient failure — allow the next connection to re-probe.
         wireFormatByOrigin.delete(httpOrigin);
@@ -224,9 +282,10 @@ function resolveWsRpcSocketUrl(rawUrl: string, format: WsWireFormat): string {
 
   resolved.pathname = "/ws";
   // Advertise the negotiated format at the handshake so the server selects the
-  // matching decoder. Only msgpack needs advertising — JSON is the server default.
-  if (format === WIRE_FORMAT_MSGPACK_DEFLATE) {
-    resolved.searchParams.set(WIRE_FORMAT_QUERY_PARAM, WIRE_FORMAT_MSGPACK_DEFLATE);
+  // matching decoder. Any non-JSON format is advertised verbatim; JSON is the
+  // server default and needs no query param.
+  if (format !== WIRE_FORMAT_JSON) {
+    resolved.searchParams.set(WIRE_FORMAT_QUERY_PARAM, format);
   }
   return resolved.toString();
 }
@@ -348,6 +407,27 @@ export function createWsRpcProtocolLayer(
   // socket URL's `?fmt` and the serialization layer below read this one value, so
   // they can never disagree. Absent → JSON, the always-safe format.
   const wireFormat = options?.wireFormat ?? WIRE_FORMAT_JSON;
+  // Only the context-takeover stream codec carries per-connection deflate state that
+  // ordering/teardown must protect; JSON and per-frame msgpack are order-independent.
+  const isStreamFormat = wireFormat === WIRE_FORMAT_MSGPACK_DEFLATE_STREAM;
+  // The currently-OPEN socket, so the codec's inbound-desync callback can tear it
+  // down (only `close` is needed, kept structural to avoid a DOM `lib` dependency).
+  const activeSocket: { current: { close(code?: number, reason?: string): void } | null } = {
+    current: null,
+  };
+  // Two latches gate the stream codec's stateful send against the socket lifecycle:
+  //
+  // - `connectedLatch` (open only while connected) gates the ENCODE. Effect's
+  //   makeProtocolSocket builds a throwaway parser at setup and REASSIGNS a fresh one
+  //   on every (re)connect, so a request encoded before the connect would use the
+  //   pre-connect window — putting a SECOND deflate stream on the wire that the
+  //   server's single inflate can't follow. Waiting for connect makes every encode
+  //   use the live post-connect parser (onConnect fires after that reassignment).
+  // - `disconnectLatch` (open only while disconnected) ABANDONS an in-flight send: a
+  //   frame already encoded when the socket drops must not flush to the next socket
+  //   (fresh window) — Effect's writer would otherwise block and replay it there.
+  const connectedLatch = isStreamFormat ? Latch.makeUnsafe(false) : undefined;
+  const disconnectLatch = isStreamFormat ? Latch.makeUnsafe(false) : undefined;
   const resolvedUrl =
     typeof url === "function"
       ? Effect.promise(() => url()).pipe(
@@ -383,6 +463,7 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "open",
         () => {
+          activeSocket.current = socket;
           lifecycle.onOpen();
         },
         { once: true },
@@ -405,6 +486,9 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "close",
         (event) => {
+          if (activeSocket.current === socket) {
+            activeSocket.current = null;
+          }
           if (wireMeterLoggingEnabled()) {
             // @effect-diagnostics-next-line globalConsole:off - dev-only bandwidth instrument, no Effect runtime in this DOM/RN close callback.
             console.info(`[wire-meter] socket closed — ${wireMeter.format()}`);
@@ -434,6 +518,13 @@ export function createWsRpcProtocolLayer(
   const retryPolicy = Schedule.addDelay(baseSchedule, (retryCount) =>
     Effect.succeed(Duration.millis(getReconnectDelayMs(retryCount, backoff) ?? 0)),
   );
+  // For the context-takeover stream codec, outbound frames must reach the wire in
+  // ENCODE order — a reordered frame desyncs the shared deflate window. `protocol.send`
+  // encodes eagerly and defers the write, so two concurrent sends could interleave
+  // (encode A, encode B, write B, write A → desync). Serialize the whole encode+write
+  // under one permit so each frame is atomic and ordered. Stateless formats (json /
+  // per-frame) are order-independent and skip this.
+  const sendMutex = isStreamFormat ? Semaphore.makeUnsafe(1) : undefined;
   const protocolLayer = Layer.effect(
     RpcClient.Protocol,
     Effect.map(
@@ -451,7 +542,26 @@ export function createWsRpcProtocolLayer(
               stream: false,
             });
           }
-          return protocol.send(clientId, request, transferables);
+          if (
+            sendMutex === undefined ||
+            disconnectLatch === undefined ||
+            connectedLatch === undefined
+          ) {
+            return protocol.send(clientId, request, transferables);
+          }
+          return sendMutex.withPermits(1)(
+            abandonSendOnDisconnect(
+              // `whenOpen` waits for connect so the encode uses the live post-connect
+              // parser (never the throwaway pre-connect one); `Effect.suspend` then
+              // defers the eager encode into the permit so encode+write are atomic and
+              // ordered. `abandonSendOnDisconnect` drops the frame if the socket drops
+              // mid-send (prevents a stale-window flush — see its doc).
+              connectedLatch.whenOpen(
+                Effect.suspend(() => protocol.send(clientId, request, transferables)),
+              ),
+              disconnectLatch,
+            ),
+          );
         },
       }),
     ),
@@ -459,15 +569,41 @@ export function createWsRpcProtocolLayer(
   const connectionHooksLayer = Layer.succeed(
     RpcClient.ConnectionHooks,
     RpcClient.ConnectionHooks.of({
-      onConnect: Effect.void,
-      onDisconnect: Effect.void,
+      // Toggle both latches together so the send wrapper (above) gates the encode on
+      // connect and abandons an in-flight frame on disconnect. No-ops for the
+      // stateless formats, which have no per-connection window to protect.
+      onConnect:
+        connectedLatch && disconnectLatch
+          ? Effect.sync(() => {
+              connectedLatch.openUnsafe(); // sends may now encode against the live parser
+              disconnectLatch.closeUnsafe();
+            })
+          : Effect.void,
+      onDisconnect:
+        connectedLatch && disconnectLatch
+          ? Effect.sync(() => {
+              connectedLatch.closeUnsafe(); // hold new sends until the next connect
+              disconnectLatch.openUnsafe(); // abandon any in-flight send
+            })
+          : Effect.void,
     }),
   );
 
-  // Same negotiated format as the socket URL above, so the client never
-  // deflate-msgpacks a frame to a server that only advertised JSON.
-  const serializationLayer =
-    wireFormat === WIRE_FORMAT_MSGPACK_DEFLATE ? layerCompressedMsgPack : RpcSerialization.layerJson;
+  // Same negotiated format the socket URL advertises (single source of truth), so the
+  // client never encodes a frame in a format the server hasn't confirmed it can decode.
+  // For the stream codec, a failed inbound decode means the persistent inflate window
+  // has desynced; close the live socket so the transport reconnects with a fresh
+  // window rather than limping on a permanently-broken decode. With ordered server
+  // sends + TCP in-order delivery this is a latent-bug backstop, but it keeps a
+  // desync from silently wedging the stream.
+  const serializationLayer = serializationLayerForWireFormat(
+    wireFormat,
+    isStreamFormat
+      ? () => {
+          activeSocket.current?.close(4000, "stream-decode-desync");
+        }
+      : undefined,
+  );
   return protocolLayer.pipe(
     Layer.provide(Layer.mergeAll(socketLayer, serializationLayer, connectionHooksLayer)),
   );

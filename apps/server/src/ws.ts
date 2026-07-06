@@ -57,7 +57,7 @@ import {
   HttpServerRespondable,
   HttpServerResponse,
 } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcServer } from "effect/unstable/rpc";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { writeUploadedAttachment } from "./attachmentUpload.ts";
@@ -115,12 +115,14 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import {
-  layerCompressedMsgPack,
+  serializationLayerForWireFormat,
   SUPPORTED_WIRE_FORMATS,
-  WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_JSON,
+  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
   WIRE_FORMAT_QUERY_PARAM,
   WS_CAPABILITIES_PATH,
 } from "@t3tools/shared/rpcSerialization";
+import { toHttpEffectWebsocketOrdered } from "./wsRpcServerProtocol.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
@@ -1668,23 +1670,35 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         // browser test harness (msw) can carry. wsConnectionsTotal below records the
         // json-vs-msgpack split so any future removal is data-gated, not guessed.
         const requestUrl = HttpServerRequest.toURL(request);
-        const wantsMsgPack =
-          Option.isSome(requestUrl) &&
-          requestUrl.value.searchParams.get(WIRE_FORMAT_QUERY_PARAM) ===
-            WIRE_FORMAT_MSGPACK_DEFLATE;
-        const serializationLayer = wantsMsgPack
-          ? layerCompressedMsgPack
-          : RpcSerialization.layerJson;
-        yield* increment(wsConnectionsTotal, {
-          wireFormat: wantsMsgPack ? WIRE_FORMAT_MSGPACK_DEFLATE : "json",
-        });
+        // Honor the client's advertised wire format; anything absent or unrecognized
+        // falls back to JSON (the load-bearing compatibility floor). We only accept a
+        // format this build actually supports, then build its codec via the SAME
+        // helper the client uses — so `?fmt` and the decoder can never disagree.
+        const requestedWireFormat = Option.isSome(requestUrl)
+          ? (requestUrl.value.searchParams.get(WIRE_FORMAT_QUERY_PARAM) ?? WIRE_FORMAT_JSON)
+          : WIRE_FORMAT_JSON;
+        const negotiatedWireFormat = (SUPPORTED_WIRE_FORMATS as readonly string[]).includes(
+          requestedWireFormat,
+        )
+          ? requestedWireFormat
+          : WIRE_FORMAT_JSON;
+        const serializationLayer = serializationLayerForWireFormat(negotiatedWireFormat);
+        yield* increment(wsConnectionsTotal, { wireFormat: negotiatedWireFormat });
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchTags({
             ServerAuthInvalidCredentialError: (error) => failEnvironmentAuthInvalid(error.reason),
             ServerAuthInternalError: (error) => failEnvironmentInternal("internal_error", error),
           }),
         );
-        const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
+        // The context-takeover stream codec carries ONE deflate window per
+        // connection, so its response frames must reach the wire in encode order
+        // (see toHttpEffectWebsocketOrdered). JSON / per-frame connections are
+        // order-independent and use the stock transport unchanged.
+        const toWebSocketHttpEffect =
+          negotiatedWireFormat === WIRE_FORMAT_MSGPACK_DEFLATE_STREAM
+            ? toHttpEffectWebsocketOrdered
+            : RpcServer.toHttpEffectWebsocket;
+        const rpcWebSocketHttpEffect = yield* toWebSocketHttpEffect(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(

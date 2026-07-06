@@ -37,8 +37,10 @@ import {
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import {
-  layerCompressedMsgPack,
+  serializationLayerForWireFormat,
+  WIRE_FORMAT_JSON,
   WIRE_FORMAT_MSGPACK_DEFLATE,
+  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
   WIRE_FORMAT_QUERY_PARAM,
 } from "@t3tools/shared/rpcSerialization";
 import { assert, it } from "@effect/vitest";
@@ -47,13 +49,16 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
@@ -66,7 +71,7 @@ import {
   HttpServer,
 } from "effect/unstable/http";
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import { RpcClient } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
 
@@ -863,13 +868,13 @@ const wsRpcProtocolLayer = (wsUrl: string) => {
       ) as unknown as globalThis.WebSocket,
   );
 
-  // Mirror the server's handshake negotiation: a client advertising the compressed
-  // format on the URL connects with it, everything else stays on JSON.
-  const wantsMsgPack =
-    new URL(url).searchParams.get(WIRE_FORMAT_QUERY_PARAM) === WIRE_FORMAT_MSGPACK_DEFLATE;
+  // Mirror the server's handshake negotiation via the SAME shared helper the client
+  // and server use: honor whatever format the URL advertises, defaulting to JSON.
+  const requestedWireFormat =
+    new URL(url).searchParams.get(WIRE_FORMAT_QUERY_PARAM) ?? WIRE_FORMAT_JSON;
   return RpcClient.layerProtocolSocket().pipe(
     Layer.provide(Socket.layerWebSocket(url).pipe(Layer.provide(webSocketConstructorLayer))),
-    Layer.provide(wantsMsgPack ? layerCompressedMsgPack : RpcSerialization.layerJson),
+    Layer.provide(serializationLayerForWireFormat(requestedWireFormat)),
   );
 };
 
@@ -881,6 +886,68 @@ const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
 ) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+
+// A stream-codec client whose OUTBOUND sends are permit-serialized, mirroring the
+// real client's `sendMutex`. Used to exercise the SERVER's ordered send under
+// concurrency without the stock (un-serialized) client desyncing its own request
+// window first — so a failure isolates to the server side.
+const wsRpcProtocolLayerOrdered = (wsUrl: string) => {
+  const { cookie, url } = parseSessionCookieFromWsUrl(wsUrl);
+  const webSocketConstructorLayer = Layer.succeed(
+    Socket.WebSocketConstructor,
+    (socketUrl, protocols) =>
+      new NodeSocket.NodeWS.WebSocket(
+        socketUrl,
+        protocols,
+        cookie ? { headers: { cookie } } : undefined,
+      ) as unknown as globalThis.WebSocket,
+  );
+  const requestedWireFormat =
+    new URL(url).searchParams.get(WIRE_FORMAT_QUERY_PARAM) ?? WIRE_FORMAT_JSON;
+  const sendMutex = Semaphore.makeUnsafe(1);
+  // Mirror the real client's connect-gate: makeProtocolSocket reassigns a fresh
+  // stream parser on connect, so an encode before connect would use the throwaway
+  // pre-connect window — a second deflate stream the server's single inflate can't
+  // follow. Gating the encode on connect makes every frame use the live parser.
+  const connectedLatch = Latch.makeUnsafe(false);
+  const protocolLayer = Layer.effect(
+    RpcClient.Protocol,
+    Effect.map(RpcClient.makeProtocolSocket(), (protocol) => ({
+      ...protocol,
+      send: (clientId, request, transferables) =>
+        sendMutex.withPermits(1)(
+          connectedLatch.whenOpen(
+            Effect.suspend(() => protocol.send(clientId, request, transferables)),
+          ),
+        ),
+    })),
+  );
+  const connectionHooksLayer = Layer.succeed(
+    RpcClient.ConnectionHooks,
+    RpcClient.ConnectionHooks.of({
+      onConnect: Effect.sync(() => {
+        connectedLatch.openUnsafe();
+      }),
+      onDisconnect: Effect.sync(() => {
+        connectedLatch.closeUnsafe();
+      }),
+    }),
+  );
+  return protocolLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Socket.layerWebSocket(url).pipe(Layer.provide(webSocketConstructorLayer)),
+        serializationLayerForWireFormat(requestedWireFormat),
+        connectionHooksLayer,
+      ),
+    ),
+  );
+};
+
+const withOrderedWsRpcClient = <A, E, R>(
+  wsUrl: string,
+  f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
+) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayerOrdered(wsUrl)));
 
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
@@ -1290,8 +1357,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const body = yield* responseJsonEffect<{ readonly wireFormats: ReadonlyArray<string> }>(
           response,
         );
-        // Order matters to the client only in that msgpack must be present to opt in.
-        assert.deepEqual([...body.wireFormats].sort(), ["json", "msgpack-deflate"]);
+        // Order is not authoritative — the client picks by its own precedence; a format
+        // just has to be present to be opt-in-able. All three this build supports appear.
+        assert.deepEqual(
+          [...body.wireFormats].sort(),
+          ["json", "msgpack-deflate", "msgpack-deflate-stream"],
+        );
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3906,6 +3977,86 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "round-trips websocket rpc over the context-takeover (stream) wire format",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const { response: bootstrapResponse, cookie } = yield* bootstrapBrowserSession();
+        assert.equal(bootstrapResponse.status, 200);
+        assert.isDefined(cookie);
+
+        const wsUrl = appendSessionCookieToWsUrl(
+          `${yield* getWsServerUrl("/ws", { authenticated: false })}?${WIRE_FORMAT_QUERY_PARAM}=${WIRE_FORMAT_MSGPACK_DEFLATE_STREAM}`,
+          cookie?.split(";")[0] ?? "",
+        );
+        // End-to-end proof that the STATEFUL context-takeover codec integrates with
+        // Effect RPC over a real socket: the client's persistent Deflate window pairs
+        // with the server's single Inflate across the handshake + a real request→
+        // response, with the frame-type tag (STREAM vs CONTROL) driving the decoder.
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
+        );
+
+        assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
+        assert.equal(response.auth.policy, "desktop-managed-local");
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "keeps the context-takeover stream in sync under concurrent server responses",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const { response: bootstrapResponse, cookie } = yield* bootstrapBrowserSession();
+        assert.equal(bootstrapResponse.status, 200);
+
+        const wsUrl = appendSessionCookieToWsUrl(
+          `${yield* getWsServerUrl("/ws", { authenticated: false })}?${WIRE_FORMAT_QUERY_PARAM}=${WIRE_FORMAT_MSGPACK_DEFLATE_STREAM}`,
+          cookie?.split(";")[0] ?? "",
+        );
+
+        // Fire many requests concurrently over ONE socket. The server handles them on
+        // separate fibers (unbounded concurrency), so their response frames encode
+        // concurrently against the connection's single deflate window — the exact
+        // Finding 9 hazard. toHttpEffectWebsocketOrdered serializes each encode+write,
+        // so every response still decodes correctly; without it the window would
+        // desync and some responses would come back corrupt or fail to decode.
+        const requestCount = 24;
+        const exits = yield* Effect.scoped(
+          withOrderedWsRpcClient(wsUrl, (client) =>
+            Effect.all(
+              Array.from({ length: requestCount }, () =>
+                client[WS_METHODS.serverGetConfig]({}).pipe(Effect.exit),
+              ),
+              { concurrency: "unbounded" },
+            ),
+          ),
+        );
+
+        const failures = exits.filter((exit) => exit._tag === "Failure");
+        if (failures.length > 0) {
+          const detail = failures
+            .slice(0, 3)
+            .map((failure, index) => `#${index}: ${Cause.pretty(failure.cause)}`)
+            .join("\n");
+          assert.fail(`${failures.length}/${requestCount} requests failed:\n${detail}`);
+        }
+        const responses = exits.map((exit) => (exit._tag === "Success" ? exit.value : null));
+
+        assert.equal(responses.length, requestCount);
+        for (const response of responses) {
+          assert.equal(
+            response?.environment.environmentId,
+            testEnvironmentDescriptor.environmentId,
+          );
+          assert.equal(response?.auth.policy, "desktop-managed-local");
+        }
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("counts websocket connections by negotiated wire format", () =>

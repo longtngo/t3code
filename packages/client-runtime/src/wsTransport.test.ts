@@ -137,7 +137,9 @@ afterEach(async () => {
   transports.length = 0;
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
-  setAdvertisedWireFormat("msgpack-deflate");
+  // Restore the module's real default (the client's top preference) so this suite
+  // never leaves the global pinned to a lower format for a later suite in the worker.
+  setAdvertisedWireFormat("msgpack-deflate-stream");
   vi.restoreAllMocks();
 });
 
@@ -218,6 +220,54 @@ describe("WsTransport", () => {
       "http://localhost:3020/ws/capabilities",
       expect.objectContaining({ method: "GET" }),
     );
+    expect(getSocket().url).toBe(
+      "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate",
+    );
+    await transport.dispose();
+  });
+
+  it("advertises the context-takeover stream format when the server supports it", async () => {
+    // The client's top preference is the streaming (context-takeover) format; a
+    // server that lists it gets `?fmt=msgpack-deflate-stream`.
+    const capabilitiesFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        wireFormats: ["json", "msgpack-deflate", "msgpack-deflate-stream"],
+      }),
+    }));
+    globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
+    setAdvertisedWireFormat("msgpack-deflate-stream");
+    resetWireFormatNegotiation();
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    expect(getSocket().url).toBe(
+      "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate-stream",
+    );
+    await transport.dispose();
+  });
+
+  it("downgrades to per-frame msgpack when the server lacks the stream format", async () => {
+    // A newer client prefers stream, but a server that only advertises per-frame
+    // msgpack must be spoken to in per-frame msgpack — never `?fmt=stream` it can't decode.
+    const capabilitiesFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ wireFormats: ["json", "msgpack-deflate"] }),
+    }));
+    globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
+    setAdvertisedWireFormat("msgpack-deflate-stream");
+    resetWireFormatNegotiation();
+    const transport = createTransport("ws://localhost:3020/?token=secret-token");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
     expect(getSocket().url).toBe(
       "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate",
     );
