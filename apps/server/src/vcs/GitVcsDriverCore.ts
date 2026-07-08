@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as HashMap from "effect/HashMap";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -51,11 +52,50 @@ const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 
+// A remote whose upstream fetch keeps failing (e.g. an HTTPS remote whose
+// credential helper cannot reach the keychain when git runs under launchd/a
+// service) must NOT keep being re-fetched on the flat 15s cadence — that turns
+// one broken remote into a permanent retry storm that pins a CPU core (each
+// doomed fetch also holds a git subprocess). Instead we back off exponentially
+// from this base up to the cap, resetting to the normal interval on the first
+// success. At the cap a persistently-broken remote is retried only twice an hour.
+const STATUS_UPSTREAM_REFRESH_FAILURE_BACKOFF_BASE = Duration.seconds(30);
+const STATUS_UPSTREAM_REFRESH_FAILURE_BACKOFF_MAX = Duration.minutes(30);
+// Fallback TTL used only if a refresh entry ever resolves as a defect/interrupt
+// rather than a normal outcome (the loader is written to always succeed with one).
 const STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
   SSH_ASKPASS_REQUIRE: "never",
+  // Never let a credential lookup block. Without this, git's HTTPS credential
+  // helper (e.g. git-credential-osxkeychain under launchd) can hang until the
+  // fetch timeout fires, burning a full 5s subprocess on every doomed refresh.
+  // With prompting disabled here and the helper cleared (see fetchRemoteForStatus)
+  // a fetch that needs credentials fails in ~0.2s instead of hanging.
+  GIT_TERMINAL_PROMPT: "0",
 } satisfies NodeJS.ProcessEnv);
+
+// The refresh loader never fails: the Cache TTL derives the next-attempt backoff
+// from the consecutive-failure count carried on the success value.
+type StatusRemoteRefreshOutcome =
+  | { readonly _tag: "refreshed" }
+  | { readonly _tag: "failed"; readonly consecutiveFailures: number };
+
+/**
+ * Exponential backoff for a failing upstream-status refresh. `consecutiveFailures`
+ * is >= 1: failure #1 waits the base delay, each further failure doubles it, and
+ * the result is clamped to the max.
+ */
+export const statusUpstreamRefreshBackoff = (consecutiveFailures: number): Duration.Duration => {
+  // Clamp the exponent so `2 ** exponent` cannot overflow to Infinity for a
+  // remote that has been failing for a very long time.
+  const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 30);
+  const millis = Math.min(
+    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_BACKOFF_BASE) * 2 ** exponent,
+    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_BACKOFF_MAX),
+  );
+  return Duration.millis(millis);
+};
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
@@ -896,19 +936,38 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRemoteForStatus = (
     gitCommonDir: string,
     remoteName: string,
-  ): Effect.Effect<void, GitCommandError> => {
+  ): Effect.Effect<GitVcsDriver.ExecuteGitResult, GitCommandError> => {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
+    // `allowNonZeroExit` keeps executeGit from turning a non-zero exit into a
+    // failed Effect; the caller inspects `exitCode` so it can tell an auth/ref
+    // failure (fast non-zero exit) apart from a clean fetch and drive the backoff.
     return executeGit(
       "GitVcsDriver.fetchRemoteForStatus",
       fetchCwd,
-      ["--git-dir", gitCommonDir, "fetch", "--quiet", "--no-tags", remoteName],
+      // `-c credential.helper=` clears the helper chain for this fetch so a stuck
+      // credential helper (git-credential-osxkeychain under launchd) cannot hang
+      // the process; combined with GIT_TERMINAL_PROMPT=0 in the env, a fetch
+      // needing auth fails fast instead of blocking until the timeout. Tradeoff:
+      // an HTTPS remote that requires credentials will never authenticate here, so
+      // its ahead/behind status stops refreshing (it settles into the failure
+      // backoff). This is a background best-effort refresh, and hanging is worse.
+      [
+        "--git-dir",
+        gitCommonDir,
+        "-c",
+        "credential.helper=",
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        remoteName,
+      ],
       {
         allowNonZeroExit: true,
         env: STATUS_UPSTREAM_REFRESH_ENV,
         timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
       },
-    ).pipe(Effect.asVoid);
+    );
   };
 
   const resolveGitCommonDir = Effect.fn("resolveGitCommonDir")(function* (cwd: string) {
@@ -919,20 +978,73 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
   });
 
+  // Consecutive-failure count per remote, used to grow the backoff. Keyed on the
+  // same StatusRemoteRefreshCacheKey the Cache uses (a Data.Class with structural
+  // equality). Entries are pruned on the first success; the key space is bounded
+  // by distinct (git-common-dir, remote) pairs — worktrees of one repo share a
+  // git-common-dir — so it stays proportional to the number of real repositories.
+  // The count lives here rather than in the cached value so it survives the cache
+  // entry's TTL expiry/eviction, which is what lets the backoff keep climbing.
+  // Ref.modify is atomic, so the read-modify-write below is safe across keys.
+  const statusRemoteRefreshFailures = yield* Ref.make(
+    HashMap.empty<StatusRemoteRefreshCacheKey, number>(),
+  );
   const refreshStatusRemoteCacheEntry = Effect.fn("refreshStatusRemoteCacheEntry")(function* (
     cacheKey: StatusRemoteRefreshCacheKey,
   ) {
-    yield* fetchRemoteForStatus(cacheKey.gitCommonDir, cacheKey.remoteName);
-    return true as const;
+    // Effect.result captures the typed fetch failure (timeout/spawn error) but
+    // lets interruption propagate — a cancelled refresh must not be miscounted as
+    // a remote failure. A non-zero exit is a *successful* Effect here (see
+    // fetchRemoteForStatus), so failure = an Effect failure OR a non-zero exit.
+    const fetchResult = yield* Effect.result(
+      fetchRemoteForStatus(cacheKey.gitCommonDir, cacheKey.remoteName),
+    );
+    const succeeded = Result.isSuccess(fetchResult) && fetchResult.success.exitCode === 0;
+    const outcome = yield* Ref.modify(
+      statusRemoteRefreshFailures,
+      (
+        failures,
+      ): readonly [
+        StatusRemoteRefreshOutcome,
+        HashMap.HashMap<StatusRemoteRefreshCacheKey, number>,
+      ] => {
+        if (succeeded) {
+          return [{ _tag: "refreshed" }, HashMap.remove(failures, cacheKey)];
+        }
+        const consecutiveFailures = Option.getOrElse(HashMap.get(failures, cacheKey), () => 0) + 1;
+        return [
+          { _tag: "failed", consecutiveFailures },
+          HashMap.set(failures, cacheKey, consecutiveFailures),
+        ];
+      },
+    );
+    // Surface the transition into failure once per outage (not every retry), with a
+    // compact reason, so an operator can see WHY a remote's status stopped refreshing.
+    if (outcome._tag === "failed" && outcome.consecutiveFailures === 1) {
+      const reason = Result.isFailure(fetchResult)
+        ? fetchResult.failure.detail
+        : `exit ${fetchResult.success.exitCode}: ${fetchResult.success.stderr.trim().slice(0, 200)}`;
+      yield* Effect.logWarning("git.status.upstreamRefreshFailing").pipe(
+        Effect.annotateLogs({
+          gitCommonDir: cacheKey.gitCommonDir,
+          remoteName: cacheKey.remoteName,
+          reason,
+        }),
+      );
+    }
+    return outcome;
   });
 
   const statusRemoteRefreshCache = yield* Cache.makeWith(refreshStatusRemoteCacheEntry, {
     capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
-    // Keep successful refreshes warm and briefly back off failed refreshes to avoid retry storms.
-    timeToLive: (exit) =>
-      Exit.isSuccess(exit)
+    // Keep successful refreshes warm for the normal interval; back a failing
+    // remote off exponentially so one broken remote cannot become a retry storm.
+    timeToLive: (exit) => {
+      if (!Exit.isSuccess(exit)) return STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN;
+      return exit.value._tag === "refreshed"
         ? STATUS_UPSTREAM_REFRESH_INTERVAL
-        : STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN,
+        : statusUpstreamRefreshBackoff(exit.value.consecutiveFailures);
+    },
   });
 
   const refreshStatusUpstreamIfStale = Effect.fn("refreshStatusUpstreamIfStale")(function* (

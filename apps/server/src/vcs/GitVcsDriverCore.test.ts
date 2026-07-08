@@ -1,15 +1,20 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 
 import { CheckpointRef, GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  splitNullSeparatedGitStdoutPaths,
+  statusUpstreamRefreshBackoff,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -213,6 +218,86 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
               } else {
                 process.env.T3_TEST_SSH_ASKPASS_LOG = previousAskpassLog;
               }
+            }),
+          ),
+        );
+      }),
+    );
+
+    it.effect("backs a failing upstream fetch off instead of refetching on every status read", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const tempDir = yield* makeTmpDir("git-vcs-driver-backoff-");
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const fetchLogPath = pathService.join(tempDir, "fetch-calls.txt");
+        const sshWrapperPath = pathService.join(tempDir, "ssh-wrapper.sh");
+        const previousGitSsh = process.env.GIT_SSH;
+        const previousFetchLog = process.env.T3_TEST_FETCH_LOG;
+
+        // A stand-in ssh transport that records every invocation then fails, so a
+        // fetch that reaches the remote leaves a countable trace.
+        yield* fileSystem.writeFileString(
+          sshWrapperPath,
+          ["#!/bin/sh", 'printf "call\\n" >> "$T3_TEST_FETCH_LOG"', "exit 1", ""].join("\n"),
+        );
+        yield* fileSystem.chmod(sshWrapperPath, 0o755);
+        yield* git(cwd, ["remote", "add", "origin", "ssh://example.invalid/repo.git"]);
+        yield* git(cwd, ["update-ref", `refs/remotes/origin/${initialBranch}`, "HEAD"]);
+        yield* git(cwd, ["branch", "--set-upstream-to", `origin/${initialBranch}`]);
+
+        const logMessages: string[] = [];
+        const captureLogger = Logger.make(({ message }) => {
+          logMessages.push(String(message));
+        });
+
+        yield* Effect.gen(function* () {
+          process.env.GIT_SSH = sshWrapperPath;
+          process.env.T3_TEST_FETCH_LOG = fetchLogPath;
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          const fetchInvocations = Effect.gen(function* () {
+            const exists = yield* fileSystem.exists(fetchLogPath);
+            if (!exists) return 0;
+            return (yield* fileSystem.readFileString(fetchLogPath))
+              .split("\n")
+              .filter((line) => line.length > 0).length;
+          });
+
+          // First read triggers the upstream fetch, which the wrapper fails with a
+          // non-zero exit.
+          yield* driver.statusDetails(cwd);
+          const afterFirst = yield* fetchInvocations;
+          assert.ok(afterFirst >= 1, "first status read should attempt the upstream fetch");
+
+          // The failed branch (and only it) logs this warning once per outage. A
+          // non-zero exit reaching the "refreshed" branch — the pre-fix bug — would
+          // log nothing, so this pins the fix end-to-end: a non-zero exit is counted
+          // as a failure (which is what puts the entry into the failure backoff,
+          // whose 30s→30m curve is covered by the statusUpstreamRefreshBackoff tests).
+          assert.isTrue(
+            logMessages.some((message) => message.includes("upstreamRefreshFailing")),
+            "a failed upstream fetch should log the failing-refresh warning",
+          );
+
+          // A second read moments later is served from the cached outcome, so it does
+          // not re-hit the remote. (This shows the entry is cached; the failure-vs-
+          // success TTL magnitude is asserted separately by the backoff unit tests.)
+          yield* driver.statusDetails(cwd);
+          const afterSecond = yield* fetchInvocations;
+          assert.equal(
+            afterSecond,
+            afterFirst,
+            "the cached outcome should suppress the repeat fetch",
+          );
+        }).pipe(
+          Effect.provide(Logger.layer([captureLogger], { mergeWithExisting: false })),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previousGitSsh === undefined) delete process.env.GIT_SSH;
+              else process.env.GIT_SSH = previousGitSsh;
+              if (previousFetchLog === undefined) delete process.env.T3_TEST_FETCH_LOG;
+              else process.env.T3_TEST_FETCH_LOG = previousFetchLog;
             }),
           ),
         );
@@ -639,5 +724,39 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* git(worktreeDir, ["show", `${ref}:wt-only.txt`]), "in-worktree");
       }),
     );
+  });
+});
+
+describe("statusUpstreamRefreshBackoff", () => {
+  const seconds = (d: Duration.Duration) => Duration.toMillis(d) / 1000;
+
+  it("waits the base delay after the first failure and doubles each subsequent failure", () => {
+    assert.equal(seconds(statusUpstreamRefreshBackoff(1)), 30);
+    assert.equal(seconds(statusUpstreamRefreshBackoff(2)), 60);
+    assert.equal(seconds(statusUpstreamRefreshBackoff(3)), 120);
+    assert.equal(seconds(statusUpstreamRefreshBackoff(4)), 240);
+  });
+
+  it("caps the backoff at the maximum for a persistently failing remote", () => {
+    // 30min cap = 1800s; reached once 30s * 2**n exceeds it.
+    assert.equal(seconds(statusUpstreamRefreshBackoff(7)), 1800);
+    assert.equal(seconds(statusUpstreamRefreshBackoff(8)), 1800);
+    // Never overflows to Infinity even for an absurd failure count.
+    const huge = seconds(statusUpstreamRefreshBackoff(1000));
+    assert.equal(huge, 1800);
+    assert.ok(Number.isFinite(huge));
+  });
+
+  it("never decreases as failures accumulate", () => {
+    let previous = 0;
+    for (let failures = 1; failures <= 40; failures++) {
+      const current = seconds(statusUpstreamRefreshBackoff(failures));
+      assert.ok(current >= previous, `backoff decreased at failure ${failures}`);
+      previous = current;
+    }
+  });
+
+  it("clamps a non-positive count to the base delay", () => {
+    assert.equal(seconds(statusUpstreamRefreshBackoff(0)), 30);
   });
 });
