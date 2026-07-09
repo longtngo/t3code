@@ -9,9 +9,11 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadHistoryPageResult,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
+  type OrchestrationHistoryCursor,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
   type OrchestrationProjectShell,
@@ -52,6 +54,7 @@ import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIde
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
+  type OrchestrationThreadDetailResult,
   type ProjectionFullThreadDiffContext,
   type ProjectionSnapshotCounts,
   type ProjectionThreadCheckpointContext,
@@ -61,6 +64,7 @@ import {
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeThreadHistoryPage = Schema.decodeUnknownEffect(OrchestrationThreadHistoryPageResult);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
@@ -142,6 +146,71 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   toCheckpointRef: Schema.NullOr(CheckpointRef),
 });
 
+// --- Thread-load windowing (getThreadDetailById window bounds) ---
+
+const WindowTurnLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  limit: Schema.Number,
+});
+const ProjectionWindowTurnRowSchema = Schema.Struct({
+  turnId: Schema.NullOr(TurnId),
+  requestedAt: IsoDateTime,
+  checkpointTurnCount: Schema.NullOr(NonNegativeInt),
+});
+const ProjectionTurnRowCountSchema = Schema.Struct({
+  turnId: Schema.NullOr(TurnId),
+  rowCount: Schema.Number,
+});
+const HasMoreHistoryInput = Schema.Struct({
+  threadId: ThreadId,
+  boundaryRequestedAt: IsoDateTime,
+  boundaryTurnId: Schema.NullOr(TurnId),
+});
+const ProjectionHasMoreRowSchema = Schema.Struct({
+  hasMore: Schema.Number,
+});
+const WindowedThreadRowsInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
+  boundaryRequestedAt: IsoDateTime,
+});
+const WindowedCheckpointInput = Schema.Struct({
+  threadId: ThreadId,
+  checkpointLowerBound: NonNegativeInt,
+});
+
+// --- Older-turn paging (getThreadHistoryPage) ---
+
+const HistoryPageTurnLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  beforeRequestedAt: IsoDateTime,
+  // Bound into a row-value comparison only, so the branded turn-id kind is
+  // irrelevant — accept the cursor's raw string form.
+  beforeTurnId: Schema.NullOr(Schema.String),
+  limit: Schema.Number,
+});
+// A half-open `[lower, upper)` created_at range so a page never re-includes the
+// null-turn rows already covered by the newer window/page above it.
+const HistoryPageRowsInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
+  lowerRequestedAt: IsoDateTime,
+  upperRequestedAt: IsoDateTime,
+});
+const HistoryPageCheckpointInput = Schema.Struct({
+  threadId: ThreadId,
+  checkpointLowerBound: NonNegativeInt,
+  checkpointUpperBound: NonNegativeInt,
+});
+
+interface WindowBoundary {
+  readonly turnIds: ReadonlyArray<TurnId>;
+  readonly boundaryRequestedAt: string;
+  readonly boundaryTurnId: TurnId | null;
+  readonly boundaryCheckpointTurnCount: number | null;
+  readonly checkpointLowerBound: number | null;
+}
+
 const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
@@ -157,6 +226,27 @@ function maxIso(left: string | null, right: string): string {
     return right;
   }
   return left > right ? left : right;
+}
+
+// Walk turn rows (already ordered newest-first for the range being loaded)
+// accumulating each turn's combined row count, stopping before a turn that
+// would push the total past `maxRows` — but always keeping at least one turn.
+function accumulateTurnsWithinRowBudget<T extends { readonly turnId: TurnId | null }>(
+  turnRows: ReadonlyArray<T>,
+  countByTurnId: ReadonlyMap<string, number>,
+  maxRows: number | undefined,
+): Array<T> {
+  let accumulated = 0;
+  const included: Array<T> = [];
+  for (const turn of turnRows) {
+    const turnCount = turn.turnId !== null ? (countByTurnId.get(turn.turnId) ?? 0) : 0;
+    if (maxRows !== undefined && included.length > 0 && accumulated + turnCount > maxRows) {
+      break;
+    }
+    accumulated += turnCount;
+    included.push(turn);
+  }
+  return included;
 }
 
 function computeSnapshotSequence(
@@ -913,6 +1003,338 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_turns
         WHERE thread_id = ${threadId}
           AND checkpoint_turn_count IS NOT NULL
+        ORDER BY checkpoint_turn_count ASC
+      `,
+  });
+
+  // --- Thread-load windowing queries ---
+
+  // Newest `limit` turns for a thread, ordered so the head is the most recent.
+  const listWindowTurnRowsByThread = SqlSchema.findAll({
+    Request: WindowTurnLookupInput,
+    Result: ProjectionWindowTurnRowSchema,
+    execute: ({ threadId, limit }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          requested_at AS "requestedAt",
+          checkpoint_turn_count AS "checkpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+        ORDER BY requested_at DESC, turn_id DESC
+        LIMIT ${limit}
+      `,
+  });
+
+  // Per-turn combined row counts (messages + activities + proposed plans) used
+  // to walk the newest turns until the `maxRows` budget is spent.
+  const listTurnRowCountsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionTurnRowCountSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT turn_id AS "turnId", COUNT(*) AS "rowCount"
+        FROM (
+          SELECT turn_id FROM projection_thread_messages WHERE thread_id = ${threadId}
+          UNION ALL
+          SELECT turn_id FROM projection_thread_activities WHERE thread_id = ${threadId}
+          UNION ALL
+          SELECT turn_id FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}
+        )
+        GROUP BY turn_id
+      `,
+  });
+
+  // Real EXISTS check: is there any turn strictly older than the boundary?
+  const existsOlderTurnByThread = SqlSchema.findAll({
+    Request: HasMoreHistoryInput,
+    Result: ProjectionHasMoreRowSchema,
+    execute: ({ threadId, boundaryRequestedAt, boundaryTurnId }) =>
+      sql`
+        SELECT EXISTS(
+          SELECT 1 FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND (requested_at, turn_id) < (${boundaryRequestedAt}, ${boundaryTurnId})
+        ) AS "hasMore"
+      `,
+  });
+
+  const windowTurnPredicate = (turnIds: ReadonlyArray<string>, boundaryRequestedAt: string) =>
+    turnIds.length > 0
+      ? sql`(${sql.in("turn_id", turnIds)} OR (turn_id IS NULL AND created_at >= ${boundaryRequestedAt}))`
+      : sql`(turn_id IS NULL AND created_at >= ${boundaryRequestedAt})`;
+
+  const listWindowedThreadMessageRows = SqlSchema.findAll({
+    Request: WindowedThreadRowsInput,
+    Result: ProjectionThreadMessageDbRowSchema,
+    execute: ({ threadId, turnIds, boundaryRequestedAt }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          role,
+          text,
+          attachments_json AS "attachments",
+          is_streaming AS "isStreaming",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND ${windowTurnPredicate(turnIds, boundaryRequestedAt)}
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
+  const listWindowedThreadProposedPlanRows = SqlSchema.findAll({
+    Request: WindowedThreadRowsInput,
+    Result: ProjectionThreadProposedPlanDbRowSchema,
+    execute: ({ threadId, turnIds, boundaryRequestedAt }) =>
+      sql`
+        SELECT
+          plan_id AS "planId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          plan_markdown AS "planMarkdown",
+          implemented_at AS "implementedAt",
+          implementation_thread_id AS "implementationThreadId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_proposed_plans
+        WHERE thread_id = ${threadId}
+          AND ${windowTurnPredicate(turnIds, boundaryRequestedAt)}
+        ORDER BY created_at ASC, plan_id ASC
+      `,
+  });
+
+  const listWindowedThreadActivityRows = SqlSchema.findAll({
+    Request: WindowedThreadRowsInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, turnIds, boundaryRequestedAt }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND ${windowTurnPredicate(turnIds, boundaryRequestedAt)}
+        ORDER BY
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
+  const listWindowedCheckpointRows = SqlSchema.findAll({
+    Request: WindowedCheckpointInput,
+    Result: ProjectionCheckpointDbRowSchema,
+    execute: ({ threadId, checkpointLowerBound }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "status",
+          checkpoint_files_json AS "files",
+          assistant_message_id AS "assistantMessageId",
+          completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND checkpoint_turn_count IS NOT NULL
+          AND checkpoint_turn_count >= ${checkpointLowerBound}
+        ORDER BY checkpoint_turn_count ASC
+      `,
+  });
+
+  // Resolve the window boundary: walk the newest turns accumulating each turn's
+  // row count, stopping early once adding a turn would exceed `maxRows` (always
+  // keeping at least the newest turn). Returns `null` when the window covers the
+  // whole thread (so the caller runs the byte-identical unbounded queries).
+  const resolveWindowBoundary = (
+    threadId: ThreadId,
+    windowTurns: number | undefined,
+    maxRows: number | undefined,
+  ): Effect.Effect<WindowBoundary | null, ProjectionRepositoryError> =>
+    Effect.gen(function* () {
+      const limit = windowTurns ?? Number.MAX_SAFE_INTEGER;
+      const turnRows = yield* listWindowTurnRowsByThread({ threadId, limit }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadDetailById:windowTurns:query",
+            "ProjectionSnapshotQuery.getThreadDetailById:windowTurns:decodeRows",
+          ),
+        ),
+      );
+      if (turnRows.length === 0) {
+        return null;
+      }
+
+      const countRows = yield* listTurnRowCountsByThread({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:query",
+            "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:decodeRows",
+          ),
+        ),
+      );
+      const countByTurnId = new Map<string, number>();
+      for (const row of countRows) {
+        if (row.turnId !== null) {
+          countByTurnId.set(row.turnId, row.rowCount);
+        }
+      }
+
+      const included = accumulateTurnsWithinRowBudget(turnRows, countByTurnId, maxRows);
+
+      const truncatedByRows = included.length < turnRows.length;
+      const limitedByTurns = windowTurns !== undefined && turnRows.length >= windowTurns;
+      if (!truncatedByRows && !limitedByTurns) {
+        // The fetched window already spans every turn of the thread with no
+        // maxRows truncation: the whole thread fits, so no windowing is needed.
+        return null;
+      }
+
+      const boundary = included[included.length - 1]!;
+      const includedCheckpointCounts = included
+        .map((turn) => turn.checkpointTurnCount)
+        .filter((count): count is number => count !== null);
+      const checkpointLowerBound =
+        includedCheckpointCounts.length > 0 ? Math.min(...includedCheckpointCounts) : null;
+
+      return {
+        turnIds: included
+          .map((turn) => turn.turnId)
+          .filter((turnId): turnId is TurnId => turnId !== null),
+        boundaryRequestedAt: boundary.requestedAt,
+        boundaryTurnId: boundary.turnId,
+        boundaryCheckpointTurnCount: boundary.checkpointTurnCount,
+        checkpointLowerBound,
+      };
+    });
+
+  // Next `limit` turns strictly OLDER than the cursor, newest-first so the head
+  // is the turn just below the cursor and the tail is the oldest of the page.
+  const listHistoryTurnRowsBeforeCursor = SqlSchema.findAll({
+    Request: HistoryPageTurnLookupInput,
+    Result: ProjectionWindowTurnRowSchema,
+    execute: ({ threadId, beforeRequestedAt, beforeTurnId, limit }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          requested_at AS "requestedAt",
+          checkpoint_turn_count AS "checkpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND (requested_at, turn_id) < (${beforeRequestedAt}, ${beforeTurnId})
+        ORDER BY requested_at DESC, turn_id DESC
+        LIMIT ${limit}
+      `,
+  });
+
+  const historyTurnPredicate = (
+    turnIds: ReadonlyArray<string>,
+    lowerRequestedAt: string,
+    upperRequestedAt: string,
+  ) =>
+    turnIds.length > 0
+      ? sql`(${sql.in("turn_id", turnIds)} OR (turn_id IS NULL AND created_at >= ${lowerRequestedAt} AND created_at < ${upperRequestedAt}))`
+      : sql`(turn_id IS NULL AND created_at >= ${lowerRequestedAt} AND created_at < ${upperRequestedAt})`;
+
+  const listHistoryPageThreadMessageRows = SqlSchema.findAll({
+    Request: HistoryPageRowsInput,
+    Result: ProjectionThreadMessageDbRowSchema,
+    execute: ({ threadId, turnIds, lowerRequestedAt, upperRequestedAt }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          role,
+          text,
+          attachments_json AS "attachments",
+          is_streaming AS "isStreaming",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND ${historyTurnPredicate(turnIds, lowerRequestedAt, upperRequestedAt)}
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
+  const listHistoryPageThreadProposedPlanRows = SqlSchema.findAll({
+    Request: HistoryPageRowsInput,
+    Result: ProjectionThreadProposedPlanDbRowSchema,
+    execute: ({ threadId, turnIds, lowerRequestedAt, upperRequestedAt }) =>
+      sql`
+        SELECT
+          plan_id AS "planId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          plan_markdown AS "planMarkdown",
+          implemented_at AS "implementedAt",
+          implementation_thread_id AS "implementationThreadId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_proposed_plans
+        WHERE thread_id = ${threadId}
+          AND ${historyTurnPredicate(turnIds, lowerRequestedAt, upperRequestedAt)}
+        ORDER BY created_at ASC, plan_id ASC
+      `,
+  });
+
+  const listHistoryPageThreadActivityRows = SqlSchema.findAll({
+    Request: HistoryPageRowsInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, turnIds, lowerRequestedAt, upperRequestedAt }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND ${historyTurnPredicate(turnIds, lowerRequestedAt, upperRequestedAt)}
+        ORDER BY
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
+  const listHistoryPageCheckpointRows = SqlSchema.findAll({
+    Request: HistoryPageCheckpointInput,
+    Result: ProjectionCheckpointDbRowSchema,
+    execute: ({ threadId, checkpointLowerBound, checkpointUpperBound }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "status",
+          checkpoint_files_json AS "files",
+          assistant_message_id AS "assistantMessageId",
+          completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND checkpoint_turn_count IS NOT NULL
+          AND checkpoint_turn_count >= ${checkpointLowerBound}
+          AND checkpoint_turn_count < ${checkpointUpperBound}
         ORDER BY checkpoint_turn_count ASC
       `,
   });
@@ -1916,8 +2338,115 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       } satisfies OrchestrationThreadShell);
     });
 
-  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
+  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (
+    threadId,
+    options,
+  ) =>
     Effect.gen(function* () {
+      const windowTurns = options?.windowTurns;
+      const maxRows = options?.maxRows;
+      // No window bounds ⇒ run the byte-identical unbounded queries below.
+      const boundary =
+        windowTurns === undefined && maxRows === undefined
+          ? null
+          : yield* resolveWindowBoundary(threadId, windowTurns, maxRows);
+
+      const messageRowsEffect =
+        boundary === null
+          ? listThreadMessageRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listMessages:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listMessages:decodeRows",
+                ),
+              ),
+            )
+          : listWindowedThreadMessageRows({
+              threadId,
+              turnIds: boundary.turnIds,
+              boundaryRequestedAt: boundary.boundaryRequestedAt,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedMessages:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedMessages:decodeRows",
+                ),
+              ),
+            );
+
+      const proposedPlanRowsEffect =
+        boundary === null
+          ? listThreadProposedPlanRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listPlans:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listPlans:decodeRows",
+                ),
+              ),
+            )
+          : listWindowedThreadProposedPlanRows({
+              threadId,
+              turnIds: boundary.turnIds,
+              boundaryRequestedAt: boundary.boundaryRequestedAt,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedPlans:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedPlans:decodeRows",
+                ),
+              ),
+            );
+
+      const activityRowsEffect =
+        boundary === null
+          ? listThreadActivityRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listActivities:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listActivities:decodeRows",
+                ),
+              ),
+            )
+          : listWindowedThreadActivityRows({
+              threadId,
+              turnIds: boundary.turnIds,
+              boundaryRequestedAt: boundary.boundaryRequestedAt,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedActivities:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listWindowedActivities:decodeRows",
+                ),
+              ),
+            );
+
+      const checkpointRowsEffect: Effect.Effect<
+        ReadonlyArray<Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>>,
+        ProjectionRepositoryError
+      > =
+        boundary === null
+          ? listCheckpointRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:decodeRows",
+                ),
+              ),
+            )
+          : boundary.checkpointLowerBound === null
+            ? Effect.succeed([])
+            : listWindowedCheckpointRows({
+                threadId,
+                checkpointLowerBound: boundary.checkpointLowerBound,
+              }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getThreadDetailById:listWindowedCheckpoints:query",
+                    "ProjectionSnapshotQuery.getThreadDetailById:listWindowedCheckpoints:decodeRows",
+                  ),
+                ),
+              );
+
       const [
         threadRow,
         messageRows,
@@ -1935,38 +2464,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
-        listThreadMessageRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:decodeRows",
-            ),
-          ),
-        ),
-        listThreadProposedPlanRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:decodeRows",
-            ),
-          ),
-        ),
-        listThreadActivityRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:decodeRows",
-            ),
-          ),
-        ),
-        listCheckpointRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:decodeRows",
-            ),
-          ),
-        ),
+        messageRowsEffect,
+        proposedPlanRowsEffect,
+        activityRowsEffect,
+        checkpointRowsEffect,
         getLatestTurnRowByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
@@ -1986,7 +2487,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ]);
 
       if (Option.isNone(threadRow)) {
-        return Option.none<OrchestrationThread>();
+        return Option.none<OrchestrationThreadDetailResult>();
+      }
+
+      let hasMoreHistory = false;
+      let oldestLoaded: OrchestrationHistoryCursor | undefined = undefined;
+      if (boundary !== null) {
+        const hasMoreRows = yield* existsOlderTurnByThread({
+          threadId,
+          boundaryRequestedAt: boundary.boundaryRequestedAt,
+          boundaryTurnId: boundary.boundaryTurnId,
+        }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:hasMoreHistory:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:hasMoreHistory:decodeRows",
+            ),
+          ),
+        );
+        hasMoreHistory = (hasMoreRows[0]?.hasMore ?? 0) > 0;
+        oldestLoaded = {
+          requestedAt: boundary.boundaryRequestedAt,
+          turnId: boundary.boundaryTurnId,
+          checkpointTurnCount: boundary.boundaryCheckpointTurnCount,
+        };
       }
 
       const thread = {
@@ -2046,11 +2570,212 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
 
-      return Option.some(
-        yield* decodeThread(thread).pipe(
-          Effect.mapError(
-            toPersistenceDecodeError("ProjectionSnapshotQuery.getThreadDetailById:decodeThread"),
+      const decoded = yield* decodeThread(thread).pipe(
+        Effect.mapError(
+          toPersistenceDecodeError("ProjectionSnapshotQuery.getThreadDetailById:decodeThread"),
+        ),
+      );
+      // The thread stays pure in `.value`; windowing metadata sits alongside it
+      // so the detail thread remains identical to the snapshot thread.
+      return Option.some({ value: decoded, oldestLoaded, hasMoreHistory });
+    });
+
+  const getThreadHistoryPage: ProjectionSnapshotQueryShape["getThreadHistoryPage"] = ({
+    threadId,
+    beforeTurn,
+    maxTurns,
+    maxRows,
+  }) =>
+    Effect.gen(function* () {
+      const turnRows = yield* listHistoryTurnRowsBeforeCursor({
+        threadId,
+        beforeRequestedAt: beforeTurn.requestedAt,
+        beforeTurnId: beforeTurn.turnId,
+        limit: maxTurns,
+      }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadHistoryPage:turns:query",
+            "ProjectionSnapshotQuery.getThreadHistoryPage:turns:decodeRows",
           ),
+        ),
+      );
+
+      // Nothing older than the cursor: an empty final page.
+      if (turnRows.length === 0) {
+        return {
+          messages: [],
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          hasMoreHistory: false,
+        };
+      }
+
+      const countRows = yield* listTurnRowCountsByThread({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:query",
+            "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:decodeRows",
+          ),
+        ),
+      );
+      const countByTurnId = new Map<string, number>();
+      for (const row of countRows) {
+        if (row.turnId !== null) {
+          countByTurnId.set(row.turnId, row.rowCount);
+        }
+      }
+
+      const included = accumulateTurnsWithinRowBudget(turnRows, countByTurnId, maxRows);
+      const boundary = included[included.length - 1]!;
+      const turnIds = included
+        .map((turn) => turn.turnId)
+        .filter((turnId): turnId is TurnId => turnId !== null);
+      const includedCheckpointCounts = included
+        .map((turn) => turn.checkpointTurnCount)
+        .filter((count): count is number => count !== null);
+      const checkpointLowerBound =
+        includedCheckpointCounts.length > 0 ? Math.min(...includedCheckpointCounts) : null;
+
+      const checkpointRowsEffect: Effect.Effect<
+        ReadonlyArray<Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>>,
+        ProjectionRepositoryError
+      > =
+        checkpointLowerBound === null
+          ? Effect.succeed([])
+          : beforeTurn.checkpointTurnCount === null
+            ? // No upper checkpoint bound recoverable from the cursor: page's turns
+              // are older, so their checkpoints already sit below the newer page.
+              listWindowedCheckpointRows({ threadId, checkpointLowerBound }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getThreadHistoryPage:checkpoints:query",
+                    "ProjectionSnapshotQuery.getThreadHistoryPage:checkpoints:decodeRows",
+                  ),
+                ),
+              )
+            : listHistoryPageCheckpointRows({
+                threadId,
+                checkpointLowerBound,
+                checkpointUpperBound: beforeTurn.checkpointTurnCount,
+              }).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getThreadHistoryPage:checkpoints:query",
+                    "ProjectionSnapshotQuery.getThreadHistoryPage:checkpoints:decodeRows",
+                  ),
+                ),
+              );
+
+      const [messageRows, proposedPlanRows, activityRows, checkpointRows, hasMoreRows] =
+        yield* Effect.all([
+          listHistoryPageThreadMessageRows({
+            threadId,
+            turnIds,
+            lowerRequestedAt: boundary.requestedAt,
+            upperRequestedAt: beforeTurn.requestedAt,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listMessages:query",
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listMessages:decodeRows",
+              ),
+            ),
+          ),
+          listHistoryPageThreadProposedPlanRows({
+            threadId,
+            turnIds,
+            lowerRequestedAt: boundary.requestedAt,
+            upperRequestedAt: beforeTurn.requestedAt,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listPlans:query",
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listPlans:decodeRows",
+              ),
+            ),
+          ),
+          listHistoryPageThreadActivityRows({
+            threadId,
+            turnIds,
+            lowerRequestedAt: boundary.requestedAt,
+            upperRequestedAt: beforeTurn.requestedAt,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listActivities:query",
+                "ProjectionSnapshotQuery.getThreadHistoryPage:listActivities:decodeRows",
+              ),
+            ),
+          ),
+          checkpointRowsEffect,
+          existsOlderTurnByThread({
+            threadId,
+            boundaryRequestedAt: boundary.requestedAt,
+            boundaryTurnId: boundary.turnId,
+          }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadHistoryPage:hasMoreHistory:query",
+                "ProjectionSnapshotQuery.getThreadHistoryPage:hasMoreHistory:decodeRows",
+              ),
+            ),
+          ),
+        ]);
+
+      const page = {
+        messages: messageRows.map((row) => {
+          const message = {
+            id: row.messageId,
+            role: row.role,
+            text: row.text,
+            turnId: row.turnId,
+            streaming: row.isStreaming === 1,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+          };
+          if (row.attachments !== null) {
+            return Object.assign(message, { attachments: row.attachments });
+          }
+          return message;
+        }),
+        activities: activityRows.map((row) => {
+          const activity = {
+            id: row.activityId,
+            tone: row.tone,
+            kind: row.kind,
+            summary: row.summary,
+            payload: row.payload,
+            turnId: row.turnId,
+            createdAt: row.createdAt,
+          };
+          if (row.sequence !== null) {
+            return Object.assign(activity, { sequence: row.sequence });
+          }
+          return activity;
+        }),
+        proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
+        checkpoints: checkpointRows.map((row) => ({
+          turnId: row.turnId,
+          checkpointTurnCount: row.checkpointTurnCount,
+          checkpointRef: row.checkpointRef,
+          status: row.status,
+          files: row.files,
+          assistantMessageId: row.assistantMessageId,
+          completedAt: row.completedAt,
+        })),
+        oldestLoaded: {
+          requestedAt: boundary.requestedAt,
+          turnId: boundary.turnId,
+          checkpointTurnCount: boundary.checkpointTurnCount,
+        },
+        hasMoreHistory: (hasMoreRows[0]?.hasMore ?? 0) > 0,
+      };
+
+      return yield* decodeThreadHistoryPage(page).pipe(
+        Effect.mapError(
+          toPersistenceDecodeError("ProjectionSnapshotQuery.getThreadHistoryPage:decodePage"),
         ),
       );
     });
@@ -2069,6 +2794,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getFullThreadDiffContext,
     getThreadShellById,
     getThreadDetailById,
+    getThreadHistoryPage,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

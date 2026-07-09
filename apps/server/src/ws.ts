@@ -30,6 +30,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   OrchestrationGetFullThreadDiffError,
+  OrchestrationGetHistoryPageError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -177,6 +178,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getThreadHistoryPage, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
@@ -1059,15 +1061,20 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               }
 
               const [threadDetail, snapshotSequence] = yield* Effect.all([
-                projectionSnapshotQuery.getThreadDetailById(input.threadId).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new OrchestrationGetSnapshotError({
-                        message: `Failed to load thread ${input.threadId}`,
-                        cause,
-                      }),
+                projectionSnapshotQuery
+                  .getThreadDetailById(input.threadId, {
+                    windowTurns: input.windowTurns,
+                    maxRows: input.maxRows,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationGetSnapshotError({
+                          message: `Failed to load thread ${input.threadId}`,
+                          cause,
+                        }),
+                    ),
                   ),
-                ),
                 projectionSnapshotQuery.getSnapshotSequence().pipe(
                   Effect.map(({ snapshotSequence }) => snapshotSequence),
                   Effect.mapError(
@@ -1096,12 +1103,28 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   kind: "snapshot" as const,
                   snapshot: {
                     snapshotSequence,
-                    thread: threadDetail.value,
+                    thread: threadDetail.value.value,
+                    oldestLoaded: threadDetail.value.oldestLoaded,
+                    hasMoreHistory: threadDetail.value.hasMoreHistory,
                   },
                 }),
                 liveStreamAfter(snapshotSequence),
               );
             }),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
+            projectionSnapshotQuery.getThreadHistoryPage(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetHistoryPageError({
+                    message: `Failed to load history page for thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            ),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>

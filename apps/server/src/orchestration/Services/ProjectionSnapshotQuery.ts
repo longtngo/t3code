@@ -9,11 +9,14 @@
 import type {
   CheckpointRef,
   OrchestrationCheckpointSummary,
+  OrchestrationHistoryCursor,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadHistoryPageInput,
+  OrchestrationThreadHistoryPageResult,
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
@@ -153,10 +156,53 @@ export interface ProjectionSnapshotQueryShape {
 
   /**
    * Read a single active thread detail snapshot by id.
+   *
+   * The resolved thread stays pure in `.value`; windowing metadata rides
+   * alongside it. With no `options` (or with both bounds absent) the full
+   * thread is loaded and the result carries `oldestLoaded: undefined,
+   * hasMoreHistory: false`. When `windowTurns`/`maxRows` are supplied the
+   * snapshot is capped to the most recent turns and reports how far back it
+   * reaches. `Option.none` means the thread was not found (unchanged).
    */
   readonly getThreadDetailById: (
     threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+    options?: {
+      readonly windowTurns?: number | undefined;
+      readonly maxRows?: number | undefined;
+    },
+  ) => Effect.Effect<
+    Option.Option<OrchestrationThreadDetailResult>,
+    ProjectionRepositoryError
+  >;
+
+  /**
+   * Read the next OLDER page of a thread's history, paging strictly before the
+   * `beforeTurn` cursor. Symmetric to the windowed `getThreadDetailById`, but
+   * returns only the four per-turn collections (no thread head): the next
+   * `maxTurns` turns older than the cursor, capped by `maxRows`, plus the new
+   * `oldestLoaded` cursor and whether still-older turns remain.
+   */
+  readonly getThreadHistoryPage: (
+    input: OrchestrationThreadHistoryPageInput,
+  ) => Effect.Effect<OrchestrationThreadHistoryPageResult, ProjectionRepositoryError>;
+}
+
+/**
+ * A resolved thread detail plus its thread-load windowing metadata.
+ */
+export interface OrchestrationThreadDetailResult {
+  /** The resolved thread (full or windowed to the most recent turns). */
+  readonly value: OrchestrationThread;
+  /**
+   * Cursor identifying the oldest turn included in the snapshot, for paging
+   * further back. `undefined` when the full thread history was loaded.
+   */
+  readonly oldestLoaded: OrchestrationHistoryCursor | undefined;
+  /**
+   * Whether older turns exist beyond `oldestLoaded`. `false` for full
+   * (unwindowed) snapshots.
+   */
+  readonly hasMoreHistory: boolean;
 }
 
 /**

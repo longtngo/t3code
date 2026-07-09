@@ -30,6 +30,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  getThreadHistoryPage: "orchestration.getThreadHistoryPage",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -453,6 +454,19 @@ export const OrchestrationShellStreamItem = Schema.Union([
 ]);
 export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
 
+/**
+ * Cursor identifying the oldest turn currently loaded on the client for a
+ * thread's windowed history. Used both to report how far back a snapshot or
+ * history page reaches (`oldestLoaded`) and to request the next older page
+ * (`beforeTurn`).
+ */
+export const OrchestrationHistoryCursor = Schema.Struct({
+  requestedAt: IsoDateTime,
+  turnId: Schema.NullOr(TrimmedNonEmptyString),
+  checkpointTurnCount: Schema.NullOr(NonNegativeInt),
+});
+export type OrchestrationHistoryCursor = typeof OrchestrationHistoryCursor.Type;
+
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
   /**
@@ -463,12 +477,38 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * cursor.
    */
   fromSequenceExclusive: Schema.optional(NonNegativeInt),
+  /**
+   * Opt-in thread-load windowing: cap the initial snapshot to the most recent
+   * `windowTurns` turns instead of the full thread history. Omit for the
+   * legacy full-history snapshot behavior.
+   */
+  windowTurns: Schema.optional(NonNegativeInt),
+  /**
+   * Opt-in thread-load windowing: cap the initial snapshot to at most
+   * `maxRows` combined messages/activities/checkpoints, in addition to (or
+   * instead of) `windowTurns`. Omit for the legacy full-history snapshot
+   * behavior.
+   */
+  maxRows: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
+  /**
+   * Present when the snapshot was windowed: the cursor identifying the
+   * oldest turn included in this snapshot, for paging further back via
+   * `getThreadHistoryPage`. Absent when the snapshot covers full history.
+   */
+  oldestLoaded: Schema.optional(OrchestrationHistoryCursor),
+  /**
+   * Present when the snapshot was windowed: whether older turns exist beyond
+   * `oldestLoaded`. Defaults to `false` for historical/unwindowed snapshots.
+   */
+  hasMoreHistory: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
 
@@ -1283,6 +1323,24 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
 
+export const OrchestrationThreadHistoryPageInput = Schema.Struct({
+  threadId: ThreadId,
+  beforeTurn: OrchestrationHistoryCursor,
+  maxTurns: NonNegativeInt,
+  maxRows: NonNegativeInt,
+});
+export type OrchestrationThreadHistoryPageInput = typeof OrchestrationThreadHistoryPageInput.Type;
+
+export const OrchestrationThreadHistoryPageResult = Schema.Struct({
+  messages: Schema.Array(OrchestrationMessage),
+  activities: Schema.Array(OrchestrationThreadActivity),
+  proposedPlans: Schema.Array(OrchestrationProposedPlan),
+  checkpoints: Schema.Array(OrchestrationCheckpointSummary),
+  oldestLoaded: Schema.optional(OrchestrationHistoryCursor),
+  hasMoreHistory: Schema.Boolean,
+});
+export type OrchestrationThreadHistoryPageResult = typeof OrchestrationThreadHistoryPageResult.Type;
+
 export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
@@ -1311,6 +1369,10 @@ export const OrchestrationRpcSchemas = {
   subscribeShell: {
     input: Schema.Struct({}),
     output: OrchestrationShellStreamItem,
+  },
+  getThreadHistoryPage: {
+    input: OrchestrationThreadHistoryPageInput,
+    output: OrchestrationThreadHistoryPageResult,
   },
 } as const;
 
@@ -1376,6 +1438,14 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedErrorClass
 
 export class OrchestrationReplayEventsError extends Schema.TaggedErrorClass<OrchestrationReplayEventsError>()(
   "OrchestrationReplayEventsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationGetHistoryPageError extends Schema.TaggedErrorClass<OrchestrationGetHistoryPageError>()(
+  "OrchestrationGetHistoryPageError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

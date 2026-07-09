@@ -9,13 +9,19 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  type OrchestrationCheckpointSummary,
   type OrchestrationEvent,
+  type OrchestrationMessage,
+  type OrchestrationProposedPlan,
+  type OrchestrationThread,
+  type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyOrchestrationEvent,
   applyOrchestrationEvents,
+  prependThreadHistory,
   removeEnvironmentState,
   selectEnvironmentState,
   selectProjectsAcrossEnvironments,
@@ -23,6 +29,7 @@ import {
   selectThreadExistsByRef,
   setThreadBranch,
   selectThreadsAcrossEnvironments,
+  syncServerThreadDetail,
   type AppState,
   type EnvironmentState,
 } from "./store";
@@ -1107,5 +1114,233 @@ describe("incremental orchestration updates", () => {
       state: "running",
     });
     expect(threadsOf(next)[0]?.latestTurn?.sourceProposedPlan).toBeUndefined();
+  });
+});
+
+function makeServerThread(overrides: Partial<OrchestrationThread> = {}): OrchestrationThread {
+  return {
+    id: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    title: "Thread",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    },
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: "2026-02-13T00:00:00.000Z",
+    updatedAt: "2026-02-13T00:00:00.000Z",
+    archivedAt: null,
+    deletedAt: null,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+    session: null,
+    ...overrides,
+  };
+}
+
+function serverActivity(sequence: number): OrchestrationThreadActivity {
+  return {
+    id: EventId.make(`activity-${sequence}`),
+    tone: "info",
+    kind: "step",
+    summary: `activity ${sequence}`,
+    payload: {},
+    turnId: TurnId.make("turn-1"),
+    sequence,
+    createdAt: `2026-02-13T00:00:${String(sequence % 60).padStart(2, "0")}.000Z`,
+  };
+}
+
+describe("syncServerThreadDetail merge/upsert", () => {
+  const ref = scopeThreadRef(localEnvironmentId, ThreadId.make("thread-1"));
+
+  it("merges collections by id instead of replacing", () => {
+    const first = syncServerThreadDetail(
+      makeEmptyState(),
+      makeServerThread({ activities: [serverActivity(1), serverActivity(2)] }),
+      localEnvironmentId,
+    );
+
+    // Second snapshot only carries an overlapping row + a new one; the
+    // backfilled `activity-1` must survive rather than be wiped.
+    const second = syncServerThreadDetail(
+      first,
+      makeServerThread({ activities: [serverActivity(2), serverActivity(3)] }),
+      localEnvironmentId,
+    );
+
+    const activities = selectThreadByRef(second, ref)?.activities ?? [];
+    expect(activities.map((activity) => activity.id)).toEqual([
+      EventId.make("activity-1"),
+      EventId.make("activity-2"),
+      EventId.make("activity-3"),
+    ]);
+  });
+
+  it("still replaces head/scalar fields on a new snapshot", () => {
+    const first = syncServerThreadDetail(
+      makeEmptyState(),
+      makeServerThread({ title: "Old title" }),
+      localEnvironmentId,
+    );
+    const second = syncServerThreadDetail(
+      first,
+      makeServerThread({ title: "New title" }),
+      localEnvironmentId,
+    );
+
+    expect(selectThreadByRef(second, ref)?.title).toBe("New title");
+  });
+
+  it("caps activities at 3000 keeping the newest", () => {
+    const firstBatch = Array.from({ length: 2000 }, (_, index) => serverActivity(index));
+    const secondBatch = Array.from({ length: 2000 }, (_, index) => serverActivity(index + 2000));
+
+    const first = syncServerThreadDetail(
+      makeEmptyState(),
+      makeServerThread({ activities: firstBatch }),
+      localEnvironmentId,
+    );
+    const second = syncServerThreadDetail(
+      first,
+      makeServerThread({ activities: secondBatch }),
+      localEnvironmentId,
+    );
+
+    const activities = selectThreadByRef(second, ref)?.activities ?? [];
+    expect(activities).toHaveLength(3000);
+    // 4000 unique sequences merged, capped to the newest 3000 → 1000..3999.
+    expect(activities[0]?.sequence).toBe(1000);
+    expect(activities[activities.length - 1]?.sequence).toBe(3999);
+  });
+});
+
+describe("prependThreadHistory", () => {
+  const ref = scopeThreadRef(localEnvironmentId, ThreadId.make("thread-1"));
+
+  it("adds older rows and keeps sort order", () => {
+    const loaded = syncServerThreadDetail(
+      makeEmptyState(),
+      makeServerThread({ activities: [serverActivity(10), serverActivity(11)] }),
+      localEnvironmentId,
+    );
+
+    const older: OrchestrationThreadActivity[] = [serverActivity(8), serverActivity(9)];
+    const next = prependThreadHistory(loaded, localEnvironmentId, ThreadId.make("thread-1"), {
+      messages: [] as OrchestrationMessage[],
+      activities: older,
+      proposedPlans: [] as OrchestrationProposedPlan[],
+      checkpoints: [] as OrchestrationCheckpointSummary[],
+    });
+
+    const activities = selectThreadByRef(next, ref)?.activities ?? [];
+    expect(activities.map((activity) => activity.sequence)).toEqual([8, 9, 10, 11]);
+  });
+
+  it("returns state unchanged when the thread is not loaded", () => {
+    const state = makeEmptyState();
+    const next = prependThreadHistory(state, localEnvironmentId, ThreadId.make("missing"), {
+      messages: [] as OrchestrationMessage[],
+      activities: [serverActivity(1)],
+      proposedPlans: [] as OrchestrationProposedPlan[],
+      checkpoints: [] as OrchestrationCheckpointSummary[],
+    });
+
+    expect(next).toBe(state);
+  });
+});
+
+// C2 guard (design review): syncServerThreadDetail switched from wholesale
+// replace to merge/upsert, so it no longer prunes on its own. Deletion pruning
+// is now entirely event-driven — this proves a thread.reverted still trims the
+// reverted turn's rows even when they were loaded through the merge path.
+describe("event-driven pruning after merge-upsert (C2)", () => {
+  const ref = scopeThreadRef(localEnvironmentId, ThreadId.make("thread-1"));
+
+  function serverMessage(id: string, turn: string, second: number): OrchestrationMessage {
+    return {
+      id: MessageId.make(id),
+      role: id.startsWith("user") ? "user" : "assistant",
+      text: id,
+      turnId: TurnId.make(turn),
+      streaming: false,
+      createdAt: `2026-02-27T00:00:0${second}.000Z`,
+      updatedAt: `2026-02-27T00:00:0${second}.000Z`,
+    };
+  }
+
+  function serverPlan(id: string, turn: string, second: number): OrchestrationProposedPlan {
+    return {
+      id,
+      turnId: TurnId.make(turn),
+      planMarkdown: id,
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: `2026-02-27T00:00:0${second}.000Z`,
+      updatedAt: `2026-02-27T00:00:0${second}.000Z`,
+    };
+  }
+
+  function serverActivityForTurn(id: string, turn: string, sequence: number): OrchestrationThreadActivity {
+    return { ...serverActivity(sequence), id: EventId.make(id), turnId: TurnId.make(turn) };
+  }
+
+  function serverCheckpoint(turn: string, turnCount: number, second: number): OrchestrationCheckpointSummary {
+    return {
+      turnId: TurnId.make(turn),
+      completedAt: `2026-02-27T00:00:0${second}.000Z`,
+      status: "ready",
+      checkpointTurnCount: turnCount,
+      checkpointRef: CheckpointRef.make(`ref-${turnCount}`),
+      files: [],
+      assistantMessageId: null,
+    };
+  }
+
+  it("thread.reverted prunes the reverted turn's rows loaded via a merged snapshot", () => {
+    // Load two turns through the merge path (not a direct makeState).
+    const loaded = syncServerThreadDetail(
+      makeEmptyState(),
+      makeServerThread({
+        messages: [
+          serverMessage("user-1", "turn-1", 0),
+          serverMessage("assistant-1", "turn-1", 1),
+          serverMessage("user-2", "turn-2", 2),
+        ],
+        proposedPlans: [serverPlan("plan-1", "turn-1", 0), serverPlan("plan-2", "turn-2", 2)],
+        activities: [
+          serverActivityForTurn("activity-1", "turn-1", 1),
+          serverActivityForTurn("activity-2", "turn-2", 2),
+        ],
+        checkpoints: [serverCheckpoint("turn-1", 1, 1), serverCheckpoint("turn-2", 2, 3)],
+      }),
+      localEnvironmentId,
+    );
+
+    // Sanity: everything merged in.
+    const before = selectThreadByRef(loaded, ref);
+    expect(before?.messages.map((m) => m.id)).toEqual(["user-1", "assistant-1", "user-2"]);
+    expect(before?.activities.map((a) => a.id)).toEqual([
+      EventId.make("activity-1"),
+      EventId.make("activity-2"),
+    ]);
+
+    const reverted = applyOrchestrationEvent(
+      loaded,
+      makeEvent("thread.reverted", { threadId: ThreadId.make("thread-1"), turnCount: 1 }),
+      localEnvironmentId,
+    );
+
+    const after = selectThreadByRef(reverted, ref);
+    expect(after?.messages.map((m) => m.id)).toEqual(["user-1", "assistant-1"]);
+    expect(after?.proposedPlans.map((p) => p.id)).toEqual(["plan-1"]);
+    expect(after?.activities.map((a) => a.id)).toEqual([EventId.make("activity-1")]);
+    expect(after?.turnDiffSummaries.map((s) => s.turnId)).toEqual([TurnId.make("turn-1")]);
   });
 });

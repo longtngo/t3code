@@ -2,6 +2,7 @@ import {
   CheckpointRef,
   EventId,
   MessageId,
+  NonNegativeInt,
   ProjectId,
   ThreadId,
   TurnId,
@@ -25,6 +26,97 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
+
+const pad2 = (n: number): string => n.toString().padStart(2, "0");
+
+// Seed `thread-1` with `turnCount` completed turns (newest last), each carrying
+// one user message and `activitiesPerTurn` activities. When `hugeTurnActivities`
+// is set, the newest turn instead gets that many activities (for the maxRows
+// budget test). Every turn has a distinct `requested_at` and `checkpoint_turn_count`.
+const seedWindowThread = (
+  sql: SqlClient.SqlClient,
+  options: {
+    readonly turnCount: number;
+    readonly activitiesPerTurn: number;
+    readonly hugeTurnActivities?: number;
+  },
+) =>
+  Effect.gen(function* () {
+    yield* sql`DELETE FROM projection_projects`;
+    yield* sql`DELETE FROM projection_threads`;
+    yield* sql`DELETE FROM projection_turns`;
+    yield* sql`DELETE FROM projection_thread_messages`;
+    yield* sql`DELETE FROM projection_thread_activities`;
+    yield* sql`DELETE FROM projection_thread_proposed_plans`;
+    yield* sql`DELETE FROM projection_thread_sessions`;
+
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id, title, workspace_root, default_model_selection_json,
+        scripts_json, created_at, updated_at, deleted_at
+      )
+      VALUES (
+        'project-1', 'Project 1', '/tmp/project-1',
+        '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+        '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL
+      )
+    `;
+
+    const latestTurnId = `turn-${pad2(options.turnCount - 1)}`;
+    yield* sql`
+      INSERT INTO projection_threads (
+        thread_id, project_id, title, model_selection_json, runtime_mode,
+        interaction_mode, branch, worktree_path, latest_turn_id,
+        latest_user_message_at, pending_approval_count, pending_user_input_count,
+        has_actionable_proposed_plan, created_at, updated_at, archived_at, deleted_at
+      )
+      VALUES (
+        'thread-1', 'project-1', 'Thread 1',
+        '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+        NULL, NULL, ${latestTurnId}, NULL, 0, 0, 0,
+        '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL, NULL
+      )
+    `;
+
+    for (let i = 0; i < options.turnCount; i++) {
+      const turnId = `turn-${pad2(i)}`;
+      const requestedAt = `2026-05-01T00:${pad2(i)}:00.000Z`;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, started_at, completed_at,
+          checkpoint_turn_count, checkpoint_ref, checkpoint_status, checkpoint_files_json
+        )
+        VALUES (
+          'thread-1', ${turnId}, 'completed', ${requestedAt}, ${requestedAt}, ${requestedAt},
+          ${i}, ${`checkpoint-${i}`}, 'ready', '[]'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+        )
+        VALUES (
+          ${`msg-${pad2(i)}`}, 'thread-1', ${turnId}, 'user', 'hello', 0,
+          ${requestedAt}, ${requestedAt}
+        )
+      `;
+      const activityCount =
+        options.hugeTurnActivities !== undefined && i === options.turnCount - 1
+          ? options.hugeTurnActivities
+          : options.activitiesPerTurn;
+      for (let j = 0; j < activityCount; j++) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+          )
+          VALUES (
+            ${`act-${pad2(i)}-${j}`}, 'thread-1', ${turnId}, 'info', 'runtime.note',
+            'note', '{}', ${requestedAt}
+          )
+        `;
+      }
+    }
+  });
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
@@ -439,7 +531,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
-        assert.deepEqual(threadDetail.value, snapshot.threads[0]);
+        assert.deepEqual(threadDetail.value.value, snapshot.threads[0]);
+        assert.equal(threadDetail.value.hasMoreHistory, false);
+        assert.equal(threadDetail.value.oldestLoaded, undefined);
       }
     }),
   );
@@ -1050,7 +1144,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
-        assert.deepEqual(threadDetail.value.activities, snapshot.threads[0]?.activities ?? []);
+        assert.deepEqual(threadDetail.value.value.activities, snapshot.threads[0]?.activities ?? []);
       }
 
       assert.deepEqual(snapshot.threads[0]?.activities ?? [], [
@@ -1223,11 +1317,238 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
       assert.equal(threadDetail._tag, "Some");
       if (threadDetail._tag === "Some") {
-        assert.equal(threadDetail.value.latestTurn?.turnId, asTurnId("turn-running"));
-        assert.equal(threadDetail.value.latestTurn?.state, "running");
-        assert.equal(threadDetail.value.latestTurn?.startedAt, "2026-04-02T00:00:30.000Z");
+        assert.equal(threadDetail.value.value.latestTurn?.turnId, asTurnId("turn-running"));
+        assert.equal(threadDetail.value.value.latestTurn?.state, "running");
+        assert.equal(threadDetail.value.value.latestTurn?.startedAt, "2026-04-02T00:00:30.000Z");
       }
     }),
+  );
+
+  it.effect("getThreadDetailById with no window options returns the full thread unchanged", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 3 });
+
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        assert.equal(detail.value.value.messages.length, 40);
+        assert.equal(detail.value.value.activities.length, 120);
+        assert.equal(detail.value.value.checkpoints.length, 40);
+        // Full (unwindowed) snapshot: reaches the beginning, nothing older.
+        assert.equal(detail.value.hasMoreHistory, false);
+        assert.equal(detail.value.oldestLoaded, undefined);
+      }
+    }),
+  );
+
+  it.effect("getThreadDetailById windowed to the latest 15 turns caps rows and reports more history", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 3 });
+
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+        windowTurns: 15,
+        maxRows: 2000,
+      });
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        // Newest 15 turns only (one message each), well under the maxRows budget.
+        assert.equal(detail.value.value.messages.length, 15);
+        assert.equal(detail.value.value.activities.length, 45);
+        assert.equal(detail.value.hasMoreHistory, true);
+        // Oldest included turn is turn-25 (turns 39..25); older turns exist.
+        assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-25"));
+        assert.equal(detail.value.oldestLoaded?.checkpointTurnCount, 25);
+      }
+    }),
+  );
+
+  it.effect("getThreadDetailById lets maxRows cap the window before windowTurns when a turn is huge", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      // The newest turn alone carries 200 activities; the maxRows budget is spent
+      // on it, so the window stops at that single turn even though windowTurns=15.
+      yield* seedWindowThread(sql, {
+        turnCount: 20,
+        activitiesPerTurn: 3,
+        hugeTurnActivities: 200,
+      });
+
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+        windowTurns: 15,
+        maxRows: 50,
+      });
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        // Only the newest turn (turn-19) fit — its single message, not 15.
+        assert.equal(detail.value.value.messages.length, 1);
+        assert.equal(detail.value.value.activities.length, 200);
+        assert.equal(detail.value.hasMoreHistory, true);
+        assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-19"));
+      }
+    }),
+  );
+
+  it.effect(
+    "getThreadDetailById windowed to the whole thread reports no more history",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // windowTurns == turnCount ⇒ the window is genuinely applied (boundary
+        // resolved) yet spans every turn, so there is nothing older to page to.
+        yield* seedWindowThread(sql, { turnCount: 15, activitiesPerTurn: 2 });
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 15);
+          assert.equal(detail.value.value.activities.length, 30);
+          assert.equal(detail.value.value.checkpoints.length, 15);
+          // Oldest included turn is the very first turn: no older history exists.
+          assert.equal(detail.value.hasMoreHistory, false);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-00"));
+          assert.equal(detail.value.oldestLoaded?.checkpointTurnCount, 0);
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadDetailById includes a null-turn activity in the window by its created_at",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 3 });
+        // Window(15) boundary is turn-25 @ 2026-05-01T00:25:00.000Z. A null-turn
+        // activity stamped inside the window (>= boundary) must be included; one
+        // stamped before the boundary must be excluded.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+          )
+          VALUES (
+            'act-null-in', 'thread-1', NULL, 'info', 'runtime.note',
+            'note', '{}', '2026-05-01T00:30:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+          )
+          VALUES (
+            'act-null-out', 'thread-1', NULL, 'info', 'runtime.note',
+            'note', '{}', '2026-05-01T00:10:00.000Z'
+          )
+        `;
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          // 45 turn-scoped activities (15 turns × 3) + the one in-window null-turn.
+          assert.equal(detail.value.value.activities.length, 46);
+          const activityIds = detail.value.value.activities.map((activity) => activity.id);
+          assert.equal(activityIds.includes(asEventId("act-null-in")), true);
+          assert.equal(activityIds.includes(asEventId("act-null-out")), false);
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadHistoryPage pages older turns disjoint from the window and reports remaining history",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 3 });
+
+        // Window to the latest 15 turns (turn-25 .. turn-39).
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag !== "Some") {
+          return;
+        }
+        const windowOldest = detail.value.oldestLoaded;
+        assert.equal(windowOldest !== undefined, true);
+        if (windowOldest === undefined) {
+          return;
+        }
+        const windowTurnIds = new Set(
+          detail.value.value.messages.map((message) => message.turnId),
+        );
+
+        // Page the next 10 older turns (turn-15 .. turn-24).
+        const page = yield* snapshotQuery.getThreadHistoryPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeTurn: windowOldest,
+          maxTurns: NonNegativeInt.make(10),
+          maxRows: NonNegativeInt.make(3000),
+        });
+
+        assert.equal(page.messages.length, 10);
+        assert.equal(page.activities.length, 30);
+        assert.equal(page.proposedPlans.length, 0);
+        assert.equal(page.checkpoints.length, 10);
+        // Every paged turn is strictly older than — and disjoint from — the window.
+        for (const message of page.messages) {
+          assert.equal(windowTurnIds.has(message.turnId), false);
+        }
+        const pageTurnIds = page.messages.map((message) => message.turnId).toSorted();
+        assert.deepStrictEqual(pageTurnIds, [
+          asTurnId("turn-15"),
+          asTurnId("turn-16"),
+          asTurnId("turn-17"),
+          asTurnId("turn-18"),
+          asTurnId("turn-19"),
+          asTurnId("turn-20"),
+          asTurnId("turn-21"),
+          asTurnId("turn-22"),
+          asTurnId("turn-23"),
+          asTurnId("turn-24"),
+        ]);
+        // New oldest cursor moved further back; older turns still remain.
+        assert.equal(page.oldestLoaded?.turnId, asTurnId("turn-15"));
+        assert.equal(page.oldestLoaded?.checkpointTurnCount, 15);
+        assert.equal(page.hasMoreHistory, true);
+
+        // A final page large enough to drain the rest (turn-00 .. turn-14).
+        assert.equal(page.oldestLoaded !== undefined, true);
+        if (page.oldestLoaded === undefined) {
+          return;
+        }
+        const finalPage = yield* snapshotQuery.getThreadHistoryPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeTurn: page.oldestLoaded,
+          maxTurns: NonNegativeInt.make(50),
+          maxRows: NonNegativeInt.make(3000),
+        });
+        assert.equal(finalPage.messages.length, 15);
+        assert.equal(finalPage.activities.length, 45);
+        assert.equal(finalPage.checkpoints.length, 15);
+        assert.equal(finalPage.oldestLoaded?.turnId, asTurnId("turn-00"));
+        assert.equal(finalPage.oldestLoaded?.checkpointTurnCount, 0);
+        // Reached the beginning of the thread: nothing older remains.
+        assert.equal(finalPage.hasMoreHistory, false);
+      }),
   );
 
   it.effect("uses projection_threads.latest_turn_id for bulk command and shell snapshots", () =>

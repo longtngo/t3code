@@ -50,6 +50,7 @@ import {
   OrchestrationDispatchCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
+  OrchestrationGetHistoryPageError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
@@ -570,6 +571,15 @@ export const WsOrchestrationSubscribeThreadRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetThreadHistoryPageRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
+  {
+    payload: OrchestrationRpcSchemas.getThreadHistoryPage.input,
+    success: OrchestrationRpcSchemas.getThreadHistoryPage.output,
+    error: Schema.Union([OrchestrationGetHistoryPageError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
   success: TerminalEvent,
@@ -927,4 +937,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  WsOrchestrationGetThreadHistoryPageRpc,
 );

@@ -129,7 +129,7 @@ const initialState: AppState = {
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
 const MAX_THREAD_PROPOSED_PLANS = 200;
-const MAX_THREAD_ACTIVITIES = 500;
+const MAX_THREAD_ACTIVITIES = 3_000;
 const EMPTY_THREAD_IDS: ThreadId[] = [];
 
 function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
@@ -497,6 +497,38 @@ function buildTurnDiffSlice(thread: Thread): {
     ) as Record<TurnId, TurnDiffSummary>,
   };
 }
+
+/**
+ * Union two collections keyed by id, keeping a single entry per id (the
+ * `incoming` row wins on conflict), sort by `compare`, and keep only the
+ * newest `cap` entries via `.slice(-cap)`. Always returns a NEW array so the
+ * ref-equality guards in `writeThreadState` fire on a genuine merge.
+ */
+function mergeById<T>(
+  existing: readonly T[],
+  incoming: readonly T[],
+  idOf: (item: T) => string,
+  compare: (left: T, right: T) => number,
+  cap: number,
+): T[] {
+  const byId = new Map<string, T>();
+  for (const item of existing) {
+    byId.set(idOf(item), item);
+  }
+  for (const item of incoming) {
+    byId.set(idOf(item), item);
+  }
+  return Array.from(byId.values()).sort(compare).slice(-cap);
+}
+
+const compareByCreatedAtThenId = (
+  left: { createdAt: string; id: string },
+  right: { createdAt: string; id: string },
+): number => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+
+const compareCheckpointSummaries = (left: TurnDiffSummary, right: TurnDiffSummary): number =>
+  (left.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER) -
+  (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER);
 
 function getProjects(state: EnvironmentState): Project[] {
   return state.projectIds.flatMap((projectId) => {
@@ -1151,10 +1183,112 @@ export function syncServerThreadDetail(
   // createThreadDetailManager or a shared adapter over its reducer.
   const environmentState = getStoredEnvironmentState(state, environmentId);
   const previousThread = getThreadFromEnvironmentState(environmentState, thread.id);
+  const incomingThread = mapThread(thread, environmentId);
+  // MERGE (not replace): head/scalar fields take the incoming snapshot, but the
+  // four per-thread collections union by id so backfilled rows survive a later
+  // snapshot. First load (no previous thread) uses the incoming arrays as-is.
+  const mergedThread: Thread = previousThread
+    ? {
+        ...incomingThread,
+        messages: mergeById(
+          previousThread.messages,
+          incomingThread.messages,
+          (message) => message.id,
+          compareByCreatedAtThenId,
+          MAX_THREAD_MESSAGES,
+        ),
+        activities: mergeById(
+          previousThread.activities,
+          incomingThread.activities,
+          (activity) => activity.id,
+          compareActivities,
+          MAX_THREAD_ACTIVITIES,
+        ),
+        proposedPlans: mergeById(
+          previousThread.proposedPlans,
+          incomingThread.proposedPlans,
+          (plan) => plan.id,
+          compareByCreatedAtThenId,
+          MAX_THREAD_PROPOSED_PLANS,
+        ),
+        turnDiffSummaries: mergeById(
+          previousThread.turnDiffSummaries,
+          incomingThread.turnDiffSummaries,
+          (summary) => summary.turnId,
+          compareCheckpointSummaries,
+          MAX_THREAD_CHECKPOINTS,
+        ),
+      }
+    : incomingThread;
   return commitEnvironmentState(
     state,
     environmentId,
-    writeThreadState(environmentState, mapThread(thread, environmentId), previousThread),
+    writeThreadState(environmentState, mergedThread, previousThread),
+  );
+}
+
+/**
+ * A page of older thread rows fetched by the backfill loop (Task 7), shaped as
+ * raw server rows so it maps through the same projection as a live snapshot.
+ */
+export interface ThreadHistoryPage {
+  messages: OrchestrationMessage[];
+  activities: OrchestrationThreadActivity[];
+  proposedPlans: OrchestrationProposedPlan[];
+  checkpoints: OrchestrationCheckpointSummary[];
+}
+
+/**
+ * Merge an older page of thread history (from `getThreadHistoryPage`) into an
+ * already-loaded thread. Purely additive-upsert: the same merge/sort/cap as a
+ * snapshot, no pruning. Returns `state` unchanged if the thread isn't loaded.
+ */
+export function prependThreadHistory(
+  state: AppState,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  page: ThreadHistoryPage,
+): AppState {
+  const environmentState = getStoredEnvironmentState(state, environmentId);
+  const previousThread = getThreadFromEnvironmentState(environmentState, threadId);
+  if (!previousThread) {
+    return state;
+  }
+  const mergedThread: Thread = {
+    ...previousThread,
+    messages: mergeById(
+      previousThread.messages,
+      page.messages.map((message) => mapMessage(environmentId, message)),
+      (message) => message.id,
+      compareByCreatedAtThenId,
+      MAX_THREAD_MESSAGES,
+    ),
+    activities: mergeById(
+      previousThread.activities,
+      page.activities.map((activity) => ({ ...activity })),
+      (activity) => activity.id,
+      compareActivities,
+      MAX_THREAD_ACTIVITIES,
+    ),
+    proposedPlans: mergeById(
+      previousThread.proposedPlans,
+      page.proposedPlans.map(mapProposedPlan),
+      (plan) => plan.id,
+      compareByCreatedAtThenId,
+      MAX_THREAD_PROPOSED_PLANS,
+    ),
+    turnDiffSummaries: mergeById(
+      previousThread.turnDiffSummaries,
+      page.checkpoints.map(mapTurnDiffSummary),
+      (summary) => summary.turnId,
+      compareCheckpointSummaries,
+      MAX_THREAD_CHECKPOINTS,
+    ),
+  };
+  return commitEnvironmentState(
+    state,
+    environmentId,
+    writeThreadState(environmentState, mergedThread, previousThread),
   );
 }
 
@@ -1996,6 +2130,11 @@ interface AppStore extends AppState {
     environmentId: EnvironmentId,
   ) => void;
   syncServerThreadDetail: (thread: OrchestrationThread, environmentId: EnvironmentId) => void;
+  prependThreadHistory: (
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    page: ThreadHistoryPage,
+  ) => void;
   applyOrchestrationEvent: (event: OrchestrationEvent, environmentId: EnvironmentId) => void;
   applyOrchestrationEvents: (
     events: ReadonlyArray<OrchestrationEvent>,
@@ -2020,6 +2159,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => syncServerShellSnapshot(state, snapshot, environmentId)),
   syncServerThreadDetail: (thread, environmentId) =>
     set((state) => syncServerThreadDetail(state, thread, environmentId)),
+  prependThreadHistory: (environmentId, threadId, page) =>
+    set((state) => prependThreadHistory(state, environmentId, threadId, page)),
   applyOrchestrationEvent: (event, environmentId) =>
     set((state) => applyOrchestrationEvent(state, event, environmentId)),
   applyOrchestrationEvents: (events, environmentId) =>

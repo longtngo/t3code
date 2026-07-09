@@ -15,6 +15,8 @@ import {
   KeybindingRule,
   MessageId,
   ExternalLauncherError,
+  type OrchestrationThread,
+  type OrchestrationThreadHistoryPageInput,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
@@ -237,6 +239,38 @@ const makeDefaultOrchestrationThreadShell = (
     hasActionableProposedPlan: false,
     hasPendingBackgroundTask: false,
     ...overrides,
+  };
+};
+
+const makeDetailThreadWithMessages = (count: number): OrchestrationThread => {
+  const now = "2026-01-01T00:00:00.000Z";
+  return {
+    id: defaultThreadId,
+    projectId: defaultProjectId,
+    title: "Default Thread",
+    modelSelection: defaultModelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    deletedAt: null,
+    messages: Array.from({ length: count }, (_, index) => ({
+      id: MessageId.make(`msg-${index}`),
+      role: "user" as const,
+      text: `message ${index}`,
+      turnId: null,
+      streaming: false,
+      createdAt: now,
+      updatedAt: now,
+    })),
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+    session: null,
   };
 };
 
@@ -6066,6 +6100,167 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeThread honors window params and reports hasMoreHistory", () =>
+    Effect.gen(function* () {
+      const windowedCursor = {
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        turnId: "turn-oldest",
+        checkpointTurnCount: 5,
+      } as const;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: (_threadId, options) =>
+              Effect.succeed(
+                Option.some({
+                  value: makeDetailThreadWithMessages(options?.windowTurns ?? 40),
+                  oldestLoaded: windowedCursor,
+                  hasMoreHistory: true,
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            windowTurns: 15,
+            maxRows: 2000,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      const [first] = Array.from(events);
+      assert.equal(first?.kind, "snapshot");
+      if (first?.kind === "snapshot") {
+        assert.equal(first.snapshot.thread.messages.length, 15);
+        assert.equal(first.snapshot.hasMoreHistory, true);
+        assert.deepEqual(first.snapshot.oldestLoaded, windowedCursor);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeThread with no window params returns the full unwindowed snapshot", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: (_threadId, options) =>
+              Effect.succeed(
+                options?.windowTurns !== undefined || options?.maxRows !== undefined
+                  ? Option.none()
+                  : Option.some({
+                      value: makeDetailThreadWithMessages(40),
+                      oldestLoaded: undefined,
+                      hasMoreHistory: false,
+                    }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      const [first] = Array.from(events);
+      assert.equal(first?.kind, "snapshot");
+      if (first?.kind === "snapshot") {
+        assert.equal(first.snapshot.thread.messages.length, 40);
+        assert.equal(Boolean(first.snapshot.hasMoreHistory), false);
+        assert.equal(first.snapshot.oldestLoaded, undefined);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc getThreadHistoryPage older-turn paging", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const beforeCursor = {
+        requestedAt: "2026-01-01T00:00:05.000Z",
+        turnId: "turn-window-oldest",
+        checkpointTurnCount: 10,
+      } as const;
+      const olderBoundary = {
+        requestedAt: "2026-01-01T00:00:01.000Z",
+        turnId: "turn-page-oldest",
+        checkpointTurnCount: 6,
+      } as const;
+
+      const receivedInputs: Array<OrchestrationThreadHistoryPageInput> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadHistoryPage: (input) =>
+              Effect.sync(() => {
+                receivedInputs.push(input);
+                return {
+                  messages: Array.from({ length: 3 }, (_, index) => ({
+                    id: MessageId.make(`older-msg-${index}`),
+                    role: "user" as const,
+                    text: `older message ${index}`,
+                    turnId: null,
+                    streaming: false,
+                    createdAt: now,
+                    updatedAt: now,
+                  })),
+                  activities: [],
+                  proposedPlans: [],
+                  checkpoints: [],
+                  oldestLoaded: olderBoundary,
+                  hasMoreHistory: true,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const page = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getThreadHistoryPage]({
+            threadId: defaultThreadId,
+            beforeTurn: beforeCursor,
+            maxTurns: 5,
+            maxRows: 2000,
+          }),
+        ),
+      );
+
+      // (a) returns older-turn collections
+      assert.equal(page.messages.length, 3);
+      assert.deepEqual(page.activities, []);
+      assert.deepEqual(page.proposedPlans, []);
+      assert.deepEqual(page.checkpoints, []);
+      // (b) hasMoreHistory reflects older turns still exist
+      assert.equal(page.hasMoreHistory, true);
+      // (c) oldestLoaded advances to the older boundary
+      assert.deepEqual(page.oldestLoaded, olderBoundary);
+      // the RPC forwarded the paging cursor + window params to the query
+      assert.equal(receivedInputs.length, 1);
+      assert.equal(receivedInputs[0]?.threadId, defaultThreadId);
+      assert.deepEqual(receivedInputs[0]?.beforeTurn, beforeCursor);
+      assert.equal(receivedInputs[0]?.maxTurns, 5);
+      assert.equal(receivedInputs[0]?.maxRows, 2000);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

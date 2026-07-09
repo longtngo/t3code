@@ -4,6 +4,7 @@ import {
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
   type OrchestrationEvent,
+  type OrchestrationHistoryCursor,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadShell,
@@ -122,6 +123,17 @@ type ThreadDetailSubscriptionEntry = {
    * read/live overlap on resume); there is no `+1` gap check to make.
    */
   lastAppliedSequence: number;
+  /**
+   * Thread-load windowing (Task 7). After a windowed snapshot, the background
+   * backfill loop pages older turns starting from `oldestLoaded` while
+   * `hasMoreHistory` holds. `backfillRunning` guarantees a single loop (and thus
+   * a single page) is ever in flight; `disposed` lets an in-flight loop exit at
+   * its next checkpoint after the subscription is torn down.
+   */
+  oldestLoaded: OrchestrationHistoryCursor | undefined;
+  hasMoreHistory: boolean;
+  backfillRunning: boolean;
+  disposed: boolean;
 };
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
@@ -178,6 +190,17 @@ const THREAD_DETAIL_SUBSCRIPTION_IDLE_EVICTION_MS = 15 * 60 * 1000;
 const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 32;
 const BROWSER_RESUME_RECONNECT_COOLDOWN_MS = 2_000;
 const INITIAL_SERVER_CONFIG_SNAPSHOT_WAIT_MS = 150;
+// Thread-load windowing (Task 7): the initial subscribe requests a bounded
+// recent window; a paced background loop then backfills older turns via
+// getThreadHistoryPage up to the store's activity ceiling.
+const INITIAL_WINDOW_TURNS = 15;
+const INITIAL_WINDOW_ROWS = 2000;
+const BACKFILL_MAX_TURNS = 25;
+const BACKFILL_MAX_ROWS = 3000;
+const BACKFILL_PAGE_DELAY_MS = 150;
+// Must match the store's MAX_THREAD_ACTIVITIES: once a thread holds this many
+// activities, older pages would only be pruned, so stop paging.
+const BACKFILL_ACTIVITY_CEILING = 3000;
 const NOOP = () => undefined;
 const SSH_HTTP_STATUS_RE = /^\[ssh_http:(\d+)\]\s/u;
 
@@ -423,7 +446,12 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
     entry.lastAppliedSequence > 0 ? entry.lastAppliedSequence : undefined;
 
   entry.unsubscribe = connection.client.orchestration.subscribeThread(
-    { threadId: entry.threadId, fromSequenceExclusive },
+    {
+      threadId: entry.threadId,
+      fromSequenceExclusive,
+      windowTurns: INITIAL_WINDOW_TURNS,
+      maxRows: INITIAL_WINDOW_ROWS,
+    },
     (item) => {
       if (item.kind === "snapshot") {
         useStore.getState().syncServerThreadDetail(item.snapshot.thread, entry.environmentId);
@@ -431,6 +459,12 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
           entry.lastAppliedSequence,
           item.snapshot.snapshotSequence,
         );
+        // Record how far back this (possibly windowed) snapshot reaches and kick
+        // the paced background backfill. A non-windowed/legacy server omits these
+        // fields, so hasMoreHistory defaults to false and no backfill runs.
+        entry.oldestLoaded = item.snapshot.oldestLoaded;
+        entry.hasMoreHistory = item.snapshot.hasMoreHistory ?? false;
+        void runThreadHistoryBackfill(entry);
         return;
       }
       // A single `event` or a coalesced `events` batch. Apply the fresh ones (past
@@ -448,8 +482,15 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
         entry.lastAppliedSequence,
         ...fresh.map((event) => event.sequence),
       );
+      // A backfill that stopped on a transient failure resumes once new events
+      // (often the incremental reconnect resume itself) confirm the link is live.
+      maybeResumeThreadHistoryBackfill(entry);
     },
   );
+  // On a reconnect resume the server streams events rather than a fresh snapshot,
+  // so re-drive any pending backfill here (no-op on the initial subscribe, where
+  // hasMoreHistory is still false until the snapshot arrives).
+  maybeResumeThreadHistoryBackfill(entry);
   return true;
 }
 
@@ -466,12 +507,139 @@ function watchThreadDetailSubscriptionConnection(entry: ThreadDetailSubscription
   attachThreadDetailSubscription(entry);
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Resolve immediately when the document is visible; otherwise wait for the next
+ * visibilitychange that returns it to visible. Used to pause the background
+ * backfill while the tab is hidden (never busy-spinning). Resolves immediately in
+ * non-DOM contexts (e.g. tests without a document).
+ */
+function waitForDocumentVisible(): Promise<void> {
+  if (typeof document === "undefined" || !document.hidden) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        resolve();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+  });
+}
+
+function readThreadActivityCount(entry: ThreadDetailSubscriptionEntry): number {
+  return (
+    useStore.getState().environmentStateById[entry.environmentId]?.activityIdsByThreadId[
+      entry.threadId
+    ]?.length ?? 0
+  );
+}
+
+/**
+ * Restart the backfill loop if there is still older history to load and no loop
+ * is already running. Idempotent (the `backfillRunning` guard makes a redundant
+ * call a no-op) and safe on a disposed/fresh entry (`hasMoreHistory` is false).
+ * Called on every (re)subscribe and after each applied event batch so a paced
+ * loop that stopped on a transient RPC error or a brief disconnect resumes as
+ * soon as the connection recovers — an incremental reconnect resends events, not
+ * a fresh snapshot, so the snapshot branch alone would never re-drive it.
+ */
+function maybeResumeThreadHistoryBackfill(entry: ThreadDetailSubscriptionEntry): void {
+  if (entry.hasMoreHistory && !entry.backfillRunning && !entry.disposed) {
+    void runThreadHistoryBackfill(entry);
+  }
+}
+
+/**
+ * Paced background loop that backfills older thread turns after a windowed
+ * snapshot. Single-in-flight (guarded by `entry.backfillRunning`, so a snapshot
+ * re-delivery never double-runs it) and cooperatively cancellable (`entry.disposed`).
+ * Every exit path breaks the loop cleanly — it never busy-spins: it stops on the
+ * activity ceiling, a missing cursor, a missing connection, an RPC error, a
+ * `hasMoreHistory:false` page, or disposal. When it stops on a transient
+ * connection/RPC failure with history still pending, `maybeResumeThreadHistoryBackfill`
+ * re-drives it on the next (re)subscribe or applied event batch.
+ */
+async function runThreadHistoryBackfill(entry: ThreadDetailSubscriptionEntry): Promise<void> {
+  if (entry.backfillRunning || !entry.hasMoreHistory) {
+    return;
+  }
+  entry.backfillRunning = true;
+  try {
+    while (entry.hasMoreHistory && !entry.disposed) {
+      if (readThreadActivityCount(entry) >= BACKFILL_ACTIVITY_CEILING) {
+        break;
+      }
+
+      await waitForDocumentVisible();
+      if (entry.disposed) {
+        break;
+      }
+
+      const cursor = entry.oldestLoaded;
+      if (!cursor) {
+        break;
+      }
+
+      const connection = readEnvironmentConnection(entry.environmentId);
+      if (!connection) {
+        break;
+      }
+
+      let page;
+      try {
+        page = await connection.client.orchestration.getThreadHistoryPage({
+          threadId: entry.threadId,
+          beforeTurn: cursor,
+          maxTurns: BACKFILL_MAX_TURNS,
+          maxRows: BACKFILL_MAX_ROWS,
+        });
+      } catch {
+        // Do not infinite-retry: a reconnect/refocus re-drives via a fresh snapshot.
+        break;
+      }
+      if (entry.disposed) {
+        break;
+      }
+
+      useStore.getState().prependThreadHistory(entry.environmentId, entry.threadId, {
+        messages: [...page.messages],
+        activities: [...page.activities],
+        proposedPlans: [...page.proposedPlans],
+        checkpoints: [...page.checkpoints],
+      });
+
+      entry.oldestLoaded = page.oldestLoaded;
+      entry.hasMoreHistory = page.hasMoreHistory;
+
+      if (entry.hasMoreHistory && !entry.disposed) {
+        await delay(BACKFILL_PAGE_DELAY_MS);
+        if (entry.disposed) {
+          break;
+        }
+      }
+    }
+  } finally {
+    entry.backfillRunning = false;
+  }
+}
+
 function disposeThreadDetailSubscriptionByKey(key: string): boolean {
   const entry = threadDetailSubscriptions.get(key);
   if (!entry) {
     return false;
   }
 
+  // Flag disposal so any in-flight backfill loop (which retains this entry via
+  // closure even after the map delete) exits at its next checkpoint.
+  entry.disposed = true;
   clearThreadDetailSubscriptionEviction(entry);
   entry.unsubscribeConnectionListener?.();
   entry.unsubscribeConnectionListener = null;
@@ -634,6 +802,10 @@ export function retainThreadDetailSubscription(
     lastAccessedAt: Date.now(),
     evictionTimeoutId: null,
     lastAppliedSequence: 0,
+    oldestLoaded: undefined,
+    hasMoreHistory: false,
+    backfillRunning: false,
+    disposed: false,
   };
   threadDetailSubscriptions.set(key, entry);
   if (!attachThreadDetailSubscription(entry)) {

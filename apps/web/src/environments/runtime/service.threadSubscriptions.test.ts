@@ -2,15 +2,21 @@ import { QueryClient } from "@tanstack/react-query";
 import type { WsRpcClient } from "@t3tools/client-runtime";
 import {
   EnvironmentId,
+  EventId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  type OrchestrationHistoryCursor,
   type OrchestrationShellSnapshot,
+  type OrchestrationThread,
+  type OrchestrationThreadActivity,
+  type OrchestrationThreadHistoryPageResult,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mockSubscribeThread = vi.fn();
+const mockGetThreadHistoryPage = vi.fn();
 const mockThreadUnsubscribe = vi.fn();
 const mockCreateEnvironmentConnection = vi.fn();
 const mockCreateWsRpcClient = vi.fn();
@@ -104,6 +110,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       getTurnDiff: vi.fn(),
       getFullThreadDiff: vi.fn(),
       getArchivedShellSnapshot: vi.fn(),
+      getThreadHistoryPage: mockGetThreadHistoryPage,
       subscribeShell: vi.fn(() => () => undefined),
       subscribeThread: mockSubscribeThread,
     },
@@ -257,6 +264,88 @@ function makeThreadShellSnapshot(params: {
   };
 }
 
+function makeThreadActivity(index: number): OrchestrationThreadActivity {
+  return {
+    id: EventId.make(`activity-${index}`),
+    tone: "info",
+    kind: "runtime.log",
+    summary: `activity ${index}`,
+    payload: null,
+    turnId: null,
+    sequence: index,
+    createdAt: `2026-04-13T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
+  };
+}
+
+function makeThreadDetail(
+  threadId: ThreadId,
+  options?: { readonly activityCount?: number },
+): OrchestrationThread {
+  const activityCount = options?.activityCount ?? 0;
+  return {
+    id: threadId,
+    projectId: ProjectId.make("project-1"),
+    title: "Thread",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: "2026-04-13T00:00:00.000Z",
+    updatedAt: "2026-04-13T00:00:00.000Z",
+    archivedAt: null,
+    deletedAt: null,
+    messages: [],
+    proposedPlans: [],
+    activities: Array.from({ length: activityCount }, (_, index) => makeThreadActivity(index)),
+    checkpoints: [],
+    session: null,
+  };
+}
+
+function makeHistoryCursor(turnId: string): OrchestrationHistoryCursor {
+  return {
+    requestedAt: "2026-04-13T00:00:00.000Z",
+    turnId,
+    checkpointTurnCount: null,
+  };
+}
+
+function makeThreadDetailSnapshotItem(params: {
+  readonly threadId: ThreadId;
+  readonly hasMoreHistory: boolean;
+  readonly oldestLoaded?: OrchestrationHistoryCursor;
+  readonly activityCount?: number;
+}): unknown {
+  return {
+    kind: "snapshot",
+    snapshot: {
+      snapshotSequence: 1,
+      thread: makeThreadDetail(params.threadId, { activityCount: params.activityCount ?? 0 }),
+      ...(params.oldestLoaded ? { oldestLoaded: params.oldestLoaded } : {}),
+      hasMoreHistory: params.hasMoreHistory,
+    },
+  };
+}
+
+function makeHistoryPage(params: {
+  readonly hasMoreHistory: boolean;
+  readonly oldestLoaded?: OrchestrationHistoryCursor;
+}): OrchestrationThreadHistoryPageResult {
+  return {
+    messages: [],
+    activities: [],
+    proposedPlans: [],
+    checkpoints: [],
+    ...(params.oldestLoaded ? { oldestLoaded: params.oldestLoaded } : {}),
+    hasMoreHistory: params.hasMoreHistory,
+  };
+}
+
 describe("retainThreadDetailSubscription", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -289,6 +378,7 @@ describe("retainThreadDetailSubscription", () => {
       },
       isHeartbeatFresh: vi.fn(() => true),
       orchestration: {
+        getThreadHistoryPage: mockGetThreadHistoryPage,
         subscribeThread: mockSubscribeThread,
       },
     });
@@ -392,9 +482,12 @@ describe("retainThreadDetailSubscription", () => {
     const release = retainThreadDetailSubscription(environmentId, threadId);
     expect(mockSubscribeThread).toHaveBeenCalledTimes(1);
     // A fresh subscription carries no cursor, so the server sends a full snapshot.
+    // The initial window params bound the first snapshot to the recent tail.
     expect(mockSubscribeThread.mock.calls[0]?.[0]).toEqual({
       threadId,
       fromSequenceExclusive: undefined,
+      windowTurns: 15,
+      maxRows: 2000,
     });
 
     // The thread stream is a sparse subset of the global sequence axis, so gaps
@@ -530,6 +623,8 @@ describe("retainThreadDetailSubscription", () => {
     expect(mockSubscribeThread.mock.calls[0]?.[0]).toEqual({
       threadId,
       fromSequenceExclusive: undefined,
+      windowTurns: 15,
+      maxRows: 2000,
     });
 
     // Apply a coalesced batch so the subscription has a high-water mark to resume
@@ -552,10 +647,13 @@ describe("retainThreadDetailSubscription", () => {
       );
       expect(mockSubscribeThread).toHaveBeenCalledTimes(2);
     });
-    // Incremental reconnect: the resubscribe resumes from the applied sequence.
+    // Incremental reconnect: the resubscribe resumes from the applied sequence,
+    // still carrying the initial window params.
     expect(mockSubscribeThread.mock.calls[1]?.[0]).toEqual({
       threadId,
       fromSequenceExclusive: 42,
+      windowTurns: 15,
+      maxRows: 2000,
     });
 
     release();
@@ -717,5 +815,223 @@ describe("retainThreadDetailSubscription", () => {
     expect(mockThreadUnsubscribe).toHaveBeenCalledTimes(1);
 
     stop();
+  });
+
+  it("backfills older history in paced pages until the server reports no more history", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-backfill");
+
+    const cursor0 = makeHistoryCursor("turn-0");
+    const cursor1 = makeHistoryCursor("turn-1");
+    const cursor2 = makeHistoryCursor("turn-2");
+
+    mockGetThreadHistoryPage
+      .mockResolvedValueOnce(makeHistoryPage({ oldestLoaded: cursor1, hasMoreHistory: true }))
+      .mockResolvedValueOnce(makeHistoryPage({ oldestLoaded: cursor2, hasMoreHistory: false }));
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    emit(
+      makeThreadDetailSnapshotItem({ threadId, oldestLoaded: cursor0, hasMoreHistory: true }),
+    );
+
+    // First page fires immediately after the snapshot, paging back from the
+    // snapshot's oldestLoaded cursor.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(1);
+    expect(mockGetThreadHistoryPage.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      beforeTurn: cursor0,
+      maxTurns: 25,
+      maxRows: 3000,
+    });
+
+    // The next page waits out the 150ms pacing and advances beforeTurn to the
+    // previous page's oldestLoaded cursor.
+    await vi.advanceTimersByTimeAsync(150);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(2);
+    expect(mockGetThreadHistoryPage.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      beforeTurn: cursor1,
+      maxTurns: 25,
+      maxRows: 3000,
+    });
+
+    // The second page reports hasMoreHistory:false, so no further pages fire.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(2);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("resumes a stalled backfill after a transient page error when new events arrive", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-resume-backfill");
+
+    const cursor0 = makeHistoryCursor("turn-0");
+    const cursor1 = makeHistoryCursor("turn-1");
+
+    // The first page fails (a transient RPC error / socket blip), stopping the
+    // loop with history still pending. On an incremental reconnect the server
+    // resends events (not a fresh snapshot), which must re-drive the loop; the
+    // retry then succeeds and finishes.
+    mockGetThreadHistoryPage
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(makeHistoryPage({ oldestLoaded: cursor1, hasMoreHistory: false }));
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    emit(makeThreadDetailSnapshotItem({ threadId, oldestLoaded: cursor0, hasMoreHistory: true }));
+
+    // First page attempted, errored, and the loop stopped — it does NOT retry on
+    // its own (no busy-spin).
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(1);
+
+    // A subsequent event batch (e.g. the incremental reconnect resume) re-drives
+    // the backfill from the same still-pending cursor.
+    emit({ kind: "events", events: [{ sequence: 100 }] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(2);
+    expect(mockGetThreadHistoryPage.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      beforeTurn: cursor0,
+      maxTurns: 25,
+      maxRows: 3000,
+    });
+
+    // The retry reported hasMoreHistory:false, so it stops for good.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(2);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("stops backfilling older history after the subscription is disposed", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-dispose-backfill");
+
+    const connectionInput = mockCreateEnvironmentConnection.mock.calls[0]?.[0];
+    expect(connectionInput).toBeDefined();
+
+    // Every page still reports more history, so the loop would run forever if it
+    // ignored disposal.
+    mockGetThreadHistoryPage.mockImplementation(async () =>
+      makeHistoryPage({ oldestLoaded: makeHistoryCursor("turn-next"), hasMoreHistory: true }),
+    );
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    emit(
+      makeThreadDetailSnapshotItem({
+        threadId,
+        oldestLoaded: makeHistoryCursor("turn-0"),
+        hasMoreHistory: true,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(1);
+
+    // Dispose the subscription mid-loop (while it is waiting out the pacing delay).
+    connectionInput.applyShellEvent(
+      { kind: "thread-removed", sequence: 1, threadId },
+      environmentId,
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockGetThreadHistoryPage).toHaveBeenCalledTimes(1);
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("stops backfilling older history once the activity ceiling is reached", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-ceiling-backfill");
+
+    mockGetThreadHistoryPage.mockResolvedValue(
+      makeHistoryPage({ oldestLoaded: makeHistoryCursor("turn-next"), hasMoreHistory: true }),
+    );
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    // The snapshot already loads the thread at the activity ceiling (3000), so
+    // the backfill must not fetch even though hasMoreHistory is true.
+    emit(
+      makeThreadDetailSnapshotItem({
+        threadId,
+        oldestLoaded: makeHistoryCursor("turn-0"),
+        hasMoreHistory: true,
+        activityCount: 3000,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockGetThreadHistoryPage).not.toHaveBeenCalled();
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("does not backfill when the snapshot reports no more history", async () => {
+    const {
+      retainThreadDetailSubscription,
+      startEnvironmentConnectionService,
+      resetEnvironmentServiceForTests,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-legacy-backfill");
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+    const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
+    // A legacy/non-windowed snapshot omits oldestLoaded and reports no more
+    // history, so the backfill loop never starts.
+    emit(makeThreadDetailSnapshotItem({ threadId, hasMoreHistory: false }));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockGetThreadHistoryPage).not.toHaveBeenCalled();
+
+    release();
+    stop();
+    await resetEnvironmentServiceForTests();
   });
 });
