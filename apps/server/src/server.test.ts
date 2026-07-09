@@ -1358,10 +1358,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           response,
         );
         // Order is not authoritative — the client picks by its own precedence; a format
-        // just has to be present to be opt-in-able. All three this build supports appear.
+        // just has to be present to be opt-in-able.
         assert.deepEqual(
           [...body.wireFormats].sort(),
-          ["json", "msgpack-deflate", "msgpack-deflate-stream"],
+          ["json", "msgpack-deflate"],
         );
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -3979,7 +3979,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
+  // Skipped while msgpack-deflate-stream is out of SUPPORTED_WIRE_FORMATS.
+  it.effect.skip(
     "round-trips websocket rpc over the context-takeover (stream) wire format",
     () =>
       Effect.gen(function* () {
@@ -4006,7 +4007,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
+  // Skipped while msgpack-deflate-stream is out of SUPPORTED_WIRE_FORMATS.
+  it.effect.skip(
     "keeps the context-takeover stream in sync under concurrent server responses",
     () =>
       Effect.gen(function* () {

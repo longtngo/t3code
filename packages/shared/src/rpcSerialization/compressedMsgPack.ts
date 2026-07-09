@@ -68,7 +68,9 @@ export const WIRE_FORMAT_JSON = "json";
 export const SUPPORTED_WIRE_FORMATS = [
   WIRE_FORMAT_JSON,
   WIRE_FORMAT_MSGPACK_DEFLATE,
-  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
+  // Temporarily disabled — stream codec still ships in this build but is not
+  // advertised or negotiated until re-enabled here.
+  // WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
 ] as const;
 
 /**
