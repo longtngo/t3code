@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -180,6 +181,21 @@ function stalePendingRequestDetail(
   return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
 }
 
+// Shown when a lost provider session cannot be recovered at all (no persisted
+// binding / resume state, or the recovered session rejected the continuation).
+const UNRECOVERABLE_SESSION_DETAIL =
+  "The provider session ended and couldn't be recovered — start a new turn to continue.";
+
+// Render AskUserQuestion answers (question text → chosen label) as a compact
+// human-readable block to carry into a recovery continuation turn.
+function formatUserInputAnswersForContinuation(answers: Record<string, unknown>): string {
+  const lines = Object.entries(answers).map(([question, answer]) => {
+    const value = typeof answer === "string" ? answer : JSON.stringify(answer);
+    return `• ${question}: ${value}`;
+  });
+  return lines.length > 0 ? lines.join("\n") : "(no answer provided)";
+}
+
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
     .trim()
@@ -228,6 +244,16 @@ const make = Effect.gen(function* () {
         Cache.set(handledTurnStartKeys, key, true).pipe(Effect.as(Option.isSome(cached))),
       ),
     );
+
+  // Dedup key: a lost pending request (user-input/approval) is converted to a
+  // continuation turn AT MOST ONCE. `handledTurnStartKeys` keys on turn-start
+  // events, so it can't dedup a redelivered/double-submitted answer that mints a
+  // fresh turn-start; this cache is keyed on the pending request id instead.
+  const continuedPendingRequestKeys = yield* Cache.make<string, true>({
+    capacity: HANDLED_TURN_START_KEY_MAX,
+    timeToLive: HANDLED_TURN_START_KEY_TTL,
+    lookup: () => Effect.succeed(true),
+  });
 
   const threadModelSelections = new Map<string, ModelSelection>();
 
@@ -885,6 +911,92 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
+  const hasLiveSessionForThread = (threadId: ThreadId) =>
+    providerService
+      .listSessions()
+      .pipe(Effect.map((sessions) => sessions.some((session) => session.threadId === threadId)));
+
+  // A pending request (user-input/approval) whose in-memory callback died with
+  // its provider session cannot be delivered to a recovered/fresh session (the
+  // Deferred is gone). Rather than dead-end on "No active provider session",
+  // continue the conversation: dispatch ONE new user turn carrying the user's
+  // answer/decision, reusing the robust turn-start path (which resumes the
+  // session from its persisted cursor). Idempotent per requestId; a provider
+  // rejection (e.g. a dangling tool_use after a hard crash) falls back to the
+  // actionable unrecoverable error rather than crashing the reactor.
+  const continuePendingRequestAsNewTurn = Effect.fn("continuePendingRequestAsNewTurn")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly requestId: string;
+      readonly kind: "user-input" | "approval";
+      readonly continuationText: string;
+      readonly createdAt: string;
+      readonly failureKind:
+        | "provider.user-input.respond.failed"
+        | "provider.approval.respond.failed";
+      readonly failureSummary: string;
+    }) {
+      const dedupeKey = `${input.kind}:${input.requestId}`;
+      const alreadyContinued = yield* Cache.getOption(continuedPendingRequestKeys, dedupeKey).pipe(
+        Effect.map(Option.isSome),
+      );
+      if (alreadyContinued) {
+        return;
+      }
+      const thread = yield* resolveThread(input.threadId);
+      if (!thread) {
+        return;
+      }
+      const commandId = yield* serverCommandId("pending-request-continue");
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.turn.start",
+          commandId,
+          threadId: input.threadId,
+          message: {
+            messageId: MessageId.make(`user:pending-request-continue:${input.requestId}`),
+            role: "user",
+            text: input.continuationText,
+            attachments: [],
+          },
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: input.createdAt,
+        })
+        .pipe(
+          Effect.tap(() => Cache.set(continuedPendingRequestKeys, dedupeKey, true)),
+          Effect.catchCause((cause) =>
+            // Let interruption (e.g. scope teardown on shutdown) propagate rather
+            // than reporting it as an unrecoverable session — mirrors
+            // processDomainEventSafely / recoverTurnStartFailure.
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : appendProviderFailureActivity({
+                  threadId: input.threadId,
+                  kind: input.failureKind,
+                  summary: input.failureSummary,
+                  detail: UNRECOVERABLE_SESSION_DETAIL,
+                  turnId: null,
+                  createdAt: input.createdAt,
+                  requestId: input.requestId,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.logWarning(
+                      "provider command reactor failed to continue pending request",
+                      {
+                        threadId: input.threadId,
+                        requestId: input.requestId,
+                        kind: input.kind,
+                        cause: Cause.pretty(cause),
+                      },
+                    ),
+                  ),
+                ),
+          ),
+        );
+    },
+  );
+
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
@@ -892,20 +1004,45 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
-    if (!hasSession) {
-      return yield* appendProviderFailureActivity({
-        threadId: event.payload.threadId,
-        kind: "provider.turn.interrupt.failed",
-        summary: "Provider turn interrupt failed",
-        detail: "No active provider session is bound to this thread.",
-        turnId: event.payload.turnId ?? null,
+
+    // Consult the LIVE session, not the lagging projection. If nothing is live
+    // there is nothing to interrupt — the interrupt's goal is already met, so
+    // settle to the clean stopped state (clears the spinner) instead of erroring,
+    // and do NOT resume a subprocess just to no-op it.
+    const hasLiveSession = yield* hasLiveSessionForThread(event.payload.threadId);
+    if (!hasLiveSession) {
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "stopped",
+          providerName: thread.session?.providerName ?? null,
+          ...(thread.session?.providerInstanceId !== undefined
+            ? { providerInstanceId: thread.session.providerInstanceId }
+            : {}),
+          runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: thread.session?.lastError ?? null,
+          updatedAt: event.payload.createdAt,
+        },
         createdAt: event.payload.createdAt,
       });
+      return;
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.turn.interrupt.failed",
+          summary: "Provider turn interrupt failed",
+          detail: Cause.pretty(cause),
+          turnId: event.payload.turnId ?? null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -915,17 +1052,27 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
-    if (!hasSession) {
-      return yield* appendProviderFailureActivity({
+
+    const continueApproval = () =>
+      continuePendingRequestAsNewTurn({
         threadId: event.payload.threadId,
-        kind: "provider.approval.respond.failed",
-        summary: "Provider approval response failed",
-        detail: "No active provider session is bound to this thread.",
-        turnId: null,
-        createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
+        kind: "approval",
+        continuationText: `Regarding the earlier tool-approval request, my decision was: ${event.payload.decision}. Please continue.`,
+        createdAt: event.payload.createdAt,
+        failureKind: "provider.approval.respond.failed",
+        failureSummary: "Provider approval response failed",
       });
+
+    // The session is genuinely gone (restart / hard stop): the in-memory callback
+    // died with it, so continue as a new turn (auto-reattach) rather than
+    // dead-ending on "No active provider session". A LIVE session that merely
+    // rejects the request as unknown (stale/already-resolved) has moved on — keep
+    // surfacing that as a stale-request notice instead of injecting a spurious
+    // continuation.
+    const hasLiveSession = yield* hasLiveSessionForThread(event.payload.threadId);
+    if (!hasLiveSession) {
+      return yield* continueApproval();
     }
 
     yield* providerService
@@ -959,17 +1106,27 @@ const make = Effect.gen(function* () {
       if (!thread) {
         return;
       }
-      const hasSession = thread.session && thread.session.status !== "stopped";
-      if (!hasSession) {
-        return yield* appendProviderFailureActivity({
+
+      const continueUserInput = () =>
+        continuePendingRequestAsNewTurn({
           threadId: event.payload.threadId,
-          kind: "provider.user-input.respond.failed",
-          summary: "Provider user input response failed",
-          detail: "No active provider session is bound to this thread.",
-          turnId: null,
-          createdAt: event.payload.createdAt,
           requestId: event.payload.requestId,
+          kind: "user-input",
+          continuationText: `Regarding the earlier question, here is my answer:\n${formatUserInputAnswersForContinuation(
+            event.payload.answers,
+          )}\n\nPlease continue.`,
+          createdAt: event.payload.createdAt,
+          failureKind: "provider.user-input.respond.failed",
+          failureSummary: "Provider user input response failed",
         });
+
+      // The session is genuinely gone (restart / hard stop): continue as a new
+      // turn (auto-reattach). A LIVE session that rejects the request as unknown
+      // (stale/already-resolved) has moved on — surface a stale-request notice
+      // rather than injecting a spurious continuation.
+      const hasLiveSession = yield* hasLiveSessionForThread(event.payload.threadId);
+      if (!hasLiveSession) {
+        return yield* continueUserInput();
       }
 
       yield* providerService

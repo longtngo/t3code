@@ -32,6 +32,8 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /** Dedicated cooperative decline for a pending question — never escalates to a hard stop. */
+  onCancelQuestion: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -72,6 +74,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
+  onCancelQuestion,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -140,7 +143,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             variant="ghost"
             className="rounded-full"
             {...pointerFocusProps}
-            onClick={onInterrupt}
+            onClick={onCancelQuestion}
             disabled={pendingAction.isResponding}
             aria-label="Cancel question"
           >
@@ -152,7 +155,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             variant="ghost"
             className="rounded-full"
             {...pointerFocusProps}
-            onClick={onInterrupt}
+            onClick={onCancelQuestion}
             disabled={pendingAction.isResponding}
           >
             Cancel

@@ -72,6 +72,22 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // A thread parked on a pending user-input/approval request is waiting on
+        // the human, not idle — reaping it would strand the answer with
+        // "No active provider session is bound to this thread." `activeTurnId`
+        // usually still guards this (the turn stays open), but not for every
+        // provider/flow, so guard explicitly here too — mirroring
+        // ProviderTurnStallWatchdog.shouldTrip.
+        if (thread?.hasPendingUserInput === true || thread?.hasPendingApprovals === true) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-pending-user-input", {
+            threadId: binding.threadId,
+            hasPendingUserInput: thread?.hasPendingUserInput ?? false,
+            hasPendingApprovals: thread?.hasPendingApprovals ?? false,
+            idleDurationMs,
+          });
+          continue;
+        }
+
         // A thread with an in-flight background task is not truly idle —
         // reaping its session would kill the live watcher. Leave it alone; the
         // BackgroundTaskRecoveryWatchdog owns recovery if the task is orphaned.

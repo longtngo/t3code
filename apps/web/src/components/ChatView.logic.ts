@@ -442,12 +442,20 @@ export function nextStopAction(input: {
  * After the cooperative-interrupt grace elapses, escalate to a hard stop only when the escalation
  * still belongs to this thread AND its turn is still running (an honoured interrupt would have
  * settled it).
+ *
+ * A turn parked on a pending user-input/approval request is waiting on the human, NOT wedged —
+ * never auto-escalate it into a session-killing hard stop (that stranded the answer with "No
+ * active provider session…"). This mirrors the server stall watchdog, which already abstains on
+ * these flags. A deliberate second Stop press still force-stops (see `nextStopAction`), so a
+ * genuinely wedged turn whose flag is stuck true remains killable.
  */
 export function shouldHardStopAfterGrace(input: {
   readonly threadId: string;
   readonly escalatedThreadId: string | null;
   readonly latestTurnSettled: boolean;
+  readonly hasPendingInput?: boolean;
 }): boolean {
+  if (input.hasPendingInput === true) return false;
   return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
 }
 

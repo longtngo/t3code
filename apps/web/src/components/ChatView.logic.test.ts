@@ -888,4 +888,26 @@ describe("Stop-button escalation", () => {
       shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t2", latestTurnSettled: false }),
     ).toBe(false);
   });
+
+  it("never auto-escalates while a user-input/approval request is pending", () => {
+    // Waiting on the human is not a wedged turn — no hard stop even though the
+    // turn is still running and the escalation belongs to this thread.
+    expect(
+      shouldHardStopAfterGrace({
+        threadId: "t1",
+        escalatedThreadId: "t1",
+        latestTurnSettled: false,
+        hasPendingInput: true,
+      }),
+    ).toBe(false);
+    // Without pending input, a still-running turn escalates as before (wedged).
+    expect(
+      shouldHardStopAfterGrace({
+        threadId: "t1",
+        escalatedThreadId: "t1",
+        latestTurnSettled: false,
+        hasPendingInput: false,
+      }),
+    ).toBe(true);
+  });
 });

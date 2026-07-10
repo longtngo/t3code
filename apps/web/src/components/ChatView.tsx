@@ -195,14 +195,8 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
-import {
-  enqueueCommand,
-  useCommandOutbox,
-} from "../rpc/commandOutbox";
-import {
-  getWsConnectionStatus,
-  getWsConnectionUiState,
-} from "../rpc/wsConnectionState";
+import { enqueueCommand, useCommandOutbox } from "../rpc/commandOutbox";
+import { getWsConnectionStatus, getWsConnectionUiState } from "../rpc/wsConnectionState";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
@@ -981,6 +975,9 @@ export default function ChatView(props: ChatViewProps) {
   const interruptEscalatedThreadRef = useRef<string | null>(null);
   const interruptEscalationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestTurnSettledRef = useRef(true);
+  // Whether the active thread is currently waiting on the user (a question or an
+  // approval). Read inside the escalation timer, which can't see fresh render state.
+  const hasPendingInputRef = useRef(false);
   const clearInterruptEscalation = useCallback(() => {
     if (interruptEscalationTimerRef.current !== null) {
       clearTimeout(interruptEscalationTimerRef.current);
@@ -1736,7 +1733,13 @@ export default function ChatView(props: ChatViewProps) {
         agents: visibleAgentItems,
         background: visibleBackgroundItems,
       }),
-    [planStepsCompleted, planStepsActive, planStepsTotal, visibleAgentItems, visibleBackgroundItems],
+    [
+      planStepsCompleted,
+      planStepsActive,
+      planStepsTotal,
+      visibleAgentItems,
+      visibleBackgroundItems,
+    ],
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -1744,6 +1747,21 @@ export default function ChatView(props: ChatViewProps) {
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
+  // Mirror pending-input state for the escalation timer (fire-time), so a question
+  // that arrives during the 6s grace still suppresses the hard-stop escalation.
+  useEffect(() => {
+    const pending = activePendingUserInput !== null || activePendingApproval !== null;
+    hasPendingInputRef.current = pending;
+    // A Stop press while input is pending sets the escalation ref WITHOUT arming a
+    // timer (so a 2nd press can still force-stop a stuck/wedged turn). If the
+    // pending request then resolves and generation resumes without the turn
+    // settling, drop that stale ref — otherwise a later "first" Stop press would
+    // skip the cooperative interrupt and hard-kill the session. A still-pending
+    // (stuck) turn keeps the ref so a second press remains able to force-stop it.
+    if (!pending && interruptEscalationTimerRef.current === null) {
+      interruptEscalatedThreadRef.current = null;
+    }
+  }, [activePendingUserInput, activePendingApproval]);
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -3463,34 +3481,61 @@ export default function ChatView(props: ChatViewProps) {
     // A second Stop press for this thread (or any press after we already interrupted it) escalates
     // straight to a hard session.stop, which force-kills a turn wedged in a tool.
     if (
-      nextStopAction({ threadId, alreadyEscalatedThreadId: interruptEscalatedThreadRef.current }) ===
-      "hardStop"
+      nextStopAction({
+        threadId,
+        alreadyEscalatedThreadId: interruptEscalatedThreadRef.current,
+      }) === "hardStop"
     ) {
       clearInterruptEscalation();
       dispatchHardStop(threadId);
       return;
     }
 
-    // First press: cooperative interrupt, then auto-escalate to a hard stop if the turn is still
-    // running after a grace — so a single Stop press reliably stops even a wedged turn.
+    // First press: cooperative interrupt. Record the thread so a SECOND press
+    // escalates to a hard stop (the wedged-turn escape hatch) regardless of state.
     interruptEscalatedThreadRef.current = threadId;
-    interruptEscalationTimerRef.current = setTimeout(() => {
-      interruptEscalationTimerRef.current = null;
-      const escalate = shouldHardStopAfterGrace({
-        threadId,
-        escalatedThreadId: interruptEscalatedThreadRef.current,
-        latestTurnSettled: latestTurnSettledRef.current,
-      });
-      interruptEscalatedThreadRef.current = null;
-      if (escalate) {
-        dispatchHardStop(threadId);
-      }
-    }, INTERRUPT_ESCALATION_MS);
+
+    // Auto-escalate after a grace ONLY when the turn is genuinely wedged. A turn
+    // parked on a pending question/approval is waiting on the human, not wedged —
+    // arming the timer there would hard-stop the session and strand the answer
+    // with "No active provider session…". Decide at press time; the timer also
+    // re-checks (fire time) via the ref to cover a question arriving mid-grace.
+    const pendingAtPress = activePendingUserInput !== null || activePendingApproval !== null;
+    if (!pendingAtPress) {
+      interruptEscalationTimerRef.current = setTimeout(() => {
+        interruptEscalationTimerRef.current = null;
+        const escalate = shouldHardStopAfterGrace({
+          threadId,
+          escalatedThreadId: interruptEscalatedThreadRef.current,
+          latestTurnSettled: latestTurnSettledRef.current,
+          hasPendingInput: hasPendingInputRef.current,
+        });
+        interruptEscalatedThreadRef.current = null;
+        if (escalate) {
+          dispatchHardStop(threadId);
+        }
+      }, INTERRUPT_ESCALATION_MS);
+    }
 
     await api.orchestration.dispatchCommand({
       type: "thread.turn.interrupt",
       commandId: newCommandId(),
       threadId,
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  // "Cancel question" is a dedicated cooperative decline: it dispatches the same
+  // cooperative interrupt (which the adapter turns into a clean tool `deny`) but
+  // NEVER arms the hard-stop escalation, so declining a question can never kill
+  // the provider session. Distinct from Stop, which stays escalating for wedged turns.
+  const onCancelQuestion = async () => {
+    const api = readEnvironmentApi(environmentId);
+    if (!api || !activeThread) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.turn.interrupt",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
       createdAt: new Date().toISOString(),
     });
   };
@@ -4360,6 +4405,7 @@ export default function ChatView(props: ChatViewProps) {
                   scheduleStickToBottom={scrollToEnd}
                   onSend={onSend}
                   onInterrupt={onInterrupt}
+                  onCancelQuestion={onCancelQuestion}
                   onImplementPlanInNewThread={onImplementPlanInNewThread}
                   onRespondToApproval={onRespondToApproval}
                   onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}

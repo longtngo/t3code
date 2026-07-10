@@ -1620,6 +1620,17 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // A live provider session must exist for the interrupt to be forwarded.
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1635,6 +1646,55 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
     });
+  });
+
+  it("settles the turn without erroring when interrupt arrives but no live session exists", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Projection says running, but the live session is gone (e.g. after a
+    // restart / hard stop) — runtimeSessions is empty.
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-no-live"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-turn-interrupt-no-live"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: now,
+      }),
+    );
+
+    // Settles to stopped (spinner clears); never forwards to provider interrupt;
+    // never appends the "No active provider session" error.
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((t) => t.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "stopped" && thread.session.activeTurnId === null;
+    });
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((t) => t.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.interrupt.failed"),
+    ).toBe(false);
   });
 
   it("starts a fresh session when only projected session state exists", async () => {
@@ -1784,6 +1844,16 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1825,6 +1895,16 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1847,6 +1927,120 @@ describe("ProviderCommandReactor", () => {
         sandbox_mode: "workspace-write",
       },
     });
+  });
+
+  it("continues as a new turn carrying the answer when no live session exists (user-input)", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Projection shows a stopped session and there is NO live session — the
+    // session was lost (restart / hard stop). The answer cannot be delivered to
+    // the dead callback, so it must continue as a new turn (auto-reattach).
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-lost"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make("cmd-user-input-respond-lost"),
+        threadId: ThreadId.make("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-lost"),
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+        createdAt: now,
+      }),
+    );
+
+    // A continuation user turn is dispatched carrying the answer; the answer is
+    // never forwarded to a (nonexistent) live session.
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((t) => t.id === ThreadId.make("thread-1"));
+    const continuationMessage = thread?.messages.find(
+      (message) => message.role === "user" && message.text.includes("workspace-write"),
+    );
+    expect(continuationMessage).toBeDefined();
+    expect(continuationMessage?.text).toContain("here is my answer");
+  });
+
+  it("continues only once per pending request id (idempotent) when no live session exists", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Keep the recovered session OUT of the live registry so BOTH answers take
+    // the no-live-session continuation path — otherwise the first continuation's
+    // turn-start would register a live session and divert the second answer to
+    // respondToUserInput, making the dedup guard untested. This isolates the
+    // idempotency property: without the dedup Cache, the second answer would
+    // continue too and sendTurn would be called twice.
+    harness.startSession.mockImplementation((_environment: unknown, _input: unknown) =>
+      Effect.succeed({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "ready",
+        runtimeMode: "approval-required",
+        threadId: ThreadId.make("thread-1"),
+        resumeCursor: { opaque: "resume-idem" },
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-lost-idem"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    const respond = (commandSuffix: string) =>
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make(`cmd-user-input-respond-idem-${commandSuffix}`),
+        threadId: ThreadId.make("thread-1"),
+        requestId: asApprovalRequestId("user-input-request-idem"),
+        answers: { sandbox_mode: "workspace-write" },
+        createdAt: now,
+      });
+
+    await runtime!.runPromise(respond("a"));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    // A redelivered / double-submitted answer for the SAME requestId must not
+    // spawn a second continuation turn. Both answers hit the no-live-session
+    // path (startSession never registers a live session), so only the dedup
+    // Cache keeps this at exactly one continuation.
+    await runtime!.runPromise(respond("b"));
+    await runtime!.runPromise(Effect.sleep("200 millis"));
+    expect(harness.sendTurn.mock.calls.length).toBe(1);
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
   });
 
   it("surfaces stale provider approval request failures without faking approval resolution", async () => {
@@ -1879,6 +2073,18 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // Live session present: the stale-request notice path only applies when the
+    // session is alive but the specific request is unknown/already-resolved.
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1974,6 +2180,18 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // Live session present: the stale-request notice path only applies when the
+    // session is alive but the specific request is unknown/already-resolved.
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: now,
+      updatedAt: now,
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({

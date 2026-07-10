@@ -75,6 +75,8 @@ function makeReadModel(
       readonly lastError: string | null;
       readonly updatedAt: string;
     } | null;
+    readonly hasPendingUserInput?: boolean;
+    readonly hasPendingApprovals?: boolean;
   }>,
 ) {
   const now = "2026-01-01T00:00:00.000Z";
@@ -108,8 +110,8 @@ function makeReadModel(
       updatedAt: now,
       archivedAt: null,
       latestUserMessageAt: null,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
+      hasPendingApprovals: thread.hasPendingApprovals ?? false,
+      hasPendingUserInput: thread.hasPendingUserInput ?? false,
       hasActionableProposedPlan: false,
       hasPendingBackgroundTask: false,
       latestTurn: null,
@@ -345,6 +347,98 @@ describe("ProviderSessionReaper", () => {
 
     // Let the (immediate) first sweep run, then confirm the guard held.
     await Effect.runPromise(Effect.sleep("150 millis"));
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
+  });
+
+  it("does not reap a stale session whose thread has a pending user-input request", async () => {
+    const threadId = ThreadId.make("thread-reaper-pending-user-input");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          // activeTurnId is null (the guard that usually spares a pending
+          // question does NOT apply) — the pending-user-input flag must.
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          hasPendingUserInput: true,
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-pending-user-input" },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    await runtime!.runPromise(Effect.sleep("150 millis"));
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
+  });
+
+  it("does not reap a stale session whose thread has a pending approval request", async () => {
+    const threadId = ThreadId.make("thread-reaper-pending-approval");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          hasPendingApprovals: true,
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: { opaque: "resume-pending-approval" },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    await runtime!.runPromise(Effect.sleep("150 millis"));
     expect(harness.stopSession.mock.calls.length).toBe(0);
     expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
   });
