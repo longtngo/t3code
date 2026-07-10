@@ -398,6 +398,27 @@ function resolveLifecycleHandlers(
   };
 }
 
+/**
+ * Force a browser WebSocket to deliver binary frames as `ArrayBuffer`, not the
+ * default `Blob`.
+ *
+ * WHY this is load-bearing for the context-takeover stream codec: Effect's socket
+ * reads a `Blob` frame via an ASYNC `Blob.arrayBuffer()` promise, each on its own
+ * fiber. Those promises resolve OUT OF ORDER under load (a multi-MB frame's
+ * `arrayBuffer()` finishes later than a small frame that arrived after it), so the
+ * decoder sees frames out of arrival order. The stream codec carries ONE persistent
+ * inflate window per connection, so an out-of-order frame permanently desyncs it —
+ * the exact intermittent "stream-decode-desync" that emptied large threads on load.
+ * `arraybuffer` frames are handed to the decoder SYNCHRONOUSLY, preserving wire
+ * order. Harmless for the order-independent JSON / per-frame codecs.
+ *
+ * Typed structurally (not `BinaryType`) to keep this package free of a DOM `lib`
+ * dependency, matching the rest of this file.
+ */
+export function forceInOrderBinaryFrames(socket: { binaryType: string }): void {
+  socket.binaryType = "arraybuffer";
+}
+
 export function createWsRpcProtocolLayer(
   url: WsRpcProtocolSocketUrlProvider,
   handlers?: WsProtocolLifecycleHandlers,
@@ -449,6 +470,10 @@ export function createWsRpcProtocolLayer(
     (socketUrl, protocols) => {
       lifecycle.onAttempt(socketUrl);
       const socket = new globalThis.WebSocket(socketUrl, protocols);
+      // MUST run before any frame arrives (browsers deliver the first frame on a
+      // microtask after open): forces synchronous, in-order frame delivery — see
+      // forceInOrderBinaryFrames for why the default "blob" desyncs the stream codec.
+      forceInOrderBinaryFrames(socket);
 
       // Phase 0 low-bandwidth measurement: count raw on-wire bytes in/out. The
       // meter is always on (a byte-length + add per frame) and readable from the

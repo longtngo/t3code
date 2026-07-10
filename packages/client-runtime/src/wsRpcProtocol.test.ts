@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 
-import { abandonSendOnDisconnect } from "./wsRpcProtocol.ts";
+import { abandonSendOnDisconnect, forceInOrderBinaryFrames } from "./wsRpcProtocol.ts";
 
 describe("abandonSendOnDisconnect (stale-window flush prevention)", () => {
   it.effect("returns the send result while the socket stays connected", () =>
@@ -36,4 +36,12 @@ describe("abandonSendOnDisconnect (stale-window flush prevention)", () => {
       expect(failure.message).toContain("abandoned");
     }),
   );
+});
+
+describe("forceInOrderBinaryFrames (context-takeover desync prevention)", () => {
+  it("forces arraybuffer so frames decode synchronously in arrival order", () => {
+    const socket = { binaryType: "blob" };
+    forceInOrderBinaryFrames(socket);
+    expect(socket.binaryType).toBe("arraybuffer");
+  });
 });
