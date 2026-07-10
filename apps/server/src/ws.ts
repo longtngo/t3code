@@ -173,6 +173,15 @@ const DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS = 2000;
 const HISTORY_PAGE_MAX_TURNS = 100;
 const HISTORY_PAGE_MAX_ROWS = 5000;
 
+/**
+ * Server-internal byte budget for a windowed snapshot and each history page: the
+ * third window bound alongside turns/rows, capping frame size for the "few turns,
+ * heavy payloads" thread that slips under the turn/row caps yet still ships
+ * megabytes. One shared value (the ≥1-turn floor removes any need for per-path
+ * tuning); not client-tunable. See the byte-bound design doc for the rationale.
+ */
+const WINDOW_MAX_BYTES = 4 * 1024 * 1024;
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -1115,6 +1124,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   .getThreadDetailById(input.threadId, {
                     windowTurns: snapshotWindowTurns,
                     maxRows: snapshotMaxRows,
+                    maxBytes: WINDOW_MAX_BYTES,
                   })
                   .pipe(
                     Effect.mapError(
@@ -1174,6 +1184,10 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 // empty page, unlike subscribe's windowTurns:0), so a plain min suffices.
                 maxTurns: Math.min(input.maxTurns, HISTORY_PAGE_MAX_TURNS),
                 maxRows: Math.min(input.maxRows, HISTORY_PAGE_MAX_ROWS),
+                // Server-internal byte bound (not on the wire): bounds a page's frame
+                // size the same way as the subscribe snapshot. The ≥1-turn floor keeps
+                // paging advancing even if the next-older turn alone exceeds it.
+                maxBytes: WINDOW_MAX_BYTES,
               })
               .pipe(
               Effect.mapError(

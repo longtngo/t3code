@@ -169,6 +169,14 @@ export interface ProjectionSnapshotQueryShape {
     options?: {
       readonly windowTurns?: number | undefined;
       readonly maxRows?: number | undefined;
+      /**
+       * Thread-load windowing: cap the initial snapshot to at most `maxBytes` of
+       * serialized per-turn content (message/activity/plan text), in addition to
+       * the turn/row bounds. Bounds the frame size for the "few turns, heavy
+       * payloads" case that escapes `windowTurns`/`maxRows`. Server-internal (no
+       * client sends it); always keeps at least the newest turn.
+       */
+      readonly maxBytes?: number | undefined;
     },
   ) => Effect.Effect<
     Option.Option<OrchestrationThreadDetailResult>,
@@ -183,7 +191,15 @@ export interface ProjectionSnapshotQueryShape {
    * `oldestLoaded` cursor and whether still-older turns remain.
    */
   readonly getThreadHistoryPage: (
-    input: OrchestrationThreadHistoryPageInput,
+    input: OrchestrationThreadHistoryPageInput & {
+      /**
+       * Server-internal byte budget for a single page (see
+       * {@link getThreadDetailById} `maxBytes`). Not on the wire — the ws handler
+       * injects the default. Always keeps at least the next-older turn so paging
+       * advances even when one turn alone exceeds the budget.
+       */
+      readonly maxBytes?: number | undefined;
+    },
   ) => Effect.Effect<OrchestrationThreadHistoryPageResult, ProjectionRepositoryError>;
 }
 

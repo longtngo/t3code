@@ -32,13 +32,18 @@ const pad2 = (n: number): string => n.toString().padStart(2, "0");
 // Seed `thread-1` with `turnCount` completed turns (newest last), each carrying
 // one user message and `activitiesPerTurn` activities. When `hugeTurnActivities`
 // is set, the newest turn instead gets that many activities (for the maxRows
-// budget test). Every turn has a distinct `requested_at` and `checkpoint_turn_count`.
+// budget test). When `payloadBytesPerActivity` is set, every activity carries a
+// `payload_json` of that many bytes (for the maxBytes budget test — bounds by
+// serialized size, not row count). Every turn has a distinct `requested_at` and
+// `checkpoint_turn_count`.
 const seedWindowThread = (
   sql: SqlClient.SqlClient,
   options: {
     readonly turnCount: number;
     readonly activitiesPerTurn: number;
     readonly hugeTurnActivities?: number;
+    readonly payloadBytesPerActivity?: number;
+    readonly checkpointFilesBytesPerTurn?: number;
   },
 ) =>
   Effect.gen(function* () {
@@ -78,6 +83,12 @@ const seedWindowThread = (
       )
     `;
 
+    // A single valid checkpoint-file entry whose `path` is padded so the stored
+    // `checkpoint_files_json` is `checkpointFilesBytesPerTurn` bytes (all ASCII).
+    const checkpointFilesJson =
+      options.checkpointFilesBytesPerTurn !== undefined
+        ? `[{"path":"${"A".repeat(Math.max(1, options.checkpointFilesBytesPerTurn - 52))}","kind":"m","additions":0,"deletions":0}]`
+        : "[]";
     for (let i = 0; i < options.turnCount; i++) {
       const turnId = `turn-${pad2(i)}`;
       const requestedAt = `2026-05-01T00:${pad2(i)}:00.000Z`;
@@ -88,7 +99,7 @@ const seedWindowThread = (
         )
         VALUES (
           'thread-1', ${turnId}, 'completed', ${requestedAt}, ${requestedAt}, ${requestedAt},
-          ${i}, ${`checkpoint-${i}`}, 'ready', '[]'
+          ${i}, ${`checkpoint-${i}`}, 'ready', ${checkpointFilesJson}
         )
       `;
       yield* sql`
@@ -104,6 +115,12 @@ const seedWindowThread = (
         options.hugeTurnActivities !== undefined && i === options.turnCount - 1
           ? options.hugeTurnActivities
           : options.activitiesPerTurn;
+      // `{"pad":"…"}` adds 10 chars of framing around the filler, so the stored
+      // byte length is `payloadBytesPerActivity` (all ASCII ⇒ 1 byte/char).
+      const payloadJson =
+        options.payloadBytesPerActivity !== undefined
+          ? `{"pad":"${"A".repeat(Math.max(0, options.payloadBytesPerActivity - 10))}"}`
+          : "{}";
       for (let j = 0; j < activityCount; j++) {
         yield* sql`
           INSERT INTO projection_thread_activities (
@@ -111,7 +128,7 @@ const seedWindowThread = (
           )
           VALUES (
             ${`act-${pad2(i)}-${j}`}, 'thread-1', ${turnId}, 'info', 'runtime.note',
-            'note', '{}', ${requestedAt}
+            'note', ${payloadJson}, ${requestedAt}
           )
         `;
       }
@@ -1397,6 +1414,100 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
   );
 
   it.effect(
+    "getThreadDetailById lets maxBytes cap the window before windowTurns when turns are byte-heavy",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // 40 turns, each carrying ~100 KB of activity payload (few rows, many
+        // bytes) — the exact "escape" case row/turn bounds miss. With a 250 KB
+        // byte budget only the newest two turns (~200 KB) fit before the third
+        // would exceed it, even though windowTurns=15 and maxRows=2000 are slack.
+        yield* seedWindowThread(sql, {
+          turnCount: 40,
+          activitiesPerTurn: 1,
+          payloadBytesPerActivity: 100_000,
+        });
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+          maxBytes: 250_000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 2);
+          assert.equal(detail.value.value.activities.length, 2);
+          assert.equal(detail.value.hasMoreHistory, true);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-38"));
+          assert.equal(detail.value.oldestLoaded?.checkpointTurnCount, 38);
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadDetailById keeps the newest turn even when it alone exceeds maxBytes (progress floor)",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // A single turn (~500 KB) larger than the whole byte budget must still
+        // ship whole — the ≥1-turn floor guarantees the snapshot paints and
+        // backfill can advance rather than starving on an un-splittable turn.
+        yield* seedWindowThread(sql, {
+          turnCount: 5,
+          activitiesPerTurn: 1,
+          payloadBytesPerActivity: 500_000,
+        });
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+          maxBytes: 100_000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 1);
+          assert.equal(detail.value.value.activities.length, 1);
+          assert.equal(detail.value.hasMoreHistory, true);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-04"));
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadDetailById counts checkpoint-file bytes toward the maxBytes budget",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // Tiny message/activity text but ~100 KB of checkpoint-file JSON per turn.
+        // Checkpoint files are part of the shipped frame, so they must count
+        // toward maxBytes — otherwise a checkpoint-heavy thread escapes the bound.
+        yield* seedWindowThread(sql, {
+          turnCount: 40,
+          activitiesPerTurn: 1,
+          checkpointFilesBytesPerTurn: 100_000,
+        });
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+          maxBytes: 250_000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 2);
+          assert.equal(detail.value.hasMoreHistory, true);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-38"));
+        }
+      }),
+  );
+
+  it.effect(
     "getThreadDetailById windowed to the whole thread reports no more history",
     () =>
       Effect.gen(function* () {
@@ -1548,6 +1659,52 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(finalPage.oldestLoaded?.checkpointTurnCount, 0);
         // Reached the beginning of the thread: nothing older remains.
         assert.equal(finalPage.hasMoreHistory, false);
+      }),
+  );
+
+  it.effect(
+    "getThreadHistoryPage caps a page by maxBytes before maxTurns/maxRows when turns are byte-heavy",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // 40 turns of ~100 KB each. Take a cursor at the newest turn, then page
+        // back: with a 250 KB byte budget only two older turns fit, even though
+        // maxTurns=20 and maxRows=3000 are slack — the backfill path is byte-
+        // bounded just like the subscribe snapshot.
+        yield* seedWindowThread(sql, {
+          turnCount: 40,
+          activitiesPerTurn: 1,
+          payloadBytesPerActivity: 100_000,
+        });
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 1,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag !== "Some") {
+          return;
+        }
+        const cursor = detail.value.oldestLoaded;
+        assert.equal(cursor?.turnId, asTurnId("turn-39"));
+        if (cursor === undefined) {
+          return;
+        }
+
+        const page = yield* snapshotQuery.getThreadHistoryPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeTurn: cursor,
+          maxTurns: NonNegativeInt.make(20),
+          maxRows: NonNegativeInt.make(3000),
+          maxBytes: 250_000,
+        });
+
+        assert.equal(page.messages.length, 2);
+        assert.equal(page.activities.length, 2);
+        assert.equal(page.oldestLoaded?.turnId, asTurnId("turn-37"));
+        assert.equal(page.oldestLoaded?.checkpointTurnCount, 37);
+        assert.equal(page.hasMoreHistory, true);
       }),
   );
 

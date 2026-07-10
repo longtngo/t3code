@@ -160,6 +160,9 @@ const ProjectionWindowTurnRowSchema = Schema.Struct({
 const ProjectionTurnRowCountSchema = Schema.Struct({
   turnId: Schema.NullOr(TurnId),
   rowCount: Schema.Number,
+  // Total serialized bytes of this turn's windowed content (UTF-8 byte length of
+  // every text column that enters the frame), for the `maxBytes` window budget.
+  byteCount: Schema.Number,
 });
 const HasMoreHistoryInput = Schema.Struct({
   threadId: ThreadId,
@@ -173,6 +176,10 @@ const WindowedThreadRowsInput = Schema.Struct({
   threadId: ThreadId,
   turnIds: Schema.Array(TurnId),
   boundaryRequestedAt: IsoDateTime,
+});
+const TurnStatsInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
 });
 const WindowedCheckpointInput = Schema.Struct({
   threadId: ThreadId,
@@ -228,25 +235,67 @@ function maxIso(left: string | null, right: string): string {
   return left > right ? left : right;
 }
 
+interface TurnBudgetStats {
+  readonly rows: number;
+  readonly bytes: number;
+}
+
 // Walk turn rows (already ordered newest-first for the range being loaded)
-// accumulating each turn's combined row count, stopping before a turn that
-// would push the total past `maxRows` — but always keeping at least one turn.
-function accumulateTurnsWithinRowBudget<T extends { readonly turnId: TurnId | null }>(
+// accumulating each turn's combined row count AND serialized byte total,
+// stopping before a turn that would push EITHER total past its budget
+// (`maxRows` / `maxBytes`) — but always keeping at least one turn, so the
+// snapshot always paints and history paging always advances by ≥1 turn even
+// when a single turn alone exceeds a budget.
+function accumulateTurnsWithinBudget<T extends { readonly turnId: TurnId | null }>(
   turnRows: ReadonlyArray<T>,
-  countByTurnId: ReadonlyMap<string, number>,
+  statsByTurnId: ReadonlyMap<string, TurnBudgetStats>,
   maxRows: number | undefined,
+  maxBytes: number | undefined,
 ): Array<T> {
-  let accumulated = 0;
+  let rows = 0;
+  let bytes = 0;
   const included: Array<T> = [];
   for (const turn of turnRows) {
-    const turnCount = turn.turnId !== null ? (countByTurnId.get(turn.turnId) ?? 0) : 0;
-    if (maxRows !== undefined && included.length > 0 && accumulated + turnCount > maxRows) {
+    const stats = turn.turnId !== null ? statsByTurnId.get(turn.turnId) : undefined;
+    const turnRowCount = stats?.rows ?? 0;
+    const turnByteCount = stats?.bytes ?? 0;
+    if (
+      included.length > 0 &&
+      ((maxRows !== undefined && rows + turnRowCount > maxRows) ||
+        (maxBytes !== undefined && bytes + turnByteCount > maxBytes))
+    ) {
       break;
     }
-    accumulated += turnCount;
+    rows += turnRowCount;
+    bytes += turnByteCount;
     included.push(turn);
   }
   return included;
+}
+
+// The non-null turn ids of a candidate turn set, for scoping the per-turn stats
+// query to exactly the window being loaded (never the whole thread).
+function turnIdsOf(
+  turnRows: ReadonlyArray<{ readonly turnId: TurnId | null }>,
+): Array<TurnId> {
+  return turnRows
+    .map((turn) => turn.turnId)
+    .filter((turnId): turnId is TurnId => turnId !== null);
+}
+
+// Build the per-turn `(rows, bytes)` budget map from the aggregate-count rows,
+// dropping the null-turn GROUP-BY bucket (null-turn content is not turn-scoped
+// and, as before, counts against neither budget).
+function toStatsByTurnId(
+  countRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurnRowCountSchema>>,
+): Map<string, TurnBudgetStats> {
+  const statsByTurnId = new Map<string, TurnBudgetStats>();
+  for (const row of countRows) {
+    if (row.turnId !== null) {
+      statsByTurnId.set(row.turnId, { rows: row.rowCount, bytes: row.byteCount });
+    }
+  }
+  return statsByTurnId;
 }
 
 function computeSnapshotSequence(
@@ -1026,24 +1075,71 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  // Per-turn combined row counts (messages + activities + proposed plans) used
-  // to walk the newest turns until the `maxRows` budget is spent.
-  const listTurnRowCountsByThread = SqlSchema.findAll({
-    Request: ThreadIdLookupInput,
+  // Per-turn content-row counts AND serialized byte totals for the SPECIFIC
+  // candidate turns being windowed (not the whole thread), used to walk the
+  // newest turns until the `maxRows` OR `maxBytes` budget is spent. Scoping to
+  // `turnIds` keeps this off the whole-thread blob content: subscribe reads only
+  // its window's turns, and each history page reads only that page's turns (no
+  // per-page whole-thread rescan).
+  //
+  // `length(CAST(x AS BLOB))` is the UTF-8 byte length; every term is COALESCEd
+  // to 0 so a NULL column (e.g. a message with no attachments) never nulls the
+  // whole per-row sum. `byteCount` sums every column that enters the shipped
+  // frame — message text+attachments, activity payload+summary, plan markdown,
+  // AND checkpoint files — so the byte bound reflects true frame size. The
+  // checkpoint-files branch carries `is_row = 0`: its bytes count, but a
+  // checkpoint is not a content row, so `rowCount` (via `SUM(is_row)`) stays the
+  // messages+activities+plans total the `maxRows` budget expects.
+  const listTurnStatsByTurnIds = SqlSchema.findAll({
+    Request: TurnStatsInput,
     Result: ProjectionTurnRowCountSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, turnIds }) =>
       sql`
-        SELECT turn_id AS "turnId", COUNT(*) AS "rowCount"
+        SELECT turn_id AS "turnId", SUM(is_row) AS "rowCount", COALESCE(SUM(bytes), 0) AS "byteCount"
         FROM (
-          SELECT turn_id FROM projection_thread_messages WHERE thread_id = ${threadId}
+          SELECT turn_id, 1 AS is_row,
+            COALESCE(length(CAST(text AS BLOB)), 0)
+              + COALESCE(length(CAST(attachments_json AS BLOB)), 0) AS bytes
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
           UNION ALL
-          SELECT turn_id FROM projection_thread_activities WHERE thread_id = ${threadId}
+          SELECT turn_id, 1 AS is_row,
+            COALESCE(length(CAST(payload_json AS BLOB)), 0)
+              + COALESCE(length(CAST(summary AS BLOB)), 0) AS bytes
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
           UNION ALL
-          SELECT turn_id FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}
+          SELECT turn_id, 1 AS is_row, COALESCE(length(CAST(plan_markdown AS BLOB)), 0) AS bytes
+          FROM projection_thread_proposed_plans
+          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
+          UNION ALL
+          SELECT turn_id, 0 AS is_row, COALESCE(length(CAST(checkpoint_files_json AS BLOB)), 0) AS bytes
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
         )
         GROUP BY turn_id
       `,
   });
+
+  // Fetch the per-turn `(rows, bytes)` budget map for a candidate turn set. The
+  // query is scoped to the turns' ids (guarding the empty case, since `sql.in([])`
+  // is invalid); a turn with no stats row is treated as `(0, 0)` by the walk.
+  const loadTurnStats = (
+    threadId: ThreadId,
+    turnRows: ReadonlyArray<{ readonly turnId: TurnId | null }>,
+    queryLabel: string,
+    decodeLabel: string,
+  ): Effect.Effect<Map<string, TurnBudgetStats>, ProjectionRepositoryError> =>
+    Effect.gen(function* () {
+      const turnIds = turnIdsOf(turnRows);
+      if (turnIds.length === 0) {
+        return new Map<string, TurnBudgetStats>();
+      }
+      const statRows = yield* listTurnStatsByTurnIds({ threadId, turnIds }).pipe(
+        Effect.mapError(toPersistenceSqlOrDecodeError(queryLabel, decodeLabel)),
+      );
+      return toStatsByTurnId(statRows);
+    });
 
   // Real EXISTS check: is there any turn strictly older than the boundary?
   const existsOlderTurnByThread = SqlSchema.findAll({
@@ -1162,6 +1258,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     threadId: ThreadId,
     windowTurns: number | undefined,
     maxRows: number | undefined,
+    maxBytes: number | undefined,
   ): Effect.Effect<WindowBoundary | null, ProjectionRepositoryError> =>
     Effect.gen(function* () {
       const limit = windowTurns ?? Number.MAX_SAFE_INTEGER;
@@ -1177,28 +1274,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         return null;
       }
 
-      const countRows = yield* listTurnRowCountsByThread({ threadId }).pipe(
-        Effect.mapError(
-          toPersistenceSqlOrDecodeError(
-            "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:query",
-            "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:decodeRows",
-          ),
-        ),
+      const statsByTurnId = yield* loadTurnStats(
+        threadId,
+        turnRows,
+        "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:query",
+        "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:decodeRows",
       );
-      const countByTurnId = new Map<string, number>();
-      for (const row of countRows) {
-        if (row.turnId !== null) {
-          countByTurnId.set(row.turnId, row.rowCount);
-        }
-      }
+      const included = accumulateTurnsWithinBudget(
+        turnRows,
+        statsByTurnId,
+        maxRows,
+        maxBytes,
+      );
 
-      const included = accumulateTurnsWithinRowBudget(turnRows, countByTurnId, maxRows);
-
-      const truncatedByRows = included.length < turnRows.length;
+      const truncatedByBudget = included.length < turnRows.length;
       const limitedByTurns = windowTurns !== undefined && turnRows.length >= windowTurns;
-      if (!truncatedByRows && !limitedByTurns) {
+      if (!truncatedByBudget && !limitedByTurns) {
         // The fetched window already spans every turn of the thread with no
-        // maxRows truncation: the whole thread fits, so no windowing is needed.
+        // row/byte-budget truncation: the whole thread fits, so no windowing is
+        // needed.
         return null;
       }
 
@@ -2345,11 +2439,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Effect.gen(function* () {
       const windowTurns = options?.windowTurns;
       const maxRows = options?.maxRows;
-      // No window bounds ⇒ run the byte-identical unbounded queries below.
+      const maxBytes = options?.maxBytes;
+      // No window bounds ⇒ run the byte-identical unbounded queries below. A
+      // caller passing ONLY maxBytes must still window — omitting it here would
+      // short-circuit to the unbounded full-thread load the byte bound prevents.
       const boundary =
-        windowTurns === undefined && maxRows === undefined
+        windowTurns === undefined && maxRows === undefined && maxBytes === undefined
           ? null
-          : yield* resolveWindowBoundary(threadId, windowTurns, maxRows);
+          : yield* resolveWindowBoundary(threadId, windowTurns, maxRows, maxBytes);
 
       const messageRowsEffect =
         boundary === null
@@ -2585,6 +2682,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     beforeTurn,
     maxTurns,
     maxRows,
+    maxBytes,
   }) =>
     Effect.gen(function* () {
       const turnRows = yield* listHistoryTurnRowsBeforeCursor({
@@ -2612,26 +2710,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         };
       }
 
-      const countRows = yield* listTurnRowCountsByThread({ threadId }).pipe(
-        Effect.mapError(
-          toPersistenceSqlOrDecodeError(
-            "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:query",
-            "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:decodeRows",
-          ),
-        ),
+      const statsByTurnId = yield* loadTurnStats(
+        threadId,
+        turnRows,
+        "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:query",
+        "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:decodeRows",
       );
-      const countByTurnId = new Map<string, number>();
-      for (const row of countRows) {
-        if (row.turnId !== null) {
-          countByTurnId.set(row.turnId, row.rowCount);
-        }
-      }
-
-      const included = accumulateTurnsWithinRowBudget(turnRows, countByTurnId, maxRows);
+      const included = accumulateTurnsWithinBudget(turnRows, statsByTurnId, maxRows, maxBytes);
       const boundary = included[included.length - 1]!;
-      const turnIds = included
-        .map((turn) => turn.turnId)
-        .filter((turnId): turnId is TurnId => turnId !== null);
+      const turnIds = turnIdsOf(included);
       const includedCheckpointCounts = included
         .map((turn) => turn.checkpointTurnCount)
         .filter((count): count is number => count !== null);
