@@ -2938,7 +2938,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
-    sessions.delete(context.session.threadId);
+    // Identity-guarded delete: teardown has many yield points (notably the
+    // bounded stream-fiber interrupt above), during which a recovery path may
+    // have already replaced this thread's context with a fresh session via
+    // `sessions.set`. A key-based delete would then evict the *new* live session
+    // — reintroducing the lost-session dead-end and orphaning its subprocess.
+    // Only remove the entry when it is still the one we tore down.
+    if (sessions.get(context.session.threadId) === context) {
+      sessions.delete(context.session.threadId);
+    }
   });
 
   const requireSession = (
@@ -3785,7 +3793,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   );
 
   const listSessions: ClaudeAdapterShape["listSessions"] = () =>
-    Effect.sync(() => Array.from(sessions.values(), ({ session }) => ({ ...session })));
+    Effect.sync(() =>
+      // Report only LIVE sessions, matching `hasSession`'s `!stopped` contract. A
+      // `stopped` context lingers in the map until teardown's identity-guarded
+      // delete runs (many yield points, up to STOP_INTERRUPT_GRACE); surfacing it
+      // as "active" makes `ensureSessionForThread` reuse a dead session instead of
+      // resuming from the persisted cursor. `stopped` covers the whole teardown
+      // window (set at its start), including before `status:"closed"` is written.
+      Array.from(sessions.values())
+        .filter((context) => !context.stopped)
+        .map(({ session }) => ({ ...session })),
+    );
 
   const hasSession: ClaudeAdapterShape["hasSession"] = (threadId) =>
     Effect.sync(() => {

@@ -335,6 +335,34 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("listSessions reports only live sessions, matching hasSession", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // A live session is reported by both, keeping the turn-start path's
+      // "is there an active session?" check (listSessions) consistent with
+      // hasSession's `!stopped` liveness contract.
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      assert.equal((yield* adapter.listSessions()).length, 1);
+      assert.equal((yield* adapter.listSessions())[0]?.threadId, THREAD_ID);
+
+      // Once stopped, the session is live in neither view — so a follow-up turn
+      // resumes a fresh session instead of reusing the dead one.
+      yield* adapter.stopSession(THREAD_ID);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("loads Claude filesystem settings sources for SDK sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

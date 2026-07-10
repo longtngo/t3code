@@ -28,7 +28,11 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
+  ProviderAdapterSessionNotFoundError,
+} from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -43,7 +47,23 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
+const isProviderAdapterSessionClosedError = Schema.is(ProviderAdapterSessionClosedError);
+const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+
+// A turn-start failure is recoverable when the in-memory provider session was
+// lost — closed underneath us (dead SDK query) or gone entirely. Detected by
+// error tag (not by cause-presence): `requireSession` raises the closed error
+// with no cause, while `toSessionError` raises it with one, and both must be
+// caught. Evicting the stale session and retrying once resumes from the
+// persisted cursor (see 2026-07-10-turn-start-session-recovery-design.md).
+function isRecoverableSessionLoss(cause: Cause.Cause<ProviderServiceError>): boolean {
+  const failReason = cause.reasons.find(Cause.isFailReason);
+  const error = failReason?.error;
+  return (
+    isProviderAdapterSessionClosedError(error) || isProviderAdapterSessionNotFoundError(error)
+  );
+}
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -888,7 +908,7 @@ const make = Effect.gen(function* () {
         ),
       );
 
-    const sendTurnRequest = yield* buildSendTurnRequestForThread({
+    const turnStartInput = {
       threadId: event.payload.threadId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
@@ -897,7 +917,9 @@ const make = Effect.gen(function* () {
         : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
-    }).pipe(
+    };
+
+    const sendTurnRequest = yield* buildSendTurnRequestForThread(turnStartInput).pipe(
       Effect.map(Option.some),
       Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
     );
@@ -906,9 +928,39 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Evict any stale in-memory provider session so the retry starts a fresh one
+    // (resumed from the persisted cursor). Best-effort: the session may already
+    // be gone, and `stopSession` can validation-fail when no binding remains —
+    // neither must abort the retry. A thunk so the effect (and its `stopSession`
+    // construction) is built only when recovery fires, not on every turn.
+    const evictStaleSession = () =>
+      providerService
+        .stopSession({ threadId: event.payload.threadId })
+        .pipe(Effect.catchCause(() => Effect.void));
+
+    // Retry the turn exactly once when the initial send loses its provider
+    // session (dead SDK query / gone session): re-run build+send, which resumes
+    // from the persisted cursor. Re-running build (not just sendTurn) is what
+    // re-ensures the session after eviction. A second loss — or any non-session
+    // failure — records the failure instead of looping.
+    const retryTurnStart = () =>
+      buildSendTurnRequestForThread(turnStartInput).pipe(
+        Effect.flatMap((request) => providerService.sendTurn(request)),
+        Effect.asVoid,
+        Effect.catchCause(recoverTurnStartFailure),
+      );
+
     yield* providerService
       .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      .pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          isRecoverableSessionLoss(cause)
+            ? evictStaleSession().pipe(Effect.andThen(retryTurnStart()))
+            : recoverTurnStartFailure(cause),
+        ),
+        Effect.forkScoped,
+      );
   });
 
   const hasLiveSessionForThread = (threadId: ThreadId) =>
