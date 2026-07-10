@@ -121,7 +121,10 @@ function formatSocketErrorMessage(error: unknown): string {
   return String(error);
 }
 
-export type WsWireFormat = "msgpack-deflate-stream" | "msgpack-deflate" | "json";
+export type WsWireFormat =
+  | typeof WIRE_FORMAT_MSGPACK_DEFLATE_STREAM
+  | typeof WIRE_FORMAT_MSGPACK_DEFLATE
+  | typeof WIRE_FORMAT_JSON;
 
 // Client preference order — the negotiator picks the FIRST of these the server ALSO
 // advertises (capped at `advertisedWireFormat`). Highest-compression first; JSON, the

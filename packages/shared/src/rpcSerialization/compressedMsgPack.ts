@@ -47,8 +47,16 @@ export const WIRE_FORMAT_MSGPACK_DEFLATE = "msgpack-deflate";
  * connection, so each frame compresses against the frames before it. Measured
  * ~−60% blended wire bytes vs the stateless per-frame {@link WIRE_FORMAT_MSGPACK_DEFLATE}
  * on realistic thread-load traffic. See {@link makeCompressedMsgPackStreamSerialization}.
+ *
+ * The `-v2` suffix is load-bearing: the v1 framing (`[tag][body]`) shipped, was disabled,
+ * and is still baked into cached client bundles that rank this format first and will
+ * negotiate it the instant a server advertises it. v2 adds a length-delimited header
+ * (`[tag][uint32 len][body]`) that is wire-INCOMPATIBLE with v1. Bumping the identifier
+ * means a cached v1 client no longer finds a matching format in the server's advertised
+ * list and cleanly downgrades to per-frame/JSON instead of speaking v1 framing into a v2
+ * decoder (which would desync into a reconnect storm). Never reuse a retired identifier.
  */
-export const WIRE_FORMAT_MSGPACK_DEFLATE_STREAM = "msgpack-deflate-stream";
+export const WIRE_FORMAT_MSGPACK_DEFLATE_STREAM = "msgpack-deflate-stream-v2";
 
 /**
  * The always-available fallback wire format. JSON is NOT deprecated-for-removal:
@@ -68,9 +76,7 @@ export const WIRE_FORMAT_JSON = "json";
 export const SUPPORTED_WIRE_FORMATS = [
   WIRE_FORMAT_JSON,
   WIRE_FORMAT_MSGPACK_DEFLATE,
-  // Temporarily disabled — stream codec still ships in this build but is not
-  // advertised or negotiated until re-enabled here.
-  // WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
+  WIRE_FORMAT_MSGPACK_DEFLATE_STREAM,
 ] as const;
 
 /**
@@ -136,6 +142,16 @@ function encodeFrame(packr: Packr, message: unknown): Uint8Array {
       payload = deflated;
       flags = FLAG_DEFLATED;
     }
+  }
+  // Fail loud rather than emit a frame the peer will reject on decode (the same
+  // MAX_FRAME_BYTES ceiling is enforced there). A frame this large means an
+  // un-windowed / unbounded payload slipped through upstream (e.g. a full-thread
+  // snapshot) — surface it as an error instead of silently building a
+  // multi-hundred-MB buffer that risks OOMing the process.
+  if (payload.length > MAX_FRAME_BYTES) {
+    throw new RangeError(
+      `compressed-msgpack encode frame length ${payload.length} exceeds the ${MAX_FRAME_BYTES}-byte maximum; an unbounded payload (likely an un-windowed thread snapshot) reached the encoder`,
+    );
   }
   const frame = new Uint8Array(HEADER_SIZE + payload.length);
   frame[0] = flags;
@@ -209,13 +225,17 @@ export const layerCompressedMsgPack: Layer.Layer<RpcSerialization.RpcSerializati
 // window that carries over from prior frames compresses the sub-1KB frames that
 // the per-frame codec leaves uncompressed — measured ~−60% blended wire bytes.
 //
-// ## Wire format — a 1-byte frame-type tag
+// ## Wire format — a length-delimited frame header (see FRAME_* constants below)
 //
 // ```
-//   byte 0   0x01 CONTROL  → bytes 1.. are RAW (undeflated) self-delimiting msgpack
-//            0x00 STREAM   → bytes 1.. are the next chunk of the connection's
-//                           continuous DEFLATE stream (flushed per message)
+//   byte 0        tag: 0x01 CONTROL → RAW (undeflated) self-delimiting msgpack
+//                      0x00 STREAM  → next chunk of the connection's continuous
+//                                     DEFLATE stream (flushed per message)
+//   bytes 1..4    uint32 BE body length
+//   bytes 5..     body (`length` bytes)
 // ```
+// The length prefix lets the decoder reassemble a frame the transport split across
+// (or coalesced into) WebSocket reads before it touches the deflate window.
 //
 // ### Why CONTROL frames bypass the window (load-bearing)
 // Effect's `RpcClient.makeProtocolSocket` pre-encodes the heartbeat Ping ONCE
@@ -251,11 +271,16 @@ export const layerCompressedMsgPack: Layer.Layer<RpcSerialization.RpcSerializati
 // `onDecodeDesync` callback, so the transport tears the socket down and reconnects with
 // a fresh window instead of limping on a corruption it did happen to notice.
 
-/** Content type advertised by the context-takeover compressed-msgpack serialization. */
-export const COMPRESSED_MSGPACK_STREAM_CONTENT_TYPE = "application/x-t3-msgpack-deflate-stream";
+/** Content type advertised by the context-takeover compressed-msgpack serialization.
+ * `-v2` paired with {@link WIRE_FORMAT_MSGPACK_DEFLATE_STREAM} — see the note there. */
+export const COMPRESSED_MSGPACK_STREAM_CONTENT_TYPE = "application/x-t3-msgpack-deflate-stream-v2";
 
+// Stream framing constants — the length-delimited header documented in the "## Wire
+// format" block above. Mirrors the per-frame codec's `[flags][uint32 len]` header (see
+// {@link encodeFrame}); the 1-byte tag replaces the flags byte.
 const FRAME_STREAM = 0x00;
 const FRAME_CONTROL = 0x01;
+const STREAM_HEADER_SIZE = 5;
 
 /**
  * Control frames (Ping/Pong) are kept OUT of the deflate window — see the block
@@ -344,74 +369,121 @@ export const makeCompressedMsgPackStreamSerialization = (
       const deflate = new Deflate((chunk) => {
         deflateChunks.push(chunk);
       });
-      // Inbound: one persistent inflate window; `inflateChunks` collects the
-      // callback output for the current decode() only; `inflatedLeftover` holds
-      // inflated bytes not yet forming a complete msgpack value.
+      // Inbound: one persistent inflate window; `inflateChunks` collects the callback
+      // output for the current decode() only. TWO levels of leftover buffering:
+      //  - `rawLeftover` reassembles a wire FRAME that the transport split across (or
+      //    coalesced into) socket reads — this happens BEFORE the deflate window, so a
+      //    re-chunked multi-MB frame no longer misaligns the tag byte and desyncs.
+      //  - `inflatedLeftover` holds decompressed bytes not yet forming a complete
+      //    msgpack value (fflate's Inflate doesn't emit clean per-message boundaries).
       let inflateChunks: Uint8Array[] = [];
       const inflate = new Inflate((chunk) => {
         inflateChunks.push(chunk);
       });
+      let rawLeftover: Uint8Array = EMPTY;
       let inflatedLeftover: Uint8Array = EMPTY;
+
+      const framed = (tag: number, body: Uint8Array): Uint8Array => {
+        const frame = new Uint8Array(STREAM_HEADER_SIZE + body.length);
+        frame[0] = tag;
+        new DataView(frame.buffer).setUint32(1, body.length, false);
+        frame.set(body, STREAM_HEADER_SIZE);
+        return frame;
+      };
 
       return {
         encode: (message) => {
           const packed = packr.pack(message);
+          // Fail loud BEFORE mutating the persistent deflate window: reject on the
+          // UNCOMPRESSED size so a rejected frame can never advance the window (which
+          // would silently desync every later frame on this connection — unlike the
+          // stateless per-frame codec, this window is connection-lifetime state). The
+          // uncompressed bound is conservative (deflate output <= input + small
+          // overhead) and also catches a compressible-but-huge payload that a
+          // post-deflate check would wave through into the decoder's inflate-side
+          // MAX_FRAME_BYTES guard. Stream is the default format, so this matters most here.
+          if (packed.length > MAX_FRAME_BYTES) {
+            throw new RangeError(
+              `compressed-msgpack-stream encode payload length ${packed.length} exceeds the ${MAX_FRAME_BYTES}-byte maximum; an unbounded payload (likely an un-windowed thread snapshot) reached the encoder`,
+            );
+          }
           if (isControlMessage(message)) {
-            const frame = new Uint8Array(1 + packed.length);
-            frame[0] = FRAME_CONTROL;
-            frame.set(packed, 1);
-            return frame;
+            // Stateless raw msgpack — never touches the deflate window (block comment above).
+            return framed(FRAME_CONTROL, packed);
           }
           deflateChunks = [];
           deflate.push(packed, false);
           deflate.flush(); // MANDATORY: without it fflate buffers to ~8KB and small frames stall.
-          const body = concatChunks(deflateChunks);
-          const frame = new Uint8Array(1 + body.length);
-          frame[0] = FRAME_STREAM;
-          frame.set(body, 1);
-          return frame;
+          return framed(FRAME_STREAM, concatChunks(deflateChunks));
         },
         decode: (data) => {
-          const bytes = toUint8Array(data);
-          if (bytes.length === 0) {
-            return [];
-          }
-          const tag = bytes[0];
-          const body = bytes.subarray(1);
-          // Control frames (Ping/Pong) bypass the window and are stateless, so a
-          // failure here does NOT desync the stream — let it throw without teardown.
-          if (tag === FRAME_CONTROL) {
-            return [unpackr.unpack(body)];
-          }
-          // Everything below advances / reads the persistent inflate window. Any
-          // failure means the window is unrecoverable (or the peer sent a non-stream
-          // frame), so surface it to the transport for a fresh-window reconnect.
-          try {
-            if (tag !== FRAME_STREAM) {
+          // Reassemble complete frames (peel by the length header, buffer a partial
+          // trailing frame in `rawLeftover`) BEFORE feeding any body to the window —
+          // the reassembly rationale lives at the `rawLeftover` declaration above.
+          const buffer = concat(rawLeftover, toUint8Array(data));
+          rawLeftover = EMPTY;
+          const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.length);
+          const messages: unknown[] = [];
+          let offset = 0;
+
+          while (buffer.length - offset >= STREAM_HEADER_SIZE) {
+            const tag = buffer[offset]!;
+            const length = view.getUint32(offset + 1, false);
+            if (length > MAX_FRAME_BYTES) {
+              // A length this large is a misaligned/corrupt stream, not a real frame;
+              // the window is unrecoverable, so tear down rather than buffer forever.
+              onDecodeDesync?.();
               throw new Error(
-                `compressed-msgpack-stream: unknown frame tag ${tag}; corrupt stream or wire-format mismatch`,
+                `compressed-msgpack-stream frame length ${length} exceeds the ${MAX_FRAME_BYTES}-byte maximum; corrupt stream or wire-format mismatch`,
               );
             }
-            inflateChunks = [];
-            inflate.push(body, false);
-            if (inflateChunks.length > 0) {
-              inflatedLeftover = concat(inflatedLeftover, concatChunks(inflateChunks));
+            const bodyStart = offset + STREAM_HEADER_SIZE;
+            if (buffer.length - bodyStart < length) {
+              break; // Frame not fully arrived yet; buffer the partial header/body and wait.
             }
-            if (inflatedLeftover.length === 0) {
-              return [];
+            const body = buffer.subarray(bodyStart, bodyStart + length);
+            offset = bodyStart + length;
+
+            if (tag === FRAME_CONTROL) {
+              // Control frames (Ping/Pong) bypass the window and are stateless, so a
+              // failure here does NOT desync the stream — let it throw without teardown.
+              messages.push(unpackr.unpack(body));
+              continue;
             }
-            const extracted = extractMsgpackValues(unpackr, inflatedLeftover);
-            inflatedLeftover = extracted.remainder;
-            if (inflatedLeftover.length > MAX_FRAME_BYTES) {
-              throw new Error(
-                `compressed-msgpack-stream: ${inflatedLeftover.length} buffered bytes without a complete message; corrupt stream`,
-              );
+            // STREAM frames advance / read the persistent inflate window. Any failure
+            // means the window is unrecoverable (or the peer sent a non-stream frame),
+            // so surface it to the transport for a fresh-window reconnect.
+            try {
+              if (tag !== FRAME_STREAM) {
+                throw new Error(
+                  `compressed-msgpack-stream: unknown frame tag ${tag}; corrupt stream or wire-format mismatch`,
+                );
+              }
+              inflateChunks = [];
+              inflate.push(body, false);
+              if (inflateChunks.length > 0) {
+                inflatedLeftover = concat(inflatedLeftover, concatChunks(inflateChunks));
+              }
+              // extractMsgpackValues no-ops on an empty buffer, so no empty-check needed.
+              const extracted = extractMsgpackValues(unpackr, inflatedLeftover);
+              inflatedLeftover = extracted.remainder;
+              if (inflatedLeftover.length > MAX_FRAME_BYTES) {
+                throw new Error(
+                  `compressed-msgpack-stream: ${inflatedLeftover.length} buffered bytes without a complete message; corrupt stream`,
+                );
+              }
+              for (const value of extracted.values) {
+                messages.push(value);
+              }
+            } catch (error) {
+              onDecodeDesync?.();
+              throw error;
             }
-            return extracted.values;
-          } catch (error) {
-            onDecodeDesync?.();
-            throw error;
           }
+
+          // Persist any partial trailing frame (copied so the shared buffer is free).
+          rawLeftover = offset < buffer.length ? buffer.slice(offset) : EMPTY;
+          return messages;
         },
       };
     },

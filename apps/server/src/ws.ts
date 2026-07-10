@@ -146,6 +146,33 @@ const RESUME_MAX_MISSED_EVENTS = 500;
 const ACTIVITY_BATCH_WINDOW = Duration.millis(20);
 const ACTIVITY_BATCH_MAX_EVENTS = 64;
 
+/**
+ * Default thread-load window applied to the live `subscribeThread` snapshot when
+ * the client sends no explicit bounds. Without this, an un-windowed subscribe of a
+ * long thread decodes the ENTIRE thread (every activity/message/checkpoint blob)
+ * and serializes it into a single wire frame — the "99MB single frame" that, once
+ * msgpack-packed + deflated + framed, transiently allocates hundreds of MB to >1GB
+ * of external buffers and OOMs the server. The windowing machinery already exists
+ * in {@link ProjectionSnapshotQuery.getThreadDetailById}; this just makes the
+ * bounded path the default for the live subscription instead of opt-in. Older
+ * history is still reachable via `getThreadHistoryPage`. Applied ONLY when the
+ * client sends neither bound, so an explicit request is always honored verbatim.
+ */
+const DEFAULT_SUBSCRIBE_WINDOW_TURNS = 15;
+const DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS = 2000;
+
+/**
+ * Server-side ceiling for a single {@link ORCHESTRATION_WS_METHODS.getThreadHistoryPage}
+ * response. The subscribe-window clamp above points clients at this RPC as the safe way
+ * to load older history, so it must itself be bounded — otherwise a hostile/runaway
+ * request (`maxTurns`/`maxRows` = 1e9) materializes the whole thread in one page, the
+ * same OOM the subscribe clamp prevents. Set generously above the real client's backfill
+ * request (25 turns / 3000 rows) so legitimate paging is never clipped; only a runaway
+ * request is capped.
+ */
+const HISTORY_PAGE_MAX_TURNS = 100;
+const HISTORY_PAGE_MAX_ROWS = 5000;
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -1060,11 +1087,34 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 // Window too large to serve completely — fall through to the snapshot.
               }
 
+              // Defense-in-depth against a client that sends no bounds, a degenerate
+              // (<= 0) bound, or an oversized row request: the snapshot is ALWAYS
+              // windowed and the total row count is ALWAYS capped at the default
+              // ceiling (a client may lower the row cap but never raise it; a huge
+              // windowTurns is harmless because the row cap bounds total content).
+              // Critically, `windowTurns: 0` is a schema-valid NonNegativeInt that
+              // resolves to a null window boundary downstream and loads the ENTIRE
+              // thread — the exact OOM this guards against — so a non-positive bound is
+              // treated as "unset". TRADE-OFF: a bound-less client now receives only the
+              // most recent window; older history must be paged via getThreadHistoryPage.
+              // The web client does this (backfill loop); a client that does NOT page
+              // (e.g. mobile today) sees only the recent window — an accepted regression
+              // vs. the previous full-load, which was itself the OOM. (Follow-up: give
+              // the shared client-runtime a backfill path so mobile can load older history.)
+              const snapshotWindowTurns =
+                input.windowTurns !== undefined && input.windowTurns > 0
+                  ? input.windowTurns
+                  : DEFAULT_SUBSCRIBE_WINDOW_TURNS;
+              const snapshotMaxRows =
+                input.maxRows !== undefined && input.maxRows > 0
+                  ? Math.min(input.maxRows, DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS)
+                  : DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS;
+
               const [threadDetail, snapshotSequence] = yield* Effect.all([
                 projectionSnapshotQuery
                   .getThreadDetailById(input.threadId, {
-                    windowTurns: input.windowTurns,
-                    maxRows: input.maxRows,
+                    windowTurns: snapshotWindowTurns,
+                    maxRows: snapshotMaxRows,
                   })
                   .pipe(
                     Effect.mapError(
@@ -1116,7 +1166,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
-            projectionSnapshotQuery.getThreadHistoryPage(input).pipe(
+            projectionSnapshotQuery
+              .getThreadHistoryPage({
+                ...input,
+                // Cap a single page so this "safe paging path" can't be turned into a
+                // whole-thread load. Only the upper bound is a risk here (0 yields an
+                // empty page, unlike subscribe's windowTurns:0), so a plain min suffices.
+                maxTurns: Math.min(input.maxTurns, HISTORY_PAGE_MAX_TURNS),
+                maxRows: Math.min(input.maxRows, HISTORY_PAGE_MAX_ROWS),
+              })
+              .pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationGetHistoryPageError({

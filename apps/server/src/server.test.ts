@@ -1395,7 +1395,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         // just has to be present to be opt-in-able.
         assert.deepEqual(
           [...body.wireFormats].sort(),
-          ["json", "msgpack-deflate"],
+          ["json", "msgpack-deflate", "msgpack-deflate-stream-v2"],
         );
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -4013,8 +4013,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  // Skipped while msgpack-deflate-stream is out of SUPPORTED_WIRE_FORMATS.
-  it.effect.skip(
+  it.effect(
     "round-trips websocket rpc over the context-takeover (stream) wire format",
     () =>
       Effect.gen(function* () {
@@ -4041,8 +4040,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  // Skipped while msgpack-deflate-stream is out of SUPPORTED_WIRE_FORMATS.
-  it.effect.skip(
+  it.effect(
     "keeps the context-takeover stream in sync under concurrent server responses",
     () =>
       Effect.gen(function* () {
@@ -6150,44 +6148,75 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("subscribeThread with no window params returns the full unwindowed snapshot", () =>
-    Effect.gen(function* () {
-      yield* buildAppUnderTest({
-        layers: {
-          orchestrationEngine: {
-            subscribeDomainEvents: Effect.succeed(Stream.empty),
-          },
-          projectionSnapshotQuery: {
-            getThreadDetailById: (_threadId, options) =>
-              Effect.succeed(
-                options?.windowTurns !== undefined || options?.maxRows !== undefined
-                  ? Option.none()
-                  : Option.some({
-                      value: makeDetailThreadWithMessages(40),
-                      oldestLoaded: undefined,
-                      hasMoreHistory: false,
-                    }),
-              ),
+  // Boots an app whose getThreadDetailById records the window options the subscribe
+  // handler forwards, and returns a `subscribe(params)` helper. One place owns the
+  // capture array + the client closure so each window test just calls `subscribe`.
+  const subscribeWindowProbe = Effect.gen(function* () {
+    const receivedOptions: Array<
+      { readonly windowTurns?: number | undefined; readonly maxRows?: number | undefined } | undefined
+    > = [];
+    yield* buildAppUnderTest({
+      layers: {
+        orchestrationEngine: { subscribeDomainEvents: Effect.succeed(Stream.empty) },
+        projectionSnapshotQuery: {
+          getThreadDetailById: (_threadId, options) => {
+            receivedOptions.push(options);
+            return Effect.succeed(
+              Option.some({
+                value: makeDetailThreadWithMessages(3),
+                oldestLoaded: undefined,
+                hasMoreHistory: true,
+              }),
+            );
           },
         },
-      });
-
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const events = yield* Effect.scoped(
+      },
+    });
+    const wsUrl = yield* getWsServerUrl("/ws");
+    const subscribe = (params: { windowTurns?: number; maxRows?: number }) =>
+      Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[ORCHESTRATION_WS_METHODS.subscribeThread]({
             threadId: defaultThreadId,
+            ...params,
           }).pipe(Stream.take(1), Stream.runCollect),
         ),
       );
+    return { receivedOptions, subscribe };
+  });
 
-      const [first] = Array.from(events);
-      assert.equal(first?.kind, "snapshot");
-      if (first?.kind === "snapshot") {
-        assert.equal(first.snapshot.thread.messages.length, 40);
-        assert.equal(Boolean(first.snapshot.hasMoreHistory), false);
-        assert.equal(first.snapshot.oldestLoaded, undefined);
+  it.effect("clamps missing or degenerate window bounds to a bounded default snapshot window", () =>
+    Effect.gen(function* () {
+      // A client that sends no bounds — OR a degenerate/hostile bound like
+      // windowTurns:0 / maxRows:0 (both schema-valid NonNegativeInt) — must never
+      // trigger a full-thread load. windowTurns:0 in particular resolves to a null
+      // window boundary downstream and loads the ENTIRE thread: the exact OOM this
+      // guards against. Every such case is clamped to a bounded window.
+      const { receivedOptions, subscribe } = yield* subscribeWindowProbe;
+
+      yield* subscribe({}); // no bounds
+      yield* subscribe({ windowTurns: 0 }); // degenerate turn count → would load everything
+      yield* subscribe({ maxRows: 0 }); // degenerate row cap
+
+      assert.equal(receivedOptions.length, 3);
+      for (const opts of receivedOptions) {
+        assert.isAbove(opts?.windowTurns ?? 0, 0, "windowTurns clamped to a positive default");
+        assert.isAbove(opts?.maxRows ?? 0, 0, "maxRows clamped to a positive default");
+        assert.isAtMost(opts?.maxRows ?? Infinity, 2000, "maxRows never exceeds the ceiling");
       }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("honors an explicit in-range window but caps rows at the server ceiling", () =>
+    Effect.gen(function* () {
+      const { receivedOptions, subscribe } = yield* subscribeWindowProbe;
+
+      yield* subscribe({ windowTurns: 3, maxRows: 500 }); // in range → honored verbatim
+      yield* subscribe({ maxRows: 1_000_000 }); // above the ceiling → capped
+
+      assert.equal(receivedOptions[0]?.windowTurns, 3);
+      assert.equal(receivedOptions[0]?.maxRows, 500);
+      assert.equal(receivedOptions[1]?.maxRows, 2000); // hard ceiling, never exceeded
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6261,6 +6290,59 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(receivedInputs[0]?.beforeTurn, beforeCursor);
       assert.equal(receivedInputs[0]?.maxTurns, 5);
       assert.equal(receivedInputs[0]?.maxRows, 2000);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("clamps an oversized getThreadHistoryPage request to the server page ceiling", () =>
+    Effect.gen(function* () {
+      // getThreadHistoryPage is the "safe paging path" the subscribe-window clamp
+      // points clients at — so it must itself be bounded, or a hostile/runaway
+      // client (maxTurns/maxRows = 1e9) materializes the whole thread in one page.
+      const beforeCursor = {
+        requestedAt: "2026-01-01T00:00:05.000Z",
+        turnId: "turn-window-oldest",
+        checkpointTurnCount: 10,
+      } as const;
+      const receivedInputs: Array<OrchestrationThreadHistoryPageInput> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadHistoryPage: (input) =>
+              Effect.sync(() => {
+                receivedInputs.push(input);
+                return {
+                  messages: [],
+                  activities: [],
+                  proposedPlans: [],
+                  checkpoints: [],
+                  oldestLoaded: beforeCursor,
+                  hasMoreHistory: false,
+                };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getThreadHistoryPage]({
+            threadId: defaultThreadId,
+            beforeTurn: beforeCursor,
+            maxTurns: 1_000_000,
+            maxRows: 1_000_000,
+          }),
+        ),
+      );
+
+      // Both bounds are capped at the server's page ceiling before the query runs...
+      assert.equal(receivedInputs.length, 1);
+      assert.isAtMost(receivedInputs[0]!.maxTurns, 100);
+      assert.isAtMost(receivedInputs[0]!.maxRows, 5000);
+      // ...and the ceiling sits above the real client's backfill request (25 / 3000),
+      // so legitimate paging is never clipped.
+      assert.isAtLeast(receivedInputs[0]!.maxTurns, 25);
+      assert.isAtLeast(receivedInputs[0]!.maxRows, 3000);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -31,6 +31,30 @@ function eventFrame(sequence: number) {
   };
 }
 
+/**
+ * A large, mostly-incompressible data frame (deterministic pseudo-random bytes) — its
+ * encoded wire frame exceeds single-message delivery size, so a real transport
+ * (Effect Socket / tailscale-serve proxy) splits it across WebSocket reads.
+ */
+function largeBinaryFrame(sequence: number, byteLength: number) {
+  const blob = new Uint8Array(byteLength);
+  let x = (sequence * 2654435761) >>> 0;
+  for (let i = 0; i < byteLength; i++) {
+    x = (x * 1664525 + 1013904223) >>> 0;
+    blob[i] = x & 0xff;
+  }
+  return { _tag: "Response", id: `req_big_${sequence}`, payload: { sequence, blob } };
+}
+
+/** Re-slice a contiguous byte stream into fixed-size chunks not aligned to frames. */
+function rechunk(bytes: Uint8Array, chunkSize: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+  }
+  return chunks;
+}
+
 /** Encoder (client) and decoder (server) are separate parsers, as on a real socket. */
 function pair() {
   return {
@@ -62,6 +86,46 @@ describe("context-takeover compressed msgpack serialization", () => {
     }
     expect(decoded).toHaveLength(200);
     expect(decoded).toEqual(Array.from({ length: 200 }, (_u, i) => eventFrame(i)));
+  });
+
+  it("reassembles frames split and coalesced across arbitrary transport chunks", () => {
+    const { client, server } = pair();
+    // A realistic mix: small frames, then one multi-MB frame, then more small ones.
+    // Encoding order == wire order (both ends send under one permit).
+    const messages: unknown[] = [
+      eventFrame(0),
+      eventFrame(1),
+      largeBinaryFrame(2, 5 * 1024 * 1024), // > single-message delivery size
+      eventFrame(3),
+      eventFrame(4),
+    ];
+    const wire: Uint8Array[] = messages.map((m) => client.encode(m) as Uint8Array);
+    // Concatenate the whole encoded stream, then hand it to the decoder in fixed
+    // 64KB slices that fall MID-frame — so small frames coalesce into one read and
+    // the large frame is split across ~80 reads. This is what the transport does.
+    let total = 0;
+    for (const f of wire) total += f.length;
+    const stream = new Uint8Array(total);
+    let at = 0;
+    for (const f of wire) {
+      stream.set(f, at);
+      at += f.length;
+    }
+
+    const decoded: unknown[] = [];
+    for (const chunk of rechunk(stream, 64 * 1024)) {
+      decoded.push(...server.decode(chunk));
+    }
+
+    // Every value survives, in order, byte-for-byte — no desync.
+    expect(decoded).toHaveLength(messages.length);
+    expect((decoded[0] as { id: string }).id).toBe("req_0");
+    expect((decoded[2] as { id: string }).id).toBe("req_big_2");
+    const big = decoded[2] as { payload: { blob: Uint8Array } };
+    const expectedBig = messages[2] as { payload: { blob: Uint8Array } };
+    expect(big.payload.blob.length).toBe(expectedBig.payload.blob.length);
+    expect(Buffer.from(big.payload.blob).equals(Buffer.from(expectedBig.payload.blob))).toBe(true);
+    expect((decoded[4] as { id: string }).id).toBe("req_4");
   });
 
   it("carries the deflate window across frames (later frames shrink)", () => {
@@ -110,7 +174,45 @@ describe("context-takeover compressed msgpack serialization", () => {
   it("ignores empty frames and rejects an unknown frame tag", () => {
     const { server } = pair();
     expect(server.decode(new Uint8Array(0))).toEqual([]);
-    expect(() => server.decode(new Uint8Array([0x7f, 1, 2, 3]))).toThrow(/unknown frame tag/);
+    // A COMPLETE frame [tag=0x7f][len=1][body=0xAB] whose tag is neither STREAM nor
+    // CONTROL — a wire-format mismatch, rejected once the whole frame has arrived.
+    expect(() => server.decode(new Uint8Array([0x7f, 0x00, 0x00, 0x00, 0x01, 0xab]))).toThrow(
+      /unknown frame tag/,
+    );
+  });
+
+  it("rejects an oversized frame at encode without corrupting the connection window", () => {
+    const { client, server } = pair();
+    // Establish window state with a normal frame.
+    const before = client.encode(eventFrame(1)) as Uint8Array;
+    // A payload whose UNCOMPRESSED size exceeds MAX_FRAME_BYTES must throw at encode.
+    // Zeros are highly compressible, so a post-deflate-only guard would miss this —
+    // the guard must reject on the pre-deflate size, before touching the window.
+    const huge = {
+      _tag: "Response",
+      id: "req_huge",
+      payload: { blob: new Uint8Array(65 * 1024 * 1024) },
+    };
+    expect(() => client.encode(huge)).toThrow(/exceeds the .*maximum/);
+    // The rejected frame must NOT have advanced the persistent deflate window: a
+    // subsequent normal frame still decodes against the receiver's window (which
+    // never saw the rejected frame). If encode mutated the window before throwing,
+    // `after` would decode as garbage / desync here.
+    const after = client.encode(eventFrame(2)) as Uint8Array;
+    expect(server.decode(before)).toEqual([eventFrame(1)]);
+    expect(server.decode(after)).toEqual([eventFrame(2)]);
+  });
+
+  it("buffers an incomplete frame header/body across decode calls instead of desyncing", () => {
+    const { client, server } = pair();
+    const frame = client.encode(eventFrame(1)) as Uint8Array;
+    // Deliver the frame one byte at a time: every call but the last returns [] and
+    // buffers in rawLeftover; the final byte completes the frame and yields the value.
+    const decoded: unknown[] = [];
+    for (let i = 0; i < frame.length; i++) {
+      decoded.push(...server.decode(frame.subarray(i, i + 1)));
+    }
+    expect(decoded).toEqual([eventFrame(1)]);
   });
 
   it("does not invoke onDecodeDesync while a clean stream (data + control) decodes", () => {
@@ -138,8 +240,11 @@ describe("context-takeover compressed msgpack serialization", () => {
     const server = makeCompressedMsgPackStreamSerialization(() => {
       desyncs++;
     }).makeUnsafe();
-    // 0x00 = FRAME_STREAM tag; 0xff… = an invalid deflate block header.
-    expect(() => server.decode(new Uint8Array([0x00, 0xff, 0xff, 0xff, 0xff]))).toThrow();
+    // [tag=0x00 STREAM][len=4][body=0xffffffff]: a well-formed frame header wrapping
+    // an invalid deflate continuation, so fflate's inflate throws inside the window.
+    expect(() =>
+      server.decode(new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x04, 0xff, 0xff, 0xff, 0xff])),
+    ).toThrow();
     expect(desyncs).toBe(1);
   });
 
@@ -148,7 +253,10 @@ describe("context-takeover compressed msgpack serialization", () => {
     const server = makeCompressedMsgPackStreamSerialization(() => {
       desyncs++;
     }).makeUnsafe();
-    expect(() => server.decode(new Uint8Array([0x7f, 1, 2, 3]))).toThrow(/unknown frame tag/);
+    // Complete frame [tag=0x7f][len=1][body=0xAB] with a tag the codec never emits.
+    expect(() => server.decode(new Uint8Array([0x7f, 0x00, 0x00, 0x00, 0x01, 0xab]))).toThrow(
+      /unknown frame tag/,
+    );
     expect(desyncs).toBe(1);
   });
 

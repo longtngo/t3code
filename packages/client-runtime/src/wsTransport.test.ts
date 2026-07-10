@@ -139,7 +139,7 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   // Restore the module's real default (the client's top preference) so this suite
   // never leaves the global pinned to a lower format for a later suite in the worker.
-  setAdvertisedWireFormat("msgpack-deflate-stream");
+  setAdvertisedWireFormat("msgpack-deflate-stream-v2");
   vi.restoreAllMocks();
 });
 
@@ -228,16 +228,16 @@ describe("WsTransport", () => {
 
   it("advertises the context-takeover stream format when the server supports it", async () => {
     // The client's top preference is the streaming (context-takeover) format; a
-    // server that lists it gets `?fmt=msgpack-deflate-stream`.
+    // server that lists it gets `?fmt=msgpack-deflate-stream-v2`.
     const capabilitiesFetch = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => ({
-        wireFormats: ["json", "msgpack-deflate", "msgpack-deflate-stream"],
+        wireFormats: ["json", "msgpack-deflate", "msgpack-deflate-stream-v2"],
       }),
     }));
     globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
-    setAdvertisedWireFormat("msgpack-deflate-stream");
+    setAdvertisedWireFormat("msgpack-deflate-stream-v2");
     resetWireFormatNegotiation();
     const transport = createTransport("ws://localhost:3020/?token=secret-token");
 
@@ -246,7 +246,7 @@ describe("WsTransport", () => {
     });
 
     expect(getSocket().url).toBe(
-      "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate-stream",
+      "ws://localhost:3020/ws?token=secret-token&fmt=msgpack-deflate-stream-v2",
     );
     await transport.dispose();
   });
@@ -260,7 +260,7 @@ describe("WsTransport", () => {
       json: async () => ({ wireFormats: ["json", "msgpack-deflate"] }),
     }));
     globalThis.fetch = capabilitiesFetch as unknown as typeof globalThis.fetch;
-    setAdvertisedWireFormat("msgpack-deflate-stream");
+    setAdvertisedWireFormat("msgpack-deflate-stream-v2");
     resetWireFormatNegotiation();
     const transport = createTransport("ws://localhost:3020/?token=secret-token");
 

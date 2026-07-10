@@ -478,16 +478,19 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    */
   fromSequenceExclusive: Schema.optional(NonNegativeInt),
   /**
-   * Opt-in thread-load windowing: cap the initial snapshot to the most recent
-   * `windowTurns` turns instead of the full thread history. Omit for the
-   * legacy full-history snapshot behavior.
+   * Thread-load windowing: cap the initial snapshot to the most recent
+   * `windowTurns` turns. The server ALWAYS windows the snapshot — omitting this
+   * (or sending a non-positive value) applies a bounded default (most recent
+   * ~15 turns), NOT the full thread. Older history is paged separately via
+   * `getThreadHistoryPage`; a client that wants the full thread must page it back.
    */
   windowTurns: Schema.optional(NonNegativeInt),
   /**
-   * Opt-in thread-load windowing: cap the initial snapshot to at most
-   * `maxRows` combined messages/activities/checkpoints, in addition to (or
-   * instead of) `windowTurns`. Omit for the legacy full-history snapshot
-   * behavior.
+   * Thread-load windowing: cap the initial snapshot to at most `maxRows` combined
+   * messages/activities/checkpoints, in addition to (or instead of) `windowTurns`.
+   * The server enforces a default row ceiling regardless: omitting this applies the
+   * default, and an explicit value is clamped DOWN to that ceiling (a client may ask
+   * for fewer rows, never more). Older history is paged via `getThreadHistoryPage`.
    */
   maxRows: Schema.optional(NonNegativeInt),
 });

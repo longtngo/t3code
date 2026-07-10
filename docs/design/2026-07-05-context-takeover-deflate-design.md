@@ -4,6 +4,13 @@ Date: 2026-07-05
 Branch: `feat/wire-context-takeover-deflate`
 Status: design → review
 
+> **SUPERSEDED (2026-07-09):** the v1 framing described below (`[tag][body]`, identifier
+> `msgpack-deflate-stream`) desynced on multi-MB frames the transport re-chunked. It was
+> replaced by **length-delimited framing** `[tag][uint32 BE len][body]` under a new identifier
+> **`msgpack-deflate-stream-v2`** (so cached v1 clients cleanly downgrade instead of speaking v1
+> framing into a v2 decoder). See the codec in `packages/shared/src/rpcSerialization/compressedMsgPack.ts`
+> and `docs/reports` for the fix. Treat the wire-format details in this doc as historical.
+
 ## Goal
 Add a stateful, context-takeover DEFLATE wire format to the client↔server WebSocket-RPC transport,
 alongside today's `json` and per-frame `msgpack-deflate`. It keeps ONE persistent deflate window per

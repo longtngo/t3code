@@ -148,7 +148,7 @@ afterEach(async () => {
   globalThis.WebSocket = originalWebSocket;
   globalThis.fetch = originalFetch;
   // Restore the module's real default (see client-runtime wsTransport.test.ts).
-  setAdvertisedWireFormat("msgpack-deflate-stream");
+  setAdvertisedWireFormat("msgpack-deflate-stream-v2");
   resetWsConnectionStateForTests();
   await __resetClientTracingForTests();
   vi.restoreAllMocks();
