@@ -29,6 +29,18 @@ describe("isTransportConnectionErrorMessage", () => {
     expect(isTransportConnectionErrorMessage("ping timeout")).toBe(true);
   });
 
+  it("returns true for a send abandoned during a reconnect window", () => {
+    // A re-subscribe issued while the socket is mid-reconnect is abandoned by the
+    // stream codec's disconnect latch (`abandonSendOnDisconnect`). That is a
+    // transient connection condition, not a business error — the subscribe loop must
+    // keep retrying until the socket reopens, not treat it as fatal and exit.
+    expect(
+      isTransportConnectionErrorMessage(
+        "send abandoned: socket disconnected before the frame was written",
+      ),
+    ).toBe(true);
+  });
+
   it("returns false for business logic errors", () => {
     expect(isTransportConnectionErrorMessage("Thread not found")).toBe(false);
     expect(isTransportConnectionErrorMessage("Invalid model selection")).toBe(false);

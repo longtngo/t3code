@@ -4,6 +4,12 @@ const TRANSPORT_ERROR_PATTERNS = [
   /\bSocket is not connected\b/i,
   /Unable to connect to the T3 server WebSocket\./i,
   /\bping timeout\b/i,
+  // A re-subscribe issued while the socket is mid-reconnect is abandoned by the
+  // stream codec's disconnect latch (`abandonSendOnDisconnect`). This is a transient
+  // connection condition — the subscribe loop must keep retrying until the socket
+  // reopens, not treat it as a fatal subscription error and exit (which would
+  // re-orphan the subscription; see the 2026-07-11 transient-reconnect design).
+  /\bsend abandoned\b/i,
 ] as const;
 
 /**

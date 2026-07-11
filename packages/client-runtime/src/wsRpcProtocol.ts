@@ -558,7 +558,15 @@ export function createWsRpcProtocolLayer(
     Effect.map(
       RpcClient.makeProtocolSocket({
         retryPolicy,
-        retryTransientErrors: true,
+        // MUST stay false. `true` makes Effect SWALLOW a transient socket error (e.g. a
+        // ping-timeout on a dead mobile socket) and silently reopen the socket WITHOUT
+        // re-issuing stream subscriptions — the subscription is orphaned (server has no
+        // record of it) while the socket looks fresh, so a thread silently stops updating
+        // until a full reload. `false` surfaces the error as a `ClientProtocolError`,
+        // which fails the stream and lets the app's own recovery (`transportError.ts` +
+        // `WsTransport.subscribe`'s retry loop) re-subscribe on the reopened socket.
+        // See the 2026-07-11 transient-reconnect-resubscribe design.
+        retryTransientErrors: false,
       }),
       (protocol) => ({
         ...protocol,

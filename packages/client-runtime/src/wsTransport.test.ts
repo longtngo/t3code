@@ -1036,6 +1036,48 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
+  it("keeps retrying a stream subscription abandoned during a reconnect window", async () => {
+    // Regression for the transient-reconnect resubscribe bug: when the underlying
+    // socket reconnects (e.g. after a mobile freeze ping-timeout), the app re-subscribes
+    // while the socket is still mid-reopen, so the stream-codec disconnect latch abandons
+    // the send with "send abandoned: ...". That must be treated as a transient transport
+    // error so the loop keeps cycling until the socket reopens — NOT logged as a fatal
+    // "subscription failed" and the loop exited (which would re-orphan the subscription).
+    const warnSpy = vi.fn();
+    const transport = createTransport("ws://localhost:3020", undefined, { logWarning: warnSpy });
+    let attempts = 0;
+
+    const unsubscribe = transport.subscribe(
+      () =>
+        Stream.suspend(() => {
+          attempts += 1;
+          return Stream.fail(
+            new Error("send abandoned: socket disconnected before the frame was written"),
+          );
+        }),
+      vi.fn(),
+      { retryDelay: 10 },
+    );
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    getSocket().open();
+
+    await waitFor(() => {
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith("WebSocket RPC subscription disconnected", {
+      error: "send abandoned: socket disconnected before the frame was written",
+    });
+    expect(warnSpy).not.toHaveBeenCalledWith("WebSocket RPC subscription failed", expect.anything());
+
+    unsubscribe();
+    await transport.dispose();
+  });
+
   it("logs a transport disconnect once even when multiple subscriptions fail together", async () => {
     const warnSpy = vi.fn();
     const transport = createTransport("ws://localhost:3020", undefined, { logWarning: warnSpy });
