@@ -1581,6 +1581,175 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
   );
 
   it.effect(
+    "getThreadDetailById counts null-turn rows toward the maxRows budget",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // 40 turns × (1 message + 1 activity) = 2 rows/turn. Ten null-turn
+        // activities stamped after the newest turn ride inside every window, so
+        // they always ship. With maxRows=24 the ten null rows must be reserved
+        // (24 − 10 = 14 → 7 turns), not the 12 turns a null-blind budget admits.
+        yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 1 });
+        for (let k = 0; k < 10; k++) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+            )
+            VALUES (
+              ${`nt-row-${pad2(k)}`}, 'thread-1', NULL, 'info', 'runtime.note',
+              'note', '{}', '2026-05-01T00:39:30.000Z'
+            )
+          `;
+        }
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 24,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 7);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-33"));
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadDetailById counts null-turn bytes toward the maxBytes budget",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // Byte-heavy turns (~100 KB each): a 250 KB budget admits two turns when
+        // null content is ignored. One ~100 KB null-turn activity inside the
+        // window must be reserved too, dropping the window to a single turn.
+        yield* seedWindowThread(sql, {
+          turnCount: 40,
+          activitiesPerTurn: 1,
+          payloadBytesPerActivity: 100_000,
+        });
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+          )
+          VALUES (
+            'nt-bytes', 'thread-1', NULL, 'info', 'runtime.note', 'note',
+            ${`{"pad":"${"A".repeat(100_000 - 10)}"}`}, '2026-05-01T00:39:30.000Z'
+          )
+        `;
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 2000,
+          maxBytes: 250_000,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 1);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-39"));
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadDetailById keeps the newest turn when null-turn rows alone exceed maxRows (floor)",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        // 30 null-turn rows against a 20-row budget: the reservation zeroes the
+        // turn budget, so only the ≥1-turn floor (newest turn) is admitted.
+        yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 1 });
+        for (let k = 0; k < 30; k++) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+            )
+            VALUES (
+              ${`nt-floor-${pad2(k)}`}, 'thread-1', NULL, 'info', 'runtime.note',
+              'note', '{}', '2026-05-01T00:39:30.000Z'
+            )
+          `;
+        }
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 15,
+          maxRows: 20,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag === "Some") {
+          assert.equal(detail.value.value.messages.length, 1);
+          assert.equal(detail.value.oldestLoaded?.turnId, asTurnId("turn-39"));
+        }
+      }),
+  );
+
+  it.effect(
+    "getThreadHistoryPage counts null-turn rows below the cursor and excludes those at/above it",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* seedWindowThread(sql, { turnCount: 40, activitiesPerTurn: 1 });
+        // 20 null-turn rows sit below the cursor (00:38:30 — inside the page's
+        // range) and must be reserved by the page budget; 100 sit at/above the
+        // cursor (00:39:30), already shipped by the newer frame, so the page's
+        // `< cursor` cap must exclude them (else the budget would floor to 1 turn).
+        for (let k = 0; k < 20; k++) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+            )
+            VALUES (
+              ${`nt-below-${pad2(k)}`}, 'thread-1', NULL, 'info', 'runtime.note',
+              'note', '{}', '2026-05-01T00:38:30.000Z'
+            )
+          `;
+        }
+        for (let k = 0; k < 100; k++) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+            )
+            VALUES (
+              ${`nt-above-${pad2(k)}`}, 'thread-1', NULL, 'info', 'runtime.note',
+              'note', '{}', '2026-05-01T00:39:30.000Z'
+            )
+          `;
+        }
+
+        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"), {
+          windowTurns: 1,
+        });
+        assert.equal(detail._tag, "Some");
+        if (detail._tag !== "Some") {
+          return;
+        }
+        const cursor = detail.value.oldestLoaded;
+        assert.equal(cursor?.turnId, asTurnId("turn-39"));
+        if (cursor === undefined) {
+          return;
+        }
+
+        const page = yield* snapshotQuery.getThreadHistoryPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeTurn: cursor,
+          maxTurns: NonNegativeInt.make(20),
+          maxRows: NonNegativeInt.make(24),
+        });
+        // 24 − 20 (below-cursor null) = 4 budget → 2 turns; the 100 at/above the
+        // cursor are excluded by the `< cursor` cap.
+        assert.equal(page.messages.length, 2);
+        assert.equal(page.oldestLoaded?.turnId, asTurnId("turn-37"));
+      }),
+  );
+
+  it.effect(
     "getThreadHistoryPage pages older turns disjoint from the window and reports remaining history",
     () =>
       Effect.gen(function* () {

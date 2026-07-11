@@ -180,6 +180,12 @@ const WindowedThreadRowsInput = Schema.Struct({
 const TurnStatsInput = Schema.Struct({
   threadId: ThreadId,
   turnIds: Schema.Array(TurnId),
+  // The candidate window's time span, used to sum the null-turn (turn_id IS NULL)
+  // content the frame will ship into a single lump reserved against the budget.
+  // `nullTurnUpperExclusive` caps the span for a history page (< cursor); it is
+  // null for the subscribe path (no upper).
+  nullTurnLowerInclusive: IsoDateTime,
+  nullTurnUpperExclusive: Schema.NullOr(IsoDateTime),
 });
 const WindowedCheckpointInput = Schema.Struct({
   threadId: ThreadId,
@@ -283,19 +289,30 @@ function turnIdsOf(
     .filter((turnId): turnId is TurnId => turnId !== null);
 }
 
-// Build the per-turn `(rows, bytes)` budget map from the aggregate-count rows,
-// dropping the null-turn GROUP-BY bucket (null-turn content is not turn-scoped
-// and, as before, counts against neither budget).
-function toStatsByTurnId(
+// Split the aggregate-count rows into the per-turn `(rows, bytes)` budget map
+// (non-null `turn_id`s) and the single null-turn `GROUP BY` bucket — the lump of
+// thread-level content the frame ships that isn't attached to any turn. The lump
+// is reserved against the budget up front (see `reduceBudget`) so null-turn
+// content can no longer escape windowing.
+function toTurnStats(
   countRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurnRowCountSchema>>,
-): Map<string, TurnBudgetStats> {
+): { readonly statsByTurnId: Map<string, TurnBudgetStats>; readonly nullLump: TurnBudgetStats } {
   const statsByTurnId = new Map<string, TurnBudgetStats>();
+  let nullLump: TurnBudgetStats = { rows: 0, bytes: 0 };
   for (const row of countRows) {
     if (row.turnId !== null) {
       statsByTurnId.set(row.turnId, { rows: row.rowCount, bytes: row.byteCount });
+    } else {
+      nullLump = { rows: row.rowCount, bytes: row.byteCount };
     }
   }
-  return statsByTurnId;
+  return { statsByTurnId, nullLump };
+}
+
+// Reserve a portion of a budget axis, clamped at 0. An `undefined` axis has no
+// budget (unbounded), so it stays `undefined` and the reservation is inert.
+function reduceBudget(budget: number | undefined, reserved: number): number | undefined {
+  return budget === undefined ? undefined : Math.max(0, budget - reserved);
 }
 
 function computeSnapshotSequence(
@@ -1093,26 +1110,39 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listTurnStatsByTurnIds = SqlSchema.findAll({
     Request: TurnStatsInput,
     Result: ProjectionTurnRowCountSchema,
-    execute: ({ threadId, turnIds }) =>
+    execute: ({ threadId, turnIds, nullTurnLowerInclusive, nullTurnUpperExclusive }) =>
       sql`
         SELECT turn_id AS "turnId", SUM(is_row) AS "rowCount", COALESCE(SUM(bytes), 0) AS "byteCount"
         FROM (
+          -- Each content arm covers BOTH the candidate turns (grouped per turn) and
+          -- the window's null-turn content (grouped into the single NULL bucket = the
+          -- lump). The two predicates are mutually exclusive (turn_id IN vs turn_id
+          -- IS NULL), so GROUP BY turn_id yields identical buckets to separate arms --
+          -- this mirrors windowTurnPredicate / historyTurnPredicate.
           SELECT turn_id, 1 AS is_row,
             COALESCE(length(CAST(text AS BLOB)), 0)
               + COALESCE(length(CAST(attachments_json AS BLOB)), 0) AS bytes
           FROM projection_thread_messages
-          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
+          WHERE thread_id = ${threadId} AND (${sql.in("turn_id", turnIds)}
+            OR (turn_id IS NULL AND created_at >= ${nullTurnLowerInclusive}
+              AND (${nullTurnUpperExclusive} IS NULL OR created_at < ${nullTurnUpperExclusive})))
           UNION ALL
           SELECT turn_id, 1 AS is_row,
             COALESCE(length(CAST(payload_json AS BLOB)), 0)
               + COALESCE(length(CAST(summary AS BLOB)), 0) AS bytes
           FROM projection_thread_activities
-          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
+          WHERE thread_id = ${threadId} AND (${sql.in("turn_id", turnIds)}
+            OR (turn_id IS NULL AND created_at >= ${nullTurnLowerInclusive}
+              AND (${nullTurnUpperExclusive} IS NULL OR created_at < ${nullTurnUpperExclusive})))
           UNION ALL
           SELECT turn_id, 1 AS is_row, COALESCE(length(CAST(plan_markdown AS BLOB)), 0) AS bytes
           FROM projection_thread_proposed_plans
-          WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
+          WHERE thread_id = ${threadId} AND (${sql.in("turn_id", turnIds)}
+            OR (turn_id IS NULL AND created_at >= ${nullTurnLowerInclusive}
+              AND (${nullTurnUpperExclusive} IS NULL OR created_at < ${nullTurnUpperExclusive})))
           UNION ALL
+          -- Checkpoints are always turn-attached (projection_turns rows always have a
+          -- turn_id); is_row = 0 so their bytes count but they are not content rows.
           SELECT turn_id, 0 AS is_row, COALESCE(length(CAST(checkpoint_files_json AS BLOB)), 0) AS bytes
           FROM projection_turns
           WHERE thread_id = ${threadId} AND ${sql.in("turn_id", turnIds)}
@@ -1121,24 +1151,41 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  // Fetch the per-turn `(rows, bytes)` budget map for a candidate turn set. The
-  // query is scoped to the turns' ids (guarding the empty case, since `sql.in([])`
-  // is invalid); a turn with no stats row is treated as `(0, 0)` by the walk.
+  // Fetch the per-turn `(rows, bytes)` budget map plus the null-turn lump for a
+  // candidate turn set. The query is scoped to the turns' ids (guarding the empty
+  // case, since `sql.in([])` is invalid); a turn with no stats row is treated as
+  // `(0, 0)` by the walk. The null-turn lump spans `[oldest-candidate.requestedAt,
+  // nullTurnUpperExclusive)` — the widest range the frame could ship for this
+  // candidate set; the caller reserves it against the budget before the walk.
   const loadTurnStats = (
     threadId: ThreadId,
-    turnRows: ReadonlyArray<{ readonly turnId: TurnId | null }>,
+    turnRows: ReadonlyArray<{ readonly turnId: TurnId | null; readonly requestedAt: string }>,
     queryLabel: string,
     decodeLabel: string,
-  ): Effect.Effect<Map<string, TurnBudgetStats>, ProjectionRepositoryError> =>
+    nullTurnUpperExclusive?: string,
+  ): Effect.Effect<
+    { readonly statsByTurnId: Map<string, TurnBudgetStats>; readonly nullLump: TurnBudgetStats },
+    ProjectionRepositoryError
+  > =>
     Effect.gen(function* () {
       const turnIds = turnIdsOf(turnRows);
       if (turnIds.length === 0) {
-        return new Map<string, TurnBudgetStats>();
+        return { statsByTurnId: new Map<string, TurnBudgetStats>(), nullLump: { rows: 0, bytes: 0 } };
       }
-      const statRows = yield* listTurnStatsByTurnIds({ threadId, turnIds }).pipe(
-        Effect.mapError(toPersistenceSqlOrDecodeError(queryLabel, decodeLabel)),
+      // Oldest candidate `requestedAt` — the lowest boundary the walk can reach,
+      // so the widest null-turn span the frame could ship (ISO timestamps sort
+      // lexically). Derived rather than assumed-last in case ordering ever shifts.
+      const nullTurnLowerInclusive = turnRows.reduce(
+        (min, turn) => (turn.requestedAt < min ? turn.requestedAt : min),
+        turnRows[0]!.requestedAt,
       );
-      return toStatsByTurnId(statRows);
+      const statRows = yield* listTurnStatsByTurnIds({
+        threadId,
+        turnIds,
+        nullTurnLowerInclusive,
+        nullTurnUpperExclusive: nullTurnUpperExclusive ?? null,
+      }).pipe(Effect.mapError(toPersistenceSqlOrDecodeError(queryLabel, decodeLabel)));
+      return toTurnStats(statRows);
     });
 
   // Real EXISTS check: is there any turn strictly older than the boundary?
@@ -1274,17 +1321,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         return null;
       }
 
-      const statsByTurnId = yield* loadTurnStats(
+      const { statsByTurnId, nullLump } = yield* loadTurnStats(
         threadId,
         turnRows,
         "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:query",
         "ProjectionSnapshotQuery.getThreadDetailById:turnCounts:decodeRows",
       );
+      // Reserve the window's null-turn content (subscribe: everything newer than
+      // the oldest candidate turn) against the budget so it counts toward the frame.
       const included = accumulateTurnsWithinBudget(
         turnRows,
         statsByTurnId,
-        maxRows,
-        maxBytes,
+        reduceBudget(maxRows, nullLump.rows),
+        reduceBudget(maxBytes, nullLump.bytes),
       );
 
       const truncatedByBudget = included.length < turnRows.length;
@@ -2710,13 +2759,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         };
       }
 
-      const statsByTurnId = yield* loadTurnStats(
+      // The page ships null-turn content in `[boundary, cursor)`; cap the reserved
+      // lump `< cursor` (`beforeTurn.requestedAt`) so it excludes null-turn already
+      // shipped and reserved by the newer frame above this page.
+      const { statsByTurnId, nullLump } = yield* loadTurnStats(
         threadId,
         turnRows,
         "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:query",
         "ProjectionSnapshotQuery.getThreadHistoryPage:turnCounts:decodeRows",
+        beforeTurn.requestedAt,
       );
-      const included = accumulateTurnsWithinBudget(turnRows, statsByTurnId, maxRows, maxBytes);
+      const included = accumulateTurnsWithinBudget(
+        turnRows,
+        statsByTurnId,
+        reduceBudget(maxRows, nullLump.rows),
+        reduceBudget(maxBytes, nullLump.bytes),
+      );
       const boundary = included[included.length - 1]!;
       const turnIds = turnIdsOf(included);
       const includedCheckpointCounts = included
