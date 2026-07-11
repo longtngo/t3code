@@ -773,6 +773,155 @@ describe("retainThreadDetailSubscription", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("reconnects a stale environment stream on return to visible even without a preceding hidden event", async () => {
+    const documentTarget = new EventTarget();
+    const windowTarget = new EventTarget();
+    vi.stubGlobal("document", {
+      addEventListener: documentTarget.addEventListener.bind(documentTarget),
+      removeEventListener: documentTarget.removeEventListener.bind(documentTarget),
+      get visibilityState() {
+        return "visible" as DocumentVisibilityState;
+      },
+    });
+    vi.stubGlobal("window", {
+      addEventListener: windowTarget.addEventListener.bind(windowTarget),
+      removeEventListener: windowTarget.removeEventListener.bind(windowTarget),
+    });
+    mockCreateWsRpcClient.mockReturnValue({
+      server: {
+        getConfig: vi.fn(async () => ({
+          environment: {
+            environmentId: EnvironmentId.make("env-remote"),
+            label: "Remote env",
+            platform: { os: "darwin", arch: "arm64" },
+            serverVersion: "0.0.0-test",
+            capabilities: { repositoryIdentity: true },
+          },
+        })),
+      },
+      isHeartbeatFresh: vi.fn(() => false),
+      orchestration: {
+        subscribeThread: mockSubscribeThread,
+      },
+    });
+
+    const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
+      await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    expect(mockConnectionReconnects).toHaveLength(1);
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
+
+    // The mobile freeze/discard case: the tab was suspended on screen-off without
+    // the JS ever observing a "hidden" transition, so it returns straight to
+    // "visible" with no preceding hidden. The resync must still fire.
+    documentTarget.dispatchEvent(new Event("visibilitychange"));
+    expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("reconnects a stale environment stream on the Page Lifecycle resume event", async () => {
+    const documentTarget = new EventTarget();
+    const windowTarget = new EventTarget();
+    vi.stubGlobal("document", {
+      addEventListener: documentTarget.addEventListener.bind(documentTarget),
+      removeEventListener: documentTarget.removeEventListener.bind(documentTarget),
+      get visibilityState() {
+        return "visible" as DocumentVisibilityState;
+      },
+    });
+    vi.stubGlobal("window", {
+      addEventListener: windowTarget.addEventListener.bind(windowTarget),
+      removeEventListener: windowTarget.removeEventListener.bind(windowTarget),
+    });
+    mockCreateWsRpcClient.mockReturnValue({
+      server: {
+        getConfig: vi.fn(async () => ({
+          environment: {
+            environmentId: EnvironmentId.make("env-remote"),
+            label: "Remote env",
+            platform: { os: "darwin", arch: "arm64" },
+            serverVersion: "0.0.0-test",
+            capabilities: { repositoryIdentity: true },
+          },
+        })),
+      },
+      isHeartbeatFresh: vi.fn(() => false),
+      orchestration: {
+        subscribeThread: mockSubscribeThread,
+      },
+    });
+
+    const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
+      await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    expect(mockConnectionReconnects).toHaveLength(1);
+    expect(mockConnectionReconnects[0]).not.toHaveBeenCalled();
+
+    // Page Lifecycle `resume` fires on `document` when a frozen/discarded tab is
+    // thawed (Chrome/Android), frequently with no visibilitychange transition.
+    documentTarget.dispatchEvent(new Event("resume"));
+    expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("collapses a visibilitychange + persisted pageshow + resume thaw into one reconnect", async () => {
+    const documentTarget = new EventTarget();
+    const windowTarget = new EventTarget();
+    vi.stubGlobal("document", {
+      addEventListener: documentTarget.addEventListener.bind(documentTarget),
+      removeEventListener: documentTarget.removeEventListener.bind(documentTarget),
+      get visibilityState() {
+        return "visible" as DocumentVisibilityState;
+      },
+    });
+    vi.stubGlobal("window", {
+      addEventListener: windowTarget.addEventListener.bind(windowTarget),
+      removeEventListener: windowTarget.removeEventListener.bind(windowTarget),
+    });
+    mockCreateWsRpcClient.mockReturnValue({
+      server: {
+        getConfig: vi.fn(async () => ({
+          environment: {
+            environmentId: EnvironmentId.make("env-remote"),
+            label: "Remote env",
+            platform: { os: "darwin", arch: "arm64" },
+            serverVersion: "0.0.0-test",
+            capabilities: { repositoryIdentity: true },
+          },
+        })),
+      },
+      isHeartbeatFresh: vi.fn(() => false),
+      orchestration: {
+        subscribeThread: mockSubscribeThread,
+      },
+    });
+
+    const { resetEnvironmentServiceForTests, startEnvironmentConnectionService } =
+      await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    expect(mockConnectionReconnects).toHaveLength(1);
+
+    // A single thaw commonly fires all three foreground triggers together. The 2s
+    // cooldown must collapse them to one reconnect (fake timers freeze the clock,
+    // so all three land inside the cooldown window).
+    const pageShow = new Event("pageshow");
+    Object.defineProperty(pageShow, "persisted", { value: true });
+    documentTarget.dispatchEvent(new Event("visibilitychange"));
+    windowTarget.dispatchEvent(pageShow);
+    documentTarget.dispatchEvent(new Event("resume"));
+    expect(mockConnectionReconnects[0]).toHaveBeenCalledTimes(1);
+
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
   it("allows a larger idle cache before capacity eviction starts", async () => {
     const {
       retainThreadDetailSubscription,
@@ -838,9 +987,7 @@ describe("retainThreadDetailSubscription", () => {
 
     const release = retainThreadDetailSubscription(environmentId, threadId);
     const emit = mockSubscribeThread.mock.calls[0]?.[1] as (item: unknown) => void;
-    emit(
-      makeThreadDetailSnapshotItem({ threadId, oldestLoaded: cursor0, hasMoreHistory: true }),
-    );
+    emit(makeThreadDetailSnapshotItem({ threadId, oldestLoaded: cursor0, hasMoreHistory: true }));
 
     // First page fires immediately after the snapshot, paging back from the
     // snapshot's oldestLoaded cursor.

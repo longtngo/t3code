@@ -169,7 +169,6 @@ const terminalMetadataSubscriptions = new Map<EnvironmentId, () => void>();
 
 let activeService: EnvironmentServiceState | null = null;
 let needsProviderInvalidation = false;
-let lastBrowserHiddenAt: number | null = null;
 let lastBrowserResumeReconnectAt = Number.NEGATIVE_INFINITY;
 
 // TODO(CLIENT-RUNTIME MIGRATION - DO NOT EXPAND THIS WEB-ONLY COPY):
@@ -1964,29 +1963,42 @@ function subscribeBrowserResumeReconnects(): () => void {
     return NOOP;
   }
 
+  // Resync on any return to the foreground. We do NOT track a prior "hidden"
+  // event: a mobile OS often freezes/discards the tab on screen-off without the
+  // JS observing a clean `hidden` transition, so gating on "we saw hidden first"
+  // silently skipped the reconnect and left the open thread stale. The resync is
+  // idempotent — `reconnectEnvironmentConnectionsAfterBrowserResume` skips fresh
+  // sockets (`isHeartbeatFresh`) and a 2s cooldown collapses the trigger trio
+  // that can fire together on one thaw.
   const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      lastBrowserHiddenAt = Date.now();
-      return;
-    }
-    if (document.visibilityState === "visible" && lastBrowserHiddenAt !== null) {
-      lastBrowserHiddenAt = null;
+    if (document.visibilityState === "visible") {
       reconnectEnvironmentConnectionsAfterBrowserResume("visibilitychange");
     }
   };
 
   const handlePageShow = (event: PageTransitionEvent) => {
-    if (event.persisted || lastBrowserHiddenAt !== null) {
-      lastBrowserHiddenAt = null;
+    // Only a bfcache restore needs a resync; a non-persisted pageshow is a full
+    // reload with a fresh connection.
+    if (event.persisted) {
       reconnectEnvironmentConnectionsAfterBrowserResume("pageshow");
     }
   };
 
+  // Page Lifecycle `resume` fires on `document` (NOT `window`) when a
+  // frozen/discarded tab is thawed — the Chrome/Android case where the tab can
+  // already read `visible` with no visibilitychange transition. Defensive
+  // coverage on top of the un-gated visibilitychange above.
+  const handleResume = () => {
+    reconnectEnvironmentConnectionsAfterBrowserResume("resume");
+  };
+
   document.addEventListener("visibilitychange", handleVisibilityChange);
   window.addEventListener("pageshow", handlePageShow);
+  document.addEventListener("resume", handleResume);
   return () => {
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     window.removeEventListener("pageshow", handlePageShow);
+    document.removeEventListener("resume", handleResume);
   };
 }
 
@@ -2327,7 +2339,6 @@ export function startEnvironmentConnectionService(queryClient: QueryClient): () 
 
 export async function resetEnvironmentServiceForTests(): Promise<void> {
   stopActiveService();
-  lastBrowserHiddenAt = null;
   lastBrowserResumeReconnectAt = Number.NEGATIVE_INFINITY;
   lastAppliedProjectionVersionByEnvironment.clear();
   pendingSavedEnvironmentConnections.clear();
