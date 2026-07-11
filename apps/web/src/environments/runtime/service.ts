@@ -84,6 +84,7 @@ import {
 import { useTerminalUiStateStore } from "~/terminalUiStateStore";
 import { useUiStateStore } from "~/uiStateStore";
 import { getServerConfig } from "../../rpc/serverState";
+import { logWsReconnectEvent } from "../../rpc/wsReconnectLog";
 import { WsTransport } from "~/rpc/wsTransport";
 import { appendVersionMismatchHint, resolveServerConfigVersionMismatch } from "../../versionSkew";
 import {
@@ -1443,6 +1444,25 @@ function createPrimaryEnvironmentClient(
       getConnectionLabel: () => connectionLabel,
       getVersionMismatchHint: () =>
         resolveServerConfigVersionMismatch(getServerConfig())?.hint ?? null,
+      // Opt-in reconnect timeline (off unless `localStorage["t3.wsReconnect"]="1"`),
+      // scoped to THIS primary connection so its label de-interleaves it from any
+      // saved-environment socket reconnecting at the same time. See wsReconnectLog.
+      onAttempt: (socketUrl) => {
+        logWsReconnectEvent("attempt", connectionLabel, { socketUrl });
+      },
+      onOpen: () => {
+        logWsReconnectEvent("open", connectionLabel);
+      },
+      onError: (message) => {
+        logWsReconnectEvent("error", connectionLabel, { message });
+      },
+      onClose: (details, context) => {
+        logWsReconnectEvent("close", connectionLabel, {
+          code: details.code,
+          reason: details.reason,
+          intentional: context.intentional ? 1 : 0,
+        });
+      },
     }),
   );
 }

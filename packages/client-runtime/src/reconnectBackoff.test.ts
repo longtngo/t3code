@@ -7,19 +7,17 @@ import {
 } from "./reconnectBackoff.ts";
 
 describe("getReconnectDelayMs", () => {
-  it("returns exponential delays with default config", () => {
+  it("ramps then caps quickly with default config", () => {
     expect(getReconnectDelayMs(0)).toBe(1_000);
     expect(getReconnectDelayMs(1)).toBe(2_000);
-    expect(getReconnectDelayMs(2)).toBe(4_000);
-    expect(getReconnectDelayMs(3)).toBe(8_000);
-    expect(getReconnectDelayMs(4)).toBe(16_000);
-    expect(getReconnectDelayMs(5)).toBe(32_000);
-    expect(getReconnectDelayMs(6)).toBe(64_000);
+    expect(getReconnectDelayMs(2)).toBe(3_000); // 4_000 capped to the 3s ceiling
+    expect(getReconnectDelayMs(3)).toBe(3_000);
+    expect(getReconnectDelayMs(4)).toBe(3_000);
   });
 
   it("returns the capped delay for all retry indices (infinite retries)", () => {
-    expect(getReconnectDelayMs(7)).toBe(64_000);
-    expect(getReconnectDelayMs(100)).toBe(64_000);
+    expect(getReconnectDelayMs(7)).toBe(3_000);
+    expect(getReconnectDelayMs(100)).toBe(3_000);
   });
 
   it("returns null for negative indices", () => {
@@ -50,8 +48,8 @@ describe("getReconnectDelayMs", () => {
     };
 
     expect(getReconnectDelayMs(0, config)).toBe(1_000);
-    expect(getReconnectDelayMs(50, config)).toBe(64_000); // capped at maxDelayMs
-    expect(getReconnectDelayMs(100, config)).toBe(64_000);
+    expect(getReconnectDelayMs(50, config)).toBe(3_000); // capped at maxDelayMs
+    expect(getReconnectDelayMs(100, config)).toBe(3_000);
   });
 });
 
@@ -59,7 +57,7 @@ describe("DEFAULT_RECONNECT_BACKOFF", () => {
   it("has sensible defaults", () => {
     expect(DEFAULT_RECONNECT_BACKOFF.initialDelayMs).toBe(1_000);
     expect(DEFAULT_RECONNECT_BACKOFF.backoffFactor).toBe(2);
-    expect(DEFAULT_RECONNECT_BACKOFF.maxDelayMs).toBe(64_000);
+    expect(DEFAULT_RECONNECT_BACKOFF.maxDelayMs).toBe(3_000);
     expect(DEFAULT_RECONNECT_BACKOFF.maxRetries).toBeNull();
   });
 });
