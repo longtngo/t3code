@@ -141,6 +141,15 @@ function createProviderServiceHarness(
   };
 }
 
+// Internal poll deadline for the wait helpers below. Kept in lockstep with the
+// framework budget the maintainers set for this load-sensitive suite
+// (vite.config.ts: testTimeout 120s + retry:2) rather than the old tight 15s,
+// which tripped *before* that budget under heavy concurrent CPU load and forced a
+// retry (or a red gate if load persisted across all attempts). Matches the sibling
+// load-sensitive harness OrchestrationEngineHarness.integration.ts (40s). A genuine
+// product hang still fails deterministically at the 120s framework timeout.
+const POLL_DEADLINE_MS = 40_000;
+
 async function waitForThread(
   readModel: () => Promise<{
     readonly threads: ReadonlyArray<{
@@ -155,7 +164,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
     activities: ReadonlyArray<{ kind: string }>;
   }) => boolean,
-  timeoutMs = 15_000,
+  timeoutMs = POLL_DEADLINE_MS,
 ) {
   const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
   const poll = async (): Promise<{
@@ -180,7 +189,7 @@ async function waitForThread(
 async function waitForEvent(
   engine: OrchestrationEngineShape,
   predicate: (event: { type: string }) => boolean,
-  timeoutMs = 15_000,
+  timeoutMs = POLL_DEADLINE_MS,
 ) {
   const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
   const poll = async () => {
@@ -231,7 +240,7 @@ function gitShowFileAtRef(cwd: string, ref: string, filePath: string): string {
   return runGit(cwd, ["show", `${ref}:${filePath}`]);
 }
 
-async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 15_000) {
+async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = POLL_DEADLINE_MS) {
   const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
   const poll = async (): Promise<void> => {
     if (gitRefExists(cwd, ref)) {
