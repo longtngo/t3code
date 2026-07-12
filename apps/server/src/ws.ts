@@ -40,7 +40,6 @@ import {
   ProjectRenderMarkdownHtmlError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
-  OrchestrationReplayEventsError,
   FilesystemBrowseError,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -51,7 +50,6 @@ import {
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
-import { clamp } from "effect/Number";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -89,7 +87,6 @@ import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
 import { ReviewService } from "./review/ReviewService.ts";
 import { ProjectSetupScriptRunner } from "./project/Services/ProjectSetupScriptRunner.ts";
-import { RepositoryIdentityResolver } from "./project/Services/RepositoryIdentityResolver.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import type { AuthenticatedSession } from "./auth/EnvironmentAuth.ts";
@@ -212,7 +209,6 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getFullThreadDiff, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.replayEvents, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
@@ -350,7 +346,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
-      const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscoveryLayer.SourceControlDiscovery;
@@ -500,53 +495,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               cause,
             });
       };
-
-      const enrichProjectEvent = (
-        event: OrchestrationEvent,
-      ): Effect.Effect<OrchestrationEvent, never, never> => {
-        switch (event.type) {
-          case "project.created":
-            return repositoryIdentityResolver.resolve(event.payload.workspaceRoot).pipe(
-              Effect.map((repositoryIdentity) => ({
-                ...event,
-                payload: {
-                  ...event.payload,
-                  repositoryIdentity,
-                },
-              })),
-            );
-          case "project.meta-updated":
-            return Effect.gen(function* () {
-              const workspaceRoot =
-                event.payload.workspaceRoot ??
-                Option.match(
-                  yield* projectionSnapshotQuery.getProjectShellById(event.payload.projectId),
-                  {
-                    onNone: () => null,
-                    onSome: (project) => project.workspaceRoot,
-                  },
-                ) ??
-                null;
-              if (workspaceRoot === null) {
-                return event;
-              }
-
-              const repositoryIdentity = yield* repositoryIdentityResolver.resolve(workspaceRoot);
-              return {
-                ...event,
-                payload: {
-                  ...event.payload,
-                  repositoryIdentity,
-                },
-              } satisfies OrchestrationEvent;
-            }).pipe(Effect.orElseSucceed(() => event));
-          default:
-            return Effect.succeed(event);
-        }
-      };
-
-      const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
-        Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
@@ -952,29 +900,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 (cause) =>
                   new OrchestrationGetFullThreadDiffError({
                     message: "Failed to load full thread diff",
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
-        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.replayEvents,
-            Stream.runCollect(
-              orchestrationEngine.readEvents(
-                clamp(input.fromSequenceExclusive, {
-                  maximum: Number.MAX_SAFE_INTEGER,
-                  minimum: 0,
-                }),
-              ),
-            ).pipe(
-              Effect.map((events) => Array.from(events)),
-              Effect.flatMap(enrichOrchestrationEvents),
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationReplayEventsError({
-                    message: "Failed to replay orchestration events",
                     cause,
                   }),
               ),
