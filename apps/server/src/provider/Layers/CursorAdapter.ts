@@ -535,7 +535,14 @@ export function makeCursorAdapter(
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
-        sessions.delete(ctx.threadId);
+        // Identity-guarded delete: teardown yields above, during which a recovery
+        // path may have replaced this thread's context with a fresh session. Only
+        // evict if the map still holds THIS context, so we never orphan a new live
+        // one. Currently unreachable behind the per-thread Semaphore, but keeps the
+        // delete correct independent of the lock.
+        if (sessions.get(ctx.threadId) === ctx) {
+          sessions.delete(ctx.threadId);
+        }
         yield* offerRuntimeEvent({
           type: "session.exited",
           ...(yield* makeEventStamp()),
@@ -1164,7 +1171,15 @@ export function makeCursorAdapter(
       );
 
     const listSessions: CursorAdapterShape["listSessions"] = () =>
-      Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));
+      // Report only live sessions, matching hasSession's `!stopped` contract (and
+      // ClaudeAdapter). A stopped-but-not-yet-deleted context lingers through the
+      // teardown yield window; surfacing it as active would let ensureSessionForThread
+      // reuse a dead session instead of resuming a fresh one.
+      Effect.sync(() =>
+        Array.from(sessions.values())
+          .filter((c) => !c.stopped)
+          .map((c) => ({ ...c.session })),
+      );
 
     const hasSession: CursorAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => {

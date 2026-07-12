@@ -264,6 +264,36 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
+  it.effect("listSessions reports only live sessions, matching hasSession", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-list-sessions-live");
+
+      const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      // A live session is reported by both views.
+      assert.equal(yield* adapter.hasSession(threadId), true);
+      assert.equal((yield* adapter.listSessions()).length, 1);
+      assert.equal((yield* adapter.listSessions())[0]?.threadId, threadId);
+
+      // Once stopped it must appear in neither view — listSessions must not surface
+      // a stopped session (the ClaudeAdapter contract this fix aligns to).
+      yield* adapter.stopSession(threadId);
+      assert.equal(yield* adapter.hasSession(threadId), false);
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }),
+  );
+
   it.effect(
     "serializes concurrent startSession calls for the same thread and closes the replaced ACP session",
     () =>

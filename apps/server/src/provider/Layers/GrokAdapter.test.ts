@@ -175,6 +175,33 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("listSessions reports only live sessions, matching hasSession", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-list-sessions-live");
+      const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
+      });
+
+      // A live session is reported by both views.
+      assert.equal(yield* adapter.hasSession(threadId), true);
+      assert.equal((yield* adapter.listSessions()).length, 1);
+      assert.equal((yield* adapter.listSessions())[0]?.threadId, threadId);
+
+      // Once stopped it must appear in neither view — listSessions must not surface
+      // a stopped session (the ClaudeAdapter contract this fix aligns to).
+      yield* adapter.stopSession(threadId);
+      assert.equal(yield* adapter.hasSession(threadId), false);
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }),
+  );
+
   it.effect("rejects startSession when provider mismatches", () =>
     Effect.gen(function* () {
       const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
