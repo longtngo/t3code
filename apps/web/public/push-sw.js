@@ -52,6 +52,85 @@ self.addEventListener("push", (event) => {
   );
 });
 
+// URL-safe base64 → Uint8Array, for `pushManager.subscribe`'s applicationServerKey
+// when we must re-subscribe ourselves (some engines only accept a BufferSource).
+function urlBase64ToUint8Array(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const normalized = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(normalized);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) {
+    output[i] = raw.charCodeAt(i);
+  }
+  return output;
+}
+
+// The browser rotates/invalidates a push subscription in the background (push-service
+// maintenance, key change). Without this handler the server keeps the dead endpoint,
+// its next send 410s and is pruned, and delivery silently stops until the user next
+// opens the app. Here we obtain a fresh subscription and re-register it with the
+// server over an authenticated same-origin fetch (the session cookie rides along), so
+// background delivery keeps working with no tab. Any failure degrades gracefully — the
+// page re-registers on its next visit.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      // 1) If the browser already minted the replacement, register it directly.
+      let subscription = event.newSubscription || null;
+
+      // 2) Otherwise re-subscribe ourselves. Reuse the old subscription's key when
+      //    present; else fetch the current VAPID public key from the server.
+      if (!subscription) {
+        let applicationServerKey =
+          (event.oldSubscription &&
+            event.oldSubscription.options &&
+            event.oldSubscription.options.applicationServerKey) ||
+          null;
+        if (!applicationServerKey) {
+          try {
+            const res = await fetch("/api/push/vapid-public-key", { credentials: "include" });
+            if (res.ok) {
+              const publicKey = (await res.text()).trim();
+              if (publicKey) {
+                applicationServerKey = urlBase64ToUint8Array(publicKey);
+              }
+            }
+          } catch (_err) {
+            /* offline / server down — fall through to the graceful no-op below */
+          }
+        }
+        if (!applicationServerKey) {
+          return; // nothing to rebind to; the page re-registers on next visit
+        }
+        try {
+          subscription = await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey,
+          });
+        } catch (_err) {
+          return;
+        }
+      }
+
+      const json = subscription.toJSON();
+      if (!json.endpoint || !json.keys || !json.keys.p256dh || !json.keys.auth) {
+        return;
+      }
+      await fetch("/api/push/subscriptions", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          endpoint: json.endpoint,
+          keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+        }),
+      }).catch(() => {
+        /* best effort; the page re-registers on next visit if this failed */
+      });
+    })(),
+  );
+});
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const rawUrl = (event.notification.data && event.notification.data.url) || "/";

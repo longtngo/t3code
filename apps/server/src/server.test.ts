@@ -1484,6 +1484,107 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect(
+    "serves the VAPID public key at GET /api/push/vapid-public-key without authentication",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const response = yield* HttpClient.get("/api/push/vapid-public-key");
+        assert.equal(response.status, 200);
+        const key = yield* response.text;
+        assert.isAbove(key.length, 0);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("registers a push subscription at POST /api/push/subscriptions (204)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      assert.equal(response.status, 204);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a disallowed (SSRF) endpoint at POST /api/push/subscriptions (403)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://192.168.1.1/x",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      assert.equal(response.status, 403);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("requires authentication for POST /api/push/subscriptions", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      // Auth runs before the body check, so an unauthenticated call is rejected.
+      assert.isAtLeast(response.status, 401);
+      assert.isBelow(response.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a malformed body at POST /api/push/subscriptions (400)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Authenticated + JSON content-type, but missing the required `keys` field.
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({ endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint" }),
+      });
+
+      assert.equal(response.status, 400);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "rejects a non-JSON content-type at POST /api/push/subscriptions (415, CSRF guard)",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+        const response = yield* fetchEffect("/api/push/subscriptions", {
+          method: "POST",
+          headers: { cookie, "content-type": "text/plain" },
+          body: "endpoint=https://fcm.googleapis.com/fcm/send/x",
+        });
+
+        assert.equal(response.status, 415);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("renders a markdown file as a sandboxed HTML document via /viewer", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

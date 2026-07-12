@@ -97,8 +97,8 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as LlmModels from "./diagnostics/LlmModels.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
-import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { registerPushSubscription } from "./push/register.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -369,7 +369,6 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
-      const pushSubscriptionRepo = yield* PushSubscriptionRepository;
       const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1705,33 +1704,14 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             WS_METHODS.pushSubscriptionsRegister,
             authorizeEffect(
               AuthOrchestrationOperateScope,
-              Effect.gen(function* () {
-                if (!WebPushRelay.isAllowedPushEndpoint(input.subscription.endpoint)) {
-                  yield* Effect.logWarning("rejected push subscription with disallowed endpoint", {
-                    endpoint: input.subscription.endpoint,
-                  });
-                  return { ok: false };
-                }
-                const createdAt = yield* nowIso;
-                return yield* pushSubscriptionRepo
-                  .upsert({
-                    endpoint: input.subscription.endpoint,
-                    p256dh: input.subscription.keys.p256dh,
-                    auth: input.subscription.keys.auth,
-                    createdAt,
-                  })
-                  .pipe(
-                    Effect.as({ ok: true }),
-                    // A persistence failure is not an auth error; surface ok:false
-                    // (the client toggle treats a non-ok as "not enabled") rather
-                    // than widening the RPC error channel.
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("push subscription register failed", {
-                        cause: Cause.pretty(cause),
-                      }).pipe(Effect.as({ ok: false })),
-                    ),
-                  );
-              }),
+              // Shared with the HTTP route the service worker calls on
+              // pushsubscriptionchange (SSRF guard + upsert live in one place). The
+              // helper never fails; a non-"registered" outcome (disallowed endpoint
+              // or persistence failure) collapses to ok:false, keeping this RPC's
+              // error channel unchanged.
+              registerPushSubscription(input.subscription).pipe(
+                Effect.map((outcome) => ({ ok: outcome === "registered" })),
+              ),
             ),
             { "rpc.aggregate": "server" },
           ),

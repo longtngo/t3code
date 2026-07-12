@@ -8,6 +8,8 @@ import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
+  pushSubscriptionsRouteLayer,
+  pushVapidPublicKeyRouteLayer,
   projectFaviconRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
@@ -356,6 +358,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
+  pushSubscriptionsRouteLayer,
+  pushVapidPublicKeyRouteLayer,
   projectFaviconRouteLayer,
   viewerRouteLayer,
   staticAndDevRouteLayer,

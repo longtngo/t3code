@@ -41,6 +41,8 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
+import { WebPushRelay } from "./push/WebPushRelay.ts";
+import { registerPushSubscription } from "./push/register.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -48,6 +50,8 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+const PUSH_SUBSCRIPTIONS_PATH = "/api/push/subscriptions";
+const PUSH_VAPID_PUBLIC_KEY_PATH = "/api/push/vapid-public-key";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export const browserApiCorsLayer = Layer.unwrap(
@@ -169,6 +173,76 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
       EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
     }),
   ),
+);
+
+// POST route the service worker calls on `pushsubscriptionchange` to re-register a
+// rotated subscription in the background (no tab needed). Same operate scope + SSRF
+// guard + upsert as the `pushSubscriptions.register` WS RPC (both go through the
+// shared `registerPushSubscription`).
+export const pushSubscriptionsRouteLayer = HttpRouter.add(
+  "POST",
+  PUSH_SUBSCRIPTIONS_PATH,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    // Defense-in-depth CSRF: require a JSON content-type so any cross-origin caller
+    // is forced through a CORS preflight (which browserApiCorsLayer denies). The
+    // service worker's same-origin fetch sets this header itself.
+    const contentType = request.headers["content-type"];
+    if (
+      typeof contentType !== "string" ||
+      !contentType.toLowerCase().includes("application/json")
+    ) {
+      return HttpServerResponse.text("Unsupported Media Type", { status: 415 });
+    }
+    const body = cast<
+      unknown,
+      {
+        readonly endpoint?: unknown;
+        readonly keys?: { readonly p256dh?: unknown; readonly auth?: unknown };
+      } | null
+    >(yield* request.json.pipe(Effect.orElseSucceed(() => null)));
+    if (
+      !body ||
+      typeof body.endpoint !== "string" ||
+      !body.keys ||
+      typeof body.keys.p256dh !== "string" ||
+      typeof body.keys.auth !== "string"
+    ) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    const outcome = yield* registerPushSubscription({
+      endpoint: body.endpoint,
+      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+    });
+    switch (outcome) {
+      case "registered":
+        return HttpServerResponse.empty({ status: 204 });
+      case "rejected":
+        return HttpServerResponse.text("Forbidden push endpoint", { status: 403 });
+      case "error":
+        return HttpServerResponse.text("Registration failed", { status: 500 });
+    }
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+// Unauthenticated: the VAPID *public* key is not a secret (it already ships to every
+// client in ServerConfig). Exposed as a GET so the service worker can fetch it to
+// re-subscribe on `pushsubscriptionchange` when neither the old nor the new browser
+// subscription supplies an applicationServerKey.
+export const pushVapidPublicKeyRouteLayer = HttpRouter.add(
+  "GET",
+  PUSH_VAPID_PUBLIC_KEY_PATH,
+  Effect.gen(function* () {
+    const relay = yield* WebPushRelay;
+    return HttpServerResponse.text(relay.vapidPublicKey, { status: 200 });
+  }),
 );
 
 export const attachmentsRouteLayer = HttpRouter.add(

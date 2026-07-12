@@ -238,6 +238,15 @@ Item 3 viable but its **snippet had real bugs**; applied fixes:
   scope. Applying the same guard in the route is necessary and sufficient *relative to the
   existing bar*; DNS-resolving hardening is a separate improvement to both paths, not a blocker.
 
+**Code review (Stage 9, 1 opus reviewer on the Item 3 diff): no HIGH/MED defects.** Verified
+auth-before-content-type, outcome→status mapping, persistence-failure-never-escapes (WS channel
+stays boolean), no requirement-channel leak, clean refactor, SW ordering/`waitUntil`, CSRF
+reasoning. Applied the one cheap coverage gap (the 400 bad-body route branch). Deferred as
+non-blocking follow-ups (pre-existing / out of this batch's diff): (a) harden `isAllowedPushEndpoint`
+against DNS→internal-IP SSRF — blind + auth-gated + shared identically with the existing WS RPC, so
+this batch adds no new exposure; (b) a uniform request-body size cap on the raw JSON routes; (c) a
+jsdom/mock unit harness for the SW handler ordering.
+
 Revised Item 3 files: `apps/web/public/push-sw.js`; `apps/server/src/http.ts` (both route layers);
 `apps/server/src/server.ts` (merge the layer(s)); a shared `registerPushSubscription` helper
 (new `apps/server/src/push/register.ts` or extend the `PushSubscription` service) used by ws.ts +
