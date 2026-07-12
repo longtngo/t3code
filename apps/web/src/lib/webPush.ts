@@ -40,31 +40,67 @@ export function isWebPushSupported(): boolean {
   );
 }
 
-/** True when this device already holds a push subscription. */
-export async function hasExistingPushSubscription(): Promise<boolean> {
+/**
+ * Whether a subscription's `applicationServerKey` matches the given VAPID key bytes.
+ * A subscription bound to a *different* key can never receive our pushes — the push
+ * service (FCM etc.) rejects the mismatch (404/410/403) — so reusing it silently
+ * breaks delivery. Exported for unit testing.
+ */
+export function pushSubscriptionMatchesKey(
+  subscription: Pick<PushSubscription, "options">,
+  expectedKey: Uint8Array,
+): boolean {
+  const existing = subscription.options.applicationServerKey;
+  if (!existing) {
+    return false;
+  }
+  const existingBytes = new Uint8Array(existing);
+  if (existingBytes.length !== expectedKey.length) {
+    return false;
+  }
+  for (let i = 0; i < expectedKey.length; i += 1) {
+    if (existingBytes[i] !== expectedKey[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** True when this device holds a push subscription bound to the CURRENT server key. */
+export async function hasValidPushSubscription(vapidPublicKey: string): Promise<boolean> {
   if (!isWebPushSupported()) {
     return false;
   }
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.getSubscription();
-  return subscription !== null;
+  return (
+    subscription !== null &&
+    pushSubscriptionMatchesKey(subscription, urlBase64ToUint8Array(vapidPublicKey))
+  );
 }
 
 /**
- * Subscribe this device to Web Push (reusing an existing subscription if present)
- * and return the server-shaped payload, or `null` if the browser produced an
- * unexpectedly incomplete subscription.
+ * Subscribe this device to Web Push and return the server-shaped payload, or `null`
+ * if the browser produced an incomplete subscription. Reuses an existing subscription
+ * ONLY when it is bound to the current server key; a stale/foreign-keyed subscription
+ * (e.g. left over from an earlier key or a rotated endpoint still bound to the old
+ * key) is dropped and replaced, so we never register a dead endpoint.
  */
 export async function subscribeToPush(
   vapidPublicKey: string,
 ): Promise<WebPushSubscriptionPayload | null> {
   const registration = await navigator.serviceWorker.ready;
-  const existing = await registration.pushManager.getSubscription();
+  const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+  let existing = await registration.pushManager.getSubscription();
+  if (existing && !pushSubscriptionMatchesKey(existing, applicationServerKey)) {
+    await existing.unsubscribe();
+    existing = null;
+  }
   const subscription =
     existing ??
     (await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      applicationServerKey,
     }));
   const json = subscription.toJSON();
   if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {

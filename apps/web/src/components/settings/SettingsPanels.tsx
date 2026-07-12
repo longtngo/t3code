@@ -33,7 +33,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { ensureWebNotificationPermission } from "../../lib/notifier";
 import {
-  hasExistingPushSubscription,
+  hasValidPushSubscription,
   isWebPushSupported,
   subscribeToPush,
   unsubscribeFromPush,
@@ -405,11 +405,11 @@ export function GeneralSettingsPanel() {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => {
-    if (!pushAvailable) {
+    if (!pushAvailable || !vapidPublicKey) {
       return;
     }
     let cancelled = false;
-    void hasExistingPushSubscription().then((enabled) => {
+    void hasValidPushSubscription(vapidPublicKey).then((enabled) => {
       if (!cancelled) {
         setPushEnabled(enabled);
       }
@@ -417,7 +417,7 @@ export function GeneralSettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pushAvailable]);
+  }, [pushAvailable, vapidPublicKey]);
 
   const handlePushEnabledChange = useCallback(
     async (checked: boolean) => {
