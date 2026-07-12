@@ -15,8 +15,15 @@ export interface WsConnectionStatus {
   readonly connectedAt: string | null;
   readonly disconnectedAt: string | null;
   readonly hasConnected: boolean;
+  /** Count of heartbeat timeouts (pong not seen within the deadline) since load. */
+  readonly heartbeatTimeoutCount: number;
   readonly lastError: string | null;
   readonly lastErrorAt: string | null;
+  /** ISO of the last heartbeat ping sent; used to compute the pong round-trip. */
+  readonly lastHeartbeatPingAt: string | null;
+  readonly lastHeartbeatPongAt: string | null;
+  /** Round-trip of the most recent ping→pong, in ms (detection-latency signal). */
+  readonly lastHeartbeatRttMs: number | null;
   readonly nextRetryAt: string | null;
   readonly online: boolean;
   readonly phase: "idle" | "connecting" | "connected" | "disconnected";
@@ -33,8 +40,12 @@ const INITIAL_WS_CONNECTION_STATUS = Object.freeze<WsConnectionStatus>({
   connectedAt: null,
   disconnectedAt: null,
   hasConnected: false,
+  heartbeatTimeoutCount: 0,
   lastError: null,
   lastErrorAt: null,
+  lastHeartbeatPingAt: null,
+  lastHeartbeatPongAt: null,
+  lastHeartbeatRttMs: null,
   nextRetryAt: null,
   online: typeof navigator === "undefined" ? true : navigator.onLine !== false,
   phase: "idle",
@@ -121,6 +132,34 @@ export function recordWsConnectionOpened(metadata?: WsConnectionMetadata): WsCon
     phase: "connected",
     reconnectAttemptCount: 0,
     reconnectPhase: "idle",
+  }));
+}
+
+export function recordWsHeartbeatPing(): WsConnectionStatus {
+  return updateWsConnectionStatus((current) => ({
+    ...current,
+    lastHeartbeatPingAt: isoNow(),
+  }));
+}
+
+export function recordWsHeartbeatPong(): WsConnectionStatus {
+  return updateWsConnectionStatus((current) => {
+    const pingAt = current.lastHeartbeatPingAt;
+    // RTT only when this pong pairs with a ping we recorded; a pong with no
+    // outstanding ping (clock skew, reconnect races) leaves the prior RTT intact.
+    const rttMs = pingAt === null ? current.lastHeartbeatRttMs : Math.max(0, Date.now() - Date.parse(pingAt));
+    return {
+      ...current,
+      lastHeartbeatPongAt: isoNow(),
+      lastHeartbeatRttMs: rttMs,
+    };
+  });
+}
+
+export function recordWsHeartbeatTimeout(): WsConnectionStatus {
+  return updateWsConnectionStatus((current) => ({
+    ...current,
+    heartbeatTimeoutCount: current.heartbeatTimeoutCount + 1,
   }));
 }
 

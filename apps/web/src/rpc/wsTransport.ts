@@ -13,6 +13,9 @@ import {
   recordWsConnectionClosed,
   recordWsConnectionErrored,
   recordWsConnectionOpened,
+  recordWsHeartbeatPing,
+  recordWsHeartbeatPong,
+  recordWsHeartbeatTimeout,
 } from "./wsConnectionState";
 
 function createWsRpcProtocolLayer(
@@ -25,6 +28,15 @@ function createWsRpcProtocolLayer(
     telemetryLifecycle: {
       onAttempt: recordWsConnectionAttempt,
       onOpen: recordWsConnectionOpened,
+      onHeartbeatPing: () => {
+        recordWsHeartbeatPing();
+      },
+      onHeartbeatPong: () => {
+        recordWsHeartbeatPong();
+      },
+      onHeartbeatTimeout: () => {
+        recordWsHeartbeatTimeout();
+      },
       onError: (message) => {
         recordWsConnectionErrored(message);
       },

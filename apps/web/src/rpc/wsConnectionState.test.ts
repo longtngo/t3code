@@ -8,6 +8,9 @@ import {
   recordWsConnectionClosed,
   recordWsConnectionErrored,
   recordWsConnectionOpened,
+  recordWsHeartbeatPing,
+  recordWsHeartbeatPong,
+  recordWsHeartbeatTimeout,
   resetWsConnectionStateForTests,
   setBrowserOnlineStatus,
 } from "./wsConnectionState";
@@ -30,6 +33,31 @@ describe("wsConnectionState", () => {
     setBrowserOnlineStatus(false);
 
     expect(getWsConnectionUiState(getWsConnectionStatus())).toBe("offline");
+  });
+
+  it("records heartbeat ping/pong round-trip and timeout counts", () => {
+    recordWsConnectionAttempt("ws://localhost:3020/ws");
+    recordWsConnectionOpened();
+
+    recordWsHeartbeatPing();
+    expect(getWsConnectionStatus().lastHeartbeatPingAt).toBe("2026-04-03T20:30:00.000Z");
+
+    // A pong 250ms after the ping yields a 250ms RTT (the detection-latency signal).
+    vi.advanceTimersByTime(250);
+    recordWsHeartbeatPong();
+    expect(getWsConnectionStatus()).toMatchObject({
+      lastHeartbeatPongAt: "2026-04-03T20:30:00.250Z",
+      lastHeartbeatRttMs: 250,
+    });
+
+    // A pong with no outstanding ping keeps the prior RTT rather than inventing one.
+    resetWsConnectionStateForTests();
+    recordWsHeartbeatPong();
+    expect(getWsConnectionStatus().lastHeartbeatRttMs).toBeNull();
+
+    recordWsHeartbeatTimeout();
+    recordWsHeartbeatTimeout();
+    expect(getWsConnectionStatus().heartbeatTimeoutCount).toBe(2);
   });
 
   it("stays in the initial connecting state until the first disconnect", () => {
