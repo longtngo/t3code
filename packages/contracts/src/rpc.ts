@@ -198,6 +198,9 @@ export const WS_METHODS = {
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
 
+  // Web Push — register this device's push subscription for background notifications
+  pushSubscriptionsRegister: "pushSubscriptions.register",
+
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -874,6 +877,34 @@ export const WsGetResourceQueueRpc = Rpc.make(WS_METHODS.getResourceQueue, {
   error: EnvironmentAuthorizationError,
 });
 
+/**
+ * A browser Web Push subscription, as produced by `PushManager.subscribe(...)`
+ * `.toJSON()`. The server stores these and sends VAPID-signed pushes to the FCM
+ * (etc.) `endpoint` so background thread notifications reach the device even when the
+ * PWA tab is frozen (screen off). `p256dh`/`auth` are the client's public encryption
+ * material — not secrets — used by the Web Push message-encryption scheme.
+ */
+export const PushSubscriptionInput = Schema.Struct({
+  endpoint: Schema.String,
+  keys: Schema.Struct({
+    p256dh: Schema.String,
+    auth: Schema.String,
+  }),
+});
+export type PushSubscriptionInput = typeof PushSubscriptionInput.Type;
+
+/**
+ * Register (idempotently, keyed by `endpoint`) this device's Web Push subscription.
+ * Enabling the per-device notification toggle calls this. Unregistering is handled
+ * client-side (`pushManager.unsubscribe()`) plus server-side pruning when a later send
+ * returns 404/410, so there is deliberately no `unregister` method in v1.
+ */
+export const WsPushSubscriptionsRegisterRpc = Rpc.make(WS_METHODS.pushSubscriptionsRegister, {
+  payload: Schema.Struct({ subscription: PushSubscriptionInput }),
+  success: Schema.Struct({ ok: Schema.Boolean }),
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -930,6 +961,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsLlmServeLoadRpc,
   WsLlmServeUnloadRpc,
   WsGetResourceQueueRpc,
+  WsPushSubscriptionsRegisterRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

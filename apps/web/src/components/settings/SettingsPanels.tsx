@@ -1,7 +1,7 @@
 import { ArchiveIcon, ArchiveX, LoaderIcon, PlusIcon, RefreshCwIcon, SparklesIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultInstanceIdForDriver,
   type DesktopUpdateChannel,
@@ -32,6 +32,15 @@ import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hos
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { ensureWebNotificationPermission } from "../../lib/notifier";
+import {
+  hasExistingPushSubscription,
+  isWebPushSupported,
+  subscribeToPush,
+  unsubscribeFromPush,
+} from "../../lib/webPush";
+import { readEnvironmentApi } from "../../environmentApi";
+import { useServerConfig } from "../../rpc/serverState";
+import { usePrimaryEnvironmentId } from "../../environments/primary";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopUpdateStateQueryData,
@@ -385,6 +394,66 @@ export function GeneralSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
 
+  // Per-device Web Push toggle. Push works only in the deployed web PWA (a service
+  // worker + secure context) — never Electron or dev — and needs a server VAPID key.
+  const serverConfig = useServerConfig();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const vapidPublicKey = serverConfig?.webPushVapidPublicKey ?? null;
+  const pushAvailable =
+    !isElectron && import.meta.env.PROD && isWebPushSupported() && vapidPublicKey !== null;
+
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    if (!pushAvailable) {
+      return;
+    }
+    let cancelled = false;
+    void hasExistingPushSubscription().then((enabled) => {
+      if (!cancelled) {
+        setPushEnabled(enabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pushAvailable]);
+
+  const handlePushEnabledChange = useCallback(
+    async (checked: boolean) => {
+      if (pushBusy || !vapidPublicKey) {
+        return;
+      }
+      setPushBusy(true);
+      try {
+        if (!checked) {
+          await unsubscribeFromPush();
+          setPushEnabled(false);
+          return;
+        }
+        const permission = await ensureWebNotificationPermission();
+        if (permission !== "granted") {
+          setPushEnabled(false);
+          return;
+        }
+        const subscription = await subscribeToPush(vapidPublicKey);
+        if (!subscription || !primaryEnvironmentId) {
+          setPushEnabled(false);
+          return;
+        }
+        const result = await readEnvironmentApi(primaryEnvironmentId)?.pushSubscriptions.register(
+          subscription,
+        );
+        setPushEnabled(result?.ok === true);
+      } catch {
+        setPushEnabled(false);
+      } finally {
+        setPushBusy(false);
+      }
+    },
+    [pushBusy, vapidPublicKey, primaryEnvironmentId],
+  );
+
   // Enabling requires a gesture-bound OS permission prompt; only persist the
   // preference once permission is granted so the toggle reflects reality.
   const handleNotifyOnThreadCompletionChange = useCallback(
@@ -639,6 +708,23 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {pushAvailable ? (
+          <SettingsRow
+            title="Background notifications on this device"
+            description="Get a notification when a task finishes or needs your input, even with the app closed or the screen off. Works on this device only."
+            control={
+              <Switch
+                checked={pushEnabled}
+                disabled={pushBusy}
+                onCheckedChange={(checked) => {
+                  void handlePushEnabledChange(Boolean(checked));
+                }}
+                aria-label="Enable background notifications on this device"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           title="New threads"

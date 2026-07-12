@@ -31,7 +31,8 @@
     "@pierre/diffs": "catalog:",
     "effect": "catalog:",
     "marked": "^16.4.0",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
@@ -41,6 +42,7 @@
     "@t3tools/web": "workspace:*",
     "@types/bun": "1.3.14",
     "@types/node": "catalog:",
+    "@types/web-push": "^3.6.4",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "vite-plus": "catalog:"

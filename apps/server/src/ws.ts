@@ -97,6 +97,8 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as LlmModels from "./diagnostics/LlmModels.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -268,6 +270,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeHostMetrics, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeLlmModels, AuthOrchestrationReadScope],
   [WS_METHODS.getResourceQueue, AuthOrchestrationReadScope],
+  [WS_METHODS.pushSubscriptionsRegister, AuthOrchestrationOperateScope],
   [WS_METHODS.llmServeLoad, AuthOrchestrationOperateScope],
   [WS_METHODS.llmServeUnload, AuthOrchestrationOperateScope],
 ]);
@@ -366,6 +369,8 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
+      const pushSubscriptionRepo = yield* PushSubscriptionRepository;
+      const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -850,6 +855,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          webPushVapidPublicKey: webPushRelay.vapidPublicKey,
         };
       });
 
@@ -1694,6 +1700,41 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcEffect(WS_METHODS.getResourceQueue, ResourceQueue.readResourceQueue, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pushSubscriptionsRegister,
+            authorizeEffect(
+              AuthOrchestrationOperateScope,
+              Effect.gen(function* () {
+                if (!WebPushRelay.isAllowedPushEndpoint(input.subscription.endpoint)) {
+                  yield* Effect.logWarning("rejected push subscription with disallowed endpoint", {
+                    endpoint: input.subscription.endpoint,
+                  });
+                  return { ok: false };
+                }
+                const createdAt = yield* nowIso;
+                return yield* pushSubscriptionRepo
+                  .upsert({
+                    endpoint: input.subscription.endpoint,
+                    p256dh: input.subscription.keys.p256dh,
+                    auth: input.subscription.keys.auth,
+                    createdAt,
+                  })
+                  .pipe(
+                    Effect.as({ ok: true }),
+                    // A persistence failure is not an auth error; surface ok:false
+                    // (the client toggle treats a non-ok as "not enabled") rather
+                    // than widening the RPC error channel.
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("push subscription register failed", {
+                        cause: Cause.pretty(cause),
+                      }).pipe(Effect.as({ ok: false })),
+                    ),
+                  );
+              }),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.llmServeLoad]: (input) =>
           observeRpcEffect(WS_METHODS.llmServeLoad, llmServeManager.load(input.configId), {
             "rpc.aggregate": "server",

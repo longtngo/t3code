@@ -85,7 +85,12 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import type { HostMetricsSample, LlmModelsSample, ResourceQueueSnapshot } from "./rpc.ts";
+import type {
+  HostMetricsSample,
+  LlmModelsSample,
+  PushSubscriptionInput,
+  ResourceQueueSnapshot,
+} from "./rpc.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -681,6 +686,13 @@ export interface EnvironmentApi {
      * with `available:false` (not a rejection) when the broker CLI is absent.
      */
     get: () => Promise<ResourceQueueSnapshot>;
+  };
+  pushSubscriptions: {
+    /**
+     * Register this device's Web Push subscription so the server can send background
+     * thread notifications. Idempotent by `endpoint`.
+     */
+    register: (subscription: PushSubscriptionInput) => Promise<{ ok: boolean }>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;

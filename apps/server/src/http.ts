@@ -509,9 +509,18 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Internal Server Error", { status: 500 });
     }
 
+    // Service-worker scripts (the workbox worker + our imported push handler) must
+    // not be HTTP-cached, or a rebuilt worker/handler can lag up to ~24h behind the
+    // deployed build. Everything else keeps the default (content-hashed /assets are
+    // themselves immutable-by-URL).
+    const baseName = path.basename(filePath);
+    const isServiceWorkerScript =
+      baseName === "sw.js" || baseName === "push-sw.js" || baseName.startsWith("workbox-");
+
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType,
+      ...(isServiceWorkerScript ? { headers: { "Cache-Control": "no-cache" } } : {}),
     });
   }),
 );

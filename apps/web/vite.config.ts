@@ -137,6 +137,12 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          // Inject our Web Push handlers into the generated worker. This keeps the
+          // whole generateSW config below (precache + the load-bearing CacheFirst
+          // /assets rule) untouched, while adding `push` / `notificationclick`
+          // listeners the auto-generated worker otherwise can't carry. The file is
+          // a plain static asset under public/ (served at /push-sw.js).
+          importScripts: ["/push-sw.js"],
           // Precache only the small, always-needed shell. The large hashed JS/CSS
           // chunks (incl. lazy Shiki language + wasm bundles, ~16 MB total) are
           // runtime-cached on first use instead of blocking SW install on 16 MB.

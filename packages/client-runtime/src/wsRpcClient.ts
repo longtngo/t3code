@@ -171,6 +171,9 @@ export interface WsRpcClient {
   readonly resourceQueue: {
     readonly get: RpcUnaryNoArgMethod<typeof WS_METHODS.getResourceQueue>;
   };
+  readonly pushSubscriptions: {
+    readonly register: RpcUnaryMethod<typeof WS_METHODS.pushSubscriptionsRegister>;
+  };
   readonly cloud: {
     readonly getRelayClientStatus: RpcUnaryNoArgMethod<typeof WS_METHODS.cloudGetRelayClientStatus>;
     readonly installRelayClient: (
@@ -381,6 +384,10 @@ export function createWsRpcClient(
     },
     resourceQueue: {
       get: () => transport.request((client) => client[WS_METHODS.getResourceQueue]({})),
+    },
+    pushSubscriptions: {
+      register: (input) =>
+        transport.request((client) => client[WS_METHODS.pushSubscriptionsRegister](input)),
     },
     cloud: {
       getRelayClientStatus: () =>

@@ -142,6 +142,8 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   CloudManagedEndpointRuntime,
@@ -863,6 +865,19 @@ const buildAppUnderTest = (options?: {
           hasCredential: Effect.succeed(false),
           clear: Effect.void,
           ...options?.layers?.cloudCliTokenManager,
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(PushSubscriptionRepository, {
+          upsert: () => Effect.void,
+          list: () => Effect.succeed([]),
+          deleteByEndpoint: () => Effect.void,
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(WebPushRelay.WebPushRelay, {
+          vapidPublicKey: "test-vapid-public-key",
+          start: () => Effect.void,
         }),
       ),
       Layer.provideMerge(makeAuthTestLayer()),

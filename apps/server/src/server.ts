@@ -29,6 +29,7 @@ import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReap
 import { ProviderTurnStallWatchdogLive } from "./provider/Layers/ProviderTurnStallWatchdog.ts";
 import { BackgroundTaskRecoveryWatchdogLive } from "./provider/Layers/BackgroundTaskRecoveryWatchdog.ts";
 import { PendingBackgroundTaskRepositoryLive } from "./persistence/Layers/PendingBackgroundTask.ts";
+import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
 import { RuntimeBootIdLive } from "./environment/Layers/RuntimeBootId.ts";
 import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
@@ -50,6 +51,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
@@ -158,6 +160,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(WebPushRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
@@ -272,6 +275,9 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // repository and the SAME boot id (SqlClient/Crypto are satisfied by the
   // outer PersistenceLayerLive / PlatformServicesLive).
   Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
+  // Web Push subscription persistence — shared by the register RPC handler and the
+  // WebPushRelay fan-out. (SqlClient satisfied by the outer PersistenceLayerLive.)
+  Layer.provideMerge(PushSubscriptionRepositoryLive),
   Layer.provideMerge(RuntimeBootIdLive),
 );
 
