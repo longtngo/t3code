@@ -10,6 +10,7 @@ import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  EventId,
   GitCommandError,
   KeybindingRule,
   MessageId,
@@ -19,6 +20,7 @@ import {
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderDriverKind,
@@ -5970,6 +5972,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       yield* buildAppUnderTest({
         layers: {
+          orchestrationEngine: {
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
+          },
           projectionSnapshotQuery: {
             getShellSnapshot: () => Effect.fail(projectionError),
           },
@@ -5987,6 +5992,78 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertTrue(result.failure.cause instanceof Error);
       assert.include(result.failure.cause.message, projectionError.message);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeShell replays only live shell events after the snapshot sequence", () =>
+    Effect.gen(function* () {
+      // Two live events straddling the snapshot sequence (5): the one AT the
+      // sequence is already reflected in the snapshot and must be deduped; only
+      // the one AFTER it should reach the client. This exercises the eager
+      // subscribe + `sequence > snapshotSequence` filter that closes the
+      // read-then-live lost-event window (the thread-path precedent).
+      const atSnapshot = {
+        sequence: 5,
+        eventId: EventId.make("shell-live-at-snapshot"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-shell-deduped"),
+        occurredAt: "2026-04-05T00:00:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.deleted",
+        payload: {
+          threadId: ThreadId.make("thread-shell-deduped"),
+          deletedAt: "2026-04-05T00:00:00.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+      const afterSnapshot = {
+        ...atSnapshot,
+        sequence: 6,
+        eventId: EventId.make("shell-live-after-snapshot"),
+        aggregateId: ThreadId.make("thread-shell-live"),
+        payload: {
+          threadId: ThreadId.make("thread-shell-live"),
+          deletedAt: "2026-04-05T00:00:00.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.deleted" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            subscribeDomainEvents: Effect.succeed(Stream.make(atSnapshot, afterSnapshot)),
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 5,
+                projects: [],
+                threads: [],
+                updatedAt: "1970-01-01T00:00:00.000Z",
+              }),
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 5 }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const frames = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      );
+
+      const collected = Array.from(frames);
+      assert.equal(collected[0]?.kind, "snapshot");
+      // The seq-5 event is deduped; the first live frame is the seq-6 thread removal.
+      assert.equal(collected[1]?.kind, "thread-removed");
+      if (collected[1]?.kind === "thread-removed") {
+        assert.equal(collected[1].threadId, ThreadId.make("thread-shell-live"));
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

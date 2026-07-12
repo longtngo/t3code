@@ -910,20 +910,44 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
-                Effect.tapError((cause) =>
-                  Effect.logError("orchestration shell snapshot load failed", { cause }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetSnapshotError({
-                      message: "Failed to load orchestration shell snapshot",
-                      cause,
-                    }),
-                ),
-              );
+              // Subscribe to the live tail BEFORE reading the snapshot (eager
+              // buffering), mirroring subscribeThread: an event committed *during*
+              // the snapshot read still lands in the subscription and is replayed
+              // after the snapshot, closing the read-then-live lost-event window
+              // that could otherwise leave the sidebar stuck (e.g. on "Working").
+              // The scope is the stream's; released when the client unsubscribes.
+              const liveEvents = yield* orchestrationEngine.subscribeDomainEvents;
 
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
+              const [snapshot, snapshotSequence] = yield* Effect.all([
+                projectionSnapshotQuery.getShellSnapshot().pipe(
+                  Effect.tapError((cause) =>
+                    Effect.logError("orchestration shell snapshot load failed", { cause }),
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to load orchestration shell snapshot",
+                        cause,
+                      }),
+                  ),
+                ),
+                projectionSnapshotQuery.getSnapshotSequence().pipe(
+                  Effect.map(({ snapshotSequence }) => snapshotSequence),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to load orchestration snapshot sequence",
+                        cause,
+                      }),
+                  ),
+                ),
+              ]);
+
+              // Live frames strictly after the snapshot sequence dedup the read/live
+              // overlap: an event captured in both the snapshot and the subscription
+              // is delivered once (the snapshot already carries it).
+              const liveStream = liveEvents.pipe(
+                Stream.filter((event) => event.sequence > snapshotSequence),
                 Stream.mapEffect(toShellStreamEvent),
                 Stream.flatMap((event) =>
                   Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
