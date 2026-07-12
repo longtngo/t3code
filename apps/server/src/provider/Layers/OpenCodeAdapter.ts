@@ -537,7 +537,13 @@ export function makeOpenCodeAdapter(
         return;
       }
       const turnId = context.activeTurnId;
-      sessions.delete(context.session.threadId);
+      // Identity-guarded delete: OpenCode has no per-thread Semaphore, so a recovery
+      // path can genuinely replace this thread's context between the `getAndSet` above
+      // and here. Only evict if the map still holds THIS context, or we orphan a fresh
+      // live session by deleting its map entry.
+      if (sessions.get(context.session.threadId) === context) {
+        sessions.delete(context.session.threadId);
+      }
       // Emit lifecycle events BEFORE tearing down the scope. Both call sites
       // run this inside a fiber forked via `Effect.forkIn(context.sessionScope)`;
       // closing that scope triggers the fiber-interrupt finalizer, so any
@@ -1033,7 +1039,12 @@ export function makeOpenCodeAdapter(
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
-          sessions.delete(input.threadId);
+          // Identity-guarded: `stopOpenCodeContext` yields, during which a concurrent
+          // start (no Semaphore serializes them) may have installed a fresh context.
+          // Only evict the one we just stopped.
+          if (sessions.get(input.threadId) === existing) {
+            sessions.delete(input.threadId);
+          }
         }
 
         const started = yield* Effect.gen(function* () {
@@ -1335,7 +1346,11 @@ export function makeOpenCodeAdapter(
           });
         }
         const stopped = yield* stopOpenCodeContext(context);
-        sessions.delete(threadId);
+        // Identity-guarded: `stopOpenCodeContext` yields; only evict if the map still
+        // holds the context we stopped, so a concurrently-installed session survives.
+        if (sessions.get(threadId) === context) {
+          sessions.delete(threadId);
+        }
         if (!stopped) {
           return;
         }
@@ -1352,10 +1367,22 @@ export function makeOpenCodeAdapter(
     );
 
     const listSessions: OpenCodeAdapterShape["listSessions"] = () =>
-      Effect.sync(() => [...sessions.values()].map((context) => context.session));
+      // Report only live sessions, matching hasSession's `!stopped` contract and
+      // ClaudeAdapter/Cursor/Grok. A stopped-but-not-yet-deleted context lingers
+      // through the teardown yield window; surfacing it as active would let the
+      // runtime reuse a dead session instead of resuming a fresh one. `Ref.getUnsafe`
+      // is an atomic read of the backing cell (see the note on `ensureSessionContext`).
+      Effect.sync(() =>
+        [...sessions.values()]
+          .filter((context) => !Ref.getUnsafe(context.stopped))
+          .map((context) => context.session),
+      );
 
     const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
-      Effect.sync(() => sessions.has(threadId));
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context !== undefined && !Ref.getUnsafe(context.stopped);
+      });
 
     const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
       function* (threadId) {

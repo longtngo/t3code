@@ -293,6 +293,32 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("listSessions and hasSession agree, reporting only live sessions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-list-live");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      // A live session is surfaced by both views (the aligned `!stopped` contract,
+      // matching ClaudeAdapter/Cursor/Grok).
+      assert.equal(yield* adapter.hasSession(threadId), true);
+      const live = yield* adapter.listSessions();
+      assert.equal(live.length, 1);
+      assert.equal(live[0]?.threadId, threadId);
+
+      // Once stopped it must appear in neither view — listSessions must never surface
+      // a stopped session, and the two views must stay consistent.
+      yield* adapter.stopSession(threadId);
+      assert.equal(yield* adapter.hasSession(threadId), false);
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }),
+  );
+
   it.effect("clears session state even when cleanup finalizers throw", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
