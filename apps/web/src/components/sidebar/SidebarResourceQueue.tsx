@@ -5,17 +5,16 @@ import { cn } from "~/lib/utils";
 import { useResourceQueue } from "~/hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { rowProgress, splitReason, type RowProgress } from "./sidebarResourceQueue.logic";
 
 const RESOURCE_BADGE: Record<string, string> = {
   gpu: "bg-violet-400/15 text-violet-300",
   cpu: "bg-emerald-400/15 text-emerald-300",
-  ram: "bg-blue-400/15 text-blue-300",
   machine: "bg-amber-400/15 text-amber-300",
 };
 const RESOURCE_BAR: Record<string, string> = {
   gpu: "bg-violet-400",
   cpu: "bg-emerald-400",
-  ram: "bg-blue-400",
   machine: "bg-amber-400",
 };
 const PRIORITY_BADGE: Record<string, string> = {
@@ -71,40 +70,110 @@ function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
   );
 }
 
-/** One running/waiting job. Hover expands the detail line; click toggles it closed. */
+/**
+ * Small inline progress indicator sitting between the resource label and the name. Running jobs
+ * with a known estimate show a filled ring + "%"; running jobs without one show nothing (there
+ * is no estimate to draw); queued jobs show a dashed placeholder since they haven't started.
+ */
+function RowProgressBadge({ progress }: { progress: RowProgress }) {
+  if (progress.state === "waiting") {
+    return (
+      <span className="inline-flex items-center gap-1 align-middle" title="queued — not started">
+        <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0">
+          <circle
+            cx="7"
+            cy="7"
+            r="5"
+            fill="none"
+            strokeWidth="2"
+            strokeDasharray="2 2"
+            className="stroke-muted-foreground/40"
+          />
+        </svg>
+        <span className="text-[10px] text-muted-foreground">queued</span>
+      </span>
+    );
+  }
+  if (progress.pct == null) return null;
+  const pct = progress.pct;
+  const r = 5;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - pct / 100);
+  return (
+    <span
+      className="inline-flex items-center gap-1 align-middle"
+      title={`${pct}% of estimated time`}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 -rotate-90">
+        <circle cx="7" cy="7" r={r} fill="none" strokeWidth="2" className="stroke-muted-foreground/25" />
+        <circle
+          cx="7"
+          cy="7"
+          r={r}
+          fill="none"
+          strokeWidth="2"
+          strokeLinecap="round"
+          className="stroke-primary"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
+    </span>
+  );
+}
+
+/** One running/waiting job. Click the row to toggle its full detail line open or closed. */
 function QueueRow({
   item,
-  dismissed,
+  expanded,
   onToggle,
-  onLeave,
 }: {
   item: ResourceQueueItem;
-  dismissed: boolean;
+  expanded: boolean;
   onToggle: () => void;
-  onLeave: () => void;
 }) {
+  const now = Date.now();
+  const { name, description } = splitReason(item.reason);
+  const progress = rowProgress(item, now);
   const where =
     item.state === "waiting" ? `#${item.pos ?? "?"} in ${item.resource} queue` : "holding lease";
   return (
     <div
-      className="group flex cursor-pointer gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent"
+      className="flex cursor-pointer gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent"
       onClick={onToggle}
-      onMouseLeave={onLeave}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onToggle();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
     >
-      <span
-        className={cn(
-          "mt-1 size-[7px] shrink-0 rounded-full",
-          item.state === "running"
-            ? "bg-emerald-500 shadow-[0_0_0_3px_rgba(34,197,94,0.16)]"
-            : "bg-amber-500",
-        )}
-      />
       <div className="min-w-0 flex-1">
-        {/* line 1 — reason (primary) */}
-        <div className="truncate text-xs text-foreground">{item.reason || "(no description)"}</div>
-        {/* line 2 — labels: resource + priority badges, then project + elapsed */}
+        {/* line 1 — resource label + progress inline, then the wrapping name */}
+        <div className="text-xs leading-snug text-foreground [overflow-wrap:anywhere]">
+          <span
+            className={cn(
+              "mr-1.5 inline-flex items-center rounded px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wide",
+              RESOURCE_BADGE[item.resource] ?? FALLBACK_BADGE,
+            )}
+          >
+            {item.resource}
+          </span>
+          <RowProgressBadge progress={progress} />
+          <span className="ml-1.5">{name || "(no description)"}</span>
+        </div>
+        {/* line 2 — optional description mined from the reason */}
+        {description ? (
+          <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">
+            {description}
+          </div>
+        ) : null}
+        {/* line 3 — labels: priority badge, then project + elapsed */}
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Tag label={item.resource} className={RESOURCE_BADGE[item.resource] ?? FALLBACK_BADGE} />
           <Tag label={item.priority} className={PRIORITY_BADGE[item.priority] ?? FALLBACK_BADGE} />
           <span className="opacity-40">·</span>
           <span className="truncate">{item.project || "—"}</span>
@@ -119,13 +188,11 @@ function QueueRow({
             </>
           ) : null}
         </div>
-        {/* line 3 — full details, revealed on hover, dismissable with a click */}
+        {/* line 4 — full details, toggled open by a click (no longer hover-only) */}
         <div
           className={cn(
             "overflow-hidden text-[10.5px] tabular-nums text-muted-foreground/70 transition-all duration-150",
-            dismissed
-              ? "max-h-0 opacity-0"
-              : "max-h-0 opacity-0 group-hover:mt-1 group-hover:max-h-12 group-hover:opacity-100",
+            expanded ? "mt-1 max-h-16 opacity-100" : "max-h-0 opacity-0",
           )}
         >
           pid {item.pid ?? "—"} · {where} ·{" "}
@@ -133,6 +200,19 @@ function QueueRow({
           {item.etaSec != null ? humanizeSec(item.etaSec) : "—"}
         </div>
       </div>
+      <svg
+        className={cn(
+          "mt-0.5 size-3.5 shrink-0 text-muted-foreground/60 transition-transform",
+          expanded ? "rotate-90" : "",
+        )}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      >
+        <path d="m9 6 6 6-6 6" />
+      </svg>
     </div>
   );
 }
@@ -140,7 +220,8 @@ function QueueRow({
 /**
  * Sidebar quick-glance for the local resource broker (`resctl`). Shows two badges —
  * running (green) and waiting (yellow) — and, on hover or click, a popover with the live
- * queue. Polls at 60s in the background and 5s while the popover is open.
+ * queue. Polls at 60s in the background and 5s while the popover is open. The advisory RAM
+ * pool is intentionally omitted (it is tracked but never reserved).
  */
 export function SidebarResourceQueue() {
   const environmentId = usePrimaryEnvironmentId();
@@ -148,7 +229,7 @@ export function SidebarResourceQueue() {
   const [hovering, setHovering] = useState(false);
   const open = pinned || hovering;
   const { snapshot } = useResourceQueue(environmentId, open);
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -185,9 +266,11 @@ export function SidebarResourceQueue() {
 
   if (environmentId == null) return null;
 
-  const running = snapshot?.running ?? [];
-  const waiting = snapshot?.waiting ?? [];
-  const resources = snapshot?.resources ?? [];
+  // Drop the advisory RAM/memory pool from every surface — it is tracked but not reservable,
+  // so it has no place in this "what's holding/queued for a resource" view.
+  const running = (snapshot?.running ?? []).filter((item) => item.resource !== "ram");
+  const waiting = (snapshot?.waiting ?? []).filter((item) => item.resource !== "ram");
+  const resources = (snapshot?.resources ?? []).filter((r) => r.name !== "ram");
   const rows = [...running, ...waiting];
 
   // Hover opens; the popover lives inside the wrapper, so moving into it keeps it open. A
@@ -205,18 +288,11 @@ export function SidebarResourceQueue() {
       return !prev;
     });
   };
-  const toggleDismiss = (key: string) =>
-    setDismissed((prev) => {
+  const toggleExpand = (key: string) =>
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      return next;
-    });
-  const clearDismiss = (key: string) =>
-    setDismissed((prev) => {
-      if (!prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.delete(key);
       return next;
     });
 
@@ -280,7 +356,6 @@ export function SidebarResourceQueue() {
                       <span className="uppercase">{r.name}</span>
                       <span className="tabular-nums">
                         <span className="font-semibold text-foreground">{r.inUse}</span>/{r.capacity}
-                        {r.name === "ram" ? "G" : ""}
                       </span>
                     </div>
                     <div className="h-[3px] overflow-hidden rounded bg-accent">
@@ -315,9 +390,8 @@ export function SidebarResourceQueue() {
                   <QueueRow
                     key={key}
                     item={item}
-                    dismissed={dismissed.has(key)}
-                    onToggle={() => toggleDismiss(key)}
-                    onLeave={() => clearDismiss(key)}
+                    expanded={expanded.has(key)}
+                    onToggle={() => toggleExpand(key)}
                   />
                 );
               })
