@@ -29,18 +29,21 @@ import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
+  Maximize2Icon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
   WrenchIcon,
   ZapIcon,
 } from "lucide-react";
+import { WorkEntryDetailDialog } from "./WorkEntryDetailDialog";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -661,6 +664,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }) {
   const { workspaceRoot } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
+  // The whole log can be collapsed to just its header. Starts open; state resets on unmount.
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  // The entry whose detail modal is open (null = closed). Lifted here so one dialog serves the
+  // whole group rather than mounting one per row.
+  const [detailEntry, setDetailEntry] = useState<TimelineWorkEntry | null>(null);
   const coalescedRows = coalesceRepeatedWorkLogEntries(groupedEntries);
   const hasOverflow = coalescedRows.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleRows =
@@ -672,37 +680,61 @@ const WorkGroupSection = memo(function WorkGroupSection({
     .slice(0, coalescedRows.length - visibleRows.length)
     .reduce((sum, row) => sum + row.count, 0);
   const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-  const showHeader = hasOverflow || !onlyToolEntries;
   const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
 
   return (
     <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
-      {showHeader && (
-        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-          <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55">
-            {groupLabel} ({groupedEntries.length})
-          </p>
-          {hasOverflow && (
-            <button
-              type="button"
-              className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
-              onClick={() => setIsExpanded((v) => !v)}
-            >
-              {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-            </button>
-          )}
-        </div>
-      )}
-      <div className="space-y-0.5">
-        {visibleRows.map(({ entry, count }) => (
-          <SimpleWorkEntryRow
-            key={`work-row:${entry.id}`}
-            workEntry={entry}
-            count={count}
-            workspaceRoot={workspaceRoot}
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <button
+          type="button"
+          className="group flex min-w-0 items-center gap-1 text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+          aria-expanded={!isCollapsed}
+          onClick={() => setIsCollapsed((v) => !v)}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-3 transition-transform duration-150",
+              isCollapsed ? "" : "rotate-90",
+            )}
           />
-        ))}
+          {groupLabel} ({groupedEntries.length})
+        </button>
+        {!isCollapsed && hasOverflow && (
+          <button
+            type="button"
+            className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+            onClick={() => setIsExpanded((v) => !v)}
+          >
+            {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+          </button>
+        )}
       </div>
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200",
+          isCollapsed ? "grid-rows-[0fr]" : "mt-1.5 grid-rows-[1fr]",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-0.5">
+            {visibleRows.map(({ entry, count }) => (
+              <SimpleWorkEntryRow
+                key={`work-row:${entry.id}`}
+                workEntry={entry}
+                count={count}
+                workspaceRoot={workspaceRoot}
+                onOpenDetail={setDetailEntry}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+      <WorkEntryDetailDialog
+        entry={detailEntry}
+        onOpenChange={(open) => {
+          if (!open) setDetailEntry(null);
+        }}
+      />
     </div>
   );
 });
@@ -1245,8 +1277,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   count?: number;
   workspaceRoot: string | undefined;
+  onOpenDetail: (entry: TimelineWorkEntry) => void;
 }) {
-  const { workEntry, count = 1, workspaceRoot } = props;
+  const { workEntry, count = 1, workspaceRoot, onOpenDetail } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
@@ -1268,7 +1301,22 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
 
   return (
-    <div className="rounded-lg px-1 py-1">
+    <div
+      role="button"
+      tabIndex={0}
+      // A generic accessible name — deliberately NOT echoing the entry text, so the row's label
+      // doesn't collide with the inner tooltip triggers' labels (a `getByLabel` for the command
+      // would otherwise match both the row and the trigger).
+      aria-label="Open work log entry detail"
+      onClick={() => onOpenDetail(workEntry)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenDetail(workEntry);
+        }
+      }}
+      className="group cursor-pointer rounded-lg px-1 py-1 transition-colors duration-150 hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
+    >
       <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
         <span
           className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
@@ -1335,6 +1383,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </Tooltip>
           )}
         </div>
+        <Maximize2Icon className="size-3 shrink-0 text-transparent transition-colors duration-150 group-hover:text-muted-foreground/60" />
       </div>
       {hasChangedFiles && !previewIsChangedFiles && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">

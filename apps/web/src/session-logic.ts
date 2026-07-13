@@ -65,6 +65,9 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  /** The raw structured activity payload, retained so the row-detail modal can show the full
+   *  (often JSON) content that the flattened `detail`/`command` strings can't represent. */
+  detailPayload?: unknown;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -592,6 +595,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
+  }
+  // Keep the raw structured payload for the row-detail modal (the flattened strings above lose
+  // nested/JSON content). Held by reference — it already lives on the activity.
+  if (payload) {
+    entry.detailPayload = payload;
   }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
