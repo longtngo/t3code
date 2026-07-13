@@ -70,6 +70,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { ComposerShortcutsControls } from "./ComposerShortcutsControls";
 import { TasksPanelToggle } from "./TasksPanelToggle";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
@@ -1364,6 +1365,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ],
   );
 
+  // Whether the composer can currently accept inserted text (mirrors the `insertTextAtEnd`
+  // guards) — used to disable shortcut chips while connecting / mid-approval / awaiting input.
+  const canInsertComposerText =
+    !isConnecting &&
+    !isComposerApprovalState &&
+    pendingUserInputs.length === 0 &&
+    !(environmentUnavailable !== null && activePendingProgress === null);
+
+  const handleInsertShortcut = useCallback(
+    (text: string) => {
+      if (text.length === 0 || !canInsertComposerText) return;
+      const current = promptRef.current;
+      // Separate the inserted prompt from existing draft text with a newline, unless the draft
+      // is empty or already ends in whitespace.
+      const separator = current.length > 0 && !/\s$/.test(current) ? "\n" : "";
+      const end = current.length;
+      applyPromptReplacement(end, end, separator + text);
+    },
+    [canInsertComposerText, applyPromptReplacement, promptRef],
+  );
+
   const readComposerSnapshot = useCallback((): {
     value: string;
     cursor: number;
@@ -2019,7 +2041,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           {/* Permanent tasks bar inside the composer border: the toggle aligns
               with the input and sits on a contrasting backdrop. Aggregates plan
               steps + agents + background processes; spinner shows while any run. */}
-          <div className="flex items-center rounded-t-[20px] border-b border-border/65 bg-muted/30 px-2 py-1.5">
+          <div className="flex items-center gap-2 rounded-t-[20px] border-b border-border/65 bg-muted/30 px-2 py-1.5">
             <TasksPanelToggle
               open={tasksBar.open}
               onToggle={tasksBar.onToggle}
@@ -2027,6 +2049,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               completedCount={tasksBar.completedCount}
               totalCount={tasksBar.totalCount}
               hasActive={tasksBar.hasActive}
+            />
+            <ComposerShortcutsControls
+              onInsert={handleInsertShortcut}
+              disabled={!canInsertComposerText}
             />
           </div>
           {!isComposerCollapsedMobile &&

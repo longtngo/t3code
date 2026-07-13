@@ -39,8 +39,21 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
+/** A user-defined composer prompt shortcut: a button label plus the prompt text it inserts. */
+export const ComposerShortcut = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  text: Schema.String,
+});
+export type ComposerShortcut = typeof ComposerShortcut.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // User-managed prompt shortcuts shown above the composer input; clicking one inserts its
+  // text. Ordered by the user in the manager. Client-only (no server round-trip needed).
+  composerShortcuts: Schema.Array(ComposerShortcut).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -664,6 +677,7 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
+  composerShortcuts: Schema.optionalKey(Schema.Array(ComposerShortcut)),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),

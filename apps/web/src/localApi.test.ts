@@ -685,6 +685,7 @@ describe("wsApi", () => {
   it("reads and writes persistence through the desktop bridge when available", async () => {
     const clientSettings = {
       autoOpenPlanSidebar: false,
+      composerShortcuts: [],
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       dismissedProviderUpdateNotificationKeys: [],
@@ -749,6 +750,7 @@ describe("wsApi", () => {
     const api = createLocalApi(rpcClientMock);
     const clientSettings = {
       autoOpenPlanSidebar: false,
+      composerShortcuts: [],
       confirmThreadArchive: true,
       confirmThreadDelete: false,
       dismissedProviderUpdateNotificationKeys: [],
