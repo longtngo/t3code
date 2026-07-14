@@ -51,6 +51,19 @@ const writeTextFile = (
     yield* fileSystem.writeFileString(filePath, contents);
   });
 
+const writeSizedFile = (
+  cwd: string,
+  relativePath: string,
+  bytes: number,
+): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const filePath = pathService.join(cwd, relativePath);
+    yield* fileSystem.makeDirectory(pathService.dirname(filePath), { recursive: true });
+    yield* fileSystem.writeFile(filePath, new Uint8Array(bytes));
+  });
+
 const git = (
   cwd: string,
   args: ReadonlyArray<string>,
@@ -722,6 +735,153 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* checkpoints.captureCheckpoint({ cwd: worktreeDir, checkpointRef: ref });
 
         assert.equal(yield* git(worktreeDir, ["show", `${ref}:wt-only.txt`]), "in-worktree");
+      }),
+    );
+
+    // --- Untracked size bound (2026-07-14). Heavy untracked artifacts must be SKIPPED from
+    // capture so `git add -A` cannot blow the process timeout, and SYMMETRICALLY must not be
+    // deleted by restore's `git clean`. Design: docs/design/2026-07-14-checkpoint-untracked-size-bound.
+    const OVER = GitVcsDriver.MAX_UNTRACKED_CHECKPOINT_FILE_BYTES + 4096;
+    const UNDER = GitVcsDriver.MAX_UNTRACKED_CHECKPOINT_FILE_BYTES - 4096;
+
+    it.effect("skips an oversized untracked file from the checkpoint tree, keeps small ones", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeSizedFile(cwd, "big.bin", OVER);
+        yield* writeTextFile(cwd, "small.txt", "tiny\n");
+
+        const ref = cpRef("bound/skip-oversized");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.notInclude(tree, "big.bin");
+        assert.include(tree, "small.txt");
+      }),
+    );
+
+    // The exact data-loss case the Stage-6 correctness review caught: `git clean -fd` removes a
+    // FULLY-UNTRACKED directory wholesale, so a file-level pathspec exclude is silently ignored.
+    // Restore must use `git clean -e` (ignore machinery), which descends and preserves the file
+    // while still cleaning small untracked siblings.
+    it.effect("does not delete an oversized untracked file on restore (fully-untracked subtree)", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+        const fs = yield* FileSystem.FileSystem;
+        const p = yield* Path.Path;
+
+        yield* writeSizedFile(cwd, "research/matrices/big.npz", OVER);
+
+        const ref = cpRef("bound/restore-preserves");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.notInclude(tree, "research/matrices/big.npz");
+
+        // A small untracked file created after capture — restore SHOULD clean this one.
+        yield* writeTextFile(cwd, "research/matrices/scratch.txt", "junk\n");
+
+        yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
+
+        assert.isTrue(
+          yield* fs.exists(p.join(cwd, "research/matrices/big.npz")),
+          "oversized untracked file must survive restore",
+        );
+        assert.isFalse(
+          yield* fs.exists(p.join(cwd, "research/matrices/scratch.txt")),
+          "small untracked file created after capture must be cleaned by restore",
+        );
+      }),
+    );
+
+    it.effect("captures an untracked file just under the threshold", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeSizedFile(cwd, "just-under.bin", UNDER);
+
+        const ref = cpRef("bound/under-threshold");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.include(tree, "just-under.bin");
+      }),
+    );
+
+    it.effect("still captures a large TRACKED file (bound is untracked-only)", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+
+        yield* writeSizedFile(cwd, "tracked-big.bin", OVER);
+        yield* git(cwd, ["add", "tracked-big.bin"]);
+        yield* git(cwd, ["commit", "-m", "add big tracked"]);
+        yield* writeSizedFile(cwd, "tracked-big.bin", OVER + 8);
+
+        const ref = cpRef("bound/tracked-large");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.include(tree, "tracked-big.bin");
+      }),
+    );
+
+    // A '[' in the name breaks a naive gitignore `-e` pattern → parent dir removed wholesale.
+    // The `-e` pattern must escape gitignore metacharacters.
+    it.effect("skips + preserves an oversized untracked file whose name has a gitignore metachar", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+        const fs = yield* FileSystem.FileSystem;
+        const p = yield* Path.Path;
+
+        yield* writeSizedFile(cwd, "research/big[v2].npz", OVER);
+
+        const ref = cpRef("bound/metachar-name");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.notInclude(tree, "research/big[v2].npz");
+
+        yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
+        assert.isTrue(
+          yield* fs.exists(p.join(cwd, "research/big[v2].npz")),
+          "metacharacter-named oversized file must survive restore",
+        );
+      }),
+    );
+
+    it.effect("normal repo with no oversized files behaves as before (plain add + clean)", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const checkpoints = yield* getCheckpoints;
+        const fs = yield* FileSystem.FileSystem;
+        const p = yield* Path.Path;
+
+        yield* writeTextFile(cwd, "a.txt", "a\n");
+        yield* writeTextFile(cwd, "dir/b.txt", "b\n");
+
+        const ref = cpRef("bound/normal");
+        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+        assert.include(tree, "a.txt");
+        assert.include(tree, "dir/b.txt");
+
+        yield* writeTextFile(cwd, "c.txt", "c\n");
+        yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
+        assert.isFalse(
+          yield* fs.exists(p.join(cwd, "c.txt")),
+          "untracked file created after capture must be cleaned",
+        );
+        assert.isTrue(yield* fs.exists(p.join(cwd, "a.txt")));
       }),
     );
   });

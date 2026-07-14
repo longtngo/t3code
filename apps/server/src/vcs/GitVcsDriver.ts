@@ -32,6 +32,34 @@ import * as GitVcsDriverCore from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
+/**
+ * Untracked files whose on-disk size is >= this are excluded from checkpoint capture (and
+ * symmetrically from restore's `git clean`), so `git add -A` cannot spend the whole process
+ * timeout hashing+deflating heavy regenerable artifacts (e.g. `.npy`/`.npz` matrices, model
+ * weights, caches). 10 MiB sits well above normal source/config/small assets and below data
+ * artifacts. The bound is untracked-only: tracked files are always captured.
+ */
+export const MAX_UNTRACKED_CHECKPOINT_FILE_BYTES = 10 * 1024 * 1024;
+
+// gitignore metacharacters that must be escaped so a `git clean -e` pattern matches ONE path
+// literally. This is load-bearing: an unescaped `[`/`*`/`?` makes the pattern miss the file, and
+// `git clean -fd` then removes the file's (untracked) parent directory WHOLESALE — data loss.
+const GITIGNORE_META = /[\\*?[\]]/g;
+
+/**
+ * Build a repo-root-anchored gitignore pattern matching exactly `relPath`, for `git clean -e`.
+ * Restore uses `-e` (ignore machinery) rather than a `:(exclude)` pathspec because ignore-aware
+ * `clean` descends into an otherwise-untracked directory to preserve the excluded file while
+ * still cleaning its small siblings — a file-level pathspec exclude cannot (clean removes the
+ * whole untracked dir as a unit).
+ */
+export function checkpointCleanExcludePattern(relPath: string): string {
+  const escaped = relPath.replace(GITIGNORE_META, (ch) => `\\${ch}`);
+  // gitignore strips a single trailing space unless it is escaped.
+  const normalized = escaped.endsWith(" ") ? `${escaped.slice(0, -1)}\\ ` : escaped;
+  return `/${normalized}`;
+}
+
 export interface ExecuteGitInput {
   readonly operation: string;
   readonly cwd: string;
@@ -640,6 +668,49 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ),
     );
 
+  // Untracked, non-ignored files at or above MAX_UNTRACKED_CHECKPOINT_FILE_BYTES. Used by BOTH
+  // capture (exclude from `git add`) and restore (exclude from `git clean`) via a single shared
+  // predicate so the two ends can never drift — the symmetry is the correctness invariant.
+  // MUST run with the plain process env: `git ls-files --others` is relative to the REAL index,
+  // never the checkpoint temp index (commitEnv). `execute` uses process.env when no env is given.
+  const enumerateOversizedUntracked = (cwd: string) =>
+    Effect.gen(function* () {
+      const listing = yield* execute({
+        operation: "GitVcsDriver.checkpoints.enumerateUntracked",
+        cwd,
+        args: ["ls-files", "--others", "--exclude-standard", "-z"],
+        // A pathologically huge untracked listing is truncated → skip the bound and fall back to
+        // plain add/clean (old behavior) rather than acting on a partial set.
+        maxOutputBytes: 16 * 1024 * 1024,
+      });
+      if (listing.stdoutTruncated) {
+        return [] as ReadonlyArray<{ readonly path: string; readonly size: number }>;
+      }
+      const relPaths = listing.stdout.split("\0").filter((value) => value.length > 0);
+      const entries = yield* Effect.forEach(
+        relPaths,
+        (relPath) =>
+          Effect.gen(function* () {
+            const absolute = path.isAbsolute(relPath) ? relPath : path.resolve(cwd, relPath);
+            // stat (not lstat) — a file deleted between listing and stat, or a broken symlink,
+            // resolves to null and is simply not treated as oversized.
+            const info = yield* fileSystem.stat(absolute).pipe(Effect.orElseSucceed(() => null));
+            if (
+              info &&
+              info.type === "File" &&
+              Number(info.size) >= MAX_UNTRACKED_CHECKPOINT_FILE_BYTES
+            ) {
+              return { path: relPath, size: Number(info.size) };
+            }
+            return null;
+          }),
+        { concurrency: 16 },
+      );
+      return entries.filter(
+        (entry): entry is { readonly path: string; readonly size: number } => entry !== null,
+      );
+    });
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
@@ -659,6 +730,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         .pipe(Effect.ignore);
 
       yield* Effect.gen(function* () {
+        // Heavy untracked artifacts (regenerable `.npy`/`.npz` matrices, model weights, caches)
+        // would make `git add -A` deflate+write hundreds of MB of new blobs and blow the process
+        // timeout. Exclude any untracked file >= the size threshold from capture (and mirror it
+        // in restore's clean). Runs with the plain env (real index) — see the helper.
+        const oversizedUntracked = yield* enumerateOversizedUntracked(input.cwd);
+
         // Seed the throwaway index so `git add -A` can use git's stat cache and skip
         // re-hashing unchanged files; otherwise every capture re-reads the entire
         // working tree and can exceed the process timeout on large repos. Copying the
@@ -701,12 +778,29 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           }
         }
 
+        // `:(exclude,literal)` pathspecs drop the oversized untracked files from `-A`. `git add`
+        // is per-file, so a literal-path exclude works even for a file in a fully-untracked
+        // subtree. Empty set → exactly `git add -A -- .` as before (zero behavior change).
+        const addExcludePathspecs = oversizedUntracked.map(
+          (entry) => `:(exclude,literal)${entry.path}`,
+        );
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          args: ["add", "-A", "--", ".", ...addExcludePathspecs],
           env: commitEnv,
         });
+        if (oversizedUntracked.length > 0) {
+          const skippedBytes = oversizedUntracked.reduce((sum, entry) => sum + entry.size, 0);
+          yield* Effect.logInfo("checkpoint: skipped oversized untracked files from capture").pipe(
+            Effect.annotateLogs({
+              cwd: input.cwd,
+              skippedFiles: oversizedUntracked.length,
+              skippedBytes,
+              thresholdBytes: MAX_UNTRACKED_CHECKPOINT_FILE_BYTES,
+            }),
+          );
+        }
 
         const writeTreeResult = yield* execute({
           operation,
@@ -774,10 +868,20 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
       });
+      // Symmetric to capture: oversized untracked artifacts were never captured, so they must not
+      // be deleted here. `git restore --worktree` leaves untracked files on disk, so recompute the
+      // set and pass each as a `git clean -e` exclude — this preserves the heavy file while still
+      // cleaning its small untracked siblings (a file-level pathspec exclude would fail, because
+      // `git clean -fd` removes a fully-untracked directory wholesale). Empty set → plain clean.
+      const oversizedUntracked = yield* enumerateOversizedUntracked(input.cwd);
+      const cleanExcludes = oversizedUntracked.flatMap((entry) => [
+        "-e",
+        checkpointCleanExcludePattern(entry.path),
+      ]);
       yield* execute({
         operation,
         cwd: input.cwd,
-        args: ["clean", "-fd", "--", "."],
+        args: ["clean", "-fd", ...cleanExcludes, "--", "."],
       });
 
       const headExists = yield* hasHeadCommit(input.cwd);
