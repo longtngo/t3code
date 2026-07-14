@@ -37,8 +37,10 @@ import {
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
+import { parsePositiveIntEnv } from "../../provider/Layers/parsePositiveIntEnv.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
+import { boundedSubscriberStream } from "./boundedSubscriberStream.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -82,6 +84,18 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
+/**
+ * Per-WS-subscription buffer capacity for the domain-event hub. Bounds how far
+ * behind a single WebSocket consumer may fall before its subscription is ended
+ * cleanly (the client then resubscribes from its last-applied sequence). This is
+ * what stops one slow/dead socket from pinning the unbounded hub and OOM-ing the
+ * server. Override with T3CODE_WS_SUBSCRIBER_BUFFER.
+ */
+const DEFAULT_WS_SUBSCRIBER_BUFFER_CAPACITY = 4096;
+
+/** Interval for the event-hub health gauge (0 = disabled via T3CODE_HUB_GAUGE_MS=0). */
+const DEFAULT_HUB_GAUGE_INTERVAL_MS = 60_000;
+
 const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const eventStore = yield* OrchestrationEventStore;
@@ -95,6 +109,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const wsSubscriberBufferCapacity =
+    parsePositiveIntEnv("T3CODE_WS_SUBSCRIBER_BUFFER") ?? DEFAULT_WS_SUBSCRIBER_BUFFER_CAPACITY;
+  const hubGaugeIntervalMs =
+    process.env.T3CODE_HUB_GAUGE_MS === "0"
+      ? 0
+      : (parsePositiveIntEnv("T3CODE_HUB_GAUGE_MS") ?? DEFAULT_HUB_GAUGE_INTERVAL_MS);
 
   const projectEventsOntoReadModel = (
     baseReadModel: OrchestrationReadModel,
@@ -308,6 +328,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
   yield* Effect.forkScoped(worker);
+
+  // Health gauge: the event hub is unbounded, so its backlog is the leading
+  // indicator of the OOM leak (a stuck subscriber makes it climb). Log it
+  // alongside heap usage on a slow timer so the leak fix is observable and a
+  // regression is caught early — there was essentially no heap telemetry before.
+  // Disable with T3CODE_HUB_GAUGE_MS=0.
+  if (hubGaugeIntervalMs > 0) {
+    const hubGauge = Effect.forever(
+      Effect.gen(function* () {
+        yield* Effect.sleep(Duration.millis(hubGaugeIntervalMs));
+        const memory = process.memoryUsage();
+        yield* Effect.logInfo("orchestration.hub.gauge", {
+          hubBacklog: yield* PubSub.size(eventPubSub),
+          heapUsedMb: Math.round(memory.heapUsed / 1_048_576),
+          rssMb: Math.round(memory.rss / 1_048_576),
+        });
+      }),
+    );
+    yield* Effect.forkScoped(hubGauge);
+  }
+
   yield* Effect.logDebug("orchestration engine started").pipe(
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
   );
@@ -338,10 +379,20 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // Eager subscription: `PubSub.subscribe` runs (and starts buffering) the
     // moment this effect is evaluated, before the returned stream is consumed —
     // so a caller can subscribe to the live tail before reading a snapshot and
-    // lose nothing in the read window. `fromEffectRepeat` ends the stream cleanly
-    // when the subscription shuts down (it excludes the Done signal).
+    // lose nothing in the read window.
+    //
+    // The subscription is wrapped in a bounded, self-draining buffer
+    // (`boundedSubscriberStream`): a forked pump takes from the subscription
+    // unconditionally (so a slow/dead WebSocket consumer can never backpressure
+    // its take-loop and pin this unbounded hub — the confirmed OOM leak) into a
+    // bounded queue the consumer drains at its own pace. If the consumer falls
+    // `wsSubscriberBufferCapacity` behind, the stream ends cleanly and the client
+    // resubscribes from its last-applied sequence. Only WS callers use this;
+    // internal reactors consume the lossless `streamDomainEvents`.
     subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
-      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+      Effect.flatMap((subscription) =>
+        boundedSubscriberStream(subscription, wsSubscriberBufferCapacity),
+      ),
     ),
   } satisfies OrchestrationEngineShape;
 });

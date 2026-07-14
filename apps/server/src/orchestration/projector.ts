@@ -334,9 +334,19 @@ export function projectEvent(
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
+          // Keep a lightweight tombstone (id + deletedAt) so the decider still
+          // sees the thread as deleted, but free its heavy content arrays — a
+          // deleted thread never needs its up-to-2000 messages in the in-memory
+          // command read model again, and without this they accumulate for the
+          // whole server lifetime (a slow leak; the SQL projection still holds
+          // history until ThreadDeletionReactor prunes it).
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
             updatedAt: payload.deletedAt,
+            messages: [],
+            activities: [],
+            checkpoints: [],
+            proposedPlans: [],
           }),
         })),
       );

@@ -6,6 +6,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -913,4 +914,77 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints[0]?.turnId).toBe("turn-100");
     expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
   });
+
+  effectIt.effect("frees a deleted thread's heavy content but keeps its tombstone", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const created = yield* projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-del",
+          occurredAt: now,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-del",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      );
+      const withMessage = yield* projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-del",
+          occurredAt: now,
+          commandId: "cmd-msg",
+          payload: {
+            threadId: "thread-del",
+            messageId: "assistant:msg-1",
+            role: "assistant",
+            text: "hello",
+            turnId: "turn-1",
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      );
+      expect(withMessage.threads[0]?.messages).toHaveLength(1);
+
+      const deletedAt = "2026-01-02T00:00:00.000Z";
+      const afterDelete = yield* projectEvent(
+        withMessage,
+        makeEvent({
+          sequence: 3,
+          type: "thread.deleted",
+          aggregateKind: "thread",
+          aggregateId: "thread-del",
+          occurredAt: deletedAt,
+          commandId: "cmd-delete",
+          payload: { threadId: "thread-del", deletedAt },
+        }),
+      );
+
+      const thread = afterDelete.threads.find((entry) => entry.id === "thread-del");
+      // Tombstone kept so the decider still sees the thread as deleted...
+      expect(thread?.deletedAt).toBe(deletedAt);
+      // ...but its heavy content is freed so it can't accumulate in memory forever.
+      expect(thread?.messages).toEqual([]);
+      expect(thread?.activities).toEqual([]);
+      expect(thread?.checkpoints).toEqual([]);
+      expect(thread?.proposedPlans).toEqual([]);
+    }),
+  );
 });
