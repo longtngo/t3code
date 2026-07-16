@@ -29,6 +29,7 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import * as GitVcsDriverCore from "./GitVcsDriverCore.ts";
+import { isTransientVcsError, makeTransientGitRetrySchedule, resolveGitRetryAttempts } from "./gitRetry.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -40,6 +41,17 @@ import * as VcsProcess from "./VcsProcess.ts";
  * artifacts. The bound is untracked-only: tracked files are always captured.
  */
 export const MAX_UNTRACKED_CHECKPOINT_FILE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Retry policy for the whole `captureCheckpoint` operation. Capture uses a throwaway temp
+ * index and writes only content-addressed objects + a last-write-wins checkpoint ref, so it is
+ * idempotent and safe to retry. A transient git failure (timeout / spawn starvation) is almost
+ * always a passing host-overload episode (measured: 608 captures succeed per 1 timeout), so a
+ * bounded jittered-backoff retry converts it into a delayed success instead of a lost checkpoint.
+ * Whole-operation (not per-command) retry bounds latency on the serial checkpoint worker to
+ * attempts × timeout and re-seeds a clean temp index each attempt. Read at module load.
+ */
+const captureRetrySchedule = makeTransientGitRetrySchedule(resolveGitRetryAttempts());
 
 // gitignore metacharacters that must be escaped so a `git clean -e` pattern matches ONE path
 // literally. This is load-bearing: an unescaped `[`/`*`/`?` makes the pattern miss the file, and
@@ -714,7 +726,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
-      const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
+      // Retry the pre-flight `git rev-parse --git-common-dir` on a transient failure too: it
+      // runs OUTSIDE the retried operation body (the temp-index path derives from it), yet a
+      // zero-work `rev-parse` is the command that most often times out under host overload — so
+      // without this it would fail the whole capture unprotected, defeating the fix for its most
+      // likely trigger.
+      const gitCommonDir = yield* resolveGitCommonDir(input.cwd).pipe(
+        Effect.retry({ schedule: captureRetrySchedule, while: isTransientVcsError }),
+      );
       const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${randomUUID()}`);
       const commitEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -842,7 +861,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           cwd: input.cwd,
           args: ["update-ref", input.checkpointRef, commitOid],
         });
-      }).pipe(Effect.ensuring(cleanupTempIndex));
+      }).pipe(
+        // Retry the whole capture on a transient VCS failure (host-overload timeout / spawn
+        // starvation) — never on a real git exit or a decode/detection error. Retry is INSIDE
+        // `ensuring` so the temp index is cleaned up exactly once after all attempts settle;
+        // each attempt re-seeds it afresh. `isTransientVcsError` matches only the transient
+        // tags in the operation's error union.
+        Effect.retry({ schedule: captureRetrySchedule, while: isTransientVcsError }),
+        Effect.ensuring(cleanupTempIndex),
+      );
     }),
 
     hasCheckpointRef: (input) =>

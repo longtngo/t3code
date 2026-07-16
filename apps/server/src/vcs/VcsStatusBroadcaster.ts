@@ -291,8 +291,13 @@ export const layer = Layer.effect(
 
         return yield* refreshRemoteStatusIfEnabled.pipe(
           Effect.repeat(
+            // `Schedule.jittered` (±20%) de-correlates the per-repo pollers so that N repos,
+            // whose loops start together and share the same refresh interval, stop firing git
+            // subprocesses in synchronized lockstep bursts (which amplify host-overload git
+            // timeouts). Applied to the whole delay, including the exponential failure backoff.
             Schedule.identity<Duration.Duration>().pipe(
               Schedule.addDelay((delay) => Effect.succeed(delay)),
+              Schedule.jittered,
             ),
           ),
           Effect.asVoid,
