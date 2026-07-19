@@ -251,18 +251,20 @@ the `packages/client-runtime` `WsTransport`.)
    terminal scrollback resync).
 3. Optional: a metric/log counting recycles per method to observe real-world
    recycle frequency and tune N.
-4. **Extend the recycle to the remaining long-lived streams** (review finding,
-   deliberately out of scope here). The same per-element `_stack` growth exists on
-   other `observeRpcStream(Effect)` subscriptions the forensics did *not* pin as
-   dominant leakers:
+4. **Extend the recycle to the remaining long-lived streams** — **DONE**
+   (follow-up branch `feat/recycle-more-streams`). After verifying resync-safety
+   (server emit pattern + client apply, both confirmed):
    - `subscribeHostMetrics` (~1.5 s) and `subscribeLlmModels` (~4 s) — periodic
-     **full-state** emitters, so idempotent and *safe* to recycle; low-volume, but
-     `subscribeHostMetrics` crosses N ≈ 20000 in ~8 h, so it is a slow contributor
-     worth adding after a resync-safety confirmation.
-   - `subscribeVcsStatus` — verify resync-safety before recycling.
-   - `terminalAttach` (raw PTY output) — **not** safely recyclable as-is: like
-     `subscribeTerminalEvents`, its output is not losslessly replayable on
-     re-subscribe. Needs a scrollback/replay resync first.
-   The dominant monotonic climb (long autonomous sessions streaming every SDK
-   event through `subscribeThread`/`subscribeShell`) is closed by this change; this
-   item fully closes the leak *class* and each stream needs its own resync check.
+     **full-state** emitters the client full-replaces; `subscribeHostMetrics`
+     crosses N ≈ 20000 in ~8 h so it is a real slow contributor. **Recycled.**
+   - `subscribeVcsStatus` — leads every (re)subscribe with a full `snapshot` the
+     client applies as a full replace (even has an `onResubscribe` hook).
+     **Recycled.**
+   - `terminalAttach` + `subscribeTerminalEvents` (raw PTY output/events) —
+     confirmed **NOT** safely recyclable: output is not losslessly replayable on
+     re-subscribe (raw escape sequences / gap events are lost). Left unbounded;
+     safely recycling them needs a replayable scrollback resync first (still a
+     follow-up).
+   The dominant monotonic climb (long autonomous sessions streaming every SDK event
+   through `subscribeThread`/`subscribeShell`) was closed by the base change; this
+   follow-up closes the leak *class* for every idempotent-resync stream.

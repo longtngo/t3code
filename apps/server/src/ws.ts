@@ -1431,9 +1431,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeVcsStatus,
-            vcsStatusBroadcaster.streamStatus(input, {
-              automaticRemoteRefreshInterval: automaticGitFetchInterval,
-            }),
+            // Recycle by event-count (see recycleSubscriptionStream). Safe: every
+            // (re)subscribe leads with a full `snapshot` of current local+remote
+            // status, which the client applies as a full replace, so a recycle
+            // loses nothing.
+            recycleSubscriptionStream(
+              vcsStatusBroadcaster.streamStatus(input, {
+                automaticRemoteRefreshInterval: automaticGitFetchInterval,
+              }),
+              WS_SUBSCRIPTION_MAX_EVENTS,
+            ),
             {
               "rpc.aggregate": "vcs",
             },
@@ -1670,13 +1677,29 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.subscribeHostMetrics]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeHostMetrics,
-            Effect.succeed(HostMetrics.hostMetricsStream(input.intervalMs ?? 1500)),
+            // Recycle by event-count (see recycleSubscriptionStream). Each tick is a
+            // full independent sample the client full-replaces, so recycling is
+            // seamless. This periodic (~1.5 s) stream crosses the default cap in
+            // ~8 h, so it is a real slow contributor on long sessions.
+            Effect.succeed(
+              recycleSubscriptionStream(
+                HostMetrics.hostMetricsStream(input.intervalMs ?? 1500),
+                WS_SUBSCRIPTION_MAX_EVENTS,
+              ),
+            ),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscribeLlmModels]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeLlmModels,
-            Effect.succeed(LlmModels.llmModelsStream(input.intervalMs ?? 4000)),
+            // Recycle by event-count (see recycleSubscriptionStream). Each tick is a
+            // full independent model snapshot the client full-replaces.
+            Effect.succeed(
+              recycleSubscriptionStream(
+                LlmModels.llmModelsStream(input.intervalMs ?? 4000),
+                WS_SUBSCRIPTION_MAX_EVENTS,
+              ),
+            ),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.getResourceQueue]: (_input) =>
