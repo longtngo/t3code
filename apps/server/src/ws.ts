@@ -126,6 +126,7 @@ import {
   recycleSubscriptionStream,
   resolveSubscriptionRecycleLimit,
 } from "./recycleSubscriptionStream.ts";
+import { batchWithinStackSafe } from "./orchestration/Layers/batchWithinStackSafe.ts";
 import { toHttpEffectWebsocketOrdered } from "./wsRpcServerProtocol.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
@@ -141,13 +142,22 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const RESUME_MAX_MISSED_EVENTS = 500;
 
 /**
- * Activity batching: coalesce a burst of thread events emitted within this window
- * into one wire frame (up to {@link ACTIVITY_BATCH_MAX_EVENTS}), cutting the frame
- * count on long agentic turns. The window is short enough to be imperceptible for
- * live activity display; isolated events still flush promptly.
+ * Activity batching: coalesce a burst of thread events into one wire frame (up to
+ * {@link ACTIVITY_BATCH_MAX_EVENTS}), cutting the frame count on long agentic
+ * turns. Batching is backpressure-driven (see {@link batchWithinStackSafe}):
+ * events coalesce exactly when they arrive faster than they can be sent to the
+ * client and flush immediately otherwise. {@link ACTIVITY_BATCH_BUFFER_CAPACITY}
+ * bounds the hand-off buffer so a stalled socket backpressures into the
+ * subscriber-buffer drop+resync path rather than growing unbounded.
+ *
+ * NOTE: the previous `Stream.groupedWithin` implementation drove this with a
+ * perpetual `Schedule.spaced` timer whose effect `aggregateWithin` schedule loop
+ * is NOT stack-safe — every idle 20ms tick pinned continuation frames on the
+ * subscription fiber's `_stack` forever, the confirmed server OOM. Do NOT
+ * reintroduce `Stream.groupedWithin`/`aggregate` here.
  */
-const ACTIVITY_BATCH_WINDOW = Duration.millis(20);
 const ACTIVITY_BATCH_MAX_EVENTS = 64;
+const ACTIVITY_BATCH_BUFFER_CAPACITY = 4096;
 
 /**
  * Default thread-load window applied to the live `subscribeThread` snapshot when
@@ -1026,14 +1036,16 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
               // subscribe→read window is in BOTH the history read and this
               // subscription, so we drop the ones the history already delivered.
               const liveStreamAfter = (afterSequence: number) =>
-                liveEvents.pipe(
-                  Stream.filter((event) => event.sequence > afterSequence),
-                  Stream.filter(isThisThreadEvent),
-                  // Coalesce bursts within a turn into one batch frame; isolated
-                  // events flush after the short window. Applied in order.
-                  Stream.groupedWithin(ACTIVITY_BATCH_MAX_EVENTS, ACTIVITY_BATCH_WINDOW),
-                  Stream.map((chunk) => ({ kind: "events" as const, events: Array.from(chunk) })),
-                );
+                batchWithinStackSafe(
+                  liveEvents.pipe(
+                    Stream.filter((event) => event.sequence > afterSequence),
+                    Stream.filter(isThisThreadEvent),
+                  ),
+                  // Coalesce bursts into one batch frame by backpressure — no idle
+                  // timer, stack-safe (replaces the leaking Stream.groupedWithin).
+                  ACTIVITY_BATCH_MAX_EVENTS,
+                  ACTIVITY_BATCH_BUFFER_CAPACITY,
+                ).pipe(Stream.map((events) => ({ kind: "events" as const, events })));
 
               // Incremental reconnect: when the client sends its last-seen sequence,
               // stream only the thread events it missed instead of a full snapshot.

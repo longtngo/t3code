@@ -7,25 +7,36 @@ import * as Stream from "effect/Stream";
  * capacity). Both end the stream *cleanly* so the client resubscribes-and-resyncs;
  * this one is triggered by throughput rather than by a slow consumer.
  *
- * ## Why this exists
+ * ## Why this exists — and a CORRECTION (2026-07-21)
  *
- * Effect's `RpcServer` streaming layer (`effect/unstable/rpc`) handles each
- * subscription request in its own forked request fiber running
- * `Stream.runForEachArray(stream, sendChunk)`. That fiber's continuation `_stack`
- * grows by one frame per streamed element and is never trimmed for the life of the
- * subscription. On long-lived, high-volume subscriptions (`subscribeThread`,
- * `subscribeShell`, `subscribeTerminalMetadata` during long autonomous sessions)
- * the stack grows unbounded — a sustained ~1.7 GB/hr heap climb to an OOM crash at
- * whatever `--max-old-space-size` ceiling is set. Capturing 4+ live heap snapshots
- * pinned the leak to this per-element accumulation (517K → 690K → 1.09M frames);
- * the fiber (and its stack) is freed the moment its stream completes.
+ * This recycle was introduced (2026-07-18) believing the recurring server OOM came
+ * from a per-element fiber-`_stack` accumulation: that `RpcServer`'s forked request
+ * fiber running `Stream.runForEachArray(stream, sendChunk)` grew its continuation
+ * `_stack` by one frame per streamed element. **That mechanism was wrong.**
+ * `Stream.runForEachArray` (and `Stream.fromPull`) run under `Effect.forever` /
+ * `whileLoop`, which is trampolined to constant stack depth (`Channel.js` runWith /
+ * `internal/effect.js` whileLoop) — they do NOT grow `_stack` per element.
  *
- * Capping the stream at `maxElements` ends it cleanly, the RpcServer fiber
- * completes and frees its stack, and the client transport treats the clean
- * completion as a resubscribe-and-resync trigger (identical to what
- * `boundedSubscriberStream`'s drop-behind path already does in production). Peak
- * per-fiber stack is bounded to `maxElements` frames and rebuilt from zero on each
- * recycle, so the heap can no longer climb without bound.
+ * The real leak (source-verified 2026-07-21) was a non-stack-safe schedule loop
+ * inside effect's `Stream.groupedWithin` → `aggregateWithin` (`stepToBuffer`), used
+ * ONLY on `subscribeThread`: every idle 20 ms `Schedule.spaced` tick self-recursed
+ * under `flatMap(() => Effect.never)` + `catchDone`, pinning +2 frames per tick
+ * forever. That is fixed by replacing `groupedWithin` with `batchWithinStackSafe`
+ * (see {@link ./orchestration/Layers/batchWithinStackSafe}). This `Stream.take`
+ * recycle did NOT prevent that leak (it bounds *emitted* elements, while the leak
+ * grew fastest when zero were emitted) — which is why the server kept OOM-crashing
+ * after it shipped.
+ *
+ * ## What this actually does now
+ *
+ * Capping a subscription stream at `maxElements` ends it cleanly, so the RpcServer
+ * request fiber completes and the client transport resubscribes-and-resyncs
+ * (identical to `boundedSubscriberStream`'s drop-behind path). With the real leak
+ * fixed elsewhere, this is a *defensive* periodic event-count bound on long-lived
+ * streams, not the OOM cure it was thought to be. Its remaining value is uncertain
+ * given the trampolining finding above — it is a candidate for removal (a
+ * documented follow-up), kept for now as harmless (clean resubscribes) belt-and-
+ * braces.
  *
  * The completion MUST be clean (`Exit.success`): the client resubscribes on a
  * successful stream end but *stops* (no resubscribe) on a non-transport error.
