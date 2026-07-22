@@ -122,10 +122,6 @@ import {
   WIRE_FORMAT_QUERY_PARAM,
   WS_CAPABILITIES_PATH,
 } from "@t3tools/shared/rpcSerialization";
-import {
-  recycleSubscriptionStream,
-  resolveSubscriptionRecycleLimit,
-} from "./recycleSubscriptionStream.ts";
 import { batchWithinStackSafe } from "./orchestration/Layers/batchWithinStackSafe.ts";
 import { toHttpEffectWebsocketOrdered } from "./wsRpcServerProtocol.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -173,18 +169,6 @@ const ACTIVITY_BATCH_BUFFER_CAPACITY = 4096;
  */
 const DEFAULT_SUBSCRIBE_WINDOW_TURNS = 15;
 const DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS = 2000;
-
-/**
- * Recycle a long-lived WS subscription stream after this many emitted elements:
- * end it cleanly so the effect `RpcServer` request fiber completes and frees its
- * accumulated continuation `_stack` (one frame per streamed element — an unbounded
- * ~1.7 GB/hr heap leak on long sessions), then the client resubscribes-and-resyncs.
- * See {@link ./recycleSubscriptionStream}. Env `T3CODE_WS_SUBSCRIPTION_MAX_EVENTS`
- * tunes it; `"0"` disables. Read once at module scope (env is static per process).
- */
-const WS_SUBSCRIPTION_MAX_EVENTS = resolveSubscriptionRecycleLimit(
-  process.env.T3CODE_WS_SUBSCRIPTION_MAX_EVENTS,
-);
 
 /**
  * Server-side ceiling for a single {@link ORCHESTRATION_WS_METHODS.getThreadHistoryPage}
@@ -987,13 +971,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 }),
                 liveStream,
               );
-            }).pipe(
-              // Recycle by event-count (see recycleSubscriptionStream); the
-              // Effect.map covers every stream-return branch of the generator.
-              Effect.map((stream) =>
-                recycleSubscriptionStream(stream, WS_SUBSCRIPTION_MAX_EVENTS),
-              ),
-            ),
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
@@ -1158,13 +1136,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                 }),
                 liveStreamAfter(snapshotSequence),
               );
-            }).pipe(
-              // Recycle by event-count (see recycleSubscriptionStream); the
-              // Effect.map covers both stream returns (resume + snapshot paths).
-              Effect.map((stream) =>
-                recycleSubscriptionStream(stream, WS_SUBSCRIPTION_MAX_EVENTS),
-              ),
-            ),
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
@@ -1443,16 +1415,9 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeVcsStatus,
-            // Recycle by event-count (see recycleSubscriptionStream). Safe: every
-            // (re)subscribe leads with a full `snapshot` of current local+remote
-            // status, which the client applies as a full replace, so a recycle
-            // loses nothing.
-            recycleSubscriptionStream(
-              vcsStatusBroadcaster.streamStatus(input, {
-                automaticRemoteRefreshInterval: automaticGitFetchInterval,
-              }),
-              WS_SUBSCRIPTION_MAX_EVENTS,
-            ),
+            vcsStatusBroadcaster.streamStatus(input, {
+              automaticRemoteRefreshInterval: automaticGitFetchInterval,
+            }),
             {
               "rpc.aggregate": "vcs",
             },
@@ -1605,18 +1570,11 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.subscribeTerminalMetadata]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeTerminalMetadata,
-            // Recycle by event-count (see recycleSubscriptionStream). The one
-            // method gaining a genuinely-new mid-life clean completion (thread/shell
-            // already recycle via boundedSubscriberStream); resync is idempotent —
-            // a full metadata snapshot is re-emitted on every (re)subscribe.
-            recycleSubscriptionStream(
-              Stream.callback<TerminalMetadataStreamEvent>((queue) =>
-                Effect.acquireRelease(
-                  terminalManager.subscribeMetadata((event) => Queue.offer(queue, event)),
-                  (unsubscribe) => Effect.sync(unsubscribe),
-                ),
+            Stream.callback<TerminalMetadataStreamEvent>((queue) =>
+              Effect.acquireRelease(
+                terminalManager.subscribeMetadata((event) => Queue.offer(queue, event)),
+                (unsubscribe) => Effect.sync(unsubscribe),
               ),
-              WS_SUBSCRIPTION_MAX_EVENTS,
             ),
             { "rpc.aggregate": "terminal" },
           ),
@@ -1689,29 +1647,13 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
         [WS_METHODS.subscribeHostMetrics]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeHostMetrics,
-            // Recycle by event-count (see recycleSubscriptionStream). Each tick is a
-            // full independent sample the client full-replaces, so recycling is
-            // seamless. This periodic (~1.5 s) stream crosses the default cap in
-            // ~8 h, so it is a real slow contributor on long sessions.
-            Effect.succeed(
-              recycleSubscriptionStream(
-                HostMetrics.hostMetricsStream(input.intervalMs ?? 1500),
-                WS_SUBSCRIPTION_MAX_EVENTS,
-              ),
-            ),
+            Effect.succeed(HostMetrics.hostMetricsStream(input.intervalMs ?? 1500)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscribeLlmModels]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeLlmModels,
-            // Recycle by event-count (see recycleSubscriptionStream). Each tick is a
-            // full independent model snapshot the client full-replaces.
-            Effect.succeed(
-              recycleSubscriptionStream(
-                LlmModels.llmModelsStream(input.intervalMs ?? 4000),
-                WS_SUBSCRIPTION_MAX_EVENTS,
-              ),
-            ),
+            Effect.succeed(LlmModels.llmModelsStream(input.intervalMs ?? 4000)),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.getResourceQueue]: (_input) =>
