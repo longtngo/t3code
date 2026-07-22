@@ -122,7 +122,48 @@ correct: `jsPlugins: ["./oxlint-plugin-t3code/index.ts"]` + plugin `meta.name:
 - *Ban only `groupedWithin`* — `aggregate`/`aggregateWithin` share the same
   `stepToBuffer` loop; ban the family.
 
-## FU2 — upstream bug report (external)
+## FU4 — local effect patch (fix the bug in-tree instead of reporting it)
+
+**User decision (2026-07-22):** do NOT post upstream; keep everything local and
+"make sure we have a local fix for it." So the upstream-report plan (FU2 below) is
+superseded by a **local patch** to effect's `aggregateWithin`/`stepToBuffer` via the
+repo's existing `patches/effect@4.0.0-beta.78.patch` (pnpm `patchedDependencies`).
+
+**Approach:** minimal, semantics-preserving rewrite of the one leaking function.
+Original (installed `dist/Stream.js`):
+```js
+return step(lastOutput).pipe(
+  Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep)),
+  Effect.flatMap(() => Effect.never),
+  Pull.catchDone(() => Cause.done()));
+```
+`loop()` recurses while nested inside `flatMap(() => Effect.never)` + `catchDone`, so
+every idle schedule tick leaves +2 continuation frames on the fiber `_stack` that are
+never popped. Patched:
+```js
+return step(lastOutput).pipe(
+  Pull.catchDone(() => Cause.done()),
+  Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep).pipe(Effect.flatMap(() => Effect.never))));
+```
+`loop()` is now in TAIL position (continuations replace, don't stack); `Effect.never`
+wraps only the emit path; `catchDone` scopes to the `step` call. Semantics preserved:
+idle → re-step; sink has input → offer a marker then park; schedule expiry → `Cause.done()`.
+
+**Premise validated empirically (Hard Rule 8):** patch installed, then measured on
+the patched runtime — idle `groupedWithin(Stream.never, 64, "5ms")` heap went from
++0.18 MB/s to **flat (0.1 MB / 12 s)**; `groupedWithin(3)` over `[1..7]` still yields
+`[[1,2,3],[4,5,6],[7]]` (size path); a 40 ms-spaced source with
+`groupedWithin(100, "120ms")` still yields non-empty in-order time-based batches
+(timer path). Full repo gate green with the patched effect (no consumer broke).
+
+**Risk / tradeoffs:** patching a hot core combinator on a churning beta carries a
+re-apply-on-upgrade burden (the patch is keyed to `effect@4.0.0-beta.78`; a bump needs
+re-verification). Blast radius is contained: no code in this repo or the installed
+effect dist calls `aggregateWithin`/`groupedWithin` transitively (verified), so today
+the patch is pure insurance for any future/transitive use. The existing repo pattern
+(effect is already locally patched for RpcClient hooks) makes this a well-trodden path.
+
+## FU2 — upstream bug report (external) [SUPERSEDED by FU4 — kept for the repro/draft record]
 
 **Repro built and confirmed.** A minimal standalone script drains
 `Stream.groupedWithin(Stream.never, 64, "5 millis")` (idle: the never-emitting

@@ -1,5 +1,26 @@
+diff --git a/dist/Stream.js b/dist/Stream.js
+index 139ebf95e4f72782bf4ae2a1257dfcb00d08590d..aa0be835d17ec3e81640c2ae777310fb4ef0c532 100644
+--- a/dist/Stream.js
++++ b/dist/Stream.js
+@@ -5885,7 +5885,15 @@ export const aggregateWithin = /*#__PURE__*/dual(3, (self, sink, schedule) => fr
+   let sinkHasInput = false;
+   const step = yield* Schedule.toStepWithSleep(schedule);
+   const stepToBuffer = Effect.suspend(function loop() {
+-    return step(lastOutput).pipe(Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep)), Effect.flatMap(() => Effect.never), Pull.catchDone(() => Cause.done()));
++    // t3code local patch: stack-safe idle loop. The original wrapped the recursive
++    // `loop()` inside `.flatMap(() => Effect.never), Pull.catchDone(...)`, so every
++    // idle schedule tick left +2 continuation frames on the fiber `_stack` that were
++    // never popped (an unbounded ~1.9 GB/hr heap leak on a long-idle source). Here
++    // `loop()` is in TAIL position, so its continuations replace rather than stack,
++    // and `Effect.never` wraps only the offer (emit) path. Semantics preserved:
++    // idle -> re-step; sink has input -> offer a schedule marker then park; schedule
++    // expiry (Pull done) at any step -> Cause.done().
++    return step(lastOutput).pipe(Pull.catchDone(() => Cause.done()), Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep).pipe(Effect.flatMap(() => Effect.never))));
+   });
+   // buffer -> sink
+   const pullFromBuffer = Queue.take(buffer).pipe(Effect.flatMap(arr => {
 diff --git a/dist/unstable/rpc/RpcClient.d.ts b/dist/unstable/rpc/RpcClient.d.ts
-index b0f61df..ead663e 100644
+index b0f61df34613dee99a6f6f1b446a282b2319f5ab..ead663e54cee98fd799a3f3f0761f3f00c6e8420 100644
 --- a/dist/unstable/rpc/RpcClient.d.ts
 +++ b/dist/unstable/rpc/RpcClient.d.ts
 @@ -2,6 +2,7 @@ import * as Cause from "../../Cause.ts";
@@ -51,15 +72,8 @@ index b0f61df..ead663e 100644
  }>;
  /**
   * Represents optional client protocol hooks that run when a transport connects
-@@ -279,4 +311,4 @@ declare const ConnectionHooks_base: Context.ServiceClass<ConnectionHooks, "effec
- export declare class ConnectionHooks extends ConnectionHooks_base {
- }
- export {};
--//# sourceMappingURL=RpcClient.d.ts.map
-\ No newline at end of file
-+//# sourceMappingURL=RpcClient.d.ts.map
 diff --git a/dist/unstable/rpc/RpcClient.js b/dist/unstable/rpc/RpcClient.js
-index a3161eb..0cb81f3 100644
+index a3161ebd4a0ef74bea2c2f3a4ec95b6dd89ace8f..0cb81f37553e2e24f040ccbc20c392c57fc1e82d 100644
 --- a/dist/unstable/rpc/RpcClient.js
 +++ b/dist/unstable/rpc/RpcClient.js
 @@ -46,6 +46,7 @@ export const makeNoSerialization = /*#__PURE__*/Effect.fnUntraced(function* (gro
@@ -282,10 +296,3 @@ index a3161eb..0cb81f3 100644
  /**
   * Represents optional client protocol hooks that run when a transport connects
   * and disconnects.
-@@ -835,4 +869,4 @@ export const layerProtocolWorker = /*#__PURE__*/flow(makeProtocolWorker, /*#__PU
- export class ConnectionHooks extends /*#__PURE__*/Context.Service()("effect/rpc/RpcClient/ConnectionHooks") {}
- // internal
- const decodeDefect = /*#__PURE__*/Schema.decodeSync(/*#__PURE__*/Schema.Defect());
--//# sourceMappingURL=RpcClient.js.map
-\ No newline at end of file
-+//# sourceMappingURL=RpcClient.js.map
