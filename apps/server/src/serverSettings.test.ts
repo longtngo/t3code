@@ -532,8 +532,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
   it.effect("persists an explicit disableAuthentication and strips the default", () =>
     Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsService;
-      const serverConfig = yield* ServerConfig;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
 
       const enabled = yield* serverSettings.updateSettings({ disableAuthentication: true });
@@ -617,7 +617,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
   it.effect("migrates legacy localModels into localLlm on read", () =>
     Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsService;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
       const next = yield* serverSettings.updateSettings({
         localModels: {
@@ -644,7 +644,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
   it.effect("writing localLlm retires legacy localModels so deletions cannot resurrect", () =>
     Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsService;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
       // Seed a meaningful legacy localModels (would otherwise migrate on read).
       yield* serverSettings.updateSettings({

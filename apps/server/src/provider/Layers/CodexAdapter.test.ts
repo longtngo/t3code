@@ -1364,11 +1364,11 @@ usageLayer("CodexAdapterLive account usage", (it) => {
       yield* TestClock.adjust(Duration.seconds(60));
 
       const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
-      assert.ok(usageEvent);
-      assert.equal(usageEvent?.type, "account.usage.updated");
-      assert.equal(usageEvent?.threadId, asThreadId("thread-usage"));
+      NodeAssert.ok(usageEvent);
+      NodeAssert.equal(usageEvent?.type, "account.usage.updated");
+      NodeAssert.equal(usageEvent?.threadId, asThreadId("thread-usage"));
       if (usageEvent?.type === "account.usage.updated") {
-        assert.equal(usageEvent.payload.codex?.primary?.utilization, 42);
+        NodeAssert.equal(usageEvent.payload.codex?.primary?.utilization, 42);
       }
     }),
   );
@@ -1395,7 +1395,7 @@ usageLayer("CodexAdapterLive account usage", (it) => {
         runtimeMode: "full-access",
       });
       const runtime = lifecycleRuntimeFactory.lastRuntime;
-      assert.ok(runtime);
+      NodeAssert.ok(runtime);
 
       const usageFiber = yield* adapter.streamEvents.pipe(
         Stream.filter(
@@ -1431,9 +1431,9 @@ usageLayer("CodexAdapterLive account usage", (it) => {
       });
 
       const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
-      assert.ok(usageEvent);
+      NodeAssert.ok(usageEvent);
       if (usageEvent?.type === "account.usage.updated") {
-        assert.equal(usageEvent.payload.codex?.primary?.utilization, 33);
+        NodeAssert.equal(usageEvent.payload.codex?.primary?.utilization, 33);
       }
     }),
   );

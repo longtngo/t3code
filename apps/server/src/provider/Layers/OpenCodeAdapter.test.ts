@@ -641,16 +641,16 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       // A live session is surfaced by both views (the aligned `!stopped` contract,
       // matching ClaudeAdapter/Cursor/Grok).
-      assert.equal(yield* adapter.hasSession(threadId), true);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
       const live = yield* adapter.listSessions();
-      assert.equal(live.length, 1);
-      assert.equal(live[0]?.threadId, threadId);
+      NodeAssert.equal(live.length, 1);
+      NodeAssert.equal(live[0]?.threadId, threadId);
 
       // Once stopped it must appear in neither view — listSessions must never surface
       // a stopped session, and the two views must stay consistent.
       yield* adapter.stopSession(threadId);
-      assert.equal(yield* adapter.hasSession(threadId), false);
-      assert.deepEqual(yield* adapter.listSessions(), []);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.deepEqual(yield* adapter.listSessions(), []);
     }),
   );
 

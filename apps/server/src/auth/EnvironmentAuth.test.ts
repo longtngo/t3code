@@ -43,12 +43,14 @@ const makeCookieRequest = (
   >[0];
 
 const makeAnonymousRequest = (): Parameters<
-  EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]
+  EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
 >[0] =>
   ({
     cookies: {},
     headers: {},
-  }) as unknown as Parameters<EnvironmentAuth.EnvironmentAuthShape["authenticateHttpRequest"]>[0];
+  }) as unknown as Parameters<
+    EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
+  >[0];
 
 const requestMetadata = {
   deviceType: "desktop" as const,
@@ -269,9 +271,9 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         .authenticateHttpRequest(makeAnonymousRequest())
         .pipe(Effect.flip);
 
-      expect(error._tag).toBe("ServerAuthInvalidCredentialError");
-      if (error._tag === "ServerAuthInvalidCredentialError") {
-        expect(error.reason).toBe("missing_credential");
+      expect(error._tag).toBe("ServerAuthMissingCredentialError");
+      if (EnvironmentAuth.isServerAuthCredentialError(error)) {
+        expect(EnvironmentAuth.serverAuthCredentialReason(error)).toBe("missing_credential");
       }
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
@@ -331,7 +333,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         headers: { host: "127.0.0.1:3773" },
         cookies: {},
       } as unknown as Parameters<
-        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+        EnvironmentAuth.EnvironmentAuth["Service"]["authenticateWebSocketUpgrade"]
       >[0];
       const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
 
@@ -349,7 +351,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         headers: { host: "127.0.0.1:3773" },
         cookies: {},
       } as unknown as Parameters<
-        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+        EnvironmentAuth.EnvironmentAuth["Service"]["authenticateWebSocketUpgrade"]
       >[0];
       const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
 
@@ -366,7 +368,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         headers: { host: "127.0.0.1:3773" },
         cookies: {},
       } as unknown as Parameters<
-        EnvironmentAuth.EnvironmentAuthShape["authenticateWebSocketUpgrade"]
+        EnvironmentAuth.EnvironmentAuth["Service"]["authenticateWebSocketUpgrade"]
       >[0];
       const upgraded = yield* serverAuth.authenticateWebSocketUpgrade(upgradeRequest);
 
