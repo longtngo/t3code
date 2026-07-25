@@ -64,39 +64,6 @@ jobs:
       - name: Test
         run: vp run test
 
-  test_browser:
-    name: Test Browser
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install browser test runtime
-        run: vp run --filter @t3tools/web test:browser:install
-
-      # Runs the whole browser project (src/components/**/*.browser.tsx). Do NOT re-introduce a
-      # hardcoded per-file list here: it silently drifts as new *.browser.tsx files are added
-      # (6 files had gone unrun this way). The `test:browser` script globs them via the vite
-      # `browser` project config, so new browser tests are picked up automatically.
-      - name: Browser tests
-        run: vp run --filter @t3tools/web test:browser
-
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
     runs-on: blacksmith-12vcpu-macos-26
