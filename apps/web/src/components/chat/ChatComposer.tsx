@@ -43,10 +43,12 @@ import {
   shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import { resizeImageForUpload } from "~/lib/imageResize";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
+import { ComposerShortcutsControls } from "./ComposerShortcutsControls";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -1864,7 +1866,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: images
   // ------------------------------------------------------------------
-  const addComposerImages = (files: File[]) => {
+  const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
     if (pendingUserInputs.length > 0) {
       toastManager.add({
@@ -1876,24 +1878,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const nextImages: ComposerImageAttachment[] = [];
     let nextImageCount = composerImagesRef.current.length;
     let error: string | null = null;
-    for (const file of files) {
-      if (!file.type.startsWith("image/")) {
-        error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
-        continue;
-      }
-      if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+    for (const original of files) {
+      if (!original.type.startsWith("image/")) {
+        error = `Unsupported file type for '${original.name}'. Please attach image files only.`;
         continue;
       }
       if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
         break;
       }
+      // Downscale a large image before the size check, so a big photo that shrinks under the
+      // cap can still attach (and costs far fewer bytes on the wire). Non-image / already-small
+      // files come back unchanged.
+      const file = await resizeImageForUpload(original);
+      if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        error = `'${original.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+        continue;
+      }
       const previewUrl = URL.createObjectURL(file);
       nextImages.push({
         type: "image",
         id: randomUUID(),
-        name: file.name || "image",
+        name: file.name || original.name || "image",
         mimeType: file.type,
         sizeBytes: file.size,
         previewUrl,
@@ -1922,7 +1928,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     if (imageFiles.length === 0) return;
     event.preventDefault();
-    addComposerImages(imageFiles);
+    void addComposerImages(imageFiles);
   };
 
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
@@ -1956,7 +1962,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     const files = Array.from(event.dataTransfer.files);
-    addComposerImages(files);
+    void addComposerImages(files);
     focusComposer();
   };
 
@@ -1981,6 +1987,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       prompt.length,
       needsLeadingSpace ? ` ${text}` : text,
     );
+  };
+
+  // Whether the composer can currently accept inserted text (mirrors the guards in
+  // `insertComposerTextAtEnd`) — used to disable prompt-shortcut chips while connecting,
+  // mid-approval, awaiting plan input, or before a project is selected.
+  const canInsertComposerText =
+    !isConnecting &&
+    !isComposerApprovalState &&
+    pendingUserInputs.length === 0 &&
+    !projectSelectionRequired;
+
+  const handleInsertShortcut = (text: string) => {
+    if (text.length === 0 || !canInsertComposerText) return;
+    const current = promptRef.current;
+    // Separate the inserted prompt from existing draft text with a newline, unless the draft
+    // is empty or already ends in whitespace.
+    const separator = current.length > 0 && !/\s$/.test(current) ? "\n" : "";
+    const end = current.length;
+    applyPromptReplacement(end, end, separator + text);
   };
 
   // File-tree drags land as mentions. Handled in the capture phase so the
@@ -2540,6 +2565,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         </Button>
                       </div>
                     ))}
+                </div>
+              )}
+
+            {!isComposerCollapsedMobile &&
+              !isComposerApprovalState &&
+              pendingUserInputs.length === 0 && (
+                <div className="mb-2 flex items-center gap-2">
+                  <ComposerShortcutsControls
+                    onInsert={handleInsertShortcut}
+                    disabled={!canInsertComposerText}
+                  />
                 </div>
               )}
 
