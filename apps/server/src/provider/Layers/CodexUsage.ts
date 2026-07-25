@@ -16,7 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -125,16 +125,30 @@ const readRateLimits = (
 > =>
   Effect.gen(function* () {
     const resolvedHomePath = deps.homePath ? expandHomePath(deps.homePath) : undefined;
-    const clientContext = yield* Layer.build(
-      CodexClient.layerCommand({
-        command: deps.binaryPath,
-        args: ["app-server"],
-        cwd: deps.cwd,
-        env: {
-          ...(deps.environment ?? process.env),
-          ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
-        },
-      }),
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const runtimeScope = yield* Scope.Scope;
+    const env = {
+      ...(deps.environment ?? process.env),
+      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+    };
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(deps.binaryPath, ["app-server"], {
+          cwd: deps.cwd,
+          env,
+          extendEnv: deps.environment === undefined,
+        }),
+      )
+      .pipe(
+        Effect.provideService(Scope.Scope, runtimeScope),
+        Effect.mapError(
+          (cause) =>
+            new CodexUsageFetchError({ detail: "Failed to spawn Codex app-server", cause }),
+        ),
+      );
+    const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
+      Layer.build,
+      Effect.provideService(Scope.Scope, runtimeScope),
     );
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),

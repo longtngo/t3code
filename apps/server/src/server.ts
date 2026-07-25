@@ -48,6 +48,10 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
+import { ProviderTurnStallWatchdogLive } from "./provider/Layers/ProviderTurnStallWatchdog.ts";
+import { BackgroundTaskRecoveryWatchdogLive } from "./provider/Layers/BackgroundTaskRecoveryWatchdog.ts";
+import { PendingBackgroundTaskRepositoryLive } from "./persistence/Layers/PendingBackgroundTask.ts";
+import { RuntimeBootIdLive } from "./environment/Layers/RuntimeBootId.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -166,6 +170,13 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
+  // Preserved fork recovery services (reboot-survivable background-task recovery
+  // and turn-stall watchdog). Their dependencies (RuntimeBootId,
+  // PendingBackgroundTaskRepository) are provided below them.
+  Layer.provideMerge(ProviderTurnStallWatchdogLive),
+  Layer.provideMerge(BackgroundTaskRecoveryWatchdogLive),
+  Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
+  Layer.provideMerge(RuntimeBootIdLive),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
