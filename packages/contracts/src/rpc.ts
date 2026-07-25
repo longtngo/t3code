@@ -51,10 +51,11 @@ import {
   OrchestrationDispatchCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
-  OrchestrationGetHistoryPageError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
+  OrchestrationReplayEventsError,
+  OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -77,11 +78,6 @@ import {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project.ts";
-import {
-  AttachmentUploadError,
-  AttachmentUploadInput,
-  AttachmentUploadResult,
-} from "./attachment.ts";
 import {
   TerminalAttachInput,
   TerminalAttachStreamEvent,
@@ -161,9 +157,6 @@ export const WS_METHODS = {
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
 
-  // Attachment methods
-  attachmentsUpload: "attachments.upload",
-
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
 
@@ -226,19 +219,6 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
 
-  // Account usage methods
-  accountUsageRefresh: "account.usage.refresh",
-
-  // Local-model manager actions (mlx-serve load/unload)
-  llmServeLoad: "llmServe.load",
-  llmServeUnload: "llmServe.unload",
-
-  // Resource broker (resctl) — one-shot queue status read
-  getResourceQueue: "resourceQueue.get",
-
-  // Web Push — register this device's push subscription for background notifications
-  pushSubscriptionsRegister: "pushSubscriptions.register",
-
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -257,8 +237,6 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
-  subscribeHostMetrics: "subscribeHostMetrics",
-  subscribeLlmModels: "subscribeLlmModels",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -356,20 +334,6 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   error: EnvironmentAuthorizationError,
 });
 
-/**
- * Force an immediate account-usage poll. Account usage is otherwise emitted
- * only by a 60s background poller; this lets the client trigger an on-demand
- * refresh (e.g. a "force refresh" button). The poll fans the fresh snapshot
- * out to active sessions as `account.usage.updated` activities, so the success
- * value is just an acknowledgement — the updated data arrives via the event
- * stream, not this response.
- */
-export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
-  payload: Schema.Struct({}),
-  success: Schema.Struct({ ok: Schema.Literal(true) }),
-  error: EnvironmentAuthorizationError,
-});
-
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
   payload: Schema.Struct({}),
   success: RelayClientStatusSchema,
@@ -429,12 +393,6 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
-});
-
-export const WsAttachmentsUploadRpc = Rpc.make(WS_METHODS.attachmentsUpload, {
-  payload: AttachmentUploadInput,
-  success: AttachmentUploadResult,
-  error: Schema.Union([AttachmentUploadError, EnvironmentAuthorizationError]),
 });
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -673,6 +631,11 @@ export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
+  payload: OrchestrationReplayEventsInput,
+  success: OrchestrationRpcSchemas.replayEvents.output,
+  error: Schema.Union([OrchestrationReplayEventsError, EnvironmentAuthorizationError]),
+});
 
 export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
@@ -697,15 +660,6 @@ export const WsOrchestrationSubscribeThreadRpc = Rpc.make(
     success: OrchestrationRpcSchemas.subscribeThread.output,
     error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
     stream: true,
-  },
-);
-
-export const WsOrchestrationGetThreadHistoryPageRpc = Rpc.make(
-  ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
-  {
-    payload: OrchestrationRpcSchemas.getThreadHistoryPage.input,
-    success: OrchestrationRpcSchemas.getThreadHistoryPage.output,
-    error: Schema.Union([OrchestrationGetHistoryPageError, EnvironmentAuthorizationError]),
   },
 );
 
@@ -744,293 +698,6 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
-/** Instantaneous CPU utilization of the host running the server. */
-export const HostMetricsCpu = Schema.Struct({
-  /** Aggregate busy percentage across all logical cores, 0–100. */
-  pct: Schema.Number,
-  /** Per-logical-core busy percentage, 0–100. */
-  perCore: Schema.Array(Schema.Number),
-  /** 1/5/15-minute load averages (0 on platforms that don't report it). */
-  loadAvg: Schema.Array(Schema.Number),
-});
-
-/** Host physical memory utilization. */
-export const HostMetricsMem = Schema.Struct({
-  usedBytes: Schema.Number,
-  totalBytes: Schema.Number,
-  /** usedBytes / totalBytes, 0–100. */
-  pct: Schema.Number,
-});
-
-/** Host GPU utilization, when the platform exposes it (else the sample's gpu is null). */
-export const HostMetricsGpu = Schema.Struct({
-  /** Device utilization percentage, 0–100. */
-  pct: Schema.Number,
-  name: Schema.optional(Schema.String),
-  vramUsedBytes: Schema.optional(Schema.Number),
-});
-
-/** Static host descriptor, sent once on the first sample of a subscription. */
-export const HostMetricsHost = Schema.Struct({
-  platform: Schema.String,
-  arch: Schema.String,
-  cores: Schema.Number,
-});
-
-/** One push from the host-metrics subscription, emitted roughly every 1–2s. */
-export const HostMetricsSample = Schema.Struct({
-  /** Sample wall-clock time (epoch ms). */
-  ts: Schema.Number,
-  cpu: HostMetricsCpu,
-  mem: HostMetricsMem,
-  /** null when the host/platform doesn't expose GPU utilization. */
-  gpu: Schema.NullOr(HostMetricsGpu),
-  /** Static host descriptor; sent on every sample so the client never loses it. */
-  host: Schema.optional(HostMetricsHost),
-});
-export type HostMetricsSample = typeof HostMetricsSample.Type;
-
-/**
- * Streaming subscription for live host-machine CPU/GPU/memory utilization. The
- * server samples only while a subscriber is attached; unsubscribing stops the
- * sampling and the stream — this is the client-side "save bandwidth" toggle.
- */
-export const WsSubscribeHostMetricsRpc = Rpc.make(WS_METHODS.subscribeHostMetrics, {
-  payload: Schema.Struct({ intervalMs: Schema.optional(Schema.Number) }),
-  success: HostMetricsSample,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-/**
- * One locally-served model reported by a provider's `/v1/models` probe. Fields
- * beyond `id`/`loaded` are best-effort enrichment (mlx-serve carries them; generic
- * OpenAI-compatible providers may not) and are omitted when the provider doesn't
- * report them.
- */
-export const LlmModel = Schema.Struct({
-  id: Schema.String,
-  /** Resident in memory. mlx-serve reports `loaded`; for providers that don't, a
-   *  served/listed model is treated as loaded. */
-  loaded: Schema.Boolean,
-  /** Lifecycle hint, e.g. "ready" (mlx-serve). */
-  state: Schema.optional(Schema.String),
-  /** Resident size in bytes, when the provider reports a plausible value. */
-  sizeBytes: Schema.optional(Schema.Number),
-  /** e.g. "4-bit". */
-  quantization: Schema.optional(Schema.String),
-  /** Max context length in tokens. */
-  contextLength: Schema.optional(Schema.Number),
-  /** Mixture-of-experts architecture. */
-  isMoe: Schema.optional(Schema.Boolean),
-  capabilities: Schema.optional(Schema.Array(Schema.String)),
-  /**
-   * Manager state. Optional for back-compat with the read-only path; when present it
-   * is the source of truth for the UI (it distinguishes loading/stopping/error from a
-   * bare loaded/offline). `loaded` stays as `status === "online"`.
-   */
-  status: Schema.optional(
-    Schema.Literals(["online", "offline", "loading", "stopping", "error"]),
-  ),
-  /** PID of the mlx-serve process serving this model (online/loading/stopping). */
-  pid: Schema.optional(Schema.Number),
-  /** Port the serving process is bound to. */
-  port: Schema.optional(Schema.Number),
-  /** True when t3code launched (and thus supervises) this process. */
-  managed: Schema.optional(Schema.Boolean),
-  /** Catalog model id this row is for (mlx dir basename / ds4 GGUF / catalog id). */
-  modelId: Schema.optional(Schema.String),
-  /** Stable id of the model config (LocalLlmModelConfig.id); load/unload address this. */
-  configId: Schema.optional(Schema.String),
-  /** User-given config name, for display. */
-  configName: Schema.optional(Schema.String),
-  /** Failure detail when `status === "error"`. */
-  loadError: Schema.optional(Schema.String),
-  /** Owning local engine (display/labelling only; load resolves the engine server-side). */
-  engine: Schema.optional(Schema.Literals(["mlx-serve", "ds4"])),
-});
-export type LlmModel = typeof LlmModel.Type;
-
-/** A configured local-model provider and the result of probing it this tick. */
-export const LlmProvider = Schema.Struct({
-  /** Display name from settings, e.g. "mlx-serve". */
-  name: Schema.String,
-  /** Probed base URL, e.g. "http://127.0.0.1:8765". */
-  baseUrl: Schema.String,
-  /** False when the endpoint didn't respond (then `models` is empty). */
-  reachable: Schema.Boolean,
-  /** Short failure reason when `reachable` is false. */
-  error: Schema.optional(Schema.String),
-  models: Schema.Array(LlmModel),
-});
-export type LlmProvider = typeof LlmProvider.Type;
-
-/**
- * One push from the local-LLM subscription: every configured provider with its
- * current probe result. The server probes only while a subscriber is attached.
- */
-export const LlmModelsSample = Schema.Struct({
-  /** Sample wall-clock time (epoch ms). */
-  ts: Schema.Number,
-  providers: Schema.Array(LlmProvider),
-  /** Configured RAM budget for managed loads, in bytes (omitted if unknown). */
-  ramBudgetBytes: Schema.optional(Schema.Number),
-  /** Sum of resident bytes across online managed/external models. */
-  ramUsedBytes: Schema.optional(Schema.Number),
-});
-export type LlmModelsSample = typeof LlmModelsSample.Type;
-
-/** Why a load/unload action failed (non-authorization). */
-export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("LlmServeError", {
-  kind: Schema.Literals([
-    "budget_exceeded",
-    "already_online",
-    "no_free_port",
-    "not_found",
-    "spawn_failed",
-    "not_managed_process",
-    // Attempted to load a config whose provider is external/probe-only (not spawnable).
-    "external_not_managed",
-  ]),
-  reason: Schema.String,
-}) {
-  override get message(): string {
-    return this.reason;
-  }
-}
-
-/** Payload for loading/unloading a local model config (addressed by config id). */
-export const LlmServeLoadPayload = Schema.Struct({ configId: Schema.String });
-export const LlmServeUnloadPayload = Schema.Struct({ configId: Schema.String });
-
-/** Load (spawn) the managed model config identified by `configId`. */
-export const WsLlmServeLoadRpc = Rpc.make(WS_METHODS.llmServeLoad, {
-  payload: LlmServeLoadPayload,
-  success: Schema.Struct({ pid: Schema.Number, port: Schema.Number }),
-  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
-});
-
-/** Unload (kill) the managed model config identified by `configId`. */
-export const WsLlmServeUnloadRpc = Rpc.make(WS_METHODS.llmServeUnload, {
-  payload: LlmServeUnloadPayload,
-  success: Schema.Struct({ ok: Schema.Literal(true) }),
-  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
-});
-
-/**
- * Streaming subscription for locally-loaded LLMs across the configured providers.
- * Mirrors `subscribeHostMetrics`: the server probes only while subscribed, and a
- * slow/unreachable provider degrades to `reachable:false` inside the sample rather
- * than failing the stream.
- */
-export const WsSubscribeLlmModelsRpc = Rpc.make(WS_METHODS.subscribeLlmModels, {
-  payload: Schema.Struct({ intervalMs: Schema.optional(Schema.Number) }),
-  success: LlmModelsSample,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-/** One job in the resource broker — either holding a lease ("running") or queued ("waiting"). */
-export const ResourceQueueItem = Schema.Struct({
-  /** Resource pool: "gpu" | "cpu" | "ram" | "machine" (kept as a string for forward-compat). */
-  resource: Schema.String,
-  /** "running" = currently holding the resource; "waiting" = queued behind the holders. */
-  state: Schema.Literals(["running", "waiting"]),
-  /** Scheduling priority, e.g. "interactive" | "normal" | "background". */
-  priority: Schema.String,
-  /** The human "what & rough ETA" the job supplied when it requested the resource. */
-  reason: Schema.String,
-  /** Owning project. */
-  project: Schema.String,
-  /** Owning agent label (often equal to project); omitted when the broker doesn't report it. */
-  agent: Schema.optional(Schema.String),
-  /** OS process id of the job, when known. */
-  pid: Schema.optional(Schema.Number),
-  /** Units of the resource requested (e.g. CPU cores); 1 for indivisible pools like the GPU. */
-  amount: Schema.Number,
-  /** Epoch ms the job started holding (running) or was enqueued (waiting); the client derives a live elapsed from it. */
-  sinceMs: Schema.Number,
-  /** 1-based position within its resource's queue (waiting only). */
-  pos: Schema.optional(Schema.Number),
-  /** Broker ETA estimate in seconds, when available (usually absent). */
-  etaSec: Schema.optional(Schema.Number),
-});
-export type ResourceQueueItem = typeof ResourceQueueItem.Type;
-
-/** Capacity/usage of one resource pool at snapshot time. */
-export const ResourceQueueResource = Schema.Struct({
-  /** Pool name, e.g. "gpu". */
-  name: Schema.String,
-  /** Total units the pool can grant. */
-  capacity: Schema.Number,
-  /** Units currently leased out. */
-  inUse: Schema.Number,
-  /** Advisory pools (e.g. RAM) are tracked but not hard-enforced by the broker; true marks them. */
-  advisory: Schema.optional(Schema.Boolean),
-});
-export type ResourceQueueResource = typeof ResourceQueueResource.Type;
-
-/**
- * A point-in-time snapshot of the local resource broker (`resctl status`). When the broker
- * CLI is missing or unreachable the read still succeeds with `available:false` and empty
- * collections, so the UI degrades quietly instead of erroring.
- */
-export const ResourceQueueSnapshot = Schema.Struct({
-  /** Snapshot wall-clock time (epoch ms). */
-  ts: Schema.Number,
-  /** False when `resctl` could not be run or its output parsed. */
-  available: Schema.Boolean,
-  /** Broker is in maintenance (draining; rejecting new work). */
-  maintenance: Schema.Boolean,
-  /** Per-pool capacity/usage; fully-idle pools the client doesn't need are omitted. */
-  resources: Schema.Array(ResourceQueueResource),
-  /** Jobs holding a lease, leaders first. */
-  running: Schema.Array(ResourceQueueItem),
-  /** Jobs waiting in queues, ordered by resource then queue position. */
-  waiting: Schema.Array(ResourceQueueItem),
-});
-export type ResourceQueueSnapshot = typeof ResourceQueueSnapshot.Type;
-
-/**
- * One-shot read of the local resource-broker queue. The client polls this (slowly in the
- * background, faster while the popover is open); it is not a server push, because the two
- * cadences map cleanly onto a client-controlled interval. Never fails for an absent broker
- * — see `available`.
- */
-export const WsGetResourceQueueRpc = Rpc.make(WS_METHODS.getResourceQueue, {
-  payload: Schema.Struct({}),
-  success: ResourceQueueSnapshot,
-  error: EnvironmentAuthorizationError,
-});
-
-/**
- * A browser Web Push subscription, as produced by `PushManager.subscribe(...)`
- * `.toJSON()`. The server stores these and sends VAPID-signed pushes to the FCM
- * (etc.) `endpoint` so background thread notifications reach the device even when the
- * PWA tab is frozen (screen off). `p256dh`/`auth` are the client's public encryption
- * material — not secrets — used by the Web Push message-encryption scheme.
- */
-export const PushSubscriptionInput = Schema.Struct({
-  endpoint: Schema.String,
-  keys: Schema.Struct({
-    p256dh: Schema.String,
-    auth: Schema.String,
-  }),
-});
-export type PushSubscriptionInput = typeof PushSubscriptionInput.Type;
-
-/**
- * Register (idempotently, keyed by `endpoint`) this device's Web Push subscription.
- * Enabling the per-device notification toggle calls this. Unregistering is handled
- * client-side (`pushManager.unsubscribe()`) plus server-side pruning when a later send
- * returns 404/410, so there is deliberately no `unregister` method in v1.
- */
-export const WsPushSubscriptionsRegisterRpc = Rpc.make(WS_METHODS.pushSubscriptionsRegister, {
-  payload: Schema.Struct({ subscription: PushSubscriptionInput }),
-  success: Schema.Struct({ ok: Schema.Boolean }),
-  error: EnvironmentAuthorizationError,
-});
-
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1046,7 +713,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
-  WsAccountUsageRefreshRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
@@ -1056,7 +722,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsReadFileRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
-  WsAttachmentsUploadRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
@@ -1097,17 +762,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
-  WsSubscribeHostMetricsRpc,
-  WsSubscribeLlmModelsRpc,
-  WsLlmServeLoadRpc,
-  WsLlmServeUnloadRpc,
-  WsGetResourceQueueRpc,
-  WsPushSubscriptionsRegisterRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
+  WsOrchestrationReplayEventsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
-  WsOrchestrationGetThreadHistoryPageRpc,
 );

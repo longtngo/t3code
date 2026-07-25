@@ -113,12 +113,6 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import type {
-  HostMetricsSample,
-  LlmModelsSample,
-  PushSubscriptionInput,
-  ResourceQueueSnapshot,
-} from "./rpc.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -1270,51 +1264,6 @@ export interface EnvironmentApi {
      * the updated data arrives via the event stream, not this response.
      */
     refresh: () => Promise<{ ok: true }>;
-  };
-  hostMetrics: {
-    /**
-     * Subscribe to live host CPU/GPU/memory utilization. The server samples
-     * only while subscribed; the returned function unsubscribes and stops the
-     * stream. Samples arrive roughly every 1–2 seconds.
-     */
-    subscribe: (
-      callback: (sample: HostMetricsSample) => void,
-      options?: {
-        onResubscribe?: () => void;
-      },
-    ) => () => void;
-  };
-  llmModels: {
-    /**
-     * Subscribe to the set of locally-loaded LLMs across configured providers.
-     * The server probes only while subscribed; the returned function unsubscribes
-     * and stops probing. Samples arrive every few seconds.
-     */
-    subscribe: (
-      callback: (sample: LlmModelsSample) => void,
-      options?: {
-        onResubscribe?: () => void;
-      },
-    ) => () => void;
-    /** Load (spawn) the managed model config identified by `configId`. */
-    load: (input: { configId: string }) => Promise<{ pid: number; port: number }>;
-    /** Unload (kill) the managed model config identified by `configId`. */
-    unload: (input: { configId: string }) => Promise<{ ok: true }>;
-  };
-  resourceQueue: {
-    /**
-     * One-shot read of the local resource-broker queue (`resctl status`). The client
-     * polls this — slowly in the background, faster while the popover is open. Resolves
-     * with `available:false` (not a rejection) when the broker CLI is absent.
-     */
-    get: () => Promise<ResourceQueueSnapshot>;
-  };
-  pushSubscriptions: {
-    /**
-     * Register this device's Web Push subscription so the server can send background
-     * thread notifications. Idempotent by `endpoint`.
-     */
-    register: (subscription: PushSubscriptionInput) => Promise<{ ok: boolean }>;
   };
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
