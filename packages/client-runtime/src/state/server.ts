@@ -349,5 +349,9 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    pushSubscriptionsRegister: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:push-subscriptions-register",
+      tag: WS_METHODS.pushSubscriptionsRegister,
+    }),
   };
 }

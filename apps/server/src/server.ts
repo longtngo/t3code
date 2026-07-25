@@ -11,6 +11,8 @@ import {
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   browserApiCorsLayer,
+  pushSubscriptionsRouteLayer,
+  pushVapidPublicKeyRouteLayer,
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -51,9 +53,11 @@ import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.
 import { ProviderTurnStallWatchdogLive } from "./provider/Layers/ProviderTurnStallWatchdog.ts";
 import { BackgroundTaskRecoveryWatchdogLive } from "./provider/Layers/BackgroundTaskRecoveryWatchdog.ts";
 import { PendingBackgroundTaskRepositoryLive } from "./persistence/Layers/PendingBackgroundTask.ts";
+import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
 import { RuntimeBootIdLive } from "./environment/Layers/RuntimeBootId.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -171,6 +175,11 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  // Web Push background-notification relay. Started by OrchestrationReactor above (so
+  // it needs the WebPushRelay service in scope). Its other deps — ProjectionSnapshotQuery,
+  // OrchestrationEngine, ServerEnvironment, PushSubscriptionRepository — are satisfied by
+  // later stages of the RuntimeCoreDependenciesLive pipe, exactly like AgentAwarenessRelay.
+  Layer.provideMerge(WebPushRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
   // Preserved fork recovery services. In `A.pipe(provideMerge(B))` the argument B
   // provides into A, so a service's provider must come AFTER its consumers here:
@@ -314,7 +323,15 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // (in ProviderRuntimeLayerLive) and the recovery reactors above, so it sits
   // after them; it depends on persistence, provided by PersistenceLayerLive below.
   Layer.provideMerge(
-    Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, PendingBackgroundTaskRepositoryLive),
+    Layer.mergeAll(
+      TerminalLayerLive,
+      PreviewLayerLive,
+      PendingBackgroundTaskRepositoryLive,
+      // Web Push subscription persistence — shared by the register RPC handler, the
+      // HTTP re-register route, and the WebPushRelay fan-out. SqlClient is satisfied
+      // by the outer PersistenceLayerLive.
+      PushSubscriptionRepositoryLive,
+    ),
   ),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
@@ -394,6 +411,8 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
+    pushSubscriptionsRouteLayer,
+    pushVapidPublicKeyRouteLayer,
     assetRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,

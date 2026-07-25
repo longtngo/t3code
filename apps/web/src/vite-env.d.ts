@@ -1,4 +1,5 @@
 /// <reference types="vite-plus/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 import type { DesktopBridge, LocalApi } from "@t3tools/contracts";
 

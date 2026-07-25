@@ -110,6 +110,8 @@ import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { registerPushSubscription } from "./push/register.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -345,6 +347,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.getResourceQueue, AuthOrchestrationReadScope],
+  [WS_METHODS.pushSubscriptionsRegister, AuthOrchestrationOperateScope],
   [WS_METHODS.llmServeLoad, AuthOrchestrationOperateScope],
   [WS_METHODS.llmServeUnload, AuthOrchestrationOperateScope],
   [WS_METHODS.subscribeLlmModels, AuthOrchestrationReadScope],
@@ -490,6 +493,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
+      const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const hostMetrics = yield* HostMetrics.HostMetrics;
       const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1148,6 +1152,7 @@ const makeWsRpcLayer = (
           settings,
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
+          webPushVapidPublicKey: webPushRelay.vapidPublicKey,
         };
       });
 
@@ -1679,6 +1684,20 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pushSubscriptionsRegister,
+            // Shared with the HTTP route the service worker calls on
+            // pushsubscriptionchange (SSRF guard + upsert live in one place). The
+            // helper never fails; a non-"registered" outcome (disallowed endpoint or
+            // persistence failure) collapses to ok:false, keeping this RPC's error
+            // channel unchanged. Operate-scope authorization is applied centrally via
+            // requiredScopeForMethod (see the methodScopes map).
+            registerPushSubscription(input.subscription).pipe(
+              Effect.map((outcome) => ({ ok: outcome === "registered" })),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",

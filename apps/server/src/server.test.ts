@@ -115,6 +115,8 @@ import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as Data from "effect/Data";
@@ -651,6 +653,15 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(HostMetrics.HostMetrics)({
             stream: () => Stream.empty,
+          }),
+          Layer.mock(WebPushRelay.WebPushRelay)({
+            vapidPublicKey: "test-vapid-public-key",
+            start: () => Effect.void,
+          }),
+          Layer.mock(PushSubscriptionRepository)({
+            upsert: () => Effect.void,
+            list: () => Effect.succeed([]),
+            deleteByEndpoint: () => Effect.void,
           }),
           Layer.mock(LlmServeManager)({
             list: Effect.succeed({ providers: [], ramBudgetBytes: 0, ramUsedBytes: 0 }),
@@ -1280,6 +1291,107 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "serves the VAPID public key at GET /api/push/vapid-public-key without authentication",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+
+        const response = yield* HttpClient.get("/api/push/vapid-public-key");
+        assert.equal(response.status, 200);
+        const key = yield* response.text;
+        assert.isAbove(key.length, 0);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("registers a push subscription at POST /api/push/subscriptions (204)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      assert.equal(response.status, 204);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a disallowed (SSRF) endpoint at POST /api/push/subscriptions (403)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://192.168.1.1/x",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      assert.equal(response.status, 403);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("requires authentication for POST /api/push/subscriptions", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRequestBody({
+          endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint",
+          keys: { p256dh: "p256dh-value", auth: "auth-value" },
+        }),
+      });
+
+      // Auth runs before the body check, so an unauthenticated call is rejected.
+      assert.isAtLeast(response.status, 401);
+      assert.isBelow(response.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a malformed body at POST /api/push/subscriptions (400)", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Authenticated + JSON content-type, but missing the required `keys` field.
+      const response = yield* fetchEffect("/api/push/subscriptions", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: jsonRequestBody({ endpoint: "https://fcm.googleapis.com/fcm/send/test-endpoint" }),
+      });
+
+      assert.equal(response.status, 400);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "rejects a non-JSON content-type at POST /api/push/subscriptions (415, CSRF guard)",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+        const response = yield* fetchEffect("/api/push/subscriptions", {
+          method: "POST",
+          headers: { cookie, "content-type": "text/plain" },
+          body: "endpoint=https://fcm.googleapis.com/fcm/send/x",
+        });
+
+        assert.equal(response.status, 415);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("redirects to dev URL when configured", () =>

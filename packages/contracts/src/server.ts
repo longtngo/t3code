@@ -483,6 +483,12 @@ export const ServerConfig = Schema.Struct({
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /**
+   * VAPID public key for Web Push, base64url-encoded. Present when the server has a
+   * push keypair (generated on demand). Non-secret; the web client feeds it to
+   * `PushManager.subscribe` as `applicationServerKey`. Absent on older servers.
+   */
+  webPushVapidPublicKey: Schema.optional(Schema.String),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

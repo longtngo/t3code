@@ -35,6 +35,7 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { useUiStateStore } from "../uiStateStore";
+import { useWsReconnectTimelineLog } from "../connection/wsReconnectTimeline";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
@@ -134,6 +135,7 @@ function RootRouteView() {
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <SlowRpcRequestToastCoordinator />
+        <WsReconnectTimelineLog />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
@@ -280,6 +282,11 @@ function AuthenticatedTracingBootstrap() {
 
 function ThreadCompletionNotifications() {
   useThreadCompletionNotifications();
+  return null;
+}
+
+function WsReconnectTimelineLog() {
+  useWsReconnectTimelineLog();
   return null;
 }
 

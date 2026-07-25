@@ -53,6 +53,11 @@ import Migration0033 from "./Migrations/033_PendingBackgroundTasks.ts";
 // consistent with live DBs.
 import Migration0035 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+// Web Push background notifications (former fork migration 34). Re-ported with a
+// fresh unused id (37) so it never collides with the upstream 33-36 ids above; the
+// filename keeps its own 037 prefix and the CREATE TABLE IF NOT EXISTS is a no-op on
+// any fork DB that already applied the old "034_PushSubscriptions".
+import Migration0037 from "./Migrations/037_PushSubscriptions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -100,6 +105,7 @@ export const migrationEntries = [
   [33, "PendingBackgroundTasks", Migration0033],
   [35, "ProjectionThreadsSettled", Migration0035],
   [36, "ProjectionThreadsSnoozed", Migration0036],
+  [37, "PushSubscriptions", Migration0037],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
