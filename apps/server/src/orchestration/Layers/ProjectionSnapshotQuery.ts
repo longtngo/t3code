@@ -2981,8 +2981,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           if (Option.isNone(thread)) {
             return Option.none<OrchestrationThreadDetailSnapshot>();
           }
+          const detail = thread.value;
           const { snapshotSequence } = yield* getSnapshotSequence();
-          return Option.some({ snapshotSequence, thread: thread.value });
+          return Option.some({
+            snapshotSequence,
+            thread: detail.value,
+            ...(detail.oldestLoaded !== undefined ? { oldestLoaded: detail.oldestLoaded } : {}),
+            hasMoreHistory: detail.hasMoreHistory,
+          });
         }),
       )
       .pipe(

@@ -164,18 +164,19 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
-  Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
-  // Preserved fork recovery services (reboot-survivable background-task recovery
-  // and turn-stall watchdog). Their dependencies (RuntimeBootId,
-  // PendingBackgroundTaskRepository) are provided below them.
+  // Preserved fork recovery services. In `A.pipe(provideMerge(B))` the argument B
+  // provides into A, so a service's provider must come AFTER its consumers here:
+  // the watchdogs first, then ProviderRuntimeIngestion (which also feeds
+  // OrchestrationReactor above and needs the repo), then the repo + bootId last
+  // (feeding ProviderRuntimeIngestion and BackgroundTaskRecoveryWatchdog).
   Layer.provideMerge(ProviderTurnStallWatchdogLive),
   Layer.provideMerge(BackgroundTaskRecoveryWatchdogLive),
-  Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
+  Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(RuntimeBootIdLive),
 );
 
@@ -305,7 +306,13 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  // Fork PendingBackgroundTaskRepository folded in here (kept off its own pipe
+  // stage to stay under the 20-arg pipe cap): consumed by ProviderSessionReaper
+  // (in ProviderRuntimeLayerLive) and the recovery reactors above, so it sits
+  // after them; it depends on persistence, provided by PersistenceLayerLive below.
+  Layer.provideMerge(
+    Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, PendingBackgroundTaskRepositoryLive),
+  ),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
