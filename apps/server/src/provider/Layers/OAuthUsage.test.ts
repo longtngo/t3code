@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import * as NodeOS from "node:os";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -161,7 +161,7 @@ describe("OAuthUsage.resolveOAuthToken", () => {
         spawner: Option.none(),
         fileSystem: fileSystemWith({
           "/.claude/.credentials.json": credentialsBlob("root-decoy-token"),
-          [`${homedir()}/.claude/.credentials.json`]: credentialsBlob("default-home-token"),
+          [`${NodeOS.homedir()}/.claude/.credentials.json`]: credentialsBlob("default-home-token"),
         }),
       });
       assert.deepStrictEqual(token, Option.some("default-home-token"));
@@ -171,6 +171,8 @@ describe("OAuthUsage.resolveOAuthToken", () => {
   // The Keychain branch only runs on darwin (resolveOAuthToken short-circuits
   // elsewhere). Pre-existing salting behavior, but the per-instance fix depends
   // on it: distinct CLAUDE_CONFIG_DIR values must query distinct services.
+  // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+  // oxlint-disable-next-line t3code/no-global-process-runtime
   it.effect.runIf(process.platform === "darwin")(
     "salts the Keychain service name by CLAUDE_CONFIG_DIR so instances resolve their own login",
     () =>

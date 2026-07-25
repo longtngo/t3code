@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFs from "node:fs";
+import * as NodeFS from "node:fs";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   listLoginShellCandidates,
@@ -45,7 +45,7 @@ function existingUserBinDirs(
 
 function defaultReadCachedPath(cachePath: string): string | undefined {
   try {
-    const value = NodeFs.readFileSync(cachePath, "utf8").trim();
+    const value = NodeFS.readFileSync(cachePath, "utf8").trim();
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -54,7 +54,7 @@ function defaultReadCachedPath(cachePath: string): string | undefined {
 
 function defaultWriteCachedPath(cachePath: string, value: string): void {
   try {
-    NodeFs.writeFileSync(cachePath, value, "utf8");
+    NodeFS.writeFileSync(cachePath, value, "utf8");
   } catch (error) {
     logPathHydrationWarning(`Failed to cache hydrated PATH at ${cachePath}.`, error);
   }
@@ -91,7 +91,7 @@ function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): vo
   const cachedPath = !discoveredPath ? defaultReadCachedPath(cachePath) : undefined;
   const fallbackDirs =
     !discoveredPath && !cachedPath
-      ? existingUserBinDirs(platform, homeDir, (path) => NodeFs.existsSync(path))
+      ? existingUserBinDirs(platform, homeDir, (path) => NodeFS.existsSync(path))
       : [];
 
   const preferredPath =

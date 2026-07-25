@@ -11,8 +11,8 @@
  * @module CursorUsage
  */
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off
-import { DatabaseSync } from "node:sqlite";
-import { homedir } from "node:os";
+import * as NodeSqlite from "node:sqlite";
+import * as NodeOS from "node:os";
 
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -296,6 +296,8 @@ const tokenFromKeychain = (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   service: string,
 ): Effect.Effect<Option.Option<string>> => {
+  // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+  // oxlint-disable-next-line t3code/no-global-process-runtime
   if (process.platform !== "darwin") return Effect.succeed(Option.none());
   return Effect.gen(function* () {
     const command = ChildProcess.make("security", ["find-generic-password", "-s", service, "-w"]);
@@ -315,7 +317,9 @@ const tokenFromKeychain = (
 };
 
 export const cursorStateDbPath = (env: NodeJS.ProcessEnv = process.env): string => {
-  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : NodeOS.homedir();
+  // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+  // oxlint-disable-next-line t3code/no-global-process-runtime
   switch (process.platform) {
     case "darwin":
       return `${home}/Library/Application Support/Cursor/User/globalStorage/state.vscdb`;
@@ -331,7 +335,7 @@ export const cursorStateDbPath = (env: NodeJS.ProcessEnv = process.env): string 
 
 const readSqliteItem = (dbPath: string, key: string): Option.Option<string> => {
   try {
-    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const db = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
     try {
       const row = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get(key) as
         | { value?: unknown }

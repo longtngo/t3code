@@ -11,8 +11,8 @@
  *
  * @module OAuthUsage
  */
-import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
 
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -108,13 +108,16 @@ const claudeConfigDir = (env: NodeJS.ProcessEnv): string => {
   if (env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0) {
     return env.CLAUDE_CONFIG_DIR;
   }
-  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : NodeOS.homedir();
   return `${home}/.claude`;
 };
 
 const keychainServiceName = (env: NodeJS.ProcessEnv): string => {
   if (env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0) {
-    const hash = createHash("sha256").update(env.CLAUDE_CONFIG_DIR).digest("hex").slice(0, 8);
+    const hash = NodeCrypto.createHash("sha256")
+      .update(env.CLAUDE_CONFIG_DIR)
+      .digest("hex")
+      .slice(0, 8);
     return `${KEYCHAIN_SERVICE}-${hash}`;
   }
   return KEYCHAIN_SERVICE;
@@ -143,6 +146,8 @@ const tokenFromKeychain = (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   env: NodeJS.ProcessEnv,
 ): Effect.Effect<Option.Option<string>> => {
+  // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+  // oxlint-disable-next-line t3code/no-global-process-runtime
   if (process.platform !== "darwin") return Effect.succeed(Option.none());
   return Effect.gen(function* () {
     const command = ChildProcess.make("security", [

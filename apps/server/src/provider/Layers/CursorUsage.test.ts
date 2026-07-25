@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { homedir } from "node:os";
+import * as NodeOS from "node:os";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -212,6 +212,8 @@ describe("CursorUsage.resolveCursorAuthTokens", () => {
     }),
   );
 
+  // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+  // oxlint-disable-next-line t3code/no-global-process-runtime
   it.effect.runIf(process.platform === "darwin")(
     "falls back to CLI keychain tokens when env vars are absent",
     () =>
@@ -246,6 +248,8 @@ describe("CursorUsage.cursorStateDbPath", () => {
   });
 
   it("uses the XDG config path on Linux", () => {
+    // TODO(phase-1 sanitize): inject HostProcessPlatform instead of reading process.platform directly.
+    // oxlint-disable-next-line t3code/no-global-process-runtime
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });
     try {
@@ -261,7 +265,7 @@ describe("CursorUsage.cursorStateDbPath", () => {
   it("falls back to homedir() when HOME is empty", () => {
     assert.match(
       cursorStateDbPath({ HOME: "" }),
-      new RegExp(`${homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      new RegExp(`${NodeOS.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
     );
   });
 });
