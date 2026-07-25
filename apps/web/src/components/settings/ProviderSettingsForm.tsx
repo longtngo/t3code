@@ -10,16 +10,11 @@ import type {
 } from "@t3tools/contracts";
 
 import { cn } from "../../lib/utils";
-import { readLocalApi } from "../../localApi";
-import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import type { ProviderClientDefinition } from "./providerDriverMeta";
-
-const hasDesktopBridge = (): boolean =>
-  typeof window !== "undefined" && Boolean(window.desktopBridge);
 
 export interface ProviderSettingsFieldModel {
   readonly key: string;
@@ -243,58 +238,35 @@ function ProviderSettingsFieldRow({
     );
   }
 
-  const isFolder = field.control === "folder";
   const type = field.control === "password" ? "password" : undefined;
-  const autoComplete = field.control === "password" ? "off" : undefined;
-  const browse = async () => {
-    const api = readLocalApi();
-    if (!api) return;
-    const current = readProviderConfigString(value, field.key);
-    const picked = await api.dialogs.pickFolder(current ? { initialPath: current } : undefined);
-    if (picked) onChange(nextProviderConfigWithFieldValue(value, field, picked));
-  };
-  const input =
-    variant === "card" ? (
-      <DraftInput
-        id={inputId}
-        className={isFolder ? "flex-1" : "mt-1.5"}
-        type={type}
-        autoComplete={autoComplete}
-        value={readProviderConfigString(value, field.key)}
-        onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
-        placeholder={field.placeholder}
-        spellCheck={false}
-      />
-    ) : (
-      <Input
-        id={inputId}
-        className={cn("bg-background", isFolder && "flex-1")}
-        type={type}
-        autoComplete={autoComplete}
-        value={readProviderConfigString(value, field.key)}
-        onChange={(event) =>
-          onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
-        }
-        placeholder={field.placeholder}
-        spellCheck={false}
-      />
-    );
-
   return (
     <FieldFrame variant={variant}>
       <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
         {label}
-        {isFolder ? (
-          <div className={cn("flex items-center gap-2", variant === "card" && "mt-1.5")}>
-            {input}
-            {hasDesktopBridge() ? (
-              <Button type="button" variant="outline" size="sm" onClick={browse}>
-                Browse…
-              </Button>
-            ) : null}
-          </div>
+        {variant === "card" ? (
+          <DraftInput
+            id={inputId}
+            className="mt-1.5"
+            type={type}
+            autoComplete={field.control === "password" ? "off" : undefined}
+            value={readProviderConfigString(value, field.key)}
+            onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+            placeholder={field.placeholder}
+            spellCheck={false}
+          />
         ) : (
-          input
+          <Input
+            id={inputId}
+            className="bg-background"
+            type={type}
+            autoComplete={field.control === "password" ? "off" : undefined}
+            value={readProviderConfigString(value, field.key)}
+            onChange={(event) =>
+              onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
+            }
+            placeholder={field.placeholder}
+            spellCheck={false}
+          />
         )}
         {description}
       </label>

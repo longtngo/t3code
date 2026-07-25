@@ -30,10 +30,6 @@ import type {
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
-  ProjectReadFileInput,
-  ProjectReadFileResult,
-  ProjectRenderMarkdownHtmlInput,
-  ProjectRenderMarkdownHtmlResult,
 } from "./project.ts";
 import type { AttachmentUploadInput, AttachmentUploadResult } from "./attachment.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
@@ -1040,12 +1036,6 @@ export interface DesktopBridge {
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
-  /**
-   * Resolve the absolute filesystem path of a dropped/selected `File`, via Electron's
-   * `webUtils.getPathForFile`. Returns `""` when the file has no real path backing it
-   * (e.g. a clipboard blob). Synchronous — no IPC round-trip.
-   */
-  getPathForFile: (file: File) => string;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -1054,10 +1044,6 @@ export interface DesktopBridge {
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
-  showNotification: (input: DesktopNotificationInput) => Promise<void>;
-  onNotificationActivated: (
-    listener: (threadRef: DesktopNotificationThreadRef) => void,
-  ) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
@@ -1230,10 +1216,6 @@ export interface EnvironmentApi {
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
-    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
-    renderMarkdownHtml: (
-      input: ProjectRenderMarkdownHtmlInput,
-    ) => Promise<ProjectRenderMarkdownHtmlResult>;
   };
   attachments: {
     upload: (input: AttachmentUploadInput) => Promise<AttachmentUploadResult>;

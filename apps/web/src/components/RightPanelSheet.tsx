@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
 
-import { cn } from "~/lib/utils";
 import { RIGHT_PANEL_SHEET_CLASS_NAME } from "../rightPanelLayout";
 import { Sheet, SheetPopup } from "./ui/sheet";
 
@@ -8,8 +7,6 @@ export function RightPanelSheet(props: {
   children: ReactNode;
   open: boolean;
   onClose: () => void;
-  /** Extra classes layered after the default width; later classes win conflicts. */
-  className?: string | undefined;
 }) {
   return (
     <Sheet
@@ -24,7 +21,7 @@ export function RightPanelSheet(props: {
         side="right"
         showCloseButton={false}
         keepMounted
-        className={cn(RIGHT_PANEL_SHEET_CLASS_NAME, props.className)}
+        className={RIGHT_PANEL_SHEET_CLASS_NAME}
       >
         {props.children}
       </SheetPopup>

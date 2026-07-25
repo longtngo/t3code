@@ -1270,153 +1270,6 @@ label:has(> select#reasoning-effort) select {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 70%, transparent);
 }
 
-/* Inline openable-file chip (HTML / markdown report paths). The whole chip is
-   the click target; the directory left-truncates so the filename stays visible
-   and `max-width` keeps it inside the viewport on mobile. */
-.chat-markdown-file-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.34rem;
-  max-width: 100%;
-  vertical-align: text-bottom;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, var(--foreground) 6%);
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--muted) 60%, var(--background));
-  padding: 0.12rem 0.4rem 0.12rem 0.34rem;
-  color: var(--foreground);
-  text-align: left;
-  line-height: 1.25;
-  cursor: pointer;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease;
-}
-
-.chat-markdown-file-chip:hover {
-  background: color-mix(in srgb, var(--muted) 90%, var(--foreground) 4%);
-  border-color: color-mix(in srgb, var(--border) 55%, var(--foreground));
-}
-
-.chat-markdown-file-chip:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 60%, transparent);
-}
-
-.chat-markdown-file-chip-type {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted-foreground);
-}
-
-.chat-markdown-file-chip-ext {
-  flex: none;
-  border-radius: 0.25rem;
-  padding: 0.02rem 0.28rem;
-  font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-markdown-file-chip-ext-html {
-  color: #fb923c;
-  background: color-mix(in srgb, #fb923c 14%, transparent);
-}
-
-.chat-markdown-file-chip-ext-markdown {
-  color: var(--color-blue-400, #60a5fa);
-  background: color-mix(in srgb, #60a5fa 14%, transparent);
-}
-
-.chat-markdown-file-chip-ext-code {
-  color: var(--color-emerald-400, #34d399);
-  background: color-mix(in srgb, #34d399 14%, transparent);
-}
-
-.chat-markdown-file-chip-path {
-  display: inline-flex;
-  align-items: baseline;
-  min-width: 0;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.78rem;
-}
-
-/* Left-truncate the directory (clip from the start), keeping the path tail. */
-.chat-markdown-file-chip-dir {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  unicode-bidi: plaintext;
-  color: var(--muted-foreground);
-}
-
-.chat-markdown-file-chip-base {
-  flex: none;
-  font-weight: 600;
-  color: var(--foreground);
-}
-
-.chat-markdown-file-chip-open {
-  flex: none;
-  color: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
-}
-
-.chat-markdown-file-chip:hover .chat-markdown-file-chip-open {
-  color: var(--foreground);
-}
-
-/* Markdown chip is a button group: a main "open" body + a caret menu trigger.
-   The inner buttons are transparent; the outer span keeps the chip frame. */
-.chat-markdown-file-chip-group {
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.chat-markdown-file-chip-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.34rem;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0.12rem 0.34rem;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  line-height: 1.25;
-  cursor: pointer;
-}
-
-.chat-markdown-file-chip-caret {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  padding: 0.12rem 0.26rem;
-  border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--border) 70%, var(--foreground) 6%);
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.chat-markdown-file-chip-caret:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
-
-.chat-markdown-file-chip-main:focus-visible,
-.chat-markdown-file-chip-caret:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 60%, transparent);
-}
-
 .chat-markdown pre {
   max-width: 100%;
   overflow-x: auto;
@@ -1526,34 +1379,14 @@ label:has(> select#reasoning-effort) select {
   background: transparent !important;
 }
 
-/* Whole-file syntax-highlighted view in the file viewer side panel. The `.chat-markdown pre`
-   rules are scoped under `.chat-markdown`, which this view does not wrap with, so restate the
-   parts a full-panel code view needs. Vertical scroll is handled by the panel's ScrollArea;
-   the pre scrolls horizontally for long lines. */
-.chat-markdown-file-code .shiki,
-.chat-markdown-file-code-fallback {
-  margin: 0;
-  padding: 0;
-  background: transparent !important;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  overflow-x: auto;
-  white-space: pre;
-  tab-size: 2;
-}
-
-.chat-markdown-file-code-fallback {
-  color: var(--foreground);
-}
-
-/* Tables wrap their cell text to fit the chat column by default, so wide tables
-   stay readable without truncation. word-break: normal keeps the longest word
-   intact, so genuinely unbreakable content (long URLs/IDs) overflows and the
-   container scrolls horizontally rather than breaking mid-word. Row separators
-   only, uppercase-weight headers, scroll-fade container for the overflow case. */
+/* Diagnostics-style tables: row separators only, uppercase headers, and a
+   scroll-fade container for horizontal overflow. The root chat-markdown
+   wrapping rules (overflow-wrap: anywhere) would let columns shrink to single
+   characters and defeat the overflow — restore word-boundary wrapping so the
+   min column width is the longest word. */
 .chat-markdown table {
   width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
   overflow-wrap: normal;
   word-break: normal;
@@ -1577,13 +1410,19 @@ label:has(> select#reasoning-effort) select {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-/* Narrow viewports: don't let auto table-layout crush columns into
-   one-word-per-line towers — keep a usable minimum table width and let the
-   container scroll horizontally instead. */
-@media (max-width: 640px) {
-  .chat-markdown table {
-    min-width: 32rem;
-  }
+/* Collapsed (default): single-line cells truncate so arbitrary chat content
+   cannot blow the column out; the footer toggle expands cells to wrap. */
+.chat-markdown .chat-markdown-table-container[data-expanded="false"] th,
+.chat-markdown .chat-markdown-table-container[data-expanded="false"] td {
+  overflow: hidden;
+  max-width: 24rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-markdown .chat-markdown-table-container[data-expanded="true"] td {
+  max-width: 24rem;
+  overflow-wrap: anywhere;
 }
 
 .chat-markdown .chat-markdown-table-footer {

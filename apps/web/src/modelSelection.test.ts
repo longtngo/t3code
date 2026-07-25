@@ -302,27 +302,4 @@ describe("instance-scoped model selection", () => {
       model: "openai/gpt-5.5",
     });
   });
-
-  it("falls back to the first enabled instance and its default model when the selected instance is disabled", () => {
-    const providers = [
-      { ...provider({ instanceId: "codex", models: ["gpt-5.4"] }), enabled: false },
-      provider({
-        instanceId: "claudeAgent",
-        models: ["claude-opus-4-8"],
-      }),
-    ];
-    const settings: UnifiedSettings = {
-      ...settingsWithProviderInstances(),
-      textGenerationModelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
-        model: "gpt-5.4",
-      },
-    };
-
-    // The disabled instance's model must not carry over to the fallback.
-    expect(resolveAppModelSelectionState(settings, providers)).toEqual({
-      instanceId: ProviderInstanceId.make("claudeAgent"),
-      model: "claude-opus-4-8",
-    });
-  });
 });

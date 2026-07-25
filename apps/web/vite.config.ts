@@ -4,8 +4,6 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
 import "vite-plus/test/config";
-import { visualizer } from "rollup-plugin-visualizer";
-import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
@@ -64,11 +62,6 @@ const unitTestProject = {
     // run, those async tests can exceed Vitest's default 5s budget.
     hookTimeout: 15_000,
     testTimeout: 15_000,
-    // A few render-timing tests (e.g. MessagesTimeline collapse controls) flake
-    // only under heavy concurrent load — green in isolation. A bounded retry
-    // absorbs the transient contention; a real regression still fails every
-    // attempt. See the server config for the full rationale.
-    retry: 2,
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -98,67 +91,6 @@ const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
 export default defineConfig(() => {
   return {
     plugins: [
-      VitePWA({
-        registerType: "prompt",
-        injectRegister: false,
-        manifest: {
-          name: "T3 Code",
-          short_name: "T3 Code",
-          description: "T3 Code — an agentic coding workspace.",
-          start_url: "/",
-          scope: "/",
-          display: "standalone",
-          background_color: "#161616",
-          theme_color: "#161616",
-          icons: [
-            { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-            { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-            {
-              src: "/pwa-maskable-512x512.png",
-              sizes: "512x512",
-              type: "image/png",
-              purpose: "maskable",
-            },
-          ],
-        },
-        workbox: {
-          // Inject our Web Push handlers into the generated worker. This keeps the
-          // whole generateSW config below (precache + the load-bearing CacheFirst
-          // /assets rule) untouched, while adding `push` / `notificationclick`
-          // listeners the auto-generated worker otherwise can't carry. The file is
-          // a plain static asset under public/ (served at /push-sw.js).
-          importScripts: ["/push-sw.js"],
-          // Precache only the small, always-needed shell. The large hashed JS/CSS
-          // chunks (incl. lazy Shiki language + wasm bundles, ~16 MB total) are
-          // runtime-cached on first use instead of blocking SW install on 16 MB.
-          globPatterns: ["index.html", "manifest.webmanifest", "**/*.{css,woff2,ico,png,svg}"],
-          cleanupOutdatedCaches: true,
-          navigateFallback: "index.html",
-          // Deny server-owned top-level routes so the SPA shell never replaces a
-          // server-rendered response. `/viewer` is opened as a real navigation
-          // (window.open) and must reach the server. `/pair` is a CLIENT route, so it
-          // is intentionally absent (it needs the shell). `/ws` is a WebSocket upgrade
-          // the service worker never sees.
-          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/, /^\/viewer/],
-          runtimeCaching: [
-            {
-              // Content-hashed build assets (JS/CSS) — deliberately NOT precached (the
-              // full precache would be ~16 MB of lazy Shiki/wasm chunks). CacheFirst is
-              // safe because the URL changes whenever content changes; bounded so old
-              // builds' chunks are evicted. This is load-bearing, not redundant with the
-              // shell precache, which contains no JS.
-              urlPattern: ({ url }) => url.pathname.startsWith("/assets/"),
-              handler: "CacheFirst",
-              options: {
-                cacheName: "t3code-assets",
-                expiration: { maxEntries: 300, maxAgeSeconds: 30 * 24 * 60 * 60, purgeOnQuotaError: true },
-                cacheableResponse: { statuses: [0, 200] },
-              },
-            },
-          ],
-        },
-        devOptions: { enabled: false },
-      }),
       tanstackRouter(),
       react(),
       babel({
@@ -170,18 +102,6 @@ export default defineConfig(() => {
         presets: [reactCompilerPreset()],
       }),
       tailwindcss(),
-      // Bundle analyzer — gated behind ANALYZE so it is zero-cost by default.
-      // Run `ANALYZE=1 pnpm --filter @t3tools/web build` to emit dist/stats.html.
-      ...(process.env.ANALYZE
-        ? [
-            visualizer({
-              filename: "dist/stats.html",
-              template: "treemap",
-              gzipSize: true,
-              brotliSize: false,
-            }),
-          ]
-        : []),
     ],
     optimizeDeps: {
       include: [

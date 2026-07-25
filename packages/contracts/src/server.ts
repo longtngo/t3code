@@ -418,12 +418,6 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
-  /**
-   * VAPID public key for Web Push, base64url-encoded. Present when the server has a
-   * push keypair (generated on demand). Non-secret; the web client feeds it to
-   * `PushManager.subscribe` as `applicationServerKey`. Absent on older servers.
-   */
-  webPushVapidPublicKey: Schema.optional(Schema.String),
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */

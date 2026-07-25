@@ -76,12 +76,6 @@ import {
   ProjectWriteFileError,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
-  ProjectReadFileError,
-  ProjectReadFileInput,
-  ProjectReadFileResult,
-  ProjectRenderMarkdownHtmlError,
-  ProjectRenderMarkdownHtmlInput,
-  ProjectRenderMarkdownHtmlResult,
 } from "./project.ts";
 import {
   AttachmentUploadError,
@@ -166,8 +160,6 @@ export const WS_METHODS = {
   projectsReadFile: "projects.readFile",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
-  projectsReadFile: "projects.readFile",
-  projectsRenderMarkdownHtml: "projects.renderMarkdownHtml",
 
   // Attachment methods
   attachmentsUpload: "attachments.upload",
@@ -437,18 +429,6 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
-});
-
-export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
-  payload: ProjectReadFileInput,
-  success: ProjectReadFileResult,
-  error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
-});
-
-export const WsProjectsRenderMarkdownHtmlRpc = Rpc.make(WS_METHODS.projectsRenderMarkdownHtml, {
-  payload: ProjectRenderMarkdownHtmlInput,
-  success: ProjectRenderMarkdownHtmlResult,
-  error: Schema.Union([ProjectRenderMarkdownHtmlError, EnvironmentAuthorizationError]),
 });
 
 export const WsAttachmentsUploadRpc = Rpc.make(WS_METHODS.attachmentsUpload, {
@@ -1076,8 +1056,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsReadFileRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
-  WsProjectsReadFileRpc,
-  WsProjectsRenderMarkdownHtmlRpc,
   WsAttachmentsUploadRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,

@@ -1,5 +1,4 @@
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
-import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -11,28 +10,6 @@ const Tooltip = TooltipPrimitive.Root;
 
 function TooltipTrigger(props: TooltipPrimitive.Trigger.Props) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
-}
-
-/**
- * TooltipTrigger anchored on a wrapper span around the control instead of
- * the control itself. Use for controls that can be natively `disabled`: a
- * disabled button doesn't dispatch the pointer/hover events the tooltip
- * listens for, so a tooltip on the control itself would never open in
- * exactly the disabled state it has to explain. The wrapper span keeps
- * receiving hover regardless.
- */
-function TooltipWrapperTrigger({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <TooltipTrigger render={<span className={cn("inline-flex", className)} />}>
-      {children}
-    </TooltipTrigger>
-  );
 }
 
 function TooltipPopup({
@@ -79,11 +56,4 @@ function TooltipPopup({
   );
 }
 
-export {
-  TooltipCreateHandle,
-  TooltipProvider,
-  Tooltip,
-  TooltipTrigger,
-  TooltipWrapperTrigger,
-  TooltipPopup,
-};
+export { TooltipCreateHandle, TooltipProvider, Tooltip, TooltipTrigger, TooltipPopup };

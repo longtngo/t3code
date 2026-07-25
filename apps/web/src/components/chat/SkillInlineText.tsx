@@ -55,9 +55,7 @@ export function renderSkillInlineMarkdownChildren(
     if (!isValidElement<{ children?: ReactNode }>(child)) {
       return child;
     }
-    // Skip inline code, links, and any custom component (e.g. the markdown
-    // `code` renderer) — skill chips only apply to intrinsic text containers.
-    if (child.type === "code" || child.type === "a" || typeof child.type === "function") {
+    if (child.type === "code" || child.type === "a") {
       return child;
     }
     if (!("children" in child.props)) {

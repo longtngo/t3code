@@ -436,7 +436,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   // The top-level turn can settle while a background worker is still running;
   // this drives the sidebar "Working" state in that gap. Decoding default for
   // newer-client / older-server skew.
-  hasPendingBackgroundTask: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Server-computed (see ProjectionSnapshotQuery). Optional on construction so
+  // upstream client/mobile shell fixtures need not supply it; the "Working"
+  // status UI that consumes it is a deferred fork re-port.
+  hasPendingBackgroundTask: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
@@ -1384,14 +1387,6 @@ export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
-  }),
-  // A coalesced batch of events, in ascending sequence order. Long agentic turns
-  // emit many discrete activity events; batching bursts into one frame cuts the
-  // wire frame count on the active path (and the reconnect resume). The client
-  // applies each event exactly as it does a single `event` item.
-  Schema.Struct({
-    kind: Schema.Literal("events"),
-    events: Schema.Array(OrchestrationEvent),
   }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;

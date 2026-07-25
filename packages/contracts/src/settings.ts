@@ -59,21 +59,8 @@ export const GlassOpacity = Schema.Int.check(
 export type GlassOpacity = typeof GlassOpacity.Type;
 export const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
 
-/** A user-defined composer prompt shortcut: a button label plus the prompt text it inserts. */
-export const ComposerShortcut = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  text: Schema.String,
-});
-export type ComposerShortcut = typeof ComposerShortcut.Type;
-
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // User-managed prompt shortcuts shown above the composer input; clicking one inserts its
-  // text. Ordered by the user in the manager. Client-only (no server round-trip needed).
-  composerShortcuts: Schema.Array(ComposerShortcut).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -99,11 +86,6 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  // Raise an OS notification when a thread's turn finishes while the user is
-  // not actively viewing it. Defaults off because enabling it requires a
-  // gesture-bound OS permission prompt (browsers block silent permission
-  // requests); the settings toggle is what requests permission.
-  notifyOnThreadCompletion: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   providerModelPreferences: Schema.Record(
     ProviderInstanceId,
     Schema.Struct({
@@ -739,7 +721,6 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
-  composerShortcuts: Schema.optionalKey(Schema.Array(ComposerShortcut)),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -752,7 +733,6 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
-  notifyOnThreadCompletion: Schema.optionalKey(Schema.Boolean),
   providerModelPreferences: Schema.optionalKey(
     Schema.Record(
       ProviderInstanceId,

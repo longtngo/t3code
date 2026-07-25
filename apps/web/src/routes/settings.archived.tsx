@@ -1,14 +1,7 @@
-import { lazy, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-const ArchivedThreadsPanel = lazy(() =>
-  import("../components/settings/SettingsPanels").then((m) => ({ default: m.ArchivedThreadsPanel })),
-);
+import { ArchivedThreadsPanel } from "../components/settings/SettingsPanels";
 
 export const Route = createFileRoute("/settings/archived")({
-  component: () => (
-    <Suspense fallback={null}>
-      <ArchivedThreadsPanel />
-    </Suspense>
-  ),
+  component: ArchivedThreadsPanel,
 });
