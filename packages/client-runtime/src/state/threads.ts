@@ -294,6 +294,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         onExpectedFailure: setStreamError,
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
+        // The server ends this stream cleanly if its bounded live buffer overflows
+        // (this consumer fell too far behind). Treat that completion as a resync
+        // trigger: resubscribe with the latest `afterSequence` so the missed events
+        // are replayed. Without this the thread would silently stop updating.
+        resubscribeOnCompletionAfter: "250 millis",
       },
     ).pipe(Stream.runForEach(applyItem)),
   );
@@ -350,6 +355,7 @@ export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
 export * from "./threadDetail.ts";
+export * from "./threadHistoryBackfill.ts";
 export * from "./threadReducer.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

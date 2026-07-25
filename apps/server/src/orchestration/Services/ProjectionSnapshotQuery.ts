@@ -211,6 +211,17 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
+    options?: {
+      readonly windowTurns?: number | undefined;
+      readonly maxRows?: number | undefined;
+      /**
+       * Server-internal serialized-byte budget (see {@link getThreadDetailById}
+       * `maxBytes`). Forwarded to the underlying windowed read so a huge thread
+       * returns a bounded recent window plus `oldestLoaded`/`hasMoreHistory` rather
+       * than one giant snapshot frame. Always keeps at least the newest turn.
+       */
+      readonly maxBytes?: number | undefined;
+    },
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

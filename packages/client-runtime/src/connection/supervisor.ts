@@ -29,7 +29,11 @@ import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
-const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+// Cap the reconnect backoff at ~3s. A longer tail (previously 16s) leaves a
+// mobile client showing "disconnected" for many seconds after the network has
+// already returned. The tail value repeats forever (see retryDelayMs) so we
+// keep retrying indefinitely, just without the long dead-wait.
+const RETRY_DELAYS_MS = [500, 1_000, 2_000, 3_000, 3_000] as const;
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
@@ -100,7 +104,7 @@ export interface EnvironmentSupervisorOptions {
 }
 
 function retryDelayMs(failureCount: number): number {
-  return RETRY_DELAYS_MS[Math.min(failureCount, RETRY_DELAYS_MS.length - 1)] ?? 16_000;
+  return RETRY_DELAYS_MS[Math.min(failureCount, RETRY_DELAYS_MS.length - 1)] ?? 3_000;
 }
 
 function annotateTarget(target: ConnectionTarget) {

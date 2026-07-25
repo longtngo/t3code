@@ -156,6 +156,21 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
+  /**
+   * When set, a subscription stream that the SERVER ends NORMALLY (a clean
+   * completion, not a failure) is automatically re-subscribed after this delay,
+   * instead of stalling until the next session change.
+   *
+   * The server ends a live subscription cleanly when a bounded per-subscription
+   * buffer overflows (a slow/stalled consumer fell too far behind): the completion
+   * is the signal to reconnect and resync. Because `makeInput` is re-evaluated on
+   * each (re)subscribe, the reconnect carries the latest resume cursor
+   * (`afterSequence`), so the server replays exactly what was missed — lossless.
+   * A client tears the whole stream down by SCOPE CLOSE (interruption), which is
+   * NOT a normal completion, so unsubscribing never triggers a resubscribe. The
+   * small delay guards against a hot loop if the server keeps ending immediately.
+   */
+  readonly resubscribeOnCompletionAfter?: Duration.Input;
 }
 
 export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
@@ -198,8 +213,25 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                   Stream.suspend(() =>
                     Stream.unwrap(
                       makeInput(session).pipe(
-                        Effect.map((input) =>
-                          method(input).pipe(
+                        Effect.map((input) => {
+                          // When enabled, a NORMAL completion of the live stream (the
+                          // server ended it cleanly, e.g. a bounded-buffer overflow →
+                          // resync) re-subscribes with fresh input rather than
+                          // stalling. Failures still flow to `catchCause` below;
+                          // interruption (client unsubscribe / scope close) is not a
+                          // completion, so it never resubscribes.
+                          const live =
+                            options?.resubscribeOnCompletionAfter === undefined
+                              ? method(input)
+                              : method(input).pipe(
+                                  Stream.concat(
+                                    Stream.fromEffect(
+                                      Effect.sleep(options.resubscribeOnCompletionAfter),
+                                    ).pipe(Stream.drain),
+                                  ),
+                                  Stream.concat(Stream.suspend(subscribeToSession)),
+                                );
+                          return live.pipe(
                             Stream.catchCause((cause) => {
                               const hasOnlyExpectedFailures =
                                 cause.reasons.length > 0 &&
@@ -243,8 +275,8 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                               }
                               return Stream.failCause(cause);
                             }),
-                          ),
-                        ),
+                          );
+                        }),
                       ),
                     ),
                   );

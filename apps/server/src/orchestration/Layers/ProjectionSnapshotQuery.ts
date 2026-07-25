@@ -2968,6 +2968,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const getThreadDetailSnapshot: ProjectionSnapshotQueryShape["getThreadDetailSnapshot"] = (
     threadId,
+    options,
   ) =>
     // Read the thread detail and the snapshot sequence within a single
     // transaction so the sequence is consistent with the returned state; a
@@ -2977,7 +2978,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const thread = yield* getThreadDetailById(threadId);
+          // Forward window bounds so a huge thread returns a bounded recent window
+          // plus oldestLoaded/hasMoreHistory instead of one giant frame (the OOM).
+          const thread = yield* getThreadDetailById(threadId, options);
           if (Option.isNone(thread)) {
             return Option.none<OrchestrationThreadDetailSnapshot>();
           }

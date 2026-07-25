@@ -216,6 +216,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
+        // The server ends this stream cleanly if its bounded live buffer overflows
+        // (this consumer fell too far behind). Treat that completion as a resync
+        // trigger: resubscribe with the latest `afterSequence` so the shell catches
+        // up. Without this the sidebar would silently stop updating.
+        resubscribeOnCompletionAfter: "250 millis",
       },
     ).pipe(Stream.runForEach(applyItem)),
   );

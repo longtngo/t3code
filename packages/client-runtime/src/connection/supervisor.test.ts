@@ -311,7 +311,7 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
-  it.effect("retries forever with exponential backoff capped at sixteen seconds", () =>
+  it.effect("retries forever with exponential backoff capped at three seconds", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         prepare: () => Effect.fail(transient()),
@@ -326,7 +326,7 @@ describe("EnvironmentSupervisor", () => {
       );
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
 
-      for (const [index, delay] of [1_000, 2_000, 4_000, 8_000, 16_000, 16_000].entries()) {
+      for (const [index, delay] of [500, 1_000, 2_000, 3_000, 3_000, 3_000].entries()) {
         yield* TestClock.adjust(delay);
         yield* eventuallyState(
           supervisor.state,
@@ -627,7 +627,8 @@ describe("EnvironmentSupervisor", () => {
         (state) => state.phase === "backoff" && state.attempt === 1,
       );
 
-      yield* TestClock.adjust("1 second");
+      // First backoff is 500ms (RETRY_DELAYS_MS[0]).
+      yield* TestClock.adjust("500 millis");
       yield* awaitState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2,
@@ -640,10 +641,12 @@ describe("EnvironmentSupervisor", () => {
 
       expect(secondFailure.retryAt).not.toBeNull();
 
-      yield* TestClock.adjust("1 second");
+      // Second backoff escalates to 1000ms (RETRY_DELAYS_MS[1]); 500ms is not yet
+      // enough to trigger the reconnect.
+      yield* TestClock.adjust("500 millis");
       expect(yield* Ref.get(harness.sessionCount)).toBe(2);
 
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("500 millis");
       yield* awaitState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 3,

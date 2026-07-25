@@ -16,9 +16,22 @@ function configuredRelayUrl(): string {
 
 const httpClientLayer = remoteHttpClientLayer(fetch);
 
+// Force ArrayBuffer binary frames. The effect Socket layer async-decodes Blob
+// frames via `event.data.arrayBuffer()`, which can reorder frames under load and
+// permanently desync the msgpack codec. ArrayBuffer frames arrive synchronously
+// in wire order, so no async decode is needed.
+const webSocketConstructorLayer = Layer.succeed(
+  Socket.WebSocketConstructor,
+  (url, protocols) => {
+    const ws = new globalThis.WebSocket(url, protocols);
+    ws.binaryType = "arraybuffer";
+    return ws;
+  },
+);
+
 type RuntimeLayerSource =
   | ReturnType<typeof managedRelayClientLayer>
-  | typeof Socket.layerWebSocketConstructorGlobal
+  | typeof webSocketConstructorLayer
   | typeof cryptoLayer
   | typeof httpClientLayer
   | typeof Persistence.layer
@@ -26,7 +39,7 @@ type RuntimeLayerSource =
 
 const runtimeLayer = Layer.merge(
   managedRelayClientLayer(configuredRelayUrl()),
-  Socket.layerWebSocketConstructorGlobal,
+  webSocketConstructorLayer,
 ).pipe(
   Layer.provideMerge(cryptoLayer),
   Layer.provideMerge(httpClientLayer),

@@ -33,6 +33,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
+  OrchestrationGetHistoryPageError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -68,7 +69,13 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { pumpBoundedLiveBuffer } from "./orchestration/Layers/boundedLiveBuffer.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import {
+  DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS,
+  DEFAULT_SUBSCRIBE_WINDOW_TURNS,
+  WINDOW_MAX_BYTES,
+} from "./orchestration/threadWindowBounds.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -289,6 +296,31 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
+/**
+ * Per-subscription live-buffer capacity (ITEM 1 — OOM bound).
+ *
+ * Each WS subscribe (thread or shell) forks a pump that drains the (unbounded)
+ * domain-event hub into a per-subscription buffer the socket writer consumes at
+ * its own pace. If that buffer is unbounded, a stalled/dead socket (a mobile
+ * client that stopped ACKing without a close frame) stops draining and the buffer
+ * grows without limit — the confirmed server OOM. The buffer is therefore a
+ * bounded `Queue.dropping`; when a subscriber falls this many events behind, the
+ * pump ENDS the buffer (clean stream completion), which the client transport
+ * treats as a resubscribe trigger and reconnects with `afterSequence`, resyncing
+ * losslessly via the existing catch-up-replay path. A few thousand events is far
+ * above any real burst yet caps the buffer's memory at a small, fixed size.
+ */
+const WS_LIVE_BUFFER_CAPACITY = 4_096;
+
+/**
+ * Server-side ceilings for a single `getThreadHistoryPage` response, so the "safe
+ * paging path" that clients are pointed at cannot itself be turned into a
+ * whole-thread load by a runaway/hostile request (`maxTurns`/`maxRows` = 1e9). Set
+ * generously above any real backfill request; only a runaway request is capped.
+ */
+const HISTORY_PAGE_MAX_TURNS = 100;
+const HISTORY_PAGE_MAX_ROWS = 5_000;
+
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
@@ -297,6 +329,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.getThreadHistoryPage, AuthOrchestrationReadScope],
   [WS_METHODS.serverProbe, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
@@ -1256,12 +1289,20 @@ const makeWsRpcLayer = (
               // sequence but the live subscription is not attached yet). Every
               // path below emits from this same buffered live tail. Overlapping
               // events are deduped by sequence on the client.
-              const liveBuffer = yield* Queue.unbounded<ShellLiveInput>();
+              // Bounded (not unbounded) so a stalled/dead socket that stops
+              // draining can never grow this buffer without limit — the confirmed
+              // OOM. On overflow the pump ends the buffer; the ended stream makes
+              // the client resubscribe (with afterSequence) and resync. See
+              // WS_LIVE_BUFFER_CAPACITY / pumpBoundedLiveBuffer.
+              const liveBuffer = yield* Queue.dropping<ShellLiveInput, Cause.Done>(
+                WS_LIVE_BUFFER_CAPACITY,
+              );
               yield* Effect.forkScoped(
-                orchestrationEngine.streamDomainEvents.pipe(
-                  Stream.runForEach((event) =>
-                    Queue.offer(liveBuffer, { kind: "event" as const, event }),
+                pumpBoundedLiveBuffer(
+                  orchestrationEngine.streamDomainEvents.pipe(
+                    Stream.map((event) => ({ kind: "event" as const, event })),
                   ),
+                  liveBuffer,
                 ),
                 { startImmediately: true },
               );
@@ -1290,6 +1331,16 @@ const makeWsRpcLayer = (
                         Queue.offer(liveBuffer, { kind: "synchronized" as const }).pipe(
                           Effect.andThen(Queue.takeAll(liveBuffer)),
                           Effect.flatMap(coalesceShellLiveInputs),
+                          // `takeAll` on the bounded (Done-typed) buffer surfaces
+                          // Cause.Done if the buffer ended (overflow) between the
+                          // marker offer and this drain; nothing more to flush, so
+                          // recover to an empty batch. The concat then continues to
+                          // bufferedLiveStream (which is likewise ending → resync).
+                          Effect.catchTag("Done", () =>
+                            Effect.succeed(
+                              [] as ReadonlyArray<OrchestrationShellStreamItem>,
+                            ),
+                          ),
                         ),
                       ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                       bufferedLiveStream,
@@ -1384,10 +1435,15 @@ const makeWsRpcLayer = (
 
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
-              const liveBuffer = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
-              yield* Effect.forkScoped(
-                liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+              // Bounded (not unbounded) so a stalled/dead socket that stops draining
+              // can never grow this buffer without limit — the confirmed OOM. On
+              // overflow the pump ends the buffer; the ended stream makes the client
+              // resubscribe (with afterSequence) and resync. See
+              // WS_LIVE_BUFFER_CAPACITY / pumpBoundedLiveBuffer.
+              const liveBuffer = yield* Queue.dropping<OrchestrationThreadStreamItem, Cause.Done>(
+                WS_LIVE_BUFFER_CAPACITY,
               );
+              yield* Effect.forkScoped(pumpBoundedLiveBuffer(liveStream, liveBuffer));
               const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
               // When the client already loaded the snapshot over HTTP it passes
@@ -1434,8 +1490,28 @@ const makeWsRpcLayer = (
                 return Stream.concat(catchUpStream, afterCatchUp);
               }
 
+              // Defense-in-depth against the "giant frame" OOM (ITEM 2): the
+              // snapshot is ALWAYS windowed. A missing/degenerate (<= 0) client
+              // bound applies the bounded default (windowTurns: 0 would resolve to
+              // a null boundary = whole thread downstream, so treat non-positive as
+              // unset); an explicit maxRows is clamped DOWN to the ceiling (a client
+              // may ask for fewer rows, never more). Older history is paged via
+              // getThreadHistoryPage; a client that does not page sees only the
+              // recent window (accepted regression vs. the previous full-load OOM).
+              const snapshotWindowTurns =
+                input.windowTurns !== undefined && input.windowTurns > 0
+                  ? input.windowTurns
+                  : DEFAULT_SUBSCRIBE_WINDOW_TURNS;
+              const snapshotMaxRows =
+                input.maxRows !== undefined && input.maxRows > 0
+                  ? Math.min(input.maxRows, DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS)
+                  : DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS;
               const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId)
+                .getThreadDetailSnapshot(input.threadId, {
+                  windowTurns: snapshotWindowTurns,
+                  maxRows: snapshotMaxRows,
+                  maxBytes: WINDOW_MAX_BYTES,
+                })
                 .pipe(
                   Effect.mapError(
                     (cause) =>
@@ -1470,6 +1546,31 @@ const makeWsRpcLayer = (
                 afterSnapshot,
               );
             }),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
+          // Older-turn paging: the safe way to load history beyond the windowed
+          // subscribe snapshot (ITEM 2). A single response is bounded on all three
+          // axes so this path can't itself be turned into a whole-thread load by a
+          // runaway/hostile request — the same OOM the subscribe window prevents.
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
+            projectionSnapshotQuery
+              .getThreadHistoryPage({
+                ...input,
+                maxTurns: Math.min(input.maxTurns, HISTORY_PAGE_MAX_TURNS),
+                maxRows: Math.min(input.maxRows, HISTORY_PAGE_MAX_ROWS),
+                maxBytes: WINDOW_MAX_BYTES,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationGetHistoryPageError({
+                      message: `Failed to load history page for thread ${input.threadId}`,
+                      cause,
+                    }),
+                ),
+              ),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>

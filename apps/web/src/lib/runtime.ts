@@ -24,10 +24,23 @@ const relayTracingLayer = makeRelayClientTracingLayer(resolveRelayTracingConfig(
   client: typeof window !== "undefined" && window.desktopBridge ? "desktop" : "web",
 }).pipe(Layer.provide(httpClientLayer));
 
+// Force ArrayBuffer binary frames. The effect Socket layer async-decodes Blob
+// frames via `event.data.arrayBuffer()`, which can reorder frames under load and
+// permanently desync the msgpack codec. ArrayBuffer frames arrive synchronously
+// in wire order, so no async decode is needed.
+const webSocketConstructorLayer = Layer.succeed(
+  Socket.WebSocketConstructor,
+  (url, protocols) => {
+    const ws = new globalThis.WebSocket(url, protocols);
+    ws.binaryType = "arraybuffer";
+    return ws;
+  },
+);
+
 type RuntimeLayerSource =
   | typeof httpClientLayer
   | typeof browserCryptoLayer
-  | typeof Socket.layerWebSocketConstructorGlobal
+  | typeof webSocketConstructorLayer
   | typeof relayTracingLayer
   | ReturnType<typeof managedRelayClientLayer>;
 
@@ -57,7 +70,7 @@ export function __setPrimaryHttpRunnerForTests(runner?: PrimaryHttpEffectRunner)
 const runtimeLayer = Layer.mergeAll(
   httpClientLayer,
   browserCryptoLayer,
-  Socket.layerWebSocketConstructorGlobal,
+  webSocketConstructorLayer,
   relayTracingLayer,
   managedRelayClientLayer(configuredRelayUrl()).pipe(
     Layer.provide(Layer.mergeAll(httpClientLayer, browserCryptoLayer)),

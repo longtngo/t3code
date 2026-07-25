@@ -387,4 +387,83 @@ describe("environment RPC", () => {
       expect(expectedFailureCount).toBe(0);
     }),
   );
+
+  it.effect(
+    "resubscribes after the server ENDS the stream normally when resubscribeOnCompletionAfter is set",
+    () =>
+      Effect.gen(function* () {
+        // Models the server-side bounded-buffer overflow: the subscription stream
+        // COMPLETES (no error). With the option set, the client must reconnect
+        // (resync) rather than stall.
+        const subscriptionCount = yield* Ref.make(0);
+        const client = {
+          [WS_METHODS.subscribeTerminalEvents]: () =>
+            Stream.unwrap(
+              Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+        const subscriptionFiber = yield* subscribe(
+          WS_METHODS.subscribeTerminalEvents,
+          {},
+          { resubscribeOnCompletionAfter: "100 millis" },
+        ).pipe(
+          Stream.runDrain,
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if ((yield* Ref.get(subscriptionCount)) >= 1) break;
+          yield* Effect.yieldNow;
+        }
+        // First subscription completed; the client is now waiting out the delay.
+        expect(yield* Ref.get(subscriptionCount)).toBe(1);
+
+        yield* TestClock.adjust("100 millis");
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if ((yield* Ref.get(subscriptionCount)) >= 2) break;
+          yield* Effect.yieldNow;
+        }
+        // The clean completion triggered a resubscribe (the resync path).
+        expect(yield* Ref.get(subscriptionCount)).toBe(2);
+
+        // Client unsubscribe (scope close) is interruption, NOT a completion, so it
+        // must not spawn further resubscriptions.
+        yield* Fiber.interrupt(subscriptionFiber);
+        yield* TestClock.adjust("500 millis");
+        expect(yield* Ref.get(subscriptionCount)).toBe(2);
+      }),
+  );
+
+  it.effect("does NOT resubscribe on a clean completion when the option is absent", () =>
+    Effect.gen(function* () {
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.unwrap(
+            Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(WS_METHODS.subscribeTerminalEvents, {}).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(subscriptionCount)) >= 1) break;
+        yield* Effect.yieldNow;
+      }
+      yield* TestClock.adjust("1 second");
+      // Without the option, a clean completion is terminal — no resubscribe.
+      expect(yield* Ref.get(subscriptionCount)).toBe(1);
+      yield* Fiber.interrupt(subscriptionFiber);
+    }),
+  );
 });
