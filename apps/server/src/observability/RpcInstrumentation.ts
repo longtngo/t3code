@@ -9,7 +9,6 @@ import * as Stream from "effect/Stream";
 
 import { outcomeFromExit } from "./Attributes.ts";
 import { metricAttributes, rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
-import { recordMethodBytes, wireByteMeterEnabled } from "./WireByteMeter.ts";
 
 const RPC_SPAN_PREFIX = "ws.rpc";
 const DEFAULT_RPC_SPAN_ATTRIBUTES = {
@@ -92,9 +91,7 @@ export const observeRpcEffect = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Effect.Effect<A, E, R> => {
-  const metered = wireByteMeterEnabled()
-    ? effect.pipe(Effect.tap((value) => Effect.sync(() => recordMethodBytes(method, value))))
-    : effect;
+  const metered = effect;
 
   const instrumented = metered.pipe(
     withMetrics({
@@ -112,10 +109,7 @@ export const observeRpcEffect = <A, E, R>(
 const meterRpcStream = <A, E, R>(
   method: string,
   stream: Stream.Stream<A, E, R>,
-): Stream.Stream<A, E, R> =>
-  wireByteMeterEnabled()
-    ? stream.pipe(Stream.tap((value) => Effect.sync(() => recordMethodBytes(method, value))))
-    : stream;
+): Stream.Stream<A, E, R> => stream;
 
 export const observeRpcStream = <A, E, R>(
   method: string,
