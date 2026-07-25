@@ -98,6 +98,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
@@ -358,6 +359,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
+  [WS_METHODS.subscribeHostMetrics, AuthOrchestrationReadScope],
 ]);
 
 function toAuthAccessStreamEvent(
@@ -450,6 +452,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
+      const hostMetrics = yield* HostMetrics.HostMetrics;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -2091,6 +2094,12 @@ const makeWsRpcLayer = (
               );
             }),
             { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.subscribeHostMetrics]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeHostMetrics,
+            Effect.succeed(hostMetrics.stream(input.intervalMs)),
+            { "rpc.aggregate": "diagnostics" },
           ),
       });
     }),

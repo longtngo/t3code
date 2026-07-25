@@ -64,6 +64,7 @@ import {
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { ensureWebNotificationPermission } from "../../lib/notifier";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
@@ -552,6 +553,20 @@ export function GeneralSettingsPanel() {
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
 
+  // Enabling requires a gesture-bound OS permission prompt; only persist the
+  // preference once permission is granted so the toggle reflects reality.
+  const handleNotifyOnThreadCompletionChange = useCallback(
+    async (checked: boolean) => {
+      if (!checked) {
+        updateSettings({ notifyOnThreadCompletion: false });
+        return;
+      }
+      const permission = await ensureWebNotificationPermission();
+      updateSettings({ notifyOnThreadCompletion: permission === "granted" });
+    },
+    [updateSettings],
+  );
+
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
@@ -838,6 +853,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ autoOpenPlanSidebar: Boolean(checked) })
               }
               aria-label="Open the task panel automatically"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Task completion notifications"
+          description="Show a system notification when a task finishes and you're not viewing it."
+          resetAction={
+            settings.notifyOnThreadCompletion !==
+            DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion ? (
+              <SettingResetButton
+                label="task completion notifications"
+                onClick={() =>
+                  updateSettings({
+                    notifyOnThreadCompletion: DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.notifyOnThreadCompletion}
+              onCheckedChange={(checked) => {
+                void handleNotifyOnThreadCompletionChange(Boolean(checked));
+              }}
+              aria-label="Notify when a task finishes"
             />
           }
         />

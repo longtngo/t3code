@@ -111,6 +111,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
@@ -646,6 +647,9 @@ const buildAppUnderTest = (options?: {
               running: [],
               waiting: [],
             }),
+          }),
+          Layer.mock(HostMetrics.HostMetrics)({
+            stream: () => Stream.empty,
           }),
         ),
       ),

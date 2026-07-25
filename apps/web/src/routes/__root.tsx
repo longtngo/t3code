@@ -28,6 +28,7 @@ import {
 } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useClientSettings } from "../hooks/useSettings";
+import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -135,6 +136,7 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {appShell}
       </AnchoredToastProvider>
@@ -273,6 +275,11 @@ function AuthenticatedTracingBootstrap() {
     void configureClientTracing();
   }, []);
 
+  return null;
+}
+
+function ThreadCompletionNotifications() {
+  useThreadCompletionNotifications();
   return null;
 }
 
