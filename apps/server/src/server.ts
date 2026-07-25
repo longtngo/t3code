@@ -86,6 +86,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
+import { layer as llmServeManagerLayer } from "./llm/LlmServeManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
@@ -360,6 +361,18 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(ProcessResourceMonitor.layer),
   Layer.provideMerge(ResourceQueue.layer),
   Layer.provideMerge(HostMetrics.layer),
+  // The local-model manager reads `settings.localLlm` live (so a config added in the
+  // settings tab is immediately loadable), so it must share the one `ServerSettingsService`
+  // instance rather than build a second Ref. `RuntimeCoreDependenciesLive` is the same
+  // reference used as this pipe's base, so Effect memoizes it to a single build — providing
+  // it here flows the shared settings (+ spawner) into the manager. `FetchHttpClient` is
+  // provided locally for the /v1/models probe.
+  Layer.provideMerge(
+    llmServeManagerLayer.pipe(
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(RuntimeCoreDependenciesLive),
+    ),
+  ),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),

@@ -91,6 +91,10 @@
       "types": "./src/state/hostMetrics.ts",
       "default": "./src/state/hostMetrics.ts"
     },
+    "./state/llm-models": {
+      "types": "./src/state/llmModels.ts",
+      "default": "./src/state/llmModels.ts"
+    },
     "./state/relay": {
       "types": "./src/state/relayDiscovery.ts",
       "default": "./src/state/relayDiscovery.ts"

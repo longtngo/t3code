@@ -116,6 +116,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -650,6 +651,11 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(HostMetrics.HostMetrics)({
             stream: () => Stream.empty,
+          }),
+          Layer.mock(LlmServeManager)({
+            list: Effect.succeed({ providers: [], ramBudgetBytes: 0, ramUsedBytes: 0 }),
+            load: () => Effect.succeed({ pid: 0, port: 0 }),
+            unload: () => Effect.succeed({ ok: true as const }),
           }),
         ),
       ),

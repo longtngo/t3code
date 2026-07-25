@@ -99,10 +99,12 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as HostMetrics from "./diagnostics/HostMetrics.ts";
+import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { LlmServeManager } from "./llm/LlmServeManager.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
@@ -310,6 +312,9 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.getResourceQueue, AuthOrchestrationReadScope],
+  [WS_METHODS.llmServeLoad, AuthOrchestrationOperateScope],
+  [WS_METHODS.llmServeUnload, AuthOrchestrationOperateScope],
+  [WS_METHODS.subscribeLlmModels, AuthOrchestrationReadScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
@@ -453,6 +458,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
       const hostMetrics = yield* HostMetrics.HostMetrics;
+      const llmServeManager = yield* LlmServeManager;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -2099,6 +2105,24 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             WS_METHODS.subscribeHostMetrics,
             Effect.succeed(hostMetrics.stream(input.intervalMs)),
+            { "rpc.aggregate": "diagnostics" },
+          ),
+        [WS_METHODS.llmServeLoad]: (input) =>
+          observeRpcEffect(WS_METHODS.llmServeLoad, llmServeManager.load(input.configId), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.llmServeUnload]: (input) =>
+          observeRpcEffect(WS_METHODS.llmServeUnload, llmServeManager.unload(input.configId), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.subscribeLlmModels]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.subscribeLlmModels,
+            Effect.succeed(
+              llmModelsStream(input.intervalMs ?? 2000).pipe(
+                Stream.provideService(LlmServeManager, llmServeManager),
+              ),
+            ),
             { "rpc.aggregate": "diagnostics" },
           ),
       });

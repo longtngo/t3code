@@ -221,6 +221,10 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
 
+  // Local-model manager actions (mlx-serve / ds4 load & unload)
+  llmServeLoad: "llmServe.load",
+  llmServeUnload: "llmServe.unload",
+
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
 
@@ -243,6 +247,7 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeHostMetrics: "subscribeHostMetrics",
+  subscribeLlmModels: "subscribeLlmModels",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -728,6 +733,132 @@ export const WsSubscribeHostMetricsRpc = Rpc.make(WS_METHODS.subscribeHostMetric
   stream: true,
 });
 
+/**
+ * One locally-served model reported by a provider's `/v1/models` probe joined with
+ * the manager's registry. Fields beyond `id`/`loaded` are best-effort enrichment
+ * (mlx-serve carries them; generic OpenAI-compatible providers may not) and are
+ * omitted when unavailable.
+ */
+export const LlmModel = Schema.Struct({
+  id: Schema.String,
+  /** Resident in memory. mlx-serve reports `loaded`; for providers that don't, a
+   *  served/listed model is treated as loaded. */
+  loaded: Schema.Boolean,
+  /** Lifecycle hint, e.g. "ready" (mlx-serve). */
+  state: Schema.optional(Schema.String),
+  /** Resident size in bytes, when the provider reports a plausible value. */
+  sizeBytes: Schema.optional(Schema.Number),
+  /** e.g. "4-bit". */
+  quantization: Schema.optional(Schema.String),
+  /** Max context length in tokens. */
+  contextLength: Schema.optional(Schema.Number),
+  /** Mixture-of-experts architecture. */
+  isMoe: Schema.optional(Schema.Boolean),
+  capabilities: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Manager state. When present it is the source of truth for the UI (it
+   * distinguishes loading/stopping/error from a bare loaded/offline). `loaded`
+   * stays as `status === "online"`.
+   */
+  status: Schema.optional(Schema.Literals(["online", "offline", "loading", "stopping", "error"])),
+  /** PID of the process serving this model (online/loading/stopping). */
+  pid: Schema.optional(Schema.Number),
+  /** Port the serving process is bound to. */
+  port: Schema.optional(Schema.Number),
+  /** True when t3code launched (and thus supervises) this process. */
+  managed: Schema.optional(Schema.Boolean),
+  /** Catalog model id this row is for. */
+  modelId: Schema.optional(Schema.String),
+  /** Stable id of the model config (LocalLlmModelConfig.id); load/unload address this. */
+  configId: Schema.optional(Schema.String),
+  /** User-given config name, for display. */
+  configName: Schema.optional(Schema.String),
+  /** Failure detail when `status === "error"`. */
+  loadError: Schema.optional(Schema.String),
+  /** Owning local engine (display/labelling only; load resolves the engine server-side). */
+  engine: Schema.optional(Schema.Literals(["mlx-serve", "ds4"])),
+});
+export type LlmModel = typeof LlmModel.Type;
+
+/** A configured local-model provider and the result of probing it this tick. */
+export const LlmProvider = Schema.Struct({
+  /** Display name from settings, e.g. "mlx-serve". */
+  name: Schema.String,
+  /** Probed base URL, e.g. "http://127.0.0.1:8765". */
+  baseUrl: Schema.String,
+  /** False when the endpoint didn't respond (then `models` is empty). */
+  reachable: Schema.Boolean,
+  /** Short failure reason when `reachable` is false. */
+  error: Schema.optional(Schema.String),
+  models: Schema.Array(LlmModel),
+});
+export type LlmProvider = typeof LlmProvider.Type;
+
+/**
+ * One push from the local-LLM subscription: every configured provider with its
+ * current probe result. The server probes only while a subscriber is attached.
+ */
+export const LlmModelsSample = Schema.Struct({
+  /** Sample wall-clock time (epoch ms). */
+  ts: Schema.Number,
+  providers: Schema.Array(LlmProvider),
+  /** Configured RAM budget for managed loads, in bytes (omitted if unknown). */
+  ramBudgetBytes: Schema.optional(Schema.Number),
+  /** Sum of resident bytes across online managed/external models. */
+  ramUsedBytes: Schema.optional(Schema.Number),
+});
+export type LlmModelsSample = typeof LlmModelsSample.Type;
+
+/** Why a load/unload action failed (non-authorization). */
+export class LlmServeError extends Schema.TaggedErrorClass<LlmServeError>()("LlmServeError", {
+  kind: Schema.Literals([
+    "budget_exceeded",
+    "already_online",
+    "no_free_port",
+    "not_found",
+    "spawn_failed",
+    "not_managed_process",
+    // Attempted to load a config whose provider is external/probe-only (not spawnable).
+    "external_not_managed",
+  ]),
+  reason: Schema.String,
+}) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+/** Payload for loading/unloading a local model config (addressed by config id). */
+export const LlmServeLoadPayload = Schema.Struct({ configId: Schema.String });
+export const LlmServeUnloadPayload = Schema.Struct({ configId: Schema.String });
+
+/** Load (spawn) the managed model config identified by `configId`. */
+export const WsLlmServeLoadRpc = Rpc.make(WS_METHODS.llmServeLoad, {
+  payload: LlmServeLoadPayload,
+  success: Schema.Struct({ pid: Schema.Number, port: Schema.Number }),
+  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
+});
+
+/** Unload (kill) the managed model config identified by `configId`. */
+export const WsLlmServeUnloadRpc = Rpc.make(WS_METHODS.llmServeUnload, {
+  payload: LlmServeUnloadPayload,
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  error: Schema.Union([LlmServeError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Streaming subscription for locally-loaded LLMs across the configured providers.
+ * Mirrors `subscribeHostMetrics`: the server probes only while subscribed, and a
+ * slow/unreachable provider degrades to `reachable:false` inside the sample rather
+ * than failing the stream.
+ */
+export const WsSubscribeLlmModelsRpc = Rpc.make(WS_METHODS.subscribeLlmModels, {
+  payload: Schema.Struct({ intervalMs: Schema.optional(Schema.Number) }),
+  success: LlmModelsSample,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -744,6 +875,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
   WsGetResourceQueueRpc,
+  WsLlmServeLoadRpc,
+  WsLlmServeUnloadRpc,
+  WsSubscribeLlmModelsRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
