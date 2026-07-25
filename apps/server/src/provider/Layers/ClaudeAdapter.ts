@@ -580,7 +580,6 @@ function normalizeClaudeContextUsageApiSnapshot(
 function compactBoundaryTokenUsageSnapshot(
   message: Record<string, unknown>,
   contextWindow?: number,
-  totalProcessedTokens?: number,
 ): ThreadTokenUsageSnapshot | undefined {
   const metadata = message.compact_metadata;
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
@@ -593,12 +592,15 @@ function compactBoundaryTokenUsageSnapshot(
     return undefined;
   }
 
-  const preTokens = finiteNonNegativeInteger(compactMetadata.pre_tokens);
+  // After a compaction the context window shrinks to `post_tokens`. Emit an
+  // authoritative snapshot that fully resets the meter to the post-compact
+  // size: `lastUsedTokens` defaults to `post_tokens` and no pre-compact
+  // `totalProcessedTokens` high-water mark is carried forward. Retaining the
+  // pre-compact figures would leave the meter pinned at the old usage and
+  // defeat the reset the compaction is meant to reflect.
   return makeClaudeTokenUsageSnapshot({
     activeTokens: postTokens,
-    ...(preTokens !== undefined ? { lastUsedTokens: preTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
   });
 }
 
@@ -2737,12 +2739,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         return;
       case "compact_boundary":
+        // Drop the pre-compact total-processed high-water mark so a later
+        // result cannot re-emit it and re-pollute the freshly reset meter.
+        context.lastKnownTotalProcessedTokens = undefined;
         yield* emitThreadTokenUsage(
           context,
           compactBoundaryTokenUsageSnapshot(
             message as unknown as Record<string, unknown>,
             context.lastKnownContextWindow,
-            context.lastKnownTotalProcessedTokens,
           ),
           {
             rawMethod: "claude/system/compact_boundary",

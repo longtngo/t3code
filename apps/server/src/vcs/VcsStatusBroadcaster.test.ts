@@ -532,7 +532,12 @@ describe("VcsStatusBroadcaster", () => {
         ],
       );
 
-      yield* TestClock.adjust(Duration.seconds(30));
+      // The poll loop applies `Schedule.jittered` (±20%) to the retry delay, so
+      // the actual wait is somewhere in [24s, 36s] rather than exactly 30s.
+      // Advance past the jittered maximum so the retry always fires; the loop
+      // early-returns without another remote call once the initial load
+      // succeeds, so over-advancing cannot trigger an extra `remoteStatus` call.
+      yield* TestClock.adjust(Duration.seconds(60));
       const remoteUpdated = yield* Deferred.await(remoteUpdatedDeferred);
 
       assert.deepStrictEqual(remoteUpdated, {

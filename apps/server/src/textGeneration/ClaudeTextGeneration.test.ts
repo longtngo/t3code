@@ -299,7 +299,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
             },
           }),
           configDirMustBe: claudeConfigDir,
-          claudeConfig: { homePath: claudeConfigDir },
+          claudeConfig: { configDirPath: claudeConfigDir },
         },
         (textGeneration) =>
           Effect.gen(function* () {

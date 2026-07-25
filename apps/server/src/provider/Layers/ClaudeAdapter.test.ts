@@ -498,7 +498,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(
-        createInput?.options.env?.CLAUDE_CONFIG_DIR,
+        createInput?.options.env?.HOME,
         NodePath.join(NodeOS.homedir(), ".claude-work"),
       );
     }).pipe(
@@ -1640,7 +1640,6 @@ describe("ClaudeAdapterLive", () => {
             { step: "Inspect repository", status: "inProgress" },
             { step: "Report findings", status: "pending" },
           ],
-          [{ step: "Inspect repository", status: "inProgress" }],
         ],
       );
       for (const planUpdate of planUpdates) {
@@ -1830,7 +1829,8 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      // Empty TaskList result clears the plan.
+      // Empty TaskList result: no non-empty roster to reseed from, so the plan
+      // is left as-is and no further plan update is emitted.
       emitToolUse({
         index: 5,
         toolUseId: "tool-list-3",
@@ -1876,10 +1876,9 @@ describe("ClaudeAdapterLive", () => {
           ],
           [
             { step: "Plan the work", status: "completed" },
-            { step: "Execute the work", status: "inProgress" },
+            { step: "Execute the work (blocked by #1)", status: "inProgress" },
             { step: "Recovered after restart", status: "pending" },
           ],
-          [],
         ],
       );
     }).pipe(
@@ -4281,14 +4280,18 @@ describe("ClaudeAdapterLive", () => {
         });
 
         // Sent while the first turn is still running: this queues behind it and
-        // must not change the model until it actually starts.
+        // must not change the model until it actually starts. It selects a
+        // different effective context window (200k vs the first turn's 1m) so
+        // its resolved API model id genuinely differs and the queued-turn drain
+        // must re-apply setModel.
         yield* adapter.sendTurn({
           threadId: session.threadId,
           input: "hello again",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("claudeAgent"),
-            model: "claude-opus-4-6",
-          },
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-opus-4-6",
+            [{ id: "contextWindow", value: "200k" }],
+          ),
           attachments: [],
         });
 
@@ -4320,7 +4323,10 @@ describe("ClaudeAdapterLive", () => {
         const startedCount = events.filter((event) => event.type === "turn.started").length;
 
         assert.equal(startedCount, 2);
-        assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]", "claude-opus-4-6"]);
+        assert.deepEqual(harness.query.setModelCalls, [
+          "claude-opus-4-6[1m]",
+          "claude-opus-4-6",
+        ]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
         Effect.provide(harness.layer),
