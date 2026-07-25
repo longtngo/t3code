@@ -1031,7 +1031,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  const refreshAccountUsage: ProviderServiceShape["refreshAccountUsage"] = Effect.fn(
+  const refreshAccountUsage: ProviderService.ProviderService["Service"]["refreshAccountUsage"] = Effect.fn(
     "refreshAccountUsage",
   )(function* () {
     const currentAdapters = yield* getAdapterEntries;
