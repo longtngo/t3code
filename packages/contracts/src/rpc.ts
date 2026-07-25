@@ -126,6 +126,7 @@ import {
   ServerSelfUpdateInput,
   ServerSelfUpdateResult,
   ServerTraceDiagnosticsResult,
+  ResourceQueueSnapshot,
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
@@ -218,6 +219,9 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
+
+  // Resource broker (resctl) — one-shot queue status read
+  getResourceQueue: "resourceQueue.get",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -331,6 +335,18 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * One-shot read of the local resource-broker queue. The client polls this (slowly in the
+ * background, faster while the popover is open); it is not a server push, because the two
+ * cadences map cleanly onto a client-controlled interval. Never fails for an absent broker
+ * — see `available`.
+ */
+export const WsGetResourceQueueRpc = Rpc.make(WS_METHODS.getResourceQueue, {
+  payload: Schema.Struct({}),
+  success: ResourceQueueSnapshot,
   error: EnvironmentAuthorizationError,
 });
 
@@ -713,6 +729,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
+  WsGetResourceQueueRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,

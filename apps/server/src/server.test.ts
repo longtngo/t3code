@@ -113,6 +113,7 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
 
@@ -611,30 +612,42 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(TraceDiagnostics.TraceDiagnostics)({
-          read: () =>
-            Effect.succeed({
-              traceFilePath: "",
-              scannedFilePaths: [],
-              readAt: TEST_EPOCH,
-              recordCount: 0,
-              parseErrorCount: 0,
-              firstSpanAt: Option.none(),
-              lastSpanAt: Option.none(),
-              failureCount: 0,
-              interruptionCount: 0,
-              slowSpanThresholdMs: 1_000,
-              slowSpanCount: 0,
-              logLevelCounts: {},
-              topSpansByCount: [],
-              slowestSpans: [],
-              commonFailures: [],
-              latestFailures: [],
-              latestWarningAndErrorLogs: [],
-              partialFailure: Option.none(),
-              error: Option.none(),
+        Layer.mergeAll(
+          Layer.mock(TraceDiagnostics.TraceDiagnostics)({
+            read: () =>
+              Effect.succeed({
+                traceFilePath: "",
+                scannedFilePaths: [],
+                readAt: TEST_EPOCH,
+                recordCount: 0,
+                parseErrorCount: 0,
+                firstSpanAt: Option.none(),
+                lastSpanAt: Option.none(),
+                failureCount: 0,
+                interruptionCount: 0,
+                slowSpanThresholdMs: 1_000,
+                slowSpanCount: 0,
+                logLevelCounts: {},
+                topSpansByCount: [],
+                slowestSpans: [],
+                commonFailures: [],
+                latestFailures: [],
+                latestWarningAndErrorLogs: [],
+                partialFailure: Option.none(),
+                error: Option.none(),
+              }),
+          }),
+          Layer.mock(ResourceQueue.ResourceQueue)({
+            read: Effect.succeed({
+              ts: 0,
+              available: false,
+              maintenance: false,
+              resources: [],
+              running: [],
+              waiting: [],
             }),
-        }),
+          }),
+        ),
       ),
       Layer.provide(gitManagerLayer),
       Layer.provide(gitVcsDriverLayer),

@@ -37,6 +37,8 @@ import {
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../../lib/diffRendering";
+import { WorkEntryDetailDialog } from "./WorkEntryDetailDialog";
+import { formatWorkEntryDetail } from "./workEntryDetail.logic";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -1158,6 +1160,9 @@ const WorkGroupSection = memo(function WorkGroupSection({
     () => groupedEntries.filter((entry) => !workEntryIndicatesToolNeutralStatus(entry)),
     [groupedEntries],
   );
+  // The entry whose detail modal is open (null = closed). Lifted here so one dialog serves the
+  // whole group rather than mounting one per row.
+  const [detailEntry, setDetailEntry] = useState<TimelineWorkEntry | null>(null);
   const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const groupLabel = onlyToolEntries
     ? nonEmptyEntries.length === 1
@@ -1180,9 +1185,16 @@ const WorkGroupSection = memo(function WorkGroupSection({
             key={workEntry.id}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
+            onOpenDetail={setDetailEntry}
           />
         ))}
       </div>
+      <WorkEntryDetailDialog
+        entry={detailEntry}
+        onOpenChange={(open) => {
+          if (!open) setDetailEntry(null);
+        }}
+      />
     </section>
   );
 });
@@ -1835,44 +1847,6 @@ function workEntryPreview(
     : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
 }
 
-function workEntryRawCommand(
-  workEntry: Pick<TimelineWorkEntry, "command" | "rawCommand">,
-): string | null {
-  const rawCommand = workEntry.rawCommand?.trim();
-  if (!rawCommand || !workEntry.command) {
-    return null;
-  }
-  return rawCommand === workEntry.command.trim() ? null : rawCommand;
-}
-
-function buildToolCallExpandedBody(
-  workEntry: TimelineWorkEntry,
-  workspaceRoot: string | undefined,
-): string | null {
-  const blocks: string[] = [];
-  if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
-    blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
-  }
-  const raw = workEntryRawCommand(workEntry);
-  if (raw?.trim()) {
-    blocks.push(raw.trim());
-  } else if (workEntry.command?.trim()) {
-    blocks.push(workEntry.command.trim());
-  }
-  if (workEntry.detail?.trim()) {
-    blocks.push(workEntry.detail.trim());
-  }
-  const changedFiles = workEntry.changedFiles ?? [];
-  if (changedFiles.length > 0) {
-    blocks.push(
-      changedFiles
-        .map((filePath) => formatWorkspaceRelativePath(filePath, workspaceRoot))
-        .join("\n"),
-    );
-  }
-  return blocks.length > 0 ? blocks.join("\n\n") : null;
-}
-
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (
     workEntry.sourceActivityKind === "user-input.requested" ||
@@ -1919,15 +1893,13 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
-const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
-
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
+  onOpenDetail: (entry: TimelineWorkEntry) => void;
 }) {
-  const { workEntry, workspaceRoot } = props;
+  const { workEntry, workspaceRoot, onOpenDetail } = props;
   const activity = use(TimelineRowActivityCtx);
-  const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
@@ -1940,8 +1912,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  // A row is clickable when its detail modal would have something to show. `detailPayload` is set
+  // for every tool activity, so most rows open a purpose-built (or JSON) detail view.
+  const canOpenDetail = formatWorkEntryDetail(workEntry).kind !== "empty";
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&
@@ -1966,16 +1939,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const showSuccessIndicator =
     workEntryIndicatesToolSuccess(workEntry) ||
     (turnSettled && workEntryIndicatesToolNeutralStatus(workEntry));
-  const rowToggleProps = canExpand
+  const rowToggleProps = canOpenDetail
     ? {
         role: "button" as const,
         tabIndex: 0 as const,
         "aria-label": displayText,
-        onClick: () => setExpanded((v) => !v),
+        onClick: () => onOpenDetail(workEntry),
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((v) => !v);
+            onOpenDetail(workEntry);
           }
         },
       }
@@ -1985,7 +1958,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     <div
       className={cn(
         "flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
-        canExpand &&
+        canOpenDetail &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
       {...rowToggleProps}
@@ -2009,14 +1982,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <div className="flex shrink-0 items-center gap-px text-muted-foreground/55">
             <span
               className="flex size-4 shrink-0 items-center justify-center"
-              aria-hidden={!canExpand}
+              aria-hidden={!canOpenDetail}
             >
-              {canExpand ? (
-                <ChevronDownIcon
-                  className={cn(
-                    "size-3 shrink-0 opacity-70 transition-transform duration-200",
-                    expanded && "rotate-180",
-                  )}
+              {canOpenDetail ? (
+                <ChevronRightIcon
+                  className="size-3 shrink-0 opacity-70"
                   aria-hidden
                 />
               ) : null}
@@ -2065,17 +2035,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
-        <div
-          className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
-          onClick={stopRowToggle}
-          onPointerDown={stopRowToggle}
-        >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
-            {expandedBody}
-          </pre>
-        </div>
-      ) : null}
     </div>
   );
 });

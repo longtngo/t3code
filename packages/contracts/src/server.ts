@@ -330,6 +330,67 @@ export const ServerProcessDiagnosticsResult = Schema.Struct({
 });
 export type ServerProcessDiagnosticsResult = typeof ServerProcessDiagnosticsResult.Type;
 
+/** One job in the resource broker — either holding a lease ("running") or queued ("waiting"). */
+export const ResourceQueueItem = Schema.Struct({
+  /** Resource pool: "gpu" | "cpu" | "ram" | "machine" (kept as a string for forward-compat). */
+  resource: Schema.String,
+  /** "running" = currently holding the resource; "waiting" = queued behind the holders. */
+  state: Schema.Literals(["running", "waiting"]),
+  /** Scheduling priority, e.g. "interactive" | "normal" | "background". */
+  priority: Schema.String,
+  /** The human "what & rough ETA" the job supplied when it requested the resource. */
+  reason: Schema.String,
+  /** Owning project. */
+  project: Schema.String,
+  /** Owning agent label (often equal to project); omitted when the broker doesn't report it. */
+  agent: Schema.optional(Schema.String),
+  /** OS process id of the job, when known. */
+  pid: Schema.optional(Schema.Number),
+  /** Units of the resource requested (e.g. CPU cores); 1 for indivisible pools like the GPU. */
+  amount: Schema.Number,
+  /** Epoch ms the job started holding (running) or was enqueued (waiting); the client derives a live elapsed from it. */
+  sinceMs: Schema.Number,
+  /** 1-based position within its resource's queue (waiting only). */
+  pos: Schema.optional(Schema.Number),
+  /** Broker ETA estimate in seconds, when available (usually absent). */
+  etaSec: Schema.optional(Schema.Number),
+});
+export type ResourceQueueItem = typeof ResourceQueueItem.Type;
+
+/** Capacity/usage of one resource pool at snapshot time. */
+export const ResourceQueueResource = Schema.Struct({
+  /** Pool name, e.g. "gpu". */
+  name: Schema.String,
+  /** Total units the pool can grant. */
+  capacity: Schema.Number,
+  /** Units currently leased out. */
+  inUse: Schema.Number,
+  /** Advisory pools (e.g. RAM) are tracked but not hard-enforced by the broker; true marks them. */
+  advisory: Schema.optional(Schema.Boolean),
+});
+export type ResourceQueueResource = typeof ResourceQueueResource.Type;
+
+/**
+ * A point-in-time snapshot of the local resource broker (`resctl status`). When the broker
+ * CLI is missing or unreachable the read still succeeds with `available:false` and empty
+ * collections, so the UI degrades quietly instead of erroring.
+ */
+export const ResourceQueueSnapshot = Schema.Struct({
+  /** Snapshot wall-clock time (epoch ms). */
+  ts: Schema.Number,
+  /** False when `resctl` could not be run or its output parsed. */
+  available: Schema.Boolean,
+  /** Broker is in maintenance (draining; rejecting new work). */
+  maintenance: Schema.Boolean,
+  /** Per-pool capacity/usage; fully-idle pools the client doesn't need are omitted. */
+  resources: Schema.Array(ResourceQueueResource),
+  /** Jobs holding a lease, leaders first. */
+  running: Schema.Array(ResourceQueueItem),
+  /** Jobs waiting in queues, ordered by resource then queue position. */
+  waiting: Schema.Array(ResourceQueueItem),
+});
+export type ResourceQueueSnapshot = typeof ResourceQueueSnapshot.Type;
+
 export const ServerProcessResourceHistoryInput = Schema.Struct({
   windowMs: NonNegativeInt,
   bucketMs: NonNegativeInt,

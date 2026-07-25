@@ -91,6 +91,10 @@
       "types": "./src/state/relayDiscovery.ts",
       "default": "./src/state/relayDiscovery.ts"
     },
+    "./state/resource-queue": {
+      "types": "./src/state/resourceQueue.ts",
+      "default": "./src/state/resourceQueue.ts"
+    },
     "./state/review": {
       "types": "./src/state/review.ts",
       "default": "./src/state/review.ts"

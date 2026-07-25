@@ -72,6 +72,9 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   toolData?: unknown;
+  /** The raw structured activity payload, retained so the row-detail modal can show the full
+   *  (often JSON) content that the flattened `detail`/`command` strings can't represent. */
+  detailPayload?: unknown;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
@@ -749,6 +752,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
+  // Keep the raw structured payload for the row-detail modal (the flattened strings above lose
+  // nested/JSON content). Held by reference — it already lives on the activity.
+  if (payload) {
+    entry.detailPayload = payload;
+  }
   let toolLifecycleStatus = extractWorkLogToolLifecycleStatus(payload);
   if (!toolLifecycleStatus && activity.kind === "tool.completed") {
     toolLifecycleStatus = "completed";
@@ -818,6 +826,7 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
+  const detailPayload = next.detailPayload ?? previous.detailPayload;
   return {
     ...previous,
     ...next,
@@ -832,6 +841,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
+    ...(detailPayload !== undefined ? { detailPayload } : {}),
   };
 }
 

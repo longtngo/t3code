@@ -586,6 +586,9 @@ importers:
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
+      diff:
+        specifier: 8.0.3
+        version: 8.0.3
       effect:
         specifier: 4.0.0-beta.78
         version: 4.0.0-beta.78(patch_hash=b92f068a27d2b3d58fc41fe5edc8165ab7085145ccc73b452b509194091941e6)
