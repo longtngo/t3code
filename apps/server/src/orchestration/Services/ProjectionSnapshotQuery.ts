@@ -17,6 +17,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadHistoryPageInput,
   OrchestrationThreadHistoryPageResult,
+  OrchestrationThreadDetailSnapshot,
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
@@ -201,6 +202,16 @@ export interface ProjectionSnapshotQueryShape {
       readonly maxBytes?: number | undefined;
     },
   ) => Effect.Effect<OrchestrationThreadHistoryPageResult, ProjectionRepositoryError>;
+
+  /**
+   * Read a single active thread detail together with the projection snapshot
+   * sequence in one consistent transaction, so the returned `snapshotSequence`
+   * exactly matches the state reflected in `thread` (no interleaving projector
+   * update between the two reads).
+   */
+  readonly getThreadDetailSnapshot: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 
 /**

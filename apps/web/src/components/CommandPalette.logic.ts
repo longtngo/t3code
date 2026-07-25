@@ -1,4 +1,8 @@
-import { type KeybindingCommand, type FilesystemBrowseEntry } from "@t3tools/contracts";
+import {
+  type KeybindingCommand,
+  type FilesystemBrowseEntry,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
+} from "@t3tools/contracts";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -52,6 +56,18 @@ export interface CommandPaletteView {
   readonly initialQuery?: string;
 }
 
+export function enumerateCommandPaletteItems(
+  items: ReadonlyArray<CommandPaletteActionItem>,
+): CommandPaletteActionItem[] {
+  return items.map((item, index) => {
+    const shortcutCommand = THREAD_JUMP_KEYBINDING_COMMANDS[index];
+    if (shortcutCommand) return { ...item, shortcutCommand };
+
+    const { shortcutCommand: _shortcutCommand, ...itemWithoutShortcut } = item;
+    return itemWithoutShortcut;
+  });
+}
+
 export type CommandPaletteMode = "root" | "root-browse" | "submenu" | "submenu-browse";
 
 export function filterBrowseEntries(input: {
@@ -95,14 +111,15 @@ export function buildProjectActionItems(input: {
   valuePrefix: string;
   icon: (project: Project) => ReactNode;
   runProject: (project: Project) => Promise<void>;
+  searchTerms?: (project: Project) => ReadonlyArray<string>;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.name, project.cwd],
-    title: project.name,
-    description: project.cwd,
+    searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
+    title: project.title,
+    description: project.workspaceRoot,
     icon: input.icon(project),
     ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
     run: async () => {
@@ -115,7 +132,7 @@ export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"
 > & {
-  updatedAt?: string | undefined;
+  updatedAt: string;
   latestUserMessageAt?: string | null;
 };
 

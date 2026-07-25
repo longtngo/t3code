@@ -9,11 +9,11 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import type { WsConnectionUiState } from "../rpc/wsConnectionState";
-import { type ChatMessage, type SessionPhase, type Thread, type ThreadSession } from "../types";
+import { type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
-import { selectThreadByRef, useStore } from "../store";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentThreadDetails } from "../state/threads";
 import {
   filterTerminalContextsWithText,
   stripInlineTerminalContextPlaceholders,
@@ -23,19 +23,45 @@ import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
+export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+export function resolveThreadMetadataUpdateForNextTurn(input: {
+  currentModelSelection: ModelSelection;
+  nextModelSelection?: ModelSelection;
+  currentBranch: string | null;
+  nextBranch?: string;
+}): {
+  modelSelection?: ModelSelection;
+  branch?: string;
+  worktreePath?: null;
+} | null {
+  const nextModelSelection = input.nextModelSelection;
+  const modelSelectionChanged =
+    nextModelSelection !== undefined &&
+    (nextModelSelection.model !== input.currentModelSelection.model ||
+      nextModelSelection.instanceId !== input.currentModelSelection.instanceId ||
+      JSON.stringify(nextModelSelection.options ?? null) !==
+        JSON.stringify(input.currentModelSelection.options ?? null));
+  const branchChanged = input.nextBranch !== undefined && input.nextBranch !== input.currentBranch;
+  if (!modelSelectionChanged && !branchChanged) {
+    return null;
+  }
+  return {
+    ...(modelSelectionChanged ? { modelSelection: nextModelSelection } : {}),
+    ...(branchChanged ? { branch: input.nextBranch, worktreePath: null } : {}),
+  };
+}
 
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
   fallbackModelSelection: ModelSelection,
-  error: string | null,
 ): Thread {
   return {
     id: threadId,
     environmentId: draftThread.environmentId,
-    codexThreadId: null,
     projectId: draftThread.projectId,
     title: "New thread",
     modelSelection: fallbackModelSelection,
@@ -43,13 +69,16 @@ export function buildLocalDraftThread(
     interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
-    error,
     createdAt: draftThread.createdAt,
+    updatedAt: draftThread.createdAt,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
     latestTurn: null,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
-    turnDiffSummaries: [],
+    checkpoints: [],
     activities: [],
     proposedPlans: [],
   };
@@ -74,6 +103,17 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   );
 }
 
+export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
+  threadId: ThreadId;
+  turnId?: TurnId;
+} {
+  const runningTurnId = thread.session?.status === "running" ? thread.session.activeTurnId : null;
+  return {
+    threadId: thread.id,
+    ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
+  };
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;
@@ -81,14 +121,30 @@ export function reconcileMountedTerminalThreadIds(input: {
   activeThreadTerminalOpen: boolean;
   maxHiddenThreadCount?: number;
 }): string[] {
+  return reconcileRetainedMountedThreadIds({
+    currentThreadIds: input.currentThreadIds,
+    openThreadIds: input.openThreadIds,
+    activeThreadId: input.activeThreadId,
+    activeThreadOpen: input.activeThreadTerminalOpen,
+    maxHiddenThreadCount: input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  });
+}
+
+export function reconcileRetainedMountedThreadIds(input: {
+  currentThreadIds: ReadonlyArray<string>;
+  openThreadIds: ReadonlyArray<string>;
+  activeThreadId: string | null;
+  activeThreadOpen: boolean;
+  maxHiddenThreadCount: number;
+  retainInactiveActiveThread?: boolean;
+}): string[] {
   const openThreadIdSet = new Set(input.openThreadIds);
   const hiddenThreadIds = input.currentThreadIds.filter(
-    (threadId) => threadId !== input.activeThreadId && openThreadIdSet.has(threadId),
+    (threadId) =>
+      (threadId !== input.activeThreadId || input.retainInactiveActiveThread === true) &&
+      openThreadIdSet.has(threadId),
   );
-  const maxHiddenThreadCount = Math.max(
-    0,
-    input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
-  );
+  const maxHiddenThreadCount = Math.max(0, input.maxHiddenThreadCount);
   const nextThreadIds =
     hiddenThreadIds.length > maxHiddenThreadCount
       ? hiddenThreadIds.slice(-maxHiddenThreadCount)
@@ -96,7 +152,7 @@ export function reconcileMountedTerminalThreadIds(input: {
 
   if (
     input.activeThreadId &&
-    input.activeThreadTerminalOpen &&
+    input.activeThreadOpen &&
     !nextThreadIds.includes(input.activeThreadId)
   ) {
     nextThreadIds.push(input.activeThreadId);
@@ -186,6 +242,12 @@ export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  /**
+   * Optional element-pick attachment count. Element contexts contribute to
+   * "sendable content" exactly like images and (text-bearing) terminal
+   * contexts do: a prompt of just element chips is still a valid send.
+   */
+  elementContextCount?: number;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
@@ -196,12 +258,16 @@ export function deriveComposerSendState(options: {
   const sendableTerminalContexts = filterTerminalContextsWithText(options.terminalContexts);
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
+  const elementContextCount = options.elementContextCount ?? 0;
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
     hasSendableContent:
-      trimmedPrompt.length > 0 || options.imageCount > 0 || sendableTerminalContexts.length > 0,
+      trimmedPrompt.length > 0 ||
+      options.imageCount > 0 ||
+      sendableTerminalContexts.length > 0 ||
+      elementContextCount > 0,
   };
 }
 
@@ -221,6 +287,46 @@ export function buildExpiredTerminalContextToastCopy(
     title: `${noun} omitted from message`,
     description: "Re-add it if you want that terminal output included.",
   };
+}
+
+export function branchMismatchKey(
+  threadId: string | null,
+  mismatch: { threadBranch: string; currentBranch: string } | null,
+): string | null {
+  if (!threadId || !mismatch) {
+    return null;
+  }
+  return `${threadId}:${mismatch.threadBranch}:${mismatch.currentBranch}`;
+}
+
+// The mismatch banner only matters when the user is about to send: passive
+// reading of an old thread carries no risk (the branch picker tint already
+// covers ambient awareness). Draft content is the intent signal — composer
+// focus is useless here because ChatView autofocuses the composer on every
+// thread open. `wasShownForCurrentMismatch` keeps the banner mounted once
+// revealed so it doesn't flicker away when the draft is cleared.
+export function shouldShowBranchMismatchBanner(input: {
+  hasMismatch: boolean;
+  isDismissed: boolean;
+  composerHasContent: boolean;
+  wasShownForCurrentMismatch: boolean;
+}): boolean {
+  if (!input.hasMismatch || input.isDismissed) {
+    return false;
+  }
+  return input.composerHasContent || input.wasShownForCurrentMismatch;
+}
+
+// Session-scoped (module-level so it survives ChatView remounts, e.g. route
+// changes). Durable cross-device dismissal is planned as a server-side ack.
+const sessionDismissedBranchMismatchKeys = new Set<string>();
+
+export function dismissBranchMismatchForSession(key: string): void {
+  sessionDismissedBranchMismatchKeys.add(key);
+}
+
+export function isBranchMismatchDismissedForSession(key: string | null): boolean {
+  return key !== null && sessionDismissedBranchMismatchKeys.has(key);
 }
 
 export function threadHasStarted(thread: Thread | null | undefined): boolean {
@@ -249,8 +355,8 @@ export function deriveLockedProvider(input: {
   if (!threadHasStarted(input.thread)) {
     return null;
   }
-  const sessionProvider = input.thread?.session?.provider ?? null;
-  if (sessionProvider) {
+  const sessionProvider = input.thread?.session?.providerName ?? null;
+  if (sessionProvider && isProviderDriverKind(sessionProvider)) {
     return sessionProvider;
   }
   const narrowedThreadProvider =
@@ -306,7 +412,8 @@ export async function waitForStartedServerThread(
   threadRef: ScopedThreadRef,
   timeoutMs = 1_000,
 ): Promise<boolean> {
-  const getThread = () => selectThreadByRef(useStore.getState(), threadRef);
+  const threadAtom = environmentThreadDetails.detailAtom(threadRef);
+  const getThread = () => appAtomRegistry.get(threadAtom);
   const thread = getThread();
 
   if (threadHasStarted(thread)) {
@@ -328,8 +435,8 @@ export async function waitForStartedServerThread(
       resolve(result);
     };
 
-    const unsubscribe = useStore.subscribe((state) => {
-      if (!threadHasStarted(selectThreadByRef(state, threadRef))) {
+    const unsubscribe = appAtomRegistry.subscribe(threadAtom, (thread) => {
+      if (!threadHasStarted(thread)) {
         return;
       }
       finish(true);
@@ -349,11 +456,12 @@ export async function waitForStartedServerThread(
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
+  latestUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: TurnId | null;
   latestTurnRequestedAt: string | null;
   latestTurnStartedAt: string | null;
   latestTurnCompletedAt: string | null;
-  sessionOrchestrationStatus: ThreadSession["orchestrationStatus"] | null;
+  sessionStatus: NonNullable<Thread["session"]>["status"] | null;
   sessionUpdatedAt: string | null;
 }
 
@@ -363,14 +471,16 @@ export function createLocalDispatchSnapshot(
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
+  const latestUserMessage = activeThread?.messages.findLast((message) => message.role === "user");
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
+    latestUserMessageId: latestUserMessage?.id ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
     latestTurnCompletedAt: latestTurn?.completedAt ?? null,
-    sessionOrchestrationStatus: session?.orchestrationStatus ?? null,
+    sessionStatus: session?.status ?? null,
     sessionUpdatedAt: session?.updatedAt ?? null,
   };
 }
@@ -379,6 +489,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
+  latestUserMessageId: ChatMessage["id"] | null;
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -393,6 +504,8 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 
   const latestTurn = input.latestTurn ?? null;
   const session = input.session ?? null;
+  const latestUserMessageChanged =
+    input.localDispatch.latestUserMessageId !== input.latestUserMessageId;
   const latestTurnChanged =
     input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
     input.localDispatch.latestTurnRequestedAt !== (latestTurn?.requestedAt ?? null) ||
@@ -400,6 +513,13 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
 
   if (input.phase === "running") {
+    // Steering adds a user message to the current running turn without
+    // necessarily changing any of the turn timestamps. Treat that projected
+    // message as the server acknowledgment so the composer does not remain
+    // stuck in its local "Sending" state until the turn settles.
+    if (latestUserMessageChanged) {
+      return true;
+    }
     if (!latestTurnChanged) {
       return false;
     }
@@ -407,8 +527,8 @@ export function hasServerAcknowledgedLocalDispatch(input: {
       return false;
     }
     if (
+      session?.activeTurnId !== null &&
       session?.activeTurnId !== undefined &&
-      session.activeTurnId !== null &&
       latestTurn?.turnId !== session.activeTurnId
     ) {
       return false;
@@ -418,82 +538,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 
   return (
     latestTurnChanged ||
-    input.localDispatch.sessionOrchestrationStatus !== (session?.orchestrationStatus ?? null) ||
+    input.localDispatch.sessionStatus !== (session?.status ?? null) ||
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );
-}
-
-/**
- * Decide what a Stop-button press should dispatch. The first press for a thread sends a
- * cooperative `thread.turn.interrupt`; any subsequent press (while that interrupt is still
- * pending escalation) goes straight to a hard `thread.session.stop`, which force-kills a turn
- * wedged in a tool.
- */
-export type StopAction = "interrupt" | "hardStop";
-
-export function nextStopAction(input: {
-  readonly threadId: string;
-  readonly alreadyEscalatedThreadId: string | null;
-}): StopAction {
-  return input.alreadyEscalatedThreadId === input.threadId ? "hardStop" : "interrupt";
-}
-
-/**
- * After the cooperative-interrupt grace elapses, escalate to a hard stop only when the escalation
- * still belongs to this thread AND its turn is still running (an honoured interrupt would have
- * settled it).
- *
- * A turn parked on a pending user-input/approval request is waiting on the human, NOT wedged —
- * never auto-escalate it into a session-killing hard stop (that stranded the answer with "No
- * active provider session…"). This mirrors the server stall watchdog, which already abstains on
- * these flags. A deliberate second Stop press still force-stops (see `nextStopAction`), so a
- * genuinely wedged turn whose flag is stuck true remains killable.
- */
-export function shouldHardStopAfterGrace(input: {
-  readonly threadId: string;
-  readonly escalatedThreadId: string | null;
-  readonly latestTurnSettled: boolean;
-  readonly hasPendingInput?: boolean;
-}): boolean {
-  if (input.hasPendingInput === true) return false;
-  return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
-}
-
-/**
- * Decide whether to dispatch a command immediately or queue it for offline delivery.
- * Queue only when ALL of the following hold:
- *   - the thread belongs to the PRIMARY environment (non-primary threads live on a different
- *     server; queueing them would flush via the primary server → wrong target → data loss), AND
- *   - the connection has previously succeeded (hasConnected), AND
- *   - the connection is currently in an outage state.
- * This avoids mis-queuing commands during initial load, tests, or cross-environment sends.
- */
-export function decideSendDisposition(input: {
-  readonly hasConnected: boolean;
-  readonly uiState: WsConnectionUiState;
-  readonly isPrimaryEnvironment: boolean;
-}): "dispatch" | "queue" {
-  return input.isPrimaryEnvironment && input.hasConnected && input.uiState !== "connected"
-    ? "queue"
-    : "dispatch";
-}
-
-/**
- * Pure helper: returns true when the outbox should be cleared due to a primary-environment
- * change (env switch) or logout (transition to null/undefined).
- *
- * Rules:
- * - Clear when `prev` was a defined value and `next` is a DIFFERENT value or null/undefined.
- * - Do NOT clear on the initial undefined/null → first-value transition (coordinator mount).
- * - Do NOT clear when the value stays the same.
- */
-export function shouldClearOutboxOnPrimaryChange(
-  prev: string | null | undefined,
-  next: string | null | undefined,
-): boolean {
-  if (prev === null || prev === undefined) {
-    // Initial mount — never clear on the first population.
-    return false;
-  }
-  return prev !== next;
 }

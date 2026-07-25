@@ -7,7 +7,7 @@ import * as Stream from "effect/Stream";
 
 import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { TerminalManager } from "../../terminal/Services/Manager.ts";
+import * as TerminalManager from "../../terminal/Manager.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ThreadDeletionReactor,
@@ -40,7 +40,7 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
-  const terminalManager = yield* TerminalManager;
+  const terminalManager = yield* TerminalManager.TerminalManager;
   const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
 
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>

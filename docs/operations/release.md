@@ -156,6 +156,26 @@ One-time Vercel dashboard setup:
 - Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
 - Does not commit version bumps back to `main`.
 
+## Server self-update release invariant
+
+Connected servers update to the client's exact version, not to an npm dist-tag. Every released
+desktop or hosted client version must therefore have a matching `t3@<version>` package available on
+npm before users can receive that client.
+
+The workflow enforces this ordering:
+
+1. `publish_cli` publishes the exact stable or nightly version to npm.
+2. `release` depends on `publish_cli` before exposing desktop artifacts in GitHub Releases.
+3. `deploy_web` depends on `release` before moving the hosted channel to the new client.
+
+Preserve these dependencies when changing the release graph. Publishing a client first would leave
+the **Update server** action targeting a package version that does not exist yet.
+
+For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
+connect the new client to a server on the previous version and verify that the update action
+reconnects to the matching server. Test one automatic path and the manual or desktop-managed
+guidance when those environments are available.
+
 ## Desktop auto-update notes
 
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
@@ -219,26 +239,44 @@ Required secrets used by the workflow:
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
+- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
+
+Required repository variables:
+
+- `APPLE_TEAM_ID`
+
+Optional repository variables:
+
+- `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
+  domain from the production Clerk publishable key.
 
 Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create `Developer ID Application` certificate.
-3. Export certificate + private key as `.p12` from Keychain.
-4. Base64-encode the `.p12` and store as `CSC_LINK`.
-5. Store the `.p12` export password as `CSC_KEY_PASSWORD`.
-6. In App Store Connect, create an API key (Team key).
-7. Add API key values:
+2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains.
+3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
+   App ID with Associated Domains enabled.
+4. Export the certificate + private key as `.p12` from Keychain.
+5. Base64-encode the `.p12` and store as `CSC_LINK`.
+6. Base64-encode the provisioning profile and store it as `MACOS_PROVISIONING_PROFILE`.
+7. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
+   10-character Apple Developer Team ID.
+8. In App Store Connect, create an API key (Team key).
+9. Add API key values:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-8. Re-run a tag release and confirm macOS artifacts are signed/notarized.
+10. Complete the Clerk Native API and AASA setup in [T3 Connect Clerk Setup](../cloud/t3-connect-clerk.md#desktop-passkeys).
+11. Re-run a tag release and confirm macOS artifacts are signed/notarized and contain the expected
+    `com.apple.developer.associated-domains` entitlement.
 
 Notes:
 
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
+- The workflow decodes `MACOS_PROVISIONING_PROFILE`, validates it with `security cms`, and passes it
+  to the desktop packager.
 
 ## 3) Azure Trusted Signing setup (Windows)
 
@@ -275,13 +313,16 @@ Checklist:
 5. Verify workflow steps:
    - preflight passes
    - all matrix builds pass
+   - `publish_cli` publishes the exact release version before the release job
    - release job uploads expected files
 6. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting
 
 - macOS build unsigned when expected signed:
-  - Check all Apple secrets are populated and non-empty.
+  - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
+  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.t3tools.t3code` and includes
+    Associated Domains.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  buildFilePathInsertion,
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   detectComposerTrigger,
@@ -9,9 +8,23 @@ import {
   isCollapsedCursorAdjacentToInlineToken,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
-  shouldUseLocalFilePath,
+  shouldSubmitComposerOnEnter,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
+
+describe("shouldSubmitComposerOnEnter", () => {
+  it("submits plain Enter on desktop", () => {
+    expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: false })).toBe(true);
+  });
+
+  it("inserts a newline for plain Enter on mobile", () => {
+    expect(shouldSubmitComposerOnEnter({ isMobileViewport: true, shiftKey: false })).toBe(false);
+  });
+
+  it("inserts a newline for Shift+Enter", () => {
+    expect(shouldSubmitComposerOnEnter({ isMobileViewport: false, shiftKey: true })).toBe(false);
+  });
+});
 
 describe("detectComposerTrigger", () => {
   it("detects @path trigger at cursor", () => {
@@ -144,54 +157,6 @@ describe("replaceTextRange", () => {
   });
 });
 
-describe("buildFilePathInsertion", () => {
-  it("returns empty string when there are no paths", () => {
-    expect(buildFilePathInsertion("anything", [])).toBe("");
-  });
-
-  it("does not prefix a newline at the start of an empty composer", () => {
-    expect(buildFilePathInsertion("", ["/Users/x/report.pdf"])).toBe("/Users/x/report.pdf\n");
-  });
-
-  it("prefixes a newline when the preceding text ends in non-whitespace", () => {
-    expect(buildFilePathInsertion("see this", ["/a/b.md"])).toBe("\n/a/b.md\n");
-  });
-
-  it("does not double up when the preceding text already ends in whitespace", () => {
-    expect(buildFilePathInsertion("see this ", ["/a/b.md"])).toBe("/a/b.md\n");
-    expect(buildFilePathInsertion("see this\n", ["/a/b.md"])).toBe("/a/b.md\n");
-  });
-
-  it("joins multiple paths one per line", () => {
-    expect(buildFilePathInsertion("", ["/a.pdf", "/b/c d.csv", "/e.html"])).toBe(
-      "/a.pdf\n/b/c d.csv\n/e.html\n",
-    );
-  });
-});
-
-describe("shouldUseLocalFilePath", () => {
-  it("uses the local path only in the desktop app on the local (same-host) environment", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: true }),
-    ).toBe(true);
-  });
-
-  it("uploads instead of using a local path for a remote environment, even on desktop", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: false }),
-    ).toBe(false);
-  });
-
-  it("uploads in a plain browser (no desktop bridge), regardless of environment", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: true }),
-    ).toBe(false);
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: false }),
-    ).toBe(false);
-  });
-});
-
 describe("expandCollapsedComposerCursor", () => {
   it("keeps cursor unchanged when no mention segment is present", () => {
     expect(expandCollapsedComposerCursor("plain text", 5)).toBe(5);
@@ -281,12 +246,21 @@ describe("collapseExpandedComposerCursor", () => {
     );
   });
 
-  it("keeps replacement cursors aligned when another mention already exists earlier", () => {
+  it("keeps package-like text expanded when another mention already exists earlier", () => {
     const text = "open @AGENTS.md then @src/index.ts ";
     const expandedCursor = text.length;
     const collapsedCursor = collapseExpandedComposerCursor(text, expandedCursor);
 
-    expect(collapsedCursor).toBe("open ".length + 1 + " then ".length + 2);
+    expect(collapsedCursor).toBe("open ".length + 1 + " then @src/index.ts ".length);
+    expect(expandCollapsedComposerCursor(text, collapsedCursor)).toBe(expandedCursor);
+  });
+
+  it("collapses only genuine mentions when package-like text exists earlier", () => {
+    const text = "install @scope/pkg then @README.md ";
+    const expandedCursor = text.length;
+    const collapsedCursor = collapseExpandedComposerCursor(text, expandedCursor);
+
+    expect(collapsedCursor).toBe("install @scope/pkg then ".length + 1 + " ".length);
     expect(expandCollapsedComposerCursor(text, collapsedCursor)).toBe(expandedCursor);
   });
 

@@ -4,48 +4,45 @@ import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { ServerConfig } from "./config.ts";
+import * as ServerConfig from "./config.ts";
 import {
-  attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
-  pushSubscriptionsRouteLayer,
-  pushVapidPublicKeyRouteLayer,
-  projectFaviconRouteLayer,
+  assetRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
-  viewerRouteLayer,
   browserApiCorsLayer,
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
-import { ServerLifecycleEventsLive } from "./serverLifecycleEvents.ts";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService.ts";
+import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
-import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime.ts";
+import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
-import { ProviderEventLoggersLive } from "./provider/Layers/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
-import { ProviderTurnStallWatchdogLive } from "./provider/Layers/ProviderTurnStallWatchdog.ts";
-import { BackgroundTaskRecoveryWatchdogLive } from "./provider/Layers/BackgroundTaskRecoveryWatchdog.ts";
-import { PendingBackgroundTaskRepositoryLive } from "./persistence/Layers/PendingBackgroundTask.ts";
-import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
-import { RuntimeBootIdLive } from "./environment/Layers/RuntimeBootId.ts";
-import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime.ts";
-import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery.ts";
-import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
+import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
-import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
-import { KeybindingsLive } from "./keybindings.ts";
-import { ServerRuntimeStartup, ServerRuntimeStartupLive } from "./serverRuntimeStartup.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
@@ -53,16 +50,15 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
-import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
-import { ServerSettingsLive } from "./serverSettings.ts";
-import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
-import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
-import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
-import { WorkspaceFileSystemLive } from "./workspace/Layers/WorkspaceFileSystem.ts";
-import { MarkdownHtmlRendererLive } from "./workspace/markdownHtmlRenderer.ts";
-import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
+import * as ServerSettings from "./serverSettings.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
@@ -73,19 +69,20 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner.ts";
+import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
-import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
-import { layer as LlmServeManagerLive } from "./llm/LlmServeManager.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -98,35 +95,42 @@ import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 
+// Effect's default preemptive shutdown waits 20s before finalizing request scopes.
+// T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
+// already closes the websocket gracefully. Do not add an artificial drain before
+// those finalizers get a chance to run.
+const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
+
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
     if (typeof Bun !== "undefined") {
-      const BunPTY = yield* Effect.promise(() => import("./terminal/Layers/BunPTY.ts"));
-      return BunPTY.layer;
+      const BunPtyAdapter = yield* Effect.promise(() => import("./terminal/BunPtyAdapter.ts"));
+      return BunPtyAdapter.layer;
     } else {
-      const NodePTY = yield* Effect.promise(() => import("./terminal/Layers/NodePTY.ts"));
-      return NodePTY.layer;
+      const NodePtyAdapter = yield* Effect.promise(() => import("./terminal/NodePtyAdapter.ts"));
+      return NodePtyAdapter.layer;
     }
   }),
 );
 
 const RelayClientLive = Layer.unwrap(
   Effect.gen(function* () {
-    const config = yield* ServerConfig;
+    const config = yield* ServerConfig.ServerConfig;
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
 
 const HttpServerLive = Layer.unwrap(
   Effect.gen(function* () {
-    const config = yield* ServerConfig;
+    const config = yield* ServerConfig.ServerConfig;
     if (typeof Bun !== "undefined") {
       const BunHttpServer = yield* Effect.promise(
         () => import("@effect/platform-bun/BunHttpServer"),
       );
       return BunHttpServer.layer({
         port: config.port,
-        ...(config.host ? { hostname: config.host } : {}),
+        hostname: config.host ?? "127.0.0.1",
+        gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
       });
     } else {
       const [NodeHttpServer, NodeHttp] = yield* Effect.all([
@@ -134,8 +138,9 @@ const HttpServerLive = Layer.unwrap(
         Effect.promise(() => import("node:http")),
       ]);
       return NodeHttpServer.layer(NodeHttp.createServer, {
-        host: config.host,
+        host: config.host ?? "127.0.0.1",
         port: config.port,
+        gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
       });
     }
   }),
@@ -154,20 +159,17 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const ReactorLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(ProviderTurnStallWatchdogLive),
-  Layer.provideMerge(BackgroundTaskRecoveryWatchdogLive),
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-  Layer.provideMerge(WebPushRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
-  Layer.provide(ProviderSessionRuntimeRepositoryLive),
+  Layer.provide(ProviderSessionRuntime.layer),
 );
 
 // `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
@@ -196,7 +198,7 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
-  Layer.provideMerge(ProjectSetupScriptRunnerLive),
+  Layer.provideMerge(ProjectSetupScriptRunner.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
@@ -233,27 +235,38 @@ const VcsLayerLive = Layer.empty.pipe(
 );
 
 const CheckpointingLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(CheckpointDiffQueryLive),
-  Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
+  Layer.provideMerge(CheckpointDiffQuery.layer),
+  Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistryLayerLive))),
 );
 
-const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));
+const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
 
-const WorkspaceEntriesLayerLive = WorkspaceEntriesLive.pipe(
-  Layer.provide(WorkspacePathsLive),
-  Layer.provideMerge(VcsDriverRegistryLayerLive),
+const TerminalLayerLive = TerminalManager.layer.pipe(
+  Layer.provide(PtyAdapterLive),
+  Layer.provide(PortScannerLayerLive),
 );
 
-const WorkspaceFileSystemLayerLive = WorkspaceFileSystemLive.pipe(
-  Layer.provide(WorkspacePathsLive),
+const PreviewLayerLive = Layer.empty.pipe(
+  Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(PortScannerLayerLive),
+);
+
+const WorkspaceEntriesLayerLive = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
+
+const WorkspaceFileSystemLayerLive = WorkspaceFileSystem.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
   Layer.provide(WorkspaceEntriesLayerLive),
-  Layer.provide(MarkdownHtmlRendererLive),
 );
 
 const WorkspaceLayerLive = Layer.mergeAll(
-  WorkspacePathsLive,
+  WorkspacePaths.layer,
   WorkspaceEntriesLayerLive,
   WorkspaceFileSystemLayerLive,
+);
+
+const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
 );
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
@@ -272,15 +285,6 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
-  // Pending-background-task persistence + the per-boot id. Exposed here so the
-  // reaper guard, the recovery watchdog, and the ingestion writer all share one
-  // repository and the SAME boot id (SqlClient/Crypto are satisfied by the
-  // outer PersistenceLayerLive / PlatformServicesLive).
-  Layer.provideMerge(PendingBackgroundTaskRepositoryLive),
-  // Web Push subscription persistence — shared by the register RPC handler and the
-  // WebPushRelay fan-out. (SqlClient satisfied by the outer PersistenceLayerLive.)
-  Layer.provideMerge(PushSubscriptionRepositoryLive),
-  Layer.provideMerge(RuntimeBootIdLive),
 );
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
@@ -290,9 +294,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(TerminalLayerLive),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
-  Layer.provideMerge(KeybindingsLive),
+  Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
@@ -305,77 +309,77 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // `ProviderService` (canonical stream, written after event normalization).
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggersLive),
+  Layer.provideMerge(ProviderEventLoggers.ProviderEventLoggersLive),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(OpenCodeRuntimeLive),
-  Layer.provideMerge(ServerSettingsLive),
+  Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(WorkspaceLayerLive),
-  Layer.provideMerge(ProjectFaviconResolverLive),
-  Layer.provideMerge(RepositoryIdentityResolverLive),
-  Layer.provideMerge(ServerEnvironmentLive),
+  Layer.provideMerge(ProjectFaviconResolverLayerLive),
+  Layer.provideMerge(RepositoryIdentityResolver.layer),
+  Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
-      CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+      CloudCliTokenManager.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ExternalLauncher.layer),
+      ),
       CloudManagedEndpointRuntimeLive,
     ),
   ),
 );
 
-const RuntimeDependenciesLive = LlmServeManagerLive.pipe(
-  // The manager is the base so the core (merged below) provides ServerSettingsService
-  // *into* it; its HttpClient is satisfied locally and ChildProcessSpawner comes from
-  // the outer platform layer (like the other diagnostics services), so it leaks no new
-  // requirement into the CLI / test layers.
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provideMerge(RuntimeCoreDependenciesLive),
+const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
   Layer.provideMerge(ProcessResourceMonitor.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
-  Layer.provideMerge(AnalyticsServiceLayerLive),
+  Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
-  Layer.provideMerge(ServerLifecycleEventsLive),
+  Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
+const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
-  HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-    Layer.provide(authHttpApiLayer),
-    Layer.provide(connectHttpApiLayer),
-    Layer.provide(orchestrationHttpApiLayer),
-    Layer.provide(serverEnvironmentHttpApiLayer),
-    Layer.provide(environmentAuthenticatedAuthLayer),
+  Layer.mergeAll(
+    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+      Layer.provide(authHttpApiLayer),
+      Layer.provide(connectHttpApiLayer),
+      Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(serverEnvironmentHttpApiLayer),
+      Layer.provide(environmentAuthenticatedAuthLayer),
+    ),
+    otlpTracesProxyRouteLayer,
+    assetRouteLayer,
+    staticAndDevRouteLayer,
+    websocketRpcRouteLayer,
   ),
-  attachmentsRouteLayer,
-  otlpTracesProxyRouteLayer,
-  pushSubscriptionsRouteLayer,
-  pushVapidPublicKeyRouteLayer,
-  projectFaviconRouteLayer,
-  viewerRouteLayer,
-  staticAndDevRouteLayer,
-  websocketRpcRouteLayer,
-).pipe(Layer.provide(browserApiCorsLayer));
+  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+).pipe(
+  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(ServerSelfUpdate.layer),
+  Layer.provide(browserApiCorsLayer),
+);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
-    const config = yield* ServerConfig;
+    const config = yield* ServerConfig.ServerConfig;
 
-    fixPath({ cachePath: `${config.providerStatusCacheDir}/resolved-path` });
+    yield* fixPath();
 
     const httpListeningLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         yield* HttpServer.HttpServer;
-        const startup = yield* ServerRuntimeStartup;
+        const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
         yield* startup.markHttpListening;
       }),
     );
@@ -485,6 +489,7 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),

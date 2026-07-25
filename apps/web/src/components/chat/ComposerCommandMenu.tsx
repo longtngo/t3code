@@ -18,7 +18,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "../ui/command";
-import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { PierreEntryIcon } from "./PierreEntryIcon";
 
 export type ComposerCommandItem =
   | {
@@ -139,10 +139,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         );
       }}
     >
-      <div
-        ref={listRef}
-        className="relative w-full overflow-hidden rounded-[20px] border border-border/80 bg-popover/96 shadow-lg/8 backdrop-blur-xs"
-      >
+      <div ref={listRef} className="dropdown-glass relative w-full overflow-hidden rounded-[20px]">
         {props.items.length > 0 ? (
           <CommandList className="max-h-72">
             {groups.map((group, groupIndex) => (
@@ -228,7 +225,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       }}
     >
       {props.item.type === "path" ? (
-        <VscodeEntryIcon
+        <PierreEntryIcon
           pathValue={props.item.path}
           kind={props.item.pathKind}
           theme={props.resolvedTheme}

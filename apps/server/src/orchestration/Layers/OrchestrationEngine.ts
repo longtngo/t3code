@@ -353,8 +353,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
   );
 
-  const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive) =>
-    eventStore.readFromSequence(fromSequenceExclusive);
+  const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
+    eventStore.readFromSequence(fromSequenceExclusive, limit);
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
@@ -394,6 +394,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         boundedSubscriberStream(subscription, wsSubscriberBufferCapacity),
       ),
     ),
+    // The command read model's snapshotSequence tracks the latest committed
+    // event sequence (updated on the worker fiber). A plain property read is a
+    // consistent, committed value — reassignment of `commandReadModel` is
+    // atomic on the single-threaded event loop.
+    latestSequence: Effect.sync(() => commandReadModel.snapshotSequence),
   } satisfies OrchestrationEngineShape;
 });
 

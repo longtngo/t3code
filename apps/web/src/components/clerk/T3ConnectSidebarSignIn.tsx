@@ -1,8 +1,9 @@
 import { UserButton, useAuth } from "@clerk/react";
-import { LogInIcon } from "lucide-react";
+import { LogInIcon, SmartphoneIcon } from "lucide-react";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { useT3ConnectAuthPrompt } from "./useT3ConnectAuthPrompt";
 
 export function T3ConnectSidebarSignIn() {
@@ -27,10 +28,18 @@ function ConfiguredT3ConnectSidebarAvatar() {
       appearance={{
         elements: {
           avatarBox: "size-7",
-          userButtonTrigger: "rounded-lg p-1 hover:bg-sidebar-accent",
+          userButtonTrigger: "rounded-lg p-1 hover:bg-sidebar-row-hover",
         },
       }}
-    />
+    >
+      <UserButton.UserProfilePage
+        label="Mobile clients"
+        labelIcon={<SmartphoneIcon className="size-4" />}
+        url="mobile-clients"
+      >
+        <MobileClientsUserProfilePage />
+      </UserButton.UserProfilePage>
+    </UserButton>
   );
 }
 
@@ -46,10 +55,10 @@ function ConfiguredT3ConnectSidebarSignIn() {
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"
-            className="gap-2 px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             onClick={openAuthPrompt}
           >
-            <LogInIcon className="size-4" />
+            <LogInIcon className="size-4 shrink-0" />
             <span>Sign in to T3 Connect</span>
           </SidebarMenuButton>
         </SidebarMenuItem>

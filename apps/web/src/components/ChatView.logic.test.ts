@@ -1,98 +1,140 @@
-import { scopeThreadRef } from "@t3tools/client-runtime";
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { type EnvironmentState, useStore } from "../store";
-import { type Thread } from "../types";
+import { describe, expect, it } from "vite-plus/test";
 
+import type { Thread } from "../types";
 import {
+  MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
+  buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
-  decideSendDisposition,
   deriveComposerSendState,
+  dismissBranchMismatchForSession,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
-  nextStopAction,
+  isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
+  reconcileRetainedMountedThreadIds,
+  resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
-  shouldClearOutboxOnPrimaryChange,
-  shouldHardStopAfterGrace,
+  shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
-  waitForStartedServerThread,
 } from "./ChatView.logic";
 
-describe("decideSendDisposition", () => {
-  it("dispatches when connected", () => {
+const environmentId = EnvironmentId.make("environment-local");
+const projectId = ProjectId.make("project-1");
+const threadId = ThreadId.make("thread-1");
+const now = "2026-03-29T00:00:00.000Z";
+
+function makeThread(overrides: Partial<Thread> = {}): Thread {
+  return {
+    id: threadId,
+    environmentId,
+    projectId,
+    title: "Thread",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    session: null,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
+    latestTurn: null,
+    branch: null,
+    worktreePath: null,
+    ...overrides,
+  };
+}
+
+const completedTurn = {
+  turnId: TurnId.make("turn-1"),
+  state: "completed" as const,
+  requestedAt: now,
+  startedAt: "2026-03-29T00:00:01.000Z",
+  completedAt: "2026-03-29T00:00:10.000Z",
+  assistantMessageId: null,
+};
+
+const readySession = {
+  threadId,
+  status: "ready" as const,
+  providerName: "codex",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  runtimeMode: "full-access" as const,
+  activeTurnId: null,
+  lastError: null,
+  updatedAt: "2026-03-29T00:00:10.000Z",
+};
+
+describe("resolveThreadMetadataUpdateForNextTurn", () => {
+  const modelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.4",
+  };
+
+  it("updates a stale local thread branch to the active checkout", () => {
     expect(
-      decideSendDisposition({ hasConnected: true, uiState: "connected", isPrimaryEnvironment: true }),
-    ).toBe("dispatch");
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        currentBranch: "feature/thread",
+        nextBranch: "feature/checkout",
+      }),
+    ).toEqual({ branch: "feature/checkout", worktreePath: null });
   });
-  it("queues when previously connected and now in an outage (primary env)", () => {
+
+  it("does not write metadata when the model and branch are unchanged", () => {
     expect(
-      decideSendDisposition({ hasConnected: true, uiState: "reconnecting", isPrimaryEnvironment: true }),
-    ).toBe("queue");
-    expect(
-      decideSendDisposition({ hasConnected: true, uiState: "offline", isPrimaryEnvironment: true }),
-    ).toBe("queue");
-  });
-  it("dispatches before the first successful connection (so tests/initial load are not mis-queued)", () => {
-    expect(
-      decideSendDisposition({ hasConnected: false, uiState: "connecting", isPrimaryEnvironment: true }),
-    ).toBe("dispatch");
-  });
-  it("dispatches on a never-connected error state (first attempt failed)", () => {
-    expect(
-      decideSendDisposition({ hasConnected: false, uiState: "error", isPrimaryEnvironment: true }),
-    ).toBe("dispatch");
-  });
-  it("queues on a post-connection error state (connection was lost) for primary env", () => {
-    expect(
-      decideSendDisposition({ hasConnected: true, uiState: "error", isPrimaryEnvironment: true }),
-    ).toBe("queue");
-  });
-  it("always dispatches for non-primary environments, even during an outage", () => {
-    // Non-primary threads go to a different server — queueing then flushing via
-    // the primary server would route to the wrong server.
-    expect(
-      decideSendDisposition({ hasConnected: true, uiState: "reconnecting", isPrimaryEnvironment: false }),
-    ).toBe("dispatch");
-    expect(
-      decideSendDisposition({ hasConnected: true, uiState: "offline", isPrimaryEnvironment: false }),
-    ).toBe("dispatch");
-    expect(
-      decideSendDisposition({ hasConnected: true, uiState: "error", isPrimaryEnvironment: false }),
-    ).toBe("dispatch");
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        nextModelSelection: modelSelection,
+        currentBranch: "feature/current",
+        nextBranch: "feature/current",
+      }),
+    ).toBeNull();
   });
 });
 
-describe("shouldClearOutboxOnPrimaryChange", () => {
-  it("clears when the primary environment id transitions to a different defined value", () => {
-    expect(shouldClearOutboxOnPrimaryChange("env-a", "env-b")).toBe(true);
+describe("buildThreadTurnInterruptInput", () => {
+  it("targets the session's active running turn", () => {
+    const activeTurnId = TurnId.make("turn-running");
+
+    expect(
+      buildThreadTurnInterruptInput(
+        makeThread({
+          session: {
+            ...readySession,
+            status: "running",
+            activeTurnId,
+          },
+        }),
+      ),
+    ).toEqual({ threadId, turnId: activeTurnId });
   });
-  it("clears when the primary environment id transitions to null (logout)", () => {
-    expect(shouldClearOutboxOnPrimaryChange("env-a", null)).toBe(true);
-    expect(shouldClearOutboxOnPrimaryChange("env-a", undefined)).toBe(true);
-  });
-  it("does not clear on the initial undefined→first-value transition (initial mount)", () => {
-    expect(shouldClearOutboxOnPrimaryChange(undefined, "env-a")).toBe(false);
-    expect(shouldClearOutboxOnPrimaryChange(null, "env-a")).toBe(false);
-  });
-  it("does not clear when the value stays the same", () => {
-    expect(shouldClearOutboxOnPrimaryChange("env-a", "env-a")).toBe(false);
-  });
-  it("does not clear when transitioning from null to null", () => {
-    expect(shouldClearOutboxOnPrimaryChange(null, null)).toBe(false);
+
+  it("omits a turn id when the session is not running", () => {
+    expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
+      threadId,
+    });
   });
 });
-
-const localEnvironmentId = EnvironmentId.make("environment-local");
 
 describe("deriveComposerSendState", () => {
   it("treats expired terminal pills as non-sendable content", () => {
@@ -102,13 +144,13 @@ describe("deriveComposerSendState", () => {
       terminalContexts: [
         {
           id: "ctx-expired",
-          threadId: ThreadId.make("thread-1"),
+          threadId,
           terminalId: "default",
           terminalLabel: "Terminal 1",
           lineStart: 4,
           lineEnd: 4,
           text: "",
-          createdAt: "2026-03-17T12:52:29.000Z",
+          createdAt: now,
         },
       ],
     });
@@ -126,13 +168,13 @@ describe("deriveComposerSendState", () => {
       terminalContexts: [
         {
           id: "ctx-expired",
-          threadId: ThreadId.make("thread-1"),
+          threadId,
           terminalId: "default",
           terminalLabel: "Terminal 1",
           lineStart: 4,
           lineEnd: 4,
           text: "",
-          createdAt: "2026-03-17T12:52:29.000Z",
+          createdAt: now,
         },
       ],
     });
@@ -141,17 +183,38 @@ describe("deriveComposerSendState", () => {
     expect(state.expiredTerminalContextCount).toBe(1);
     expect(state.hasSendableContent).toBe(true);
   });
+
+  it("treats element contexts as sendable content (no text, no images, no terminals)", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      terminalContexts: [],
+      elementContextCount: 1,
+    });
+
+    expect(state.trimmedPrompt).toBe("");
+    expect(state.expiredTerminalContextCount).toBe(0);
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("does NOT treat zero element contexts as sendable", () => {
+    expect(
+      deriveComposerSendState({
+        prompt: "",
+        imageCount: 0,
+        terminalContexts: [],
+        elementContextCount: 0,
+      }).hasSendableContent,
+    ).toBe(false);
+  });
 });
 
 describe("buildExpiredTerminalContextToastCopy", () => {
-  it("formats clear empty-state guidance", () => {
+  it("formats empty and omission guidance", () => {
     expect(buildExpiredTerminalContextToastCopy(1, "empty")).toEqual({
       title: "Expired terminal context won't be sent",
       description: "Remove it or re-add it to include terminal output.",
     });
-  });
-
-  it("formats omission guidance for sent messages", () => {
     expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
       title: "Expired terminal contexts omitted from message",
       description: "Re-add it if you want that terminal output included.",
@@ -227,411 +290,174 @@ describe("getStartedThreadModelChangeBlockReason", () => {
 });
 
 describe("resolveSendEnvMode", () => {
-  it("keeps worktree mode for git repositories", () => {
+  it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
+    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("branchMismatchKey", () => {
+  it("builds a key from thread id and both branches", () => {
+    expect(branchMismatchKey("thread-1", { threadBranch: "feat/a", currentBranch: "feat/b" })).toBe(
+      "thread-1:feat/a:feat/b",
+    );
   });
 
-  it("forces local mode for non-git repositories", () => {
-    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
-    expect(resolveSendEnvMode({ requestedEnvMode: "local", isGitRepo: false })).toBe("local");
+  it("returns null without a thread or mismatch", () => {
+    expect(branchMismatchKey(null, { threadBranch: "a", currentBranch: "b" })).toBeNull();
+    expect(branchMismatchKey("thread-1", null)).toBeNull();
+  });
+});
+
+describe("shouldShowBranchMismatchBanner", () => {
+  const base = {
+    hasMismatch: true,
+    isDismissed: false,
+    composerHasContent: false,
+    wasShownForCurrentMismatch: false,
+  };
+
+  it("stays hidden during passive browsing (even though the composer autofocuses)", () => {
+    expect(shouldShowBranchMismatchBanner(base)).toBe(false);
+  });
+
+  it("shows once the composer has draft content", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, composerHasContent: true })).toBe(true);
+  });
+
+  it("stays mounted after the draft clears once shown for the current mismatch", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, wasShownForCurrentMismatch: true })).toBe(
+      true,
+    );
+  });
+
+  it("never shows when dismissed or without a mismatch", () => {
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, isDismissed: true }),
+    ).toBe(false);
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
+    ).toBe(false);
+  });
+});
+
+describe("session branch mismatch dismissal", () => {
+  it("tracks dismissed keys and treats other keys as active", () => {
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(false);
+    dismissBranchMismatchForSession("t1:a:b");
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(true);
+    expect(isBranchMismatchDismissedForSession("t1:a:c")).toBe(false);
+    expect(isBranchMismatchDismissedForSession(null)).toBe(false);
   });
 });
 
 describe("reconcileMountedTerminalThreadIds", () => {
-  it("keeps previously mounted open threads and adds the active open thread", () => {
+  it("keeps open threads and makes the active thread most recent", () => {
     expect(
       reconcileMountedTerminalThreadIds({
-        currentThreadIds: [ThreadId.make("thread-hidden"), ThreadId.make("thread-stale")],
-        openThreadIds: [ThreadId.make("thread-hidden"), ThreadId.make("thread-active")],
-        activeThreadId: ThreadId.make("thread-active"),
+        currentThreadIds: ["thread-a", "thread-b", "thread-c"],
+        openThreadIds: ["thread-a", "thread-b", "thread-c"],
+        activeThreadId: "thread-a",
         activeThreadTerminalOpen: true,
+        maxHiddenThreadCount: 2,
+      }),
+    ).toEqual(["thread-b", "thread-c", "thread-a"]);
+  });
+
+  it("drops closed threads and enforces the hidden mounted cap", () => {
+    const ids = Array.from(
+      { length: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS + 2 },
+      (_, index) => `thread-${index}`,
+    );
+    expect(
+      reconcileMountedTerminalThreadIds({
+        currentThreadIds: ids,
+        openThreadIds: ids.slice(1),
+        activeThreadId: null,
+        activeThreadTerminalOpen: false,
+      }),
+    ).toEqual(ids.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+  });
+});
+
+describe("reconcileRetainedMountedThreadIds", () => {
+  it("retains hidden open threads and adds the active open thread", () => {
+    expect(
+      reconcileRetainedMountedThreadIds({
+        currentThreadIds: [ThreadId.make("thread-hidden")],
+        openThreadIds: [ThreadId.make("thread-hidden")],
+        activeThreadId: ThreadId.make("thread-active"),
+        activeThreadOpen: true,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
       }),
     ).toEqual([ThreadId.make("thread-hidden"), ThreadId.make("thread-active")]);
   });
 
-  it("drops mounted threads once their terminal drawer is no longer open", () => {
+  it("can retain the active thread as hidden when it is inactive", () => {
     expect(
-      reconcileMountedTerminalThreadIds({
-        currentThreadIds: [ThreadId.make("thread-closed")],
-        openThreadIds: [],
-        activeThreadId: ThreadId.make("thread-closed"),
-        activeThreadTerminalOpen: false,
+      reconcileRetainedMountedThreadIds({
+        currentThreadIds: [ThreadId.make("thread-active")],
+        openThreadIds: [ThreadId.make("thread-active")],
+        activeThreadId: ThreadId.make("thread-active"),
+        activeThreadOpen: false,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+        retainInactiveActiveThread: true,
       }),
-    ).toEqual([]);
+    ).toEqual([ThreadId.make("thread-active")]);
   });
 
-  it("keeps only the most recently active hidden terminal threads", () => {
-    expect(
-      reconcileMountedTerminalThreadIds({
-        currentThreadIds: [
-          ThreadId.make("thread-1"),
-          ThreadId.make("thread-2"),
-          ThreadId.make("thread-3"),
-        ],
-        openThreadIds: [
-          ThreadId.make("thread-1"),
-          ThreadId.make("thread-2"),
-          ThreadId.make("thread-3"),
-          ThreadId.make("thread-4"),
-        ],
-        activeThreadId: ThreadId.make("thread-4"),
-        activeThreadTerminalOpen: true,
-        maxHiddenThreadCount: 2,
-      }),
-    ).toEqual([ThreadId.make("thread-2"), ThreadId.make("thread-3"), ThreadId.make("thread-4")]);
-  });
-
-  it("moves the active thread to the end so it is treated as most recently used", () => {
-    expect(
-      reconcileMountedTerminalThreadIds({
-        currentThreadIds: [
-          ThreadId.make("thread-a"),
-          ThreadId.make("thread-b"),
-          ThreadId.make("thread-c"),
-        ],
-        openThreadIds: [
-          ThreadId.make("thread-a"),
-          ThreadId.make("thread-b"),
-          ThreadId.make("thread-c"),
-        ],
-        activeThreadId: ThreadId.make("thread-a"),
-        activeThreadTerminalOpen: true,
-        maxHiddenThreadCount: 2,
-      }),
-    ).toEqual([ThreadId.make("thread-b"), ThreadId.make("thread-c"), ThreadId.make("thread-a")]);
-  });
-
-  it("defaults to the hidden mounted terminal cap", () => {
+  it("evicts the oldest hidden threads beyond the configured cap", () => {
     const currentThreadIds = Array.from(
-      { length: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS + 2 },
+      { length: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS + 2 },
       (_, index) => ThreadId.make(`thread-${index + 1}`),
     );
 
     expect(
-      reconcileMountedTerminalThreadIds({
+      reconcileRetainedMountedThreadIds({
         currentThreadIds,
         openThreadIds: currentThreadIds,
         activeThreadId: null,
-        activeThreadTerminalOpen: false,
+        activeThreadOpen: false,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
       }),
-    ).toEqual(currentThreadIds.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+    ).toEqual(currentThreadIds.slice(-MAX_HIDDEN_MOUNTED_PREVIEW_THREADS));
   });
 });
 
 describe("shouldWriteThreadErrorToCurrentServerThread", () => {
-  it("routes errors to the active server thread when route and target match", () => {
-    const threadId = ThreadId.make("thread-1");
-    const routeThreadRef = scopeThreadRef(localEnvironmentId, threadId);
+  it("requires the environment, route thread, and target thread to match", () => {
+    const routeThreadRef = { environmentId, threadId };
 
     expect(
       shouldWriteThreadErrorToCurrentServerThread({
-        serverThread: {
-          environmentId: localEnvironmentId,
-          id: threadId,
-        },
+        serverThread: { environmentId, id: threadId },
         routeThreadRef,
         targetThreadId: threadId,
       }),
     ).toBe(true);
-  });
-
-  it("does not route draft-thread errors into server-backed state", () => {
-    const threadId = ThreadId.make("thread-1");
-
     expect(
       shouldWriteThreadErrorToCurrentServerThread({
-        serverThread: undefined,
-        routeThreadRef: scopeThreadRef(localEnvironmentId, threadId),
+        serverThread: null,
+        routeThreadRef,
         targetThreadId: threadId,
       }),
     ).toBe(false);
   });
 });
 
-const makeThread = (input?: {
-  id?: ThreadId;
-  latestTurn?: {
-    turnId: TurnId;
-    state: "running" | "completed";
-    requestedAt: string;
-    startedAt: string | null;
-    completedAt: string | null;
-  } | null;
-}): Thread => ({
-  id: input?.id ?? ThreadId.make("thread-1"),
-  environmentId: localEnvironmentId,
-  codexThreadId: null,
-  projectId: ProjectId.make("project-1"),
-  title: "Thread",
-  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-  runtimeMode: "full-access" as const,
-  interactionMode: "default" as const,
-  session: null,
-  messages: [],
-  proposedPlans: [],
-  error: null,
-  createdAt: "2026-03-29T00:00:00.000Z",
-  archivedAt: null,
-  updatedAt: "2026-03-29T00:00:00.000Z",
-  latestTurn: input?.latestTurn
-    ? {
-        ...input.latestTurn,
-        assistantMessageId: null,
-      }
-    : null,
-  branch: null,
-  worktreePath: null,
-  turnDiffSummaries: [],
-  activities: [],
-});
-
-function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) {
-  const projectId = ProjectId.make("project-1");
-  const environmentState: EnvironmentState = {
-    projectIds: [projectId],
-    projectById: {
-      [projectId]: {
-        id: projectId,
-        environmentId: localEnvironmentId,
-        name: "Project",
-        cwd: "/tmp/project",
-        defaultModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-        },
-        createdAt: "2026-03-29T00:00:00.000Z",
-        updatedAt: "2026-03-29T00:00:00.000Z",
-        scripts: [],
-      },
-    },
-    threadIds: threads.map((thread) => thread.id),
-    threadIdsByProjectId: {
-      [projectId]: threads.map((thread) => thread.id),
-    },
-    threadShellById: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        {
-          id: thread.id,
-          environmentId: thread.environmentId,
-          codexThreadId: thread.codexThreadId,
-          projectId: thread.projectId,
-          title: thread.title,
-          modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          error: thread.error,
-          createdAt: thread.createdAt,
-          archivedAt: thread.archivedAt,
-          updatedAt: thread.updatedAt,
-          branch: thread.branch,
-          worktreePath: thread.worktreePath,
-        },
-      ]),
-    ),
-    threadSessionById: Object.fromEntries(threads.map((thread) => [thread.id, thread.session])),
-    threadTurnStateById: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        {
-          latestTurn: thread.latestTurn,
-          ...(thread.pendingSourceProposedPlan
-            ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
-            : {}),
-        },
-      ]),
-    ),
-    messageIdsByThreadId: Object.fromEntries(
-      threads.map((thread) => [thread.id, thread.messages.map((message) => message.id)]),
-    ),
-    messageByThreadId: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        Object.fromEntries(thread.messages.map((message) => [message.id, message])),
-      ]),
-    ),
-    activityIdsByThreadId: Object.fromEntries(
-      threads.map((thread) => [thread.id, thread.activities.map((activity) => activity.id)]),
-    ),
-    activityByThreadId: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        Object.fromEntries(thread.activities.map((activity) => [activity.id, activity])),
-      ]),
-    ),
-    proposedPlanIdsByThreadId: Object.fromEntries(
-      threads.map((thread) => [thread.id, thread.proposedPlans.map((plan) => plan.id)]),
-    ),
-    proposedPlanByThreadId: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        Object.fromEntries(thread.proposedPlans.map((plan) => [plan.id, plan])),
-      ]),
-    ),
-    turnDiffIdsByThreadId: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        thread.turnDiffSummaries.map((summary) => summary.turnId),
-      ]),
-    ),
-    turnDiffSummaryByThreadId: Object.fromEntries(
-      threads.map((thread) => [
-        thread.id,
-        Object.fromEntries(thread.turnDiffSummaries.map((summary) => [summary.turnId, summary])),
-      ]),
-    ),
-    sidebarThreadSummaryById: {},
-    bootstrapComplete: true,
-  };
-  useStore.setState({
-    activeEnvironmentId: localEnvironmentId,
-    environmentStateById: {
-      [localEnvironmentId]: environmentState,
-    },
-  });
-}
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setStoreThreads([]);
-});
-
-describe("waitForStartedServerThread", () => {
-  it("resolves immediately when the thread is already started", async () => {
-    const threadId = ThreadId.make("thread-started");
-    setStoreThreads([
-      makeThread({
-        id: threadId,
-        latestTurn: {
-          turnId: TurnId.make("turn-started"),
-          state: "running",
-          requestedAt: "2026-03-29T00:00:01.000Z",
-          startedAt: "2026-03-29T00:00:01.000Z",
-          completedAt: null,
-        },
-      }),
-    ]);
-
-    await expect(
-      waitForStartedServerThread(scopeThreadRef(localEnvironmentId, threadId)),
-    ).resolves.toBe(true);
-  });
-
-  it("waits for the thread to start via subscription updates", async () => {
-    const threadId = ThreadId.make("thread-wait");
-    setStoreThreads([makeThread({ id: threadId })]);
-
-    const promise = waitForStartedServerThread(scopeThreadRef(localEnvironmentId, threadId), 500);
-
-    setStoreThreads([
-      makeThread({
-        id: threadId,
-        latestTurn: {
-          turnId: TurnId.make("turn-started"),
-          state: "running",
-          requestedAt: "2026-03-29T00:00:01.000Z",
-          startedAt: "2026-03-29T00:00:01.000Z",
-          completedAt: null,
-        },
-      }),
-    ]);
-
-    await expect(promise).resolves.toBe(true);
-  });
-
-  it("handles the thread starting between the initial read and subscription setup", async () => {
-    const threadId = ThreadId.make("thread-race");
-    setStoreThreads([makeThread({ id: threadId })]);
-
-    const originalSubscribe = useStore.subscribe.bind(useStore);
-    let raced = false;
-    vi.spyOn(useStore, "subscribe").mockImplementation((listener) => {
-      if (!raced) {
-        raced = true;
-        setStoreThreads([
-          makeThread({
-            id: threadId,
-            latestTurn: {
-              turnId: TurnId.make("turn-race"),
-              state: "running",
-              requestedAt: "2026-03-29T00:00:01.000Z",
-              startedAt: "2026-03-29T00:00:01.000Z",
-              completedAt: null,
-            },
-          }),
-        ]);
-      }
-      return originalSubscribe(listener);
-    });
-
-    await expect(
-      waitForStartedServerThread(scopeThreadRef(localEnvironmentId, threadId), 500),
-    ).resolves.toBe(true);
-  });
-
-  it("returns false after the timeout when the thread never starts", async () => {
-    vi.useFakeTimers();
-
-    const threadId = ThreadId.make("thread-timeout");
-    setStoreThreads([makeThread({ id: threadId })]);
-    const promise = waitForStartedServerThread(scopeThreadRef(localEnvironmentId, threadId), 500);
-
-    await vi.advanceTimersByTimeAsync(500);
-
-    await expect(promise).resolves.toBe(false);
-  });
-});
-
 describe("hasServerAcknowledgedLocalDispatch", () => {
-  const projectId = ProjectId.make("project-1");
-  const previousLatestTurn = {
-    turnId: TurnId.make("turn-1"),
-    state: "completed" as const,
-    requestedAt: "2026-03-29T00:00:00.000Z",
-    startedAt: "2026-03-29T00:00:01.000Z",
-    completedAt: "2026-03-29T00:00:10.000Z",
-    assistantMessageId: null,
-  };
-
-  const previousSession = {
-    provider: ProviderDriverKind.make("codex"),
-    status: "ready" as const,
-    createdAt: "2026-03-29T00:00:00.000Z",
-    updatedAt: "2026-03-29T00:00:10.000Z",
-    orchestrationStatus: "idle" as const,
-  };
-
-  it("does not clear local dispatch before server state changes", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
+  it("does not acknowledge unchanged server state", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: completedTurn, session: readySession }),
+    );
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "ready",
-        latestTurn: previousLatestTurn,
-        session: previousSession,
+        latestTurn: completedTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
+        session: readySession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -639,45 +465,25 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(false);
   });
 
-  it("clears local dispatch when a new turn is already settled", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
+  it("acknowledges a settled newer turn", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: completedTurn, session: readySession }),
+    );
+    const newerTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: "2026-03-29T00:01:30.000Z",
+    };
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "ready",
-        latestTurn: {
-          ...previousLatestTurn,
-          turnId: TurnId.make("turn-2"),
-          requestedAt: "2026-03-29T00:01:00.000Z",
-          startedAt: "2026-03-29T00:01:01.000Z",
-          completedAt: "2026-03-29T00:01:30.000Z",
-        },
-        session: {
-          ...previousSession,
-          updatedAt: "2026-03-29T00:01:30.000Z",
-        },
+        latestTurn: newerTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
+        session: { ...readySession, updatedAt: newerTurn.completedAt },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -685,135 +491,89 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
-  it("does not clear local dispatch while the session is running a newer turn than latestTurn", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
+  it("waits for the matching running turn before acknowledging", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: completedTurn, session: readySession }),
+    );
+    const runningTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      state: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: null,
+    };
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
-        latestTurn: previousLatestTurn,
+        latestTurn: runningTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
         session: {
-          ...previousSession,
+          ...readySession,
           status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: TurnId.make("turn-2"),
-          updatedAt: "2026-03-29T00:01:00.000Z",
+          activeTurnId: TurnId.make("turn-other"),
         },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
       }),
     ).toBe(false);
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestTurn: runningTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
+        session: {
+          ...readySession,
+          status: "running",
+          activeTurnId: runningTurn.turnId,
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
   });
 
-  it("does not clear local dispatch while the session is running but latestTurn has not advanced yet", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
+  it("acknowledges a steering message projected onto the current running turn", () => {
+    const runningTurn = {
+      ...completedTurn,
+      state: "running" as const,
+      completedAt: null,
+    };
+    const runningSession = {
+      ...readySession,
+      status: "running" as const,
+      activeTurnId: runningTurn.turnId,
+    };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({
+        latestTurn: runningTurn,
+        session: runningSession,
+        messages: [
+          {
+            id: MessageId.make("message-before-steer"),
+            role: "user",
+            text: "Initial prompt",
+            turnId: runningTurn.turnId,
+            createdAt: runningTurn.requestedAt,
+            updatedAt: runningTurn.requestedAt,
+            streaming: false,
+          },
+        ],
+      }),
+    );
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
-        latestTurn: previousLatestTurn,
-        session: {
-          ...previousSession,
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: undefined,
-          updatedAt: "2026-03-29T00:01:00.000Z",
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("clears local dispatch once the running latestTurn matches the active session turn", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "running",
-        latestTurn: {
-          ...previousLatestTurn,
-          turnId: TurnId.make("turn-2"),
-          state: "running",
-          requestedAt: "2026-03-29T00:01:00.000Z",
-          startedAt: "2026-03-29T00:01:01.000Z",
-          completedAt: null,
-        },
-        session: {
-          ...previousSession,
-          status: "running",
-          orchestrationStatus: "running",
-          activeTurnId: TurnId.make("turn-2"),
-          updatedAt: "2026-03-29T00:01:01.000Z",
-        },
+        latestTurn: runningTurn,
+        latestUserMessageId: MessageId.make("message-steer"),
+        session: runningSession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -821,93 +581,21 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
-  it("clears local dispatch when the session changes without an observed running phase", () => {
-    const localDispatch = createLocalDispatchSnapshot({
-      id: ThreadId.make("thread-1"),
-      environmentId: localEnvironmentId,
-      codexThreadId: null,
-      projectId,
-      title: "Thread",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      session: previousSession,
-      messages: [],
-      proposedPlans: [],
-      error: null,
-      createdAt: "2026-03-29T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-03-29T00:00:10.000Z",
-      latestTurn: previousLatestTurn,
-      branch: null,
-      worktreePath: null,
-      turnDiffSummaries: [],
-      activities: [],
-    });
+  it("acknowledges pending user interaction and errors immediately", () => {
+    const localDispatch = createLocalDispatchSnapshot(makeThread());
+    const common = {
+      localDispatch,
+      phase: "ready" as const,
+      latestTurn: null,
+      latestUserMessageId: localDispatch.latestUserMessageId,
+      session: null,
+      hasPendingApproval: false,
+      hasPendingUserInput: false,
+      threadError: null,
+    };
 
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "ready",
-        latestTurn: previousLatestTurn,
-        session: {
-          ...previousSession,
-          updatedAt: "2026-03-29T00:00:11.000Z",
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("Stop-button escalation", () => {
-  it("interrupts on the first press and hard-stops on the next press for the same thread", () => {
-    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: null })).toBe("interrupt");
-    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: "t1" })).toBe("hardStop");
-  });
-
-  it("treats a press on a different thread as a fresh interrupt", () => {
-    expect(nextStopAction({ threadId: "t2", alreadyEscalatedThreadId: "t1" })).toBe("interrupt");
-  });
-
-  it("auto-escalates after the grace only while the same thread's turn is still running", () => {
-    expect(
-      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false }),
-    ).toBe(true);
-    // Interrupt was honoured and the turn settled → no hard stop.
-    expect(
-      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: true }),
-    ).toBe(false);
-    // Escalation was cleared / belongs to another thread → no hard stop.
-    expect(
-      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: null, latestTurnSettled: false }),
-    ).toBe(false);
-    expect(
-      shouldHardStopAfterGrace({ threadId: "t1", escalatedThreadId: "t2", latestTurnSettled: false }),
-    ).toBe(false);
-  });
-
-  it("never auto-escalates while a user-input/approval request is pending", () => {
-    // Waiting on the human is not a wedged turn — no hard stop even though the
-    // turn is still running and the escalation belongs to this thread.
-    expect(
-      shouldHardStopAfterGrace({
-        threadId: "t1",
-        escalatedThreadId: "t1",
-        latestTurnSettled: false,
-        hasPendingInput: true,
-      }),
-    ).toBe(false);
-    // Without pending input, a still-running turn escalates as before (wedged).
-    expect(
-      shouldHardStopAfterGrace({
-        threadId: "t1",
-        escalatedThreadId: "t1",
-        latestTurnSettled: false,
-        hasPendingInput: false,
-      }),
-    ).toBe(true);
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -7,89 +8,103 @@ import {
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
+import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
+import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
-export type SidebarNewThreadEnvMode = "local" | "worktree";
 type SidebarProject = {
   id: string;
-  name: string;
+  title: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
 
+type ScopedSidebarProject = SidebarProject & {
+  environmentId: string;
+};
+
+type ScopedSidebarThread = ThreadSortInput & {
+  environmentId: string;
+  projectId: string;
+  archivedAt: string | null;
+};
+
+type LogicalSidebarProject = SidebarProject & {
+  projectKey: string;
+  memberProjectRefs: readonly {
+    environmentId: string;
+    projectId: string;
+  }[];
+};
+
 export type ThreadTraversalDirection = "previous" | "next";
 
-/**
- * Glyph rendered for a thread-status indicator. `dot`, `spinner`, and `check` are
- * the neutral idle/working/completed states that adopt the provider's accent color;
- * `approval`/`input`/`plan` keep their semantic colors (they encode
- * action-required / plan-ready meaning).
- */
-export type ThreadStatusIcon = "dot" | "spinner" | "check" | "approval" | "input" | "plan";
+export async function archiveSelectedThreadEntries<
+  TEntry extends { readonly threadKey: string },
+  TResult extends { readonly _tag: "Success" | "Failure" },
+>(input: {
+  entries: readonly TEntry[];
+  archive: (entry: TEntry, onArchived: () => void) => Promise<TResult>;
+}): Promise<{
+  archivedThreadKeys: readonly string[];
+  mutationFailure: Extract<TResult, { readonly _tag: "Failure" }> | null;
+  followupFailures: readonly Extract<TResult, { readonly _tag: "Failure" }>[];
+}> {
+  const archivedThreadKeys: string[] = [];
+  const followupFailures: Extract<TResult, { readonly _tag: "Failure" }>[] = [];
 
-/** Icons that adopt the provider accent color when one is configured. */
-export const PROVIDER_ACCENT_STATUS_ICONS: ReadonlySet<ThreadStatusIcon> = new Set([
-  "dot",
-  "spinner",
-  "check",
-]);
+  for (const entry of input.entries) {
+    let didArchive = false;
+    const result = await input.archive(entry, () => {
+      didArchive = true;
+    });
+    if (didArchive || result._tag === "Success") {
+      archivedThreadKeys.push(entry.threadKey);
+    }
+    if (result._tag === "Success") continue;
+    const failure = result as Extract<TResult, { readonly _tag: "Failure" }>;
+    if (didArchive) {
+      followupFailures.push(failure);
+      continue;
+    }
+    return { archivedThreadKeys, mutationFailure: failure, followupFailures };
+  }
 
-// Luminance bounds past which a provider accent is too close to the sidebar
-// background to see (white-ish on the light theme, black-ish on the dark theme).
-// These only reject the near-invisible tail — normal brand colors (e.g. a
-// saturated orange ~0.46) stay in range — so we intentionally do NOT enforce a
-// full WCAG ratio, which would override most deliberately-chosen accents.
-const LIGHT_THEME_MAX_ACCENT_LUMINANCE = 0.75;
-const DARK_THEME_MIN_ACCENT_LUMINANCE = 0.06;
-
-function srgbChannelToLinear(channel: number): number {
-  const s = channel / 255;
-  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  return { archivedThreadKeys, mutationFailure: null, followupFailures };
 }
 
-/** WCAG relative luminance of a `#RRGGBB` color, or null if unparseable. */
-export function relativeLuminance(hex: string): number | null {
-  const match = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
-  if (!match) return null;
-  const int = Number.parseInt(match[1]!, 16);
-  return (
-    0.2126 * srgbChannelToLinear((int >> 16) & 0xff) +
-    0.7152 * srgbChannelToLinear((int >> 8) & 0xff) +
-    0.0722 * srgbChannelToLinear(int & 0xff)
-  );
-}
-
-/**
- * Whether a provider accent is legible as a status glyph against the current
- * theme's sidebar background. Rejects near-white accents on the light theme and
- * near-black accents on the dark theme so the icon never disappears; callers
- * fall back to the status's semantic color when this returns false.
- */
-export function isAccentColorLegible(hex: string, resolvedTheme: "light" | "dark"): boolean {
-  const luminance = relativeLuminance(hex);
-  if (luminance === null) return false;
-  return resolvedTheme === "dark"
-    ? luminance >= DARK_THEME_MIN_ACCENT_LUMINANCE
-    : luminance <= LIGHT_THEME_MAX_ACCENT_LUMINANCE;
+export function buildMultiSelectThreadContextMenuItems(input: {
+  count: number;
+  hasRunningThread: boolean;
+}): readonly ContextMenuItem<"mark-unread" | "archive" | "delete">[] {
+  return [
+    { id: "mark-unread", label: `Mark unread (${input.count})` },
+    {
+      id: "archive",
+      label: `Archive (${input.count})`,
+      disabled: input.hasRunningThread,
+    },
+    { id: "delete", label: `Delete (${input.count})`, destructive: true },
+  ];
 }
 
 export interface ThreadStatusPill {
   label:
-    | "Idle"
     | "Working"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
     | "Plan Ready";
-  icon: ThreadStatusIcon;
   colorClass: string;
+  dotClass: string;
+  pulse: boolean;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
@@ -99,7 +114,6 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
-  Idle: 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -107,7 +121,6 @@ type ThreadStatusInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
-  | "hasPendingBackgroundTask"
   | "interactionMode"
   | "latestTurn"
   | "session"
@@ -118,6 +131,13 @@ type ThreadStatusInput = Pick<
 export interface ThreadJumpHintVisibilityController {
   sync: (shouldShow: boolean) => void;
   dispose: () => void;
+}
+
+export function resolveSidebarStageBadgeLabel(input: {
+  primaryServerVersion: string | null | undefined;
+  fallbackStageLabel: string;
+}): string {
+  return resolveServerBackedAppStageLabel(input);
 }
 
 export function createThreadJumpHintVisibilityController(input: {
@@ -204,7 +224,7 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   if (!thread.latestTurn?.completedAt) return false;
   const completedAt = Date.parse(thread.latestTurn.completedAt);
   if (Number.isNaN(completedAt)) return false;
-  if (!thread.lastVisitedAt) return true;
+  if (!thread.lastVisitedAt) return false;
 
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
@@ -216,84 +236,51 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
 }
 
-export function resolveSidebarNewThreadEnvMode(input: {
-  requestedEnvMode?: SidebarNewThreadEnvMode;
-  defaultEnvMode: SidebarNewThreadEnvMode;
-}): SidebarNewThreadEnvMode {
-  return input.requestedEnvMode ?? input.defaultEnvMode;
-}
-
-export function resolveSidebarNewThreadSeedContext(input: {
-  projectId: string;
-  defaultEnvMode: SidebarNewThreadEnvMode;
-  activeThread?: {
-    projectId: string;
-    branch: string | null;
-    worktreePath: string | null;
-  } | null;
-  activeDraftThread?: {
-    projectId: string;
-    branch: string | null;
-    worktreePath: string | null;
-    envMode: SidebarNewThreadEnvMode;
-  } | null;
-}): {
-  branch?: string | null;
-  worktreePath?: string | null;
-  envMode: SidebarNewThreadEnvMode;
-} {
-  if (input.defaultEnvMode === "worktree") {
-    return {
-      envMode: "worktree",
-    };
-  }
-
-  if (input.activeDraftThread?.projectId === input.projectId) {
-    return {
-      branch: input.activeDraftThread.branch,
-      worktreePath: input.activeDraftThread.worktreePath,
-      envMode: input.activeDraftThread.envMode,
-    };
-  }
-
-  if (input.activeThread?.projectId === input.projectId) {
-    return {
-      branch: input.activeThread.branch,
-      worktreePath: input.activeThread.worktreePath,
-      envMode: input.activeThread.worktreePath ? "worktree" : "local",
-    };
-  }
-
-  return {
-    envMode: input.defaultEnvMode,
-  };
+// A double-click dispatches two `click` events before `dblclick`: the first has
+// `detail === 1`, the second `detail === 2`. The second click must not run the
+// row's single-click navigation, otherwise double-click-to-rename would also
+// navigate. `MouseEvent.detail` is 0 for synthetic/keyboard activations, which
+// still count as a normal single activation.
+export function isTrailingDoubleClick(detail: number): boolean {
+  return detail > 1;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
   items: readonly TItem[];
   preferredIds: readonly TId[];
   getId: (item: TItem) => TId;
+  getPreferenceIds?: (item: TItem) => readonly TId[];
 }): TItem[] {
-  const { getId, items, preferredIds } = input;
+  const { getId, getPreferenceIds, items, preferredIds } = input;
   if (preferredIds.length === 0) {
     return [...items];
   }
 
-  const itemsById = new Map(items.map((item) => [getId(item), item] as const));
-  const preferredIdSet = new Set(preferredIds);
-  const emittedPreferredIds = new Set<TId>();
+  const indexesByPreferenceId = new Map<TId, number[]>();
+  for (const [index, item] of items.entries()) {
+    const preferenceIds = getPreferenceIds?.(item) ?? [getId(item)];
+    for (const preferenceId of new Set(preferenceIds)) {
+      const indexes = indexesByPreferenceId.get(preferenceId);
+      if (indexes) {
+        indexes.push(index);
+      } else {
+        indexesByPreferenceId.set(preferenceId, [index]);
+      }
+    }
+  }
+
+  const emittedIndexes = new Set<number>();
   const ordered = preferredIds.flatMap((id) => {
-    if (emittedPreferredIds.has(id)) {
+    const index = indexesByPreferenceId
+      .get(id)
+      ?.find((candidate) => !emittedIndexes.has(candidate));
+    if (index === undefined) {
       return [];
     }
-    const item = itemsById.get(id);
-    if (!item) {
-      return [];
-    }
-    emittedPreferredIds.add(id);
-    return [item];
+    emittedIndexes.add(index);
+    return [items[index]!];
   });
-  const remaining = items.filter((item) => !preferredIdSet.has(getId(item)));
+  const remaining = items.filter((_, index) => !emittedIndexes.has(index));
   return [...ordered, ...remaining];
 }
 
@@ -342,6 +329,28 @@ export function resolveAdjacentThreadId<T>(input: {
   return currentIndex < threadIds.length - 1 ? (threadIds[currentIndex + 1] ?? null) : null;
 }
 
+export function shouldNavigateAfterProjectRemoval(input: {
+  routeTarget: ThreadRouteTarget | null;
+  projectThreads: readonly {
+    environmentId: string;
+    id: string;
+  }[];
+  projectDraftId: string | null;
+}): boolean {
+  const { projectDraftId, projectThreads, routeTarget } = input;
+  if (routeTarget?.kind === "draft") {
+    return projectDraftId === routeTarget.draftId;
+  }
+  if (routeTarget?.kind !== "server") {
+    return false;
+  }
+  return projectThreads.some(
+    (thread) =>
+      thread.environmentId === routeTarget.threadRef.environmentId &&
+      thread.id === routeTarget.threadRef.threadId,
+  );
+}
+
 export function isContextMenuPointerDown(input: {
   button: number;
   ctrlKey: boolean;
@@ -356,30 +365,177 @@ export function resolveThreadRowClassName(input: {
   isSelected: boolean;
 }): string {
   const baseClassName =
-    "h-6 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring sm:h-7";
+    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
   if (input.isSelected && input.isActive) {
     return cn(
       baseClassName,
-      "bg-primary/22 text-foreground font-medium hover:bg-primary/26 hover:text-foreground dark:bg-primary/30 dark:hover:bg-primary/36",
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
     );
   }
 
   if (input.isSelected) {
     return cn(
       baseClassName,
-      "bg-primary/15 text-foreground hover:bg-primary/19 hover:text-foreground dark:bg-primary/22 dark:hover:bg-primary/28",
+      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
     );
   }
 
   if (input.isActive) {
     return cn(
       baseClassName,
-      "bg-accent/85 text-foreground font-medium hover:bg-accent hover:text-foreground dark:bg-accent/55 dark:hover:bg-accent/70",
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
     );
   }
 
-  return cn(baseClassName, "text-muted-foreground hover:bg-accent hover:text-foreground");
+  return cn(
+    baseClassName,
+    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+  );
+}
+
+// ── Sidebar v2 status model ─────────────────────────────────────────
+// Five visual states, three colors: color is reserved for "act now"
+// (approval), "in motion" (working), and "broken" (failed). Ready is the
+// unlabeled resting state — the agent stopped and is waiting on the user,
+// whether it finished, asked a question, or proposed a plan.
+// Unread completion is tracked separately: it describes whether a ready
+// thread needs attention, not what the thread is currently doing.
+export type SidebarV2Status = "approval" | "input" | "working" | "failed" | "ready";
+
+type SidebarV2StatusInput = Pick<
+  SidebarThreadSummary,
+  "hasPendingApprovals" | "hasPendingUserInput" | "session"
+>;
+
+export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2Status {
+  if (thread.hasPendingApprovals) {
+    return "approval";
+  }
+  if (thread.hasPendingUserInput) {
+    return "input";
+  }
+  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+    return "working";
+  }
+  if (thread.session?.status === "error") {
+    return "failed";
+  }
+  return "ready";
+}
+
+/** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
+    poison the whole ordering, so it sinks to the epoch instead. */
+export function parseTimestampMs(isoDate: string): number {
+  const parsed = Date.parse(isoDate);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
+    yet-malformed string must also fall through to the next candidate rather
+    than sink the row to the epoch. */
+export function firstValidTimestampMs(
+  ...candidates: ReadonlyArray<string | null | undefined>
+): number {
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const parsed = Date.parse(candidate);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+/** String twin of firstValidTimestampMs for callers that need the ISO string
+    (display labels, tick anchors) rather than epoch ms. */
+export function firstValidTimestamp(
+  ...candidates: ReadonlyArray<string | null | undefined>
+): string | null {
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    if (!Number.isNaN(Date.parse(candidate))) return candidate;
+  }
+  return null;
+}
+
+// v2 sort: static creation order, newest thread on top. Activity NEVER
+// reorders the list — a row holds its position from open until settled, so
+// the screen only moves at lifecycle transitions. Status (including pending
+// approval) is carried by each card's edge strip, not by position.
+export function sortThreadsForSidebarV2<
+  T extends { readonly id: string; readonly createdAt: string },
+>(threads: readonly T[]): T[] {
+  return [...threads].toSorted(
+    (left, right) =>
+      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+type SettledTimestampInput = Pick<
+  SidebarThreadSummary,
+  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
+>;
+
+/** The timestamp a settled row sorts and labels by: settledAt when stamped
+    (explicit settles), otherwise last activity — the same candidates
+    threadLastActivityAt feeds the auto-settle window (user message plus all
+    latestTurn stamps), so a thread whose last activity was a turn completion
+    doesn't sort by an older message time. updatedAt is the final net. */
+export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
+  const settledAt = firstValidTimestamp(thread.settledAt);
+  if (settledAt !== null) return settledAt;
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.completedAt,
+  ]) {
+    if (candidate == null) continue;
+    const parsed = Date.parse(candidate);
+    if (!Number.isNaN(parsed) && parsed > latestMs) {
+      latest = candidate;
+      latestMs = parsed;
+    }
+  }
+  return latest ?? firstValidTimestamp(thread.updatedAt);
+}
+
+// Settled rows are history, so they order by when the work ENDED, not when
+// the thread was created or last touched.
+export function sortSettledThreadsForSidebarV2<
+  T extends SettledTimestampInput & { readonly id: string },
+>(threads: readonly T[]): T[] {
+  const timestampMs = (thread: T) => {
+    const timestamp = resolveSettledTimestamp(thread);
+    return timestamp === null ? 0 : Date.parse(timestamp);
+  };
+  return [...threads].toSorted(
+    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
+  );
+}
+
+/** The timestamp a working thread's elapsed label counts from: the running
+    turn's start (request time until adoption), falling back to the session's
+    last transition when the turn projection lags behind. Malformed
+    timestamps fall through to the next candidate, not just missing ones. */
+export function resolveWorkingStartedAt(
+  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+): string | null {
+  const turn = thread.latestTurn;
+  if (turn && turn.completedAt === null) {
+    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
+  }
+  return firstValidTimestamp(thread.session?.updatedAt);
+}
+
+export function formatWorkingDurationLabel(elapsedMs: number): string {
+  const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 export function resolveThreadStatusPill(input: {
@@ -390,44 +546,36 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingApprovals) {
     return {
       label: "Pending Approval",
-      icon: "approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
+      dotClass: "bg-amber-500 dark:bg-amber-300/90",
+      pulse: false,
     };
   }
 
   if (thread.hasPendingUserInput) {
     return {
       label: "Awaiting Input",
-      icon: "input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
+      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
     };
   }
 
   if (thread.session?.status === "running") {
     return {
       label: "Working",
-      icon: "spinner",
       colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
     };
   }
 
-  if (thread.session?.status === "connecting") {
+  if (thread.session?.status === "starting") {
     return {
       label: "Connecting",
-      icon: "spinner",
       colorClass: "text-sky-600 dark:text-sky-300/80",
-    };
-  }
-
-  // A settled top-level turn can still be waiting on an in-flight background
-  // worker; surface that as "Working" rather than letting it fall through to
-  // "Completed". Ranks below the active-session states above but above the
-  // terminal Plan Ready / Completed states.
-  if (thread.hasPendingBackgroundTask) {
-    return {
-      label: "Working",
-      icon: "spinner",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
     };
   }
 
@@ -439,34 +587,18 @@ export function resolveThreadStatusPill(input: {
   if (hasPlanReadyPrompt) {
     return {
       label: "Plan Ready",
-      icon: "plan",
       colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
     };
   }
 
   if (hasUnseenCompletion(thread)) {
     return {
       label: "Completed",
-      icon: "check",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
-    };
-  }
-
-  // Idle threads show a provider-colored dot so each row still signals which
-  // provider instance backs the chat. Higher-priority states above replace it
-  // with spinner/check/action icons in the same leading slot.
-  const isSettledForIdle =
-    thread.latestTurn === null || isLatestTurnSettled(thread.latestTurn, thread.session);
-  if (
-    thread.session?.providerInstanceId !== undefined &&
-    thread.session.status !== "error" &&
-    thread.session.status !== "closed" &&
-    isSettledForIdle
-  ) {
-    return {
-      label: "Idle",
-      icon: "dot",
-      colorClass: "bg-muted-foreground/45",
+      dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+      pulse: false,
     };
   }
 
@@ -479,7 +611,7 @@ export function resolveProjectStatusIndicator(
   let highestPriorityStatus: ThreadStatusPill | null = null;
 
   for (const status of statuses) {
-    if (status === null || status.label === "Idle") continue;
+    if (status === null) continue;
     if (
       highestPriorityStatus === null ||
       THREAD_STATUS_PRIORITY[status.label] > THREAD_STATUS_PRIORITY[highestPriorityStatus.label]
@@ -583,6 +715,25 @@ export function getProjectSortTimestamp(
   return toSortableTimestamp(project.updatedAt ?? project.createdAt) ?? Number.NEGATIVE_INFINITY;
 }
 
+function sortProjectsByActivity<TProject extends SidebarProject>(
+  projects: readonly TProject[],
+  sortOrder: SidebarProjectSortOrder,
+  getProjectThreads: (project: TProject) => readonly ThreadSortInput[],
+  compareTies: (left: TProject, right: TProject) => number,
+): TProject[] {
+  if (sortOrder === "manual") {
+    return [...projects];
+  }
+
+  return [...projects].toSorted((left, right) => {
+    const rightTimestamp = getProjectSortTimestamp(right, getProjectThreads(right), sortOrder);
+    const leftTimestamp = getProjectSortTimestamp(left, getProjectThreads(left), sortOrder);
+    const byTimestamp =
+      rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+    return byTimestamp || compareTies(left, right);
+  });
+}
+
 export function sortProjectsForSidebar<
   TProject extends SidebarProject,
   TThread extends Pick<Thread, "projectId" | "createdAt" | "updatedAt"> & ThreadSortInput,
@@ -591,10 +742,6 @@ export function sortProjectsForSidebar<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
 ): TProject[] {
-  if (sortOrder === "manual") {
-    return [...projects];
-  }
-
   const threadsByProjectId = new Map<string, TThread[]>();
   for (const thread of threads) {
     const existing = threadsByProjectId.get(thread.projectId) ?? [];
@@ -602,20 +749,85 @@ export function sortProjectsForSidebar<
     threadsByProjectId.set(thread.projectId, existing);
   }
 
-  return [...projects].toSorted((left, right) => {
-    const rightTimestamp = getProjectSortTimestamp(
-      right,
-      threadsByProjectId.get(right.id) ?? [],
-      sortOrder,
-    );
-    const leftTimestamp = getProjectSortTimestamp(
-      left,
-      threadsByProjectId.get(left.id) ?? [],
-      sortOrder,
-    );
-    const byTimestamp =
-      rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
-    if (byTimestamp !== 0) return byTimestamp;
-    return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
-  });
+  return sortProjectsByActivity(
+    projects,
+    sortOrder,
+    (project) => threadsByProjectId.get(project.id) ?? [],
+    (left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
+  );
+}
+
+export function sortLogicalProjectsForSidebar<
+  TProject extends LogicalSidebarProject,
+  TThread extends ScopedSidebarThread,
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  sortOrder: SidebarProjectSortOrder,
+): TProject[] {
+  const groupKeyByProjectRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  const threadsByProjectKey = new Map<string, TThread[]>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null) continue;
+    const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
+    if (!projectKey) continue;
+    const existing = threadsByProjectKey.get(projectKey);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      threadsByProjectKey.set(projectKey, [thread]);
+    }
+  }
+
+  return sortProjectsByActivity(
+    projects,
+    sortOrder,
+    (project) => threadsByProjectKey.get(project.projectKey) ?? [],
+    (left, right) =>
+      left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
+  );
+}
+
+/**
+ * Sorts the cross-environment project collection used by landing surfaces.
+ * Project ids are only unique within an environment, and archived threads
+ * must not make a project appear recently active.
+ */
+export function sortScopedProjectsForSidebar<
+  TProject extends ScopedSidebarProject,
+  TThread extends ScopedSidebarThread,
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  sortOrder: SidebarProjectSortOrder,
+): TProject[] {
+  const scopedKey = (environmentId: string, projectId: string) =>
+    `${environmentId}\u0000${projectId}`;
+  const threadsByProject = new Map<string, TThread[]>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null) {
+      continue;
+    }
+    const key = scopedKey(thread.environmentId, thread.projectId);
+    const existing = threadsByProject.get(key) ?? [];
+    existing.push(thread);
+    threadsByProject.set(key, existing);
+  }
+
+  return sortProjectsByActivity(
+    projects,
+    sortOrder,
+    (project) => threadsByProject.get(scopedKey(project.environmentId, project.id)) ?? [],
+    (left, right) =>
+      left.title.localeCompare(right.title) ||
+      left.environmentId.localeCompare(right.environmentId) ||
+      left.id.localeCompare(right.id),
+  );
 }

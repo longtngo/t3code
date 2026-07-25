@@ -36,22 +36,27 @@ export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath"
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
   config: ClaudeHomeConfig,
-  baseEnv: NodeJS.ProcessEnv = process.env,
+  baseEnv?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
+  const resolvedBaseEnv = baseEnv ?? process.env;
   const homePath = config.homePath.trim();
   const configDirPath = (config.configDirPath ?? "").trim();
   if (
     homePath.length === 0 &&
     configDirPath.length === 0 &&
-    baseEnv.CLAUDE_CONFIG_DIR === undefined
+    resolvedBaseEnv.CLAUDE_CONFIG_DIR === undefined
   ) {
-    return baseEnv;
+    return resolvedBaseEnv;
   }
-  const env = { ...baseEnv };
+  const env = { ...resolvedBaseEnv };
   if (homePath.length > 0) {
     env.HOME = yield* resolveClaudeHomePath(config);
   }
   if (configDirPath.length > 0) {
+    // Isolate this instance's credentials via CLAUDE_CONFIG_DIR. On macOS the
+    // Keychain credential service name is salted by CLAUDE_CONFIG_DIR, so this
+    // (rather than HOME alone) is what actually separates logins between
+    // accounts while leaving the keychain lookup intact.
     env.CLAUDE_CONFIG_DIR = yield* resolveClaudeConfigDirPath(config);
   } else {
     // An inherited CLAUDE_CONFIG_DIR would bind this instance to a different
@@ -73,9 +78,10 @@ export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationG
 export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesCacheKey")(
   function* (
     config: ClaudeHomeConfig & Pick<ClaudeSettings, "binaryPath">,
+    cwd?: string,
   ): Effect.fn.Return<string, never, Path.Path> {
     const resolvedHomePath = yield* resolveClaudeHomePath(config);
     const resolvedConfigDir = yield* resolveClaudeConfigDirPath(config);
-    return `${config.binaryPath}\0${resolvedHomePath}\0${resolvedConfigDir}`;
+    return `${config.binaryPath}\0${resolvedHomePath}\0${resolvedConfigDir}\0${cwd ?? ""}`;
   },
 );

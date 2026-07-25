@@ -1,23 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFs from "node:fs";
-import * as NodeOS from "node:os";
-import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
-  readPathFromLoginShell,
-  readEnvironmentFromWindowsShell,
-  resolveWindowsEnvironment,
-  type CommandAvailabilityOptions,
-  type WindowsShellEnvironmentReader,
   listLoginShellCandidates,
   mergePathEntries,
+  readPathFromLoginShell,
   readPathFromLaunchctl,
+  resolveWindowsEnvironment,
 } from "@t3tools/shared/shell";
-
-type WindowsCommandAvailabilityChecker = (
-  command: string,
-  options?: CommandAvailabilityOptions,
-) => boolean;
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as NodeOS from "node:os";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
   process.stderr.write(
@@ -66,97 +60,89 @@ function defaultWriteCachedPath(cachePath: string, value: string): void {
   }
 }
 
-export function fixPath(
-  options: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-    readPath?: typeof readPathFromLoginShell;
-    readWindowsEnvironment?: WindowsShellEnvironmentReader;
-    isWindowsCommandAvailable?: WindowsCommandAvailabilityChecker;
-    readLaunchctlPath?: typeof readPathFromLaunchctl;
-    userShell?: string;
-    logWarning?: (message: string, error?: unknown) => void;
-    /** File used to persist (and on failure reuse) the last good hydrated PATH. */
-    cachePath?: string;
-    homeDir?: string;
-    dirExists?: (path: string) => boolean;
-    readCachedPath?: (cachePath: string) => string | undefined;
-    writeCachedPath?: (cachePath: string, value: string) => void;
-  } = {},
-): void {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
-  const logWarning = options.logWarning ?? logPathHydrationWarning;
-  const readPath = options.readPath ?? readPathFromLoginShell;
+/** Default file used to persist (and on failure reuse) the last good hydrated PATH. */
+function defaultPathCacheFile(homeDir: string): string {
+  return `${homeDir}/.t3/last-good-path`;
+}
 
-  try {
-    if (platform === "win32") {
-      const repairedEnvironment = resolveWindowsEnvironment(env, {
-        readEnvironment: options.readWindowsEnvironment ?? readEnvironmentFromWindowsShell,
-        ...(options.isWindowsCommandAvailable
-          ? { commandAvailable: options.isWindowsCommandAvailable }
-          : {}),
-      });
-      for (const [key, value] of Object.entries(repairedEnvironment)) {
-        if (value !== undefined) {
-          env[key] = value;
-        }
-      }
-      return;
+function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): void {
+  const homeDir = NodeOS.homedir();
+  const cachePath = defaultPathCacheFile(homeDir);
+
+  let shellPath: string | undefined;
+  for (const shell of listLoginShellCandidates(platform, env.SHELL)) {
+    try {
+      shellPath = readPathFromLoginShell(shell);
+    } catch (error) {
+      logPathHydrationWarning(`Failed to read PATH from login shell ${shell}.`, error);
     }
 
-    if (platform !== "darwin" && platform !== "linux") return;
+    if (shellPath) break;
+  }
 
-    const homeDir = options.homeDir ?? NodeOS.homedir();
-    const dirExists = options.dirExists ?? ((path) => NodeFs.existsSync(path));
-    const readCachedPath = options.readCachedPath ?? defaultReadCachedPath;
-    const writeCachedPath = options.writeCachedPath ?? defaultWriteCachedPath;
+  const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
 
-    let shellPath: string | undefined;
-    for (const shell of listLoginShellCandidates(platform, env.SHELL, options.userShell)) {
-      try {
-        shellPath = readPath(shell);
-      } catch (error) {
-        logWarning(`Failed to read PATH from login shell ${shell}.`, error);
-      }
+  // A fresh login-shell read is authoritative. When it (and launchctl) fail —
+  // e.g. the `zsh -ilc` probe times out under load while a service restarts —
+  // fall back to the last PATH we successfully hydrated, then to well-known
+  // user bin dirs, instead of collapsing to the minimal launchd PATH (which
+  // would drop ~/.local/bin and make CLIs like `claude` look "not on PATH").
+  const discoveredPath = shellPath ?? launchctlPath;
+  const cachedPath = !discoveredPath ? defaultReadCachedPath(cachePath) : undefined;
+  const fallbackDirs =
+    !discoveredPath && !cachedPath
+      ? existingUserBinDirs(platform, homeDir, (path) => NodeFs.existsSync(path))
+      : [];
 
-      if (shellPath) {
-        break;
-      }
-    }
+  const preferredPath =
+    [discoveredPath ?? cachedPath, ...fallbackDirs].filter(Boolean).join(":") || undefined;
+  const mergedPath = mergePathEntries(preferredPath, env.PATH, platform);
+  if (mergedPath) {
+    env.PATH = mergedPath;
+  }
 
-    const launchctlPath =
-      platform === "darwin" && !shellPath
-        ? (options.readLaunchctlPath ?? readPathFromLaunchctl)()
-        : undefined;
-
-    // A fresh login-shell read is authoritative. When it (and launchctl) fail —
-    // e.g. the `zsh -ilc` probe times out under load while a service restarts —
-    // fall back to the last PATH we successfully hydrated, then to well-known
-    // user bin dirs, instead of collapsing to the minimal launchd PATH (which
-    // would drop ~/.local/bin and make CLIs like `claude` look "not on PATH").
-    const discoveredPath = shellPath ?? launchctlPath;
-    const cachedPath =
-      !discoveredPath && options.cachePath ? readCachedPath(options.cachePath) : undefined;
-    const fallbackDirs =
-      !discoveredPath && !cachedPath ? existingUserBinDirs(platform, homeDir, dirExists) : [];
-
-    const preferredPath =
-      [discoveredPath ?? cachedPath, ...fallbackDirs].filter(Boolean).join(":") || undefined;
-    const mergedPath = mergePathEntries(preferredPath, env.PATH, platform);
-    if (mergedPath) {
-      env.PATH = mergedPath;
-    }
-
-    // Persist only after an authoritative shell read, so a degraded boot (which
-    // used the cache or a fallback) never overwrites a known-good cached PATH.
-    if (shellPath && mergedPath && options.cachePath) {
-      writeCachedPath(options.cachePath, mergedPath);
-    }
-  } catch (error) {
-    logWarning("Failed to hydrate PATH from the user environment.", error);
+  // Persist only after an authoritative shell read, so a degraded boot (which
+  // used the cache or a fallback) never overwrites a known-good cached PATH.
+  if (shellPath && mergedPath) {
+    defaultWriteCachedPath(cachePath, mergedPath);
   }
 }
+
+export const fixPath = Effect.fn("fixPath")(function* (): Effect.fn.Return<
+  void,
+  never,
+  FileSystem.FileSystem | Path.Path
+> {
+  const platform = yield* HostProcessPlatform;
+  const env = yield* HostProcessEnvironment;
+
+  if (platform === "win32") {
+    const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
+      Effect.catchDefect((defect) =>
+        Effect.sync(() => {
+          logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
+          return {} as Partial<NodeJS.ProcessEnv>;
+        }),
+      ),
+    );
+    for (const [key, value] of Object.entries(repairedEnvironment)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    return;
+  }
+
+  if (platform !== "darwin" && platform !== "linux") return;
+
+  yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.sync(() => {
+        logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
+      }),
+    ),
+  );
+});
 
 export const expandHomePath = Effect.fn(function* (input: string) {
   const { join } = yield* Path.Path;

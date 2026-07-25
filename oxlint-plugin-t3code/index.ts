@@ -1,5 +1,7 @@
 import { definePlugin } from "@oxlint/plugins";
 
+import namespaceNodeImports from "./rules/namespace-node-imports.ts";
+import noGlobalProcessRuntime from "./rules/no-global-process-runtime.ts";
 import noInlineSchemaCompile from "./rules/no-inline-schema-compile.ts";
 import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-tests.ts";
 import noUnsafeStreamAggregate from "./rules/no-unsafe-stream-aggregate.ts";
@@ -9,6 +11,8 @@ export default definePlugin({
     name: "t3code",
   },
   rules: {
+    "namespace-node-imports": namespaceNodeImports,
+    "no-global-process-runtime": noGlobalProcessRuntime,
     "no-inline-schema-compile": noInlineSchemaCompile,
     "no-manual-effect-runtime-in-tests": noManualEffectRuntimeInTests,
     "no-unsafe-stream-aggregate": noUnsafeStreamAggregate,

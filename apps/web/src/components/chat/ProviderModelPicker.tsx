@@ -17,7 +17,6 @@ import {
   getTriggerDisplayModelLabel,
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
-import { setModelPickerOpen } from "../../modelPickerOpenState";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -78,13 +77,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       setUncontrolledIsMenuOpen(open);
     }
   };
-
-  useEffect(() => {
-    setModelPickerOpen(isMenuOpen);
-    return () => {
-      setModelPickerOpen(false);
-    };
-  }, [isMenuOpen]);
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -166,7 +158,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           />
         }
       >
-        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
           {activeEntry ? (
             <ProviderInstanceIcon
               driverKind={activeEntry.driverKind}
@@ -195,8 +187,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       </PopoverTrigger>
       <PopoverPopup
         align="start"
-        className="border-0 bg-transparent p-0 shadow-none before:hidden [--viewport-inline-padding:0]"
-        viewportClassName="!overflow-hidden p-0"
+        className="border-0 bg-transparent p-0 shadow-none before:hidden [-webkit-backdrop-filter:none]! [--viewport-inline-padding:0] [backdrop-filter:none]!"
+        viewportClassName="rounded-lg !overflow-hidden p-0"
       >
         <ModelPickerContent
           activeInstanceId={activeInstanceId}

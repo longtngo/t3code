@@ -38,8 +38,17 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
           `claude:home:${resolved}:config:`,
         );
         expect(yield* makeClaudeCapabilitiesCacheKey({ binaryPath: "claude", homePath })).toBe(
-          `claude\0${resolved}\0`,
+          `claude\0${resolved}\0\0`,
         );
+      }),
+    );
+
+    it.effect("separates capability probes by cwd", () =>
+      Effect.gen(function* () {
+        const config = { binaryPath: "claude", homePath: "" };
+        const first = yield* makeClaudeCapabilitiesCacheKey(config, "/repo-a");
+        const second = yield* makeClaudeCapabilitiesCacheKey(config, "/repo-b");
+        expect(first).not.toBe(second);
       }),
     );
 
@@ -100,7 +109,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
             homePath: "",
             configDirPath,
           }),
-        ).toBe(`claude\0${homeResolved}\0${configResolved}`);
+        ).toBe(`claude\0${homeResolved}\0${configResolved}\0`);
       }),
     );
   });

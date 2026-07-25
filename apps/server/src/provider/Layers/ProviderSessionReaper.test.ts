@@ -21,12 +21,12 @@ import { afterEach, describe, expect, vi } from "vite-plus/test";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
-import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
 import {
   PendingBackgroundTaskRepository,
   type PendingBackgroundTask,
 } from "../../persistence/Services/PendingBackgroundTask.ts";
-import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
+import { ProviderSessionRuntimeRepository } from "../../persistence/ProviderSessionRuntime.ts";
+import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
@@ -109,6 +109,8 @@ function makeReadModel(
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
       latestUserMessageAt: null,
       hasPendingApprovals: thread.hasPendingApprovals ?? false,
       hasPendingUserInput: thread.hasPendingUserInput ?? false,
@@ -127,7 +129,7 @@ function makeReadModel(
 
 describe("ProviderSessionReaper", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    ProviderSessionReaper | ProviderSessionRuntimeRepository,
+    ProviderSessionReaper | ProviderSessionRuntime.ProviderSessionRuntimeRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -213,7 +215,7 @@ describe("ProviderSessionReaper", () => {
       streamEvents: Stream.empty,
     };
 
-    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
       Layer.provide(SqlitePersistenceMemory),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
@@ -249,6 +251,7 @@ describe("ProviderSessionReaper", () => {
             ),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadHistoryPage: () => Effect.die("unused"),
+          getThreadDetailSnapshot: () => Effect.die("unused"),
         }),
       ),
       Layer.provideMerge(NodeServices.layer),
@@ -277,7 +280,9 @@ describe("ProviderSessionReaper", () => {
         },
       ]),
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
 
     await runtime!.runPromise(
       repository.upsert({
@@ -463,7 +468,9 @@ describe("ProviderSessionReaper", () => {
         },
       ]),
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
 
     await runtime!.runPromise(
       repository.upsert({
@@ -510,7 +517,9 @@ describe("ProviderSessionReaper", () => {
         },
       ]),
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
 
     await runtime!.runPromise(
       repository.upsert({
@@ -557,7 +566,9 @@ describe("ProviderSessionReaper", () => {
         },
       ]),
     });
-    const repository = await runtime!.runPromise(Effect.service(ProviderSessionRuntimeRepository));
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
 
     await runtime!.runPromise(
       repository.upsert({

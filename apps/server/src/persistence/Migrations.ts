@@ -47,6 +47,11 @@ import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_PendingBackgroundTasks.ts";
 import Migration0034 from "./Migrations/034_PushSubscriptions.ts";
+// Upstream migrations kept their original 033/034 filenames but are assigned
+// ids 35/36 here so the fork's already-deployed 33/34 (PendingBackgroundTasks,
+// PushSubscriptions) are never renumbered and stay consistent with live DBs.
+import Migration0035 from "./Migrations/033_ProjectionThreadsSettled.ts";
+import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -93,6 +98,8 @@ export const migrationEntries = [
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
   [33, "PendingBackgroundTasks", Migration0033],
   [34, "PushSubscriptions", Migration0034],
+  [35, "ProjectionThreadsSettled", Migration0035],
+  [36, "ProjectionThreadsSnoozed", Migration0036],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -127,15 +134,11 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  yield* Effect.log(
-    toMigrationInclusive === undefined
-      ? "Running all migrations..."
-      : `Running migrations 1 through ${toMigrationInclusive}...`,
-  );
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
-  yield* Effect.log("Migrations ran successfully").pipe(
-    Effect.annotateLogs({ migrations: executedMigrations.map(([id, name]) => `${id}_${name}`) }),
-  );
+  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+  yield* migrations.length === 0
+    ? Effect.logDebug("Database schema is current")
+    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
 

@@ -1,20 +1,25 @@
+import { useAtomValue } from "@effect/atom-react";
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import {
   CheckIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
-  FileCodeIcon,
-  FileTextIcon,
   GlobeIcon,
   Maximize2Icon,
+  Minimize2Icon,
   WrapTextIcon,
 } from "lucide-react";
-import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
+import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@t3tools/client-runtime/state/runtime";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
   Children,
   Suspense,
-  createContext,
   type ClipboardEvent as ReactClipboardEvent,
   type MouseEvent as ReactMouseEvent,
   isValidElement,
@@ -27,7 +32,7 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import type { Components } from "react-markdown";
+import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -36,42 +41,53 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
-import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import {
-  getVscodeIconUrlForEntry,
-  hasSpecificVscodeIconForFileName,
-  syntheticFileNameForLanguageId,
-} from "../vscode-icons";
+  resolveExternalWebLinkHost,
+  showExternalLinkContextMenu,
+} from "./chat/externalLinkContextMenu";
+import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from "../pierre-icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import { ScrollArea } from "./ui/scroll-area";
-import { Dialog, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { openInPreferredEditor } from "../editorPreferences";
+import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
+import { getClientSettings } from "../hooks/useSettings";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
+import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
 import {
   normalizeMarkdownLinkDestination,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
-import {
-  useFileViewerStore,
-  type FileViewerKind,
-  type FileViewerView,
-} from "../fileViewerStore";
-import { classifyFileViewerKind, languageForPath } from "../lib/codeFileTypes";
 import { cn } from "../lib/utils";
+import { useRightPanelStore } from "../rightPanelStore";
+import { useActiveEnvironmentId } from "../state/entities";
+import { serverEnvironment } from "../state/server";
+import { assetEnvironment } from "../state/assets";
+import { usePreparedConnection } from "../state/session";
+import { previewEnvironment } from "../state/preview";
+import { useAtomCommand } from "../state/use-atom-command";
+import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { isPreviewSupportedInRuntime } from "../previewStateStore";
+import {
+  isBrowserPreviewFile,
+  openFileInPreview,
+  openUrlInPreview,
+  BrowserPreviewUnavailableError,
+} from "../browser/openFileInPreview";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -97,13 +113,10 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
+  threadRef?: ScopedThreadRef | undefined;
+  onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
-  /**
-   * Environment used to read files for the inline markdown-path viewer. Omit it
-   * (e.g. plan previews) to suppress the in-app markdown "open" affordance.
-   */
-  environmentId?: EnvironmentId;
   className?: string;
   /** Treat single newlines as hard breaks — chat-style user input. */
   lineBreaks?: boolean;
@@ -111,28 +124,39 @@ interface ChatMarkdownProps {
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 
-interface ChatMarkdownConfig {
-  cwd: string | undefined;
-  environmentId: EnvironmentId | undefined;
-  theme: "light" | "dark";
-}
-
-// Carries per-render config to the module-level `MarkdownCode` component (which
-// must stay a stable reference so `extractCodeBlock` can identify it).
-const ChatMarkdownConfigContext = createContext<ChatMarkdownConfig>({
-  cwd: undefined,
-  environmentId: undefined,
-  theme: "dark",
-});
-
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
+
+interface MarkdownActionFailureContext {
+  readonly operation: string;
+  readonly target?: string;
+  readonly format?: "markdown" | "csv";
+  readonly language?: string;
+  readonly fenceTitle?: string;
+  readonly copyTarget?: string;
+}
+
+function reportMarkdownActionFailure(context: MarkdownActionFailureContext, cause: unknown): void {
+  console.error("[chat-markdown] action failed", context, cause);
+}
+
 const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_ENTRIES,
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
+
+function findTaskListMarkerOffset(markdown: string, listItemStart: number): number | null {
+  const firstLineEnd = markdown.indexOf("\n", listItemStart);
+  const firstLine = markdown.slice(
+    listItemStart,
+    firstLineEnd === -1 ? markdown.length : firstLineEnd,
+  );
+  const match = firstLine.match(/^(?:\s*(?:[-+*]|\d+[.)])\s+)(\[[ xX]\])/);
+  if (!match?.[1]) return null;
+  return listItemStart + firstLine.indexOf(match[1]);
+}
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
@@ -145,6 +169,24 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     href: [...(defaultSchema.protocols?.href ?? []), "file"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
+
+const CHAT_MARKDOWN_REMARK_PLUGINS = [
+  remarkGfm,
+  remarkNormalizeListItemIndentation,
+  remarkPreserveCodeMeta,
+] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
+
+const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
+  remarkGfm,
+  remarkNormalizeListItemIndentation,
+  remarkBreaks,
+  remarkPreserveCodeMeta,
+] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
+
+const CHAT_MARKDOWN_REHYPE_PLUGINS = [
+  rehypeRaw,
+  [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
+] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
 function extractFenceLanguage(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
@@ -224,239 +266,6 @@ function nodeToPlainText(node: ReactNode): string {
   return "";
 }
 
-// Characters that never appear in legitimate file paths — their presence means
-// the inline code is markup/code, not a path, so no affordance is shown.
-const NON_PATH_CHARS_PATTERN = /[<>|*"`]/;
-
-/**
- * Classify a single-line inline-code string as an openable file path (and how the
- * viewer should render it), or null. Conservative: requires a single
- * whitespace-free token with no markup characters and no URL scheme; the
- * extension→kind decision itself lives in {@link classifyFileViewerKind}.
- */
-function classifyInlineCodePath(raw: string): FileViewerKind | null {
-  const text = raw.trim();
-  if (text.length === 0 || /\s/.test(text) || NON_PATH_CHARS_PATTERN.test(text)) {
-    return null;
-  }
-  // Reject URLs (http://, file://, …) — they aren't local file paths. The `://`
-  // check leaves Windows drive paths (`C:\…`) untouched.
-  if (text.includes("://")) {
-    return null;
-  }
-  return classifyFileViewerKind(text);
-}
-
-function inlinePathBasename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
-}
-
-/**
- * Shared shell for the markdown/code chip: a body button that opens the viewer
- * plus a caret-triggered dropdown menu. Only the menu items (and caret tooltip)
- * differ between the two kinds.
- */
-function FileChipWithMenu({
-  label,
-  basename,
-  caretTitle,
-  onOpen,
-  children,
-}: {
-  label: ReactNode;
-  basename: string;
-  caretTitle: string;
-  onOpen: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <span className="chat-markdown-file-chip chat-markdown-file-chip-group">
-      <button
-        type="button"
-        className="chat-markdown-file-chip-main"
-        onClick={onOpen}
-        title={`Open ${basename}`}
-        aria-label={`Open ${basename}`}
-      >
-        {label}
-      </button>
-      <Menu>
-        <MenuTrigger
-          render={
-            <button
-              type="button"
-              className="chat-markdown-file-chip-caret"
-              title={caretTitle}
-              aria-label={`View options for ${basename}`}
-            />
-          }
-        >
-          <ChevronDownIcon className="size-3.5" />
-        </MenuTrigger>
-        <MenuPopup align="end">{children}</MenuPopup>
-      </Menu>
-    </span>
-  );
-}
-
-/**
- * Inline affordance for an openable file path. The whole chip is one click
- * target (so it stays tappable on mobile, where a trailing icon could scroll
- * off-screen), opening the file in the viewer sidebar. The directory is
- * left-truncated so the filename stays visible; `max-width` keeps it on-screen.
- */
-function InlineFilePathChip({
-  text,
-  kind,
-  cwd,
-  environmentId,
-}: {
-  text: string;
-  kind: FileViewerKind;
-  cwd: string | undefined;
-  environmentId: EnvironmentId;
-}) {
-  const { resolvedTheme } = useTheme();
-  const openFileViewer = useFileViewerStore((state) => state.openFileViewer);
-  const open = useCallback(
-    (view: FileViewerView) => {
-      openFileViewer({ path: text, cwd, environmentId, kind, view });
-    },
-    [openFileViewer, text, cwd, environmentId, kind],
-  );
-
-  const copyPath = useCallback(() => {
-    if (typeof navigator === "undefined" || navigator.clipboard == null) return;
-    void navigator.clipboard
-      .writeText(text)
-      .then(() => toastManager.add({ type: "success", title: "Path copied" }))
-      .catch(() =>
-        toastManager.add({ type: "error", title: "Couldn't copy path" }),
-      );
-  }, [text]);
-
-  const basename = inlinePathBasename(text);
-  const dir = text.slice(0, text.length - basename.length);
-  const dotIndex = basename.lastIndexOf(".");
-  // The short ext label: literal "html"/"md" for those kinds, else the real
-  // extension (e.g. "py", "txt") so a code chip reads at a glance.
-  const extLabel =
-    kind === "html" ? "html" : kind === "markdown" ? "md" : basename.slice(dotIndex + 1).toLowerCase();
-
-  const label = (
-    <>
-      <span className="chat-markdown-file-chip-type">
-        {kind === "code" ? (
-          // Real per-filetype icon (Python/Go/…), matching code-block headers.
-          <VscodeEntryIcon pathValue={text} kind="file" theme={resolvedTheme} className="size-3.5" />
-        ) : kind === "html" ? (
-          <FileCodeIcon className="size-3.5" />
-        ) : (
-          <FileTextIcon className="size-3.5" />
-        )}
-      </span>
-      <span className={`chat-markdown-file-chip-ext chat-markdown-file-chip-ext-${kind}`}>
-        {extLabel}
-      </span>
-      <span className="chat-markdown-file-chip-path">
-        {dir ? <span className="chat-markdown-file-chip-dir">{dir}</span> : null}
-        <span className="chat-markdown-file-chip-base">{basename}</span>
-      </span>
-    </>
-  );
-
-  // HTML files have a single view; the chip stays a plain button.
-  if (kind === "html") {
-    return (
-      <button
-        type="button"
-        className="chat-markdown-file-chip"
-        onClick={() => open("html")}
-        title={`Open ${basename}`}
-        aria-label={`Open ${basename}`}
-      >
-        {label}
-        <ChevronRightIcon className="chat-markdown-file-chip-open size-3.5" />
-      </button>
-    );
-  }
-
-  // Code/text files have a single (syntax-highlighted) view; the chip body opens
-  // it and the caret dropdown offers View + Copy path. `view` is ignored for code,
-  // so the body opens with the store's default view.
-  if (kind === "code") {
-    return (
-      <FileChipWithMenu
-        label={label}
-        basename={basename}
-        caretTitle={`Options for ${basename}`}
-        onOpen={() => open("markdown")}
-      >
-        <MenuItem onClick={() => open("markdown")}>View in side panel</MenuItem>
-        <MenuItem onClick={copyPath}>Copy path</MenuItem>
-      </FileChipWithMenu>
-    );
-  }
-
-  // Markdown: the chip body opens the default Markdown view; the caret dropdown
-  // chooses Markdown vs generated HTML.
-  return (
-    <FileChipWithMenu
-      label={label}
-      basename={basename}
-      caretTitle={`View ${basename} as Markdown or HTML`}
-      onOpen={() => open("markdown")}
-    >
-      <MenuItem onClick={() => open("markdown")}>Open as Markdown</MenuItem>
-      <MenuItem onClick={() => open("html")}>Open as HTML</MenuItem>
-      <MenuItem onClick={copyPath}>Copy path</MenuItem>
-    </FileChipWithMenu>
-  );
-}
-
-/**
- * Custom `code` renderer. Fenced/indented blocks are handled by the `pre`
- * component (see {@link extractCodeBlock}); this only adds affordances to inline
- * code that looks like an openable HTML/markdown path.
- */
-const MarkdownCode: NonNullable<Components["code"]> = ({
-  node: _node,
-  className,
-  children,
-  ...props
-}) => {
-  const config = use(ChatMarkdownConfigContext);
-  const text = nodeToPlainText(children);
-  const isBlock = (className != null && /language-/.test(className)) || text.includes("\n");
-  if (isBlock) {
-    return (
-      <code className={className} {...props}>
-        {children}
-      </code>
-    );
-  }
-
-  const kind = classifyInlineCodePath(text);
-  if (kind != null && config.environmentId) {
-    return (
-      <InlineFilePathChip
-        text={text}
-        kind={kind}
-        cwd={config.cwd}
-        environmentId={config.environmentId}
-      />
-    );
-  }
-
-  return (
-    <code className={className} {...props}>
-      {children}
-    </code>
-  );
-};
-
 function extractCodeBlock(
   children: ReactNode,
 ): { className: string | undefined; code: string } | null {
@@ -468,7 +277,7 @@ function extractCodeBlock(
   const onlyChild = childNodes[0];
   if (
     !isValidElement<{ className?: string; children?: ReactNode }>(onlyChild) ||
-    (onlyChild.type !== "code" && onlyChild.type !== MarkdownCode)
+    onlyChild.type !== "code"
   ) {
     return null;
   }
@@ -508,13 +317,42 @@ function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
   return promise;
 }
 
+function readInitialWordWrapSetting(): boolean {
+  return getClientSettings().wordWrap;
+}
+
 function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [expandedOpen, setExpandedOpen] = useState(false);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const [expanded, setExpanded] = useState(readInitialWordWrapSetting);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const expandLabel = "Expand table";
+  const expandLabel = expanded ? "Collapse table cells" : "Expand table cells";
   const copyLabel = copied ? "Copied" : "Copy table";
+
+  function toggleExpanded() {
+    const table = tableRef.current;
+    if (!table) return;
+
+    if (!expanded) {
+      const rows = [...table.rows];
+      const columnWidths = rows.reduce<number[]>((widths, row) => {
+        [...row.cells].forEach((cell, columnIndex) => {
+          widths[columnIndex] = Math.max(
+            widths[columnIndex] ?? 0,
+            cell.getBoundingClientRect().width,
+          );
+        });
+        return widths;
+      }, []);
+
+      [...(table.tHead?.rows[0]?.cells ?? [])].forEach((cell, columnIndex) => {
+        cell.style.minWidth = `${columnWidths[columnIndex] ?? cell.getBoundingClientRect().width}px`;
+      });
+    }
+
+    setExpanded((value) => !value);
+  }
 
   const handleCopy = useCallback((format: "markdown" | "csv") => {
     const table = containerRef.current?.querySelector("table");
@@ -537,7 +375,9 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
           copiedTimerRef.current = null;
         }, 1200);
       })
-      .catch(() => undefined);
+      .catch((cause) => {
+        reportMarkdownActionFailure({ operation: "copy-table", format }, cause);
+      });
   }, []);
 
   useEffect(
@@ -551,13 +391,20 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   );
 
   return (
-    <div ref={containerRef} className="chat-markdown-table-container">
+    <div
+      ref={containerRef}
+      className="chat-markdown-table-container"
+      data-expanded={expanded ? "true" : "false"}
+    >
       <ScrollArea
         chainVerticalScroll
         scrollFade
+        hideScrollbars
         className="w-full max-w-full rounded-none"
       >
-        <table {...props}>{children}</table>
+        <table ref={tableRef} {...props}>
+          {children}
+        </table>
       </ScrollArea>
       <div className="chat-markdown-table-footer select-none">
         <Tooltip>
@@ -568,12 +415,13 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
                 variant="ghost"
                 size="icon-xs"
                 className="chat-markdown-chrome-action"
-                onClick={() => setExpandedOpen(true)}
+                aria-pressed={expanded}
+                onClick={toggleExpanded}
                 aria-label={expandLabel}
               />
             }
           >
-            <Maximize2Icon className="size-3" />
+            {expanded ? <Minimize2Icon className="size-3" /> : <Maximize2Icon className="size-3" />}
           </TooltipTrigger>
           <TooltipPopup side="top">{expandLabel}</TooltipPopup>
         </Tooltip>
@@ -604,16 +452,6 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
           </MenuPopup>
         </Menu>
       </div>
-      <Dialog open={expandedOpen} onOpenChange={setExpandedOpen}>
-        <DialogPopup className="max-h-[88vh] max-w-[min(96vw,72rem)]">
-          <DialogTitle className="sr-only">Expanded table</DialogTitle>
-          <DialogPanel>
-            <div className="chat-markdown">
-              <table {...props}>{children}</table>
-            </div>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
     </div>
   );
 }
@@ -675,22 +513,17 @@ function MarkdownCodeBlockTitleContent({
   language: string;
   theme: "light" | "dark";
 }) {
-  const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
-
   if (fenceTitle) {
     return (
       <>
-        <VscodeEntryIcon pathValue={fenceTitle} kind="file" theme={theme} className="size-3.5" />
+        <PierreEntryIcon pathValue={fenceTitle} kind="file" theme={theme} className="size-3.5" />
         <span className="truncate">{fenceTitle}</span>
       </>
     );
   }
 
   const fileName = syntheticFileNameForLanguageId(language);
-  const iconUrl = hasSpecificVscodeIconForFileName(fileName, theme)
-    ? getVscodeIconUrlForEntry(fileName, "file", theme)
-    : null;
-  if (!iconUrl || failedIconUrl === iconUrl) {
+  if (!hasSpecificPierreIconForFileName(fileName)) {
     return <span className="truncate">{language}</span>;
   }
   return (
@@ -700,15 +533,7 @@ function MarkdownCodeBlockTitleContent({
           <span className="inline-flex shrink-0 rounded-sm" aria-label={`Language: ${language}`} />
         }
       >
-        <img
-          src={iconUrl}
-          alt=""
-          aria-hidden
-          className="size-3.5 shrink-0"
-          loading="lazy"
-          draggable={false}
-          onError={() => setFailedIconUrl(iconUrl)}
-        />
+        <PierreEntryIcon pathValue={fileName} kind="file" theme={theme} className="size-3.5" />
       </TooltipTrigger>
       <TooltipPopup side="top">{language}</TooltipPopup>
     </Tooltip>
@@ -729,10 +554,11 @@ function MarkdownCodeBlock({
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
-  const [wrapped, setWrapped] = useState(false);
+  const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
+
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
       return;
@@ -749,8 +575,17 @@ function MarkdownCodeBlock({
           copiedTimerRef.current = null;
         }, 1200);
       })
-      .catch(() => undefined);
-  }, [code]);
+      .catch((cause) => {
+        reportMarkdownActionFailure(
+          {
+            operation: "copy-code-block",
+            language,
+            ...(fenceTitle ? { fenceTitle } : {}),
+          },
+          cause,
+        );
+      });
+  }, [code, fenceTitle, language]);
 
   useEffect(
     () => () => {
@@ -901,43 +736,19 @@ function UncachedShikiCodeBlock({
   );
 }
 
-/**
- * Standalone syntax-highlighted view of a whole file's contents, for the file
- * viewer side panel. Reuses the same Shiki highlighter + LRU cache as fenced code
- * blocks, deriving the language from the file path. Self-contained: it resolves the
- * active theme and brings its own error boundary + Suspense fallback, because the
- * viewer panel that renders it has no boundary of its own (and the underlying
- * highlighter suspends via `use()`). The fallback shows the raw text, so a
- * highlighting failure degrades to a readable plain view.
- */
-export function HighlightedCodeView({ code, path }: { code: string; path: string }) {
-  const { resolvedTheme } = useTheme();
-  const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const language = languageForPath(path);
-  const fallback = <pre className="chat-markdown-file-code-fallback">{code}</pre>;
-  return (
-    <div className="chat-markdown-file-code">
-      <CodeHighlightErrorBoundary fallback={fallback}>
-        <Suspense fallback={fallback}>
-          <SuspenseShikiCodeBlock
-            className={`language-${language}`}
-            code={code}
-            themeName={diffThemeName}
-            isStreaming={false}
-          />
-        </Suspense>
-      </CodeHighlightErrorBoundary>
-    </div>
-  );
-}
-
 interface MarkdownFileLinkProps {
   href: string;
   targetPath: string;
+  iconPath: string;
   displayPath: string;
+  workspaceRelativePath: string | null;
+  line?: number | undefined;
   label: string;
   copyMarkdown: string;
   theme: "light" | "dark";
+  threadRef?: ScopedThreadRef | undefined;
+  onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
 }
 
@@ -1024,17 +835,6 @@ const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
 
 /** Hosts whose favicon request already failed this session — skip straight to the globe. */
 const failedFaviconHosts = new Set<string>();
-
-function resolveExternalLinkHost(href: string | undefined): string | null {
-  if (!href) return null;
-  try {
-    const url = new URL(href);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return url.hostname || null;
-  } catch {
-    return null;
-  }
-}
 
 const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: string }) {
   const [failedHost, setFailedHost] = useState<string | null>(null);
@@ -1207,64 +1007,137 @@ function MarkdownExternalLinkContent({
 const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
   targetPath,
+  iconPath,
   displayPath,
+  workspaceRelativePath,
+  line,
   label,
   copyMarkdown,
   theme,
+  threadRef,
+  onOpen,
+  onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
-  const handleOpen = useCallback(() => {
-    const api = readLocalApi();
-    if (!api) {
-      toastManager.add({
-        type: "error",
-        title: "Open in editor is unavailable",
-      });
+  const handleOpenInEditor = useCallback(() => {
+    void (async () => {
+      try {
+        const result = await onOpen(targetPath);
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        reportMarkdownActionFailure(
+          { operation: "open-file-in-editor", target: targetPath },
+          result.cause,
+        );
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } catch (cause) {
+        reportMarkdownActionFailure(
+          { operation: "open-file-in-editor", target: targetPath },
+          cause,
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          }),
+        );
+      }
+    })();
+  }, [onOpen, targetPath]);
+
+  const handleOpenInFilePreview = useCallback(() => {
+    if (!threadRef || !workspaceRelativePath) {
+      handleOpenInEditor();
       return;
     }
+    useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
+  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
 
-    void openInPreferredEditor(api, targetPath).catch((error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Unable to open file",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    });
-  }, [targetPath]);
-
-  const handleCopy = useCallback((value: string, title: string) => {
-    if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Failed to copy ${title.toLowerCase()}`,
-          description: "Clipboard API unavailable.",
-        }),
-      );
+  const handleOpenInBrowser = useCallback(() => {
+    if (!onOpenInBrowser) {
       return;
     }
+    void (async () => {
+      try {
+        const result = await onOpenInBrowser();
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        reportMarkdownActionFailure(
+          { operation: "open-file-in-browser", target: targetPath },
+          result.cause,
+        );
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file in browser",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } catch (cause) {
+        reportMarkdownActionFailure(
+          { operation: "open-file-in-browser", target: targetPath },
+          cause,
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file in browser",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          }),
+        );
+      }
+    })();
+  }, [onOpenInBrowser, targetPath]);
 
-    void navigator.clipboard.writeText(value).then(
-      () => {
-        toastManager.add({
-          type: "success",
-          title: `${title} copied`,
-          description: value,
-        });
-      },
-      (error) => {
+  const handleCopy = useCallback(
+    (value: string, title: string) => {
+      if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
             title: `Failed to copy ${title.toLowerCase()}`,
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description: "Clipboard API unavailable.",
           }),
         );
-      },
-    );
-  }, []);
+        return;
+      }
+
+      void navigator.clipboard.writeText(value).then(
+        () => {
+          toastManager.add({
+            type: "success",
+            title: `${title} copied`,
+            description: value,
+          });
+        },
+        (error) => {
+          reportMarkdownActionFailure(
+            { operation: "copy-file-path", target: targetPath, copyTarget: title },
+            error,
+          );
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to copy ${title.toLowerCase()}`,
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        },
+      );
+    },
+    [targetPath],
+  );
 
   const handleContextMenu = useCallback(
     async (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -1274,28 +1147,42 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       const api = readLocalApi();
       if (!api) return;
 
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "open", label: "Open in editor" },
-          { id: "copy-relative", label: "Copy relative path" },
-          { id: "copy-full", label: "Copy full path" },
-        ] as const,
-        { x: event.clientX, y: event.clientY },
-      );
+      try {
+        const clicked = await api.contextMenu.show(
+          [
+            { id: "open", label: "Open in editor" },
+            ...(onOpenInBrowser
+              ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
+              : []),
+            { id: "copy-relative", label: "Copy relative path" },
+            { id: "copy-full", label: "Copy full path" },
+          ] as const,
+          { x: event.clientX, y: event.clientY },
+        );
 
-      if (clicked === "open") {
-        handleOpen();
-        return;
-      }
-      if (clicked === "copy-relative") {
-        handleCopy(displayPath, "Relative path");
-        return;
-      }
-      if (clicked === "copy-full") {
-        handleCopy(targetPath, "Full path");
+        if (clicked === "open") {
+          handleOpenInEditor();
+          return;
+        }
+        if (clicked === "open-in-browser") {
+          handleOpenInBrowser();
+          return;
+        }
+        if (clicked === "copy-relative") {
+          handleCopy(displayPath, "Relative path");
+          return;
+        }
+        if (clicked === "copy-full") {
+          handleCopy(targetPath, "Full path");
+        }
+      } catch (cause) {
+        reportMarkdownActionFailure(
+          { operation: "show-file-context-menu", target: targetPath },
+          cause,
+        );
       }
     },
-    [displayPath, handleCopy, handleOpen, targetPath],
+    [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
   );
 
   return (
@@ -1309,11 +1196,15 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              handleOpen();
+              if (onOpenInBrowser) {
+                handleOpenInBrowser();
+                return;
+              }
+              handleOpenInFilePreview();
             }}
             onContextMenu={handleContextMenu}
           >
-            <FileTagChipContent path={targetPath} label={label} theme={theme} selectable />
+            <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
           </a>
         }
       />
@@ -1336,10 +1227,16 @@ function areMarkdownFileLinkPropsEqual(
   return (
     previous.href === next.href &&
     previous.targetPath === next.targetPath &&
+    previous.iconPath === next.iconPath &&
     previous.displayPath === next.displayPath &&
+    previous.workspaceRelativePath === next.workspaceRelativePath &&
+    previous.line === next.line &&
     previous.label === next.label &&
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
+    previous.threadRef === next.threadRef &&
+    previous.onOpen === next.onOpen &&
+    previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
 }
@@ -1347,13 +1244,27 @@ function areMarkdownFileLinkPropsEqual(
 function ChatMarkdown({
   text,
   cwd,
+  threadRef,
+  onTaskListChange,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
-  environmentId,
   className,
   lineBreaks = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
+  const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
+    reportFailure: false,
+  });
+  const openPreview = useAtomCommand(previewEnvironment.open, {
+    reportFailure: false,
+  });
+  const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
+  const environmentId = useActiveEnvironmentId();
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const openInPreferredEditor = useOpenInPreferredEditor(
+    environmentId,
+    serverConfig?.availableEditors ?? [],
+  );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
@@ -1388,21 +1299,98 @@ function ChatMarkdown({
     event.clipboardData.setData("text/plain", payload.text);
     event.clipboardData.setData("text/html", payload.html);
   }, []);
+  const openExternalLinkInPreview = useCallback(
+    (url: string) => {
+      if (!threadRef) {
+        return Promise.resolve(
+          AsyncResult.failure<void, BrowserPreviewUnavailableError>(
+            Cause.fail(
+              new BrowserPreviewUnavailableError({
+                message: "Thread context is unavailable.",
+              }),
+            ),
+          ),
+        );
+      }
+      return openUrlInPreview({ threadRef, url, openPreview });
+    },
+    [openPreview, threadRef],
+  );
+  const openMarkdownFileInPreview = useCallback(
+    (path: string) => {
+      if (!threadRef || preparedConnection._tag === "None") {
+        return Promise.resolve(
+          AsyncResult.failure<void, BrowserPreviewUnavailableError>(
+            Cause.fail(
+              new BrowserPreviewUnavailableError({
+                message: "Environment is not connected.",
+              }),
+            ),
+          ),
+        );
+      }
+      return openFileInPreview({
+        threadRef,
+        filePath: path,
+        httpBaseUrl: preparedConnection.value.httpBaseUrl,
+        createAssetUrl,
+        openPreview,
+      });
+    },
+    [createAssetUrl, openPreview, preparedConnection, threadRef],
+  );
   const markdownComponents = useMemo<Components>(
     () => ({
       p({ node: _node, children, ...props }) {
         return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
       },
-      li({ node: _node, children, ...props }) {
-        return <li {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</li>;
+      li({ node, children, ...props }) {
+        const listItemStart = node?.position?.start.offset;
+        const markerOffset =
+          typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
+        return (
+          <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
+            {renderSkillInlineMarkdownChildren(children, skills)}
+          </li>
+        );
+      },
+      input({ node: _node, type, checked, disabled: _disabled, ...props }) {
+        if (type !== "checkbox" || !onTaskListChange) {
+          return (
+            <input
+              {...props}
+              type={type}
+              checked={checked}
+              disabled={_disabled}
+              readOnly={type === "checkbox"}
+            />
+          );
+        }
+        return (
+          <input
+            {...props}
+            type="checkbox"
+            name="markdown-task"
+            aria-label="Toggle task"
+            checked={checked}
+            onChange={(event) => {
+              const markerOffset = Number(
+                event.currentTarget.closest("li")?.dataset.taskMarkerOffset,
+              );
+              if (!Number.isSafeInteger(markerOffset)) return;
+              onTaskListChange({ markerOffset, checked: event.currentTarget.checked });
+            }}
+          />
+        );
       },
       a({ node, href, children, ...props }) {
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
         if (!fileLinkMeta) {
-          const faviconHost = resolveExternalLinkHost(href);
+          const faviconHost = resolveExternalWebLinkHost(href);
           const isSameDocumentLink = href?.startsWith("#") ?? false;
           const onClick = props.onClick;
+          const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
           const link = (
             <a
               {...props}
@@ -1414,6 +1402,32 @@ function ChatMarkdown({
                 if (isSameDocumentLink && href) {
                   handleMarkdownFragmentClick(event, href);
                 }
+              }}
+              onContextMenu={(event) => {
+                if (!canOpenInPreview || !href || !faviconHost) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const api = readLocalApi();
+                if (!api) return;
+                void showExternalLinkContextMenu({
+                  href,
+                  position: { x: event.clientX, y: event.clientY },
+                  showContextMenu: (items, position) => api.contextMenu.show(items, position),
+                  openInPreview: async (target) => {
+                    const result = await openExternalLinkInPreview(target);
+                    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                      reportMarkdownActionFailure(
+                        { operation: "open-link-in-preview", target },
+                        result.cause,
+                      );
+                    }
+                  },
+                  openExternal: (target) => api.shell.openExternal(target),
+                  copyLink: (target) => writeTextToClipboard(target, "link"),
+                  reportFailure: (operation, cause) => {
+                    reportMarkdownActionFailure({ operation, target: href }, cause);
+                  },
+                });
               }}
             >
               {faviconHost ? (
@@ -1456,15 +1470,26 @@ function ChatMarkdown({
           <MarkdownFileLink
             href={fileLinkMeta.targetPath}
             targetPath={fileLinkMeta.targetPath}
+            iconPath={fileLinkMeta.filePath}
             displayPath={fileLinkMeta.displayPath}
+            workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
+            line={fileLinkMeta.line}
             label={labelParts.join(" · ")}
             copyMarkdown={`[${fileLinkMeta.basename}](${normalizedHref})`}
             theme={resolvedTheme}
+            threadRef={threadRef}
+            onOpen={openInPreferredEditor}
+            onOpenInBrowser={
+              threadRef &&
+              isPreviewSupportedInRuntime() &&
+              isBrowserPreviewFile(fileLinkMeta.filePath)
+                ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+                : undefined
+            }
             className={props.className}
           />
         );
       },
-      code: MarkdownCode,
       table({ node: _node, ...props }) {
         return <MarkdownTable {...props} />;
       },
@@ -1505,14 +1530,15 @@ function ChatMarkdown({
       fileLinkParentSuffixByPath,
       isStreaming,
       markdownFileLinkMetaByHref,
+      onTaskListChange,
+      openInPreferredEditor,
+      openExternalLinkInPreview,
+      openMarkdownFileInPreview,
       resolvedTheme,
       skills,
+      text,
+      threadRef,
     ],
-  );
-
-  const markdownConfig = useMemo<ChatMarkdownConfig>(
-    () => ({ cwd, environmentId, theme: resolvedTheme }),
-    [cwd, environmentId, resolvedTheme],
   );
 
   return (
@@ -1523,20 +1549,16 @@ function ChatMarkdown({
       )}
       onCopy={handleCopy}
     >
-      <ChatMarkdownConfigContext.Provider value={markdownConfig}>
-        <ReactMarkdown
-          remarkPlugins={
-            lineBreaks
-              ? [remarkGfm, remarkBreaks, remarkPreserveCodeMeta]
-              : [remarkGfm, remarkPreserveCodeMeta]
-          }
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA]]}
-          components={markdownComponents}
-          urlTransform={markdownUrlTransform}
-        >
-          {text}
-        </ReactMarkdown>
-      </ChatMarkdownConfigContext.Provider>
+      <ReactMarkdown
+        remarkPlugins={
+          lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
+        }
+        rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+        components={markdownComponents}
+        urlTransform={markdownUrlTransform}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }

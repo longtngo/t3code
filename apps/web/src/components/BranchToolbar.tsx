@@ -1,22 +1,19 @@
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
-import type { EnvironmentId, OrchestrationThreadActivity, ThreadId } from "@t3tools/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   CloudIcon,
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
+  HistoryIcon,
   MonitorIcon,
 } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
 import { useIsMobile } from "../hooks/useMediaQuery";
-import { deriveLatestUsageSnapshot } from "../lib/usage";
-import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
-import { readEnvironmentApi } from "~/environmentApi";
-import { useStore } from "../store";
-import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import {
   type EnvMode,
   type EnvironmentOption,
@@ -24,13 +21,13 @@ import {
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
   resolveLockedWorkspaceLabel,
+  resolvePreviousWorktreeLabel,
+  resolvePreviousWorktreeSeed,
+  shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
-import { HostMetrics } from "./chat/HostMetrics";
-import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
-import { UsageMeter } from "./chat/UsageMeter";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -52,14 +49,13 @@ interface BranchToolbarProps {
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
+  startFromOrigin: boolean;
+  onStartFromOriginChange: (startFromOrigin: boolean) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
-  activities?: readonly OrchestrationThreadActivity[];
-  /** Account usage is shown for providers that emit usage activities. */
-  showAccountUsage?: boolean;
 }
 
 interface MobileRunContextSelectorProps {
@@ -68,10 +64,13 @@ interface MobileRunContextSelectorProps {
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
+  showEnvironmentIndicator: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   onEnvModeChange: (mode: EnvMode) => void;
+  previousWorktreeLabel: string | null;
+  onUsePreviousWorktree: () => void;
 }
 
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
@@ -80,10 +79,13 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   environmentId,
   availableEnvironments,
   showEnvironmentPicker,
+  showEnvironmentIndicator,
   onEnvironmentChange,
   effectiveEnvMode,
   activeWorktreePath,
   onEnvModeChange,
+  previousWorktreeLabel,
+  onUsePreviousWorktree,
 }: MobileRunContextSelectorProps) {
   const activeEnvironment = useMemo(
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
@@ -102,7 +104,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isLocked = envLocked || envModeLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
-  const icon = showEnvironmentPicker ? (
+  const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
     // out of whatever gap we set. mx-0! cancels that so gap-0.5 reads as 2px.
     <span className="inline-flex shrink-0 items-center gap-0.5">
@@ -116,7 +118,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     <>
       {icon}
       <span className="min-w-0 truncate">
-        {showEnvironmentPicker ? (activeEnvironment?.label ?? "Run on") : workspaceLabel}
+        {showEnvironmentIndicator ? (activeEnvironment?.label ?? "Run on") : workspaceLabel}
       </span>
     </>
   );
@@ -171,7 +173,13 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
           <MenuGroupLabel>Workspace</MenuGroupLabel>
           <MenuRadioGroup
             value={effectiveEnvMode}
-            onValueChange={(value) => onEnvModeChange(value as EnvMode)}
+            onValueChange={(value) => {
+              if (value === "previous-worktree") {
+                onUsePreviousWorktree();
+                return;
+              }
+              onEnvModeChange(value as EnvMode);
+            }}
           >
             <MenuRadioItem disabled={envModeLocked} value="local">
               <span className="flex min-w-0 items-center gap-1.5">
@@ -191,6 +199,14 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                 <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
               </span>
             </MenuRadioItem>
+            {previousWorktreeLabel ? (
+              <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <HistoryIcon className="size-3" />
+                  <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                </span>
+              </MenuRadioItem>
+            ) : null}
           </MenuRadioGroup>
         </MenuGroup>
       </MenuPopup>
@@ -206,136 +222,142 @@ export const BranchToolbar = memo(function BranchToolbar({
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
+  startFromOrigin,
+  onStartFromOriginChange,
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
-  activities,
-  showAccountUsage,
 }: BranchToolbarProps) {
-  const usageSnapshot = useMemo(
-    () => (showAccountUsage && activities ? deriveLatestUsageSnapshot(activities) : null),
-    [showAccountUsage, activities],
-  );
-  const contextWindowSnapshot = useMemo(
-    () => (activities ? deriveLatestContextWindowSnapshot(activities) : null),
-    [activities],
-  );
-  const handleUsageRefresh = useCallback(async () => {
-    await readEnvironmentApi(environmentId)?.accountUsage.refresh();
-  }, [environmentId]);
-  const [hostMetricsEnabled, setHostMetricsEnabled] = useHostMetricsEnabled();
-  const { sample: hostMetricsSample, streaming: hostMetricsStreaming } = useHostMetrics(
-    environmentId,
-    hostMetricsEnabled,
-  );
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
   );
-  const serverThreadSelector = useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]);
-  const serverThread = useStore(serverThreadSelector);
+  const serverThread = useThread(threadRef);
   const draftThread = useComposerDraftStore((store) =>
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
   );
+  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const activeProjectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
     : draftThread
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
       : null;
-  const activeProjectSelector = useMemo(
-    () => createProjectSelectorByRef(activeProjectRef),
-    [activeProjectRef],
-  );
-  const activeProject = useStore(activeProjectSelector);
-  const hasActiveThread = serverThread !== undefined || draftThread !== null;
+  const activeProject = useProject(activeProjectRef);
+  const hasActiveThread = serverThread !== null || draftThread !== null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
       activeWorktreePath,
-      hasServerThread: serverThread !== undefined,
+      hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
-  const envModeLocked = envLocked || (serverThread !== undefined && activeWorktreePath !== null);
+  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+
+  // "Previous worktree" hops a draft into the most recently active worktree
+  // of this project — the "keep going where I just was" follow-up flow. Only
+  // drafts can hop; started server threads have their workspace pinned.
+  const canUsePreviousWorktree = draftThread !== null && serverThread === null && !envModeLocked;
+  const projectRefsForWorktreeLookup = useMemo(
+    () => (canUsePreviousWorktree && activeProjectRef ? [activeProjectRef] : []),
+    [canUsePreviousWorktree, activeProjectRef],
+  );
+  const projectThreads = useThreadShellsForProjectRefs(projectRefsForWorktreeLookup);
+  const previousWorktreeSeed = useMemo(
+    () =>
+      canUsePreviousWorktree
+        ? resolvePreviousWorktreeSeed({
+            threads: projectThreads,
+            currentWorktreePath: activeWorktreePath,
+          })
+        : null,
+    [activeWorktreePath, canUsePreviousWorktree, projectThreads],
+  );
+  const previousWorktreeLabel = previousWorktreeSeed
+    ? resolvePreviousWorktreeLabel(previousWorktreeSeed)
+    : null;
+  const onUsePreviousWorktree = useCallback(() => {
+    if (!previousWorktreeSeed || !activeProjectRef) return;
+    // Same shape the branch selector writes when picking a branch that
+    // already lives in a worktree: point the draft at the existing tree.
+    setDraftThreadContext(draftId ?? threadRef, {
+      branch: previousWorktreeSeed.branch,
+      worktreePath: previousWorktreeSeed.worktreePath,
+      envMode: "worktree",
+      projectRef: activeProjectRef,
+    });
+  }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
 
   const showEnvironmentPicker = Boolean(
     availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
   );
+  const activeEnvironmentOption =
+    availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
+  const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
+    activeEnvironment: activeEnvironmentOption,
+    canPickEnvironment: showEnvironmentPicker,
+  });
   const isMobile = useIsMobile();
 
   if (!hasActiveThread || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-208 flex-col gap-1 px-2.5 pb-3 pt-1 sm:px-3">
-      <div className="flex items-center gap-2">
-        {isMobile ? (
-          <MobileRunContextSelector
-            envLocked={envLocked}
-            envModeLocked={envModeLocked}
-            environmentId={environmentId}
-            availableEnvironments={availableEnvironments}
-            showEnvironmentPicker={showEnvironmentPicker}
-            onEnvironmentChange={onEnvironmentChange}
+    <div className="chat-composer-context-strip -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 px-1 pt-5 pb-1">
+      {isMobile ? (
+        <MobileRunContextSelector
+          envLocked={envLocked}
+          envModeLocked={envModeLocked}
+          environmentId={environmentId}
+          availableEnvironments={availableEnvironments}
+          showEnvironmentPicker={showEnvironmentPicker}
+          showEnvironmentIndicator={showEnvironmentIndicator}
+          onEnvironmentChange={onEnvironmentChange}
+          effectiveEnvMode={effectiveEnvMode}
+          activeWorktreePath={activeWorktreePath}
+          onEnvModeChange={onEnvModeChange}
+          previousWorktreeLabel={previousWorktreeLabel}
+          onUsePreviousWorktree={onUsePreviousWorktree}
+        />
+      ) : (
+        <div className="flex min-w-0 shrink-0 items-center gap-1">
+          {showEnvironmentIndicator && availableEnvironments && (
+            <>
+              <BranchToolbarEnvironmentSelector
+                envLocked={envLocked}
+                environmentId={environmentId}
+                availableEnvironments={availableEnvironments}
+                {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
+              />
+              <Separator orientation="vertical" className="mx-0.5 h-3.5!" />
+            </>
+          )}
+          <BranchToolbarEnvModeSelector
+            envLocked={envModeLocked}
             effectiveEnvMode={effectiveEnvMode}
             activeWorktreePath={activeWorktreePath}
             onEnvModeChange={onEnvModeChange}
+            previousWorktreeLabel={previousWorktreeLabel}
+            onUsePreviousWorktree={onUsePreviousWorktree}
           />
-        ) : (
-          <div className="flex min-w-0 shrink-0 items-center gap-1">
-            {showEnvironmentPicker && availableEnvironments && onEnvironmentChange && (
-              <>
-                <BranchToolbarEnvironmentSelector
-                  envLocked={envLocked}
-                  environmentId={environmentId}
-                  availableEnvironments={availableEnvironments}
-                  onEnvironmentChange={onEnvironmentChange}
-                />
-                <Separator orientation="vertical" className="mx-0.5 h-3.5!" />
-              </>
-            )}
-            <BranchToolbarEnvModeSelector
-              envLocked={envModeLocked}
-              effectiveEnvMode={effectiveEnvMode}
-              activeWorktreePath={activeWorktreePath}
-              onEnvModeChange={onEnvModeChange}
-            />
-          </div>
-        )}
+        </div>
+      )}
 
-        <BranchToolbarBranchSelector
-          className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
-          environmentId={environmentId}
-          threadId={threadId}
-          {...(draftId ? { draftId } : {})}
-          envLocked={envLocked}
-          {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
-          {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
-          {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
-          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
-        />
-      </div>
-
-      {/* The meters' fixed-width bars/pills can't shrink, so on narrow screens
-          (≲510px) the usage and host-metrics groups can't share one line — wrap
-          lets each group drop onto its own line instead of overlapping. */}
-      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        {usageSnapshot || contextWindowSnapshot ? (
-          <UsageMeter
-            usage={usageSnapshot}
-            contextWindow={contextWindowSnapshot}
-            {...(usageSnapshot ? { onRefresh: handleUsageRefresh } : {})}
-          />
-        ) : null}
-        <HostMetrics
-          sample={hostMetricsSample}
-          streaming={hostMetricsStreaming}
-          enabled={hostMetricsEnabled}
-          onToggle={setHostMetricsEnabled}
-        />
-      </div>
+      <BranchToolbarBranchSelector
+        className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
+        environmentId={environmentId}
+        threadId={threadId}
+        {...(draftId ? { draftId } : {})}
+        envLocked={envLocked}
+        {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+        {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+        {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+        startFromOrigin={startFromOrigin}
+        onStartFromOriginChange={onStartFromOriginChange}
+        {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+        {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+      />
     </div>
   );
 });

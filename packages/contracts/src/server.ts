@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   IsoDateTime,
@@ -64,6 +64,7 @@ export const ServerProviderModel = Schema.Struct({
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
+  isDefault: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -364,6 +365,16 @@ export const ServerProcessResourceHistorySummary = Schema.Struct({
 });
 export type ServerProcessResourceHistorySummary = typeof ServerProcessResourceHistorySummary.Type;
 
+export const ServerProcessResourceHistoryFailureTag = Schema.Literals([
+  "ProcessDiagnosticsQueryTimeoutError",
+  "ProcessDiagnosticsQueryFailedError",
+  "ProcessDiagnosticsServerProcessSignalError",
+  "ProcessDiagnosticsNotDescendantError",
+  "ProcessDiagnosticsSignalFailedError",
+]);
+export type ServerProcessResourceHistoryFailureTag =
+  typeof ServerProcessResourceHistoryFailureTag.Type;
+
 export const ServerProcessResourceHistoryResult = Schema.Struct({
   readAt: Schema.DateTimeUtc,
   windowMs: NonNegativeInt,
@@ -375,6 +386,7 @@ export const ServerProcessResourceHistoryResult = Schema.Struct({
   topProcesses: Schema.Array(ServerProcessResourceHistorySummary),
   error: Schema.Option(
     Schema.Struct({
+      failureTag: ServerProcessResourceHistoryFailureTag,
       message: TrimmedNonEmptyString,
     }),
   ),
@@ -412,6 +424,10 @@ export const ServerConfig = Schema.Struct({
    * `PushManager.subscribe` as `applicationServerKey`. Absent on older servers.
    */
   webPushVapidPublicKey: Schema.optional(Schema.String),
+  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
+  threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -562,5 +578,32 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 ) {
   override get message(): string {
     return `Provider update failed for ${this.provider}: ${this.reason}`;
+  }
+}
+
+export const ServerSelfUpdateInput = Schema.Struct({
+  /** Exact npm version of the `t3` package to install (never a dist-tag, so
+      the server and the acknowledging client agree on what was requested). */
+  targetVersion: TrimmedNonEmptyString,
+});
+export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
+
+/** Acknowledgement that the update artifact is installed and the server is
+    about to restart into it — the connection will drop moments later. */
+export const ServerSelfUpdateResult = Schema.Struct({
+  targetVersion: TrimmedNonEmptyString,
+  method: ServerSelfUpdateMethod,
+});
+export type ServerSelfUpdateResult = typeof ServerSelfUpdateResult.Type;
+
+export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpdateError>()(
+  "ServerSelfUpdateError",
+  {
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Server update failed: ${this.reason}`;
   }
 }

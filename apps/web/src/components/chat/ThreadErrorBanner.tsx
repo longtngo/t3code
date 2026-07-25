@@ -13,12 +13,12 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
 }) {
   if (!error) return null;
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className="mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
       <Alert variant="error">
         <CircleAlertIcon />
-        <AlertDescription className="line-clamp-3">
+        <AlertDescription>
           <Tooltip>
-            <TooltipTrigger>{error}</TooltipTrigger>
+            <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>
             <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
               {error}
             </TooltipPopup>
