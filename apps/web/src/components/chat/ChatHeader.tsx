@@ -15,8 +15,6 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { HostMetrics } from "./HostMetrics";
-import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -43,23 +41,6 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
-}
-
-/**
- * Connects the presentational {@link HostMetrics} indicator to the live
- * host-metrics stream and the persisted enable/pause toggle.
- */
-function HostMetricsIndicator({ environmentId }: { environmentId: EnvironmentId }) {
-  const [enabled, setEnabled] = useHostMetricsEnabled();
-  const { sample, streaming } = useHostMetrics(environmentId, enabled);
-  return (
-    <HostMetrics
-      sample={sample}
-      streaming={streaming}
-      enabled={enabled}
-      onToggle={setEnabled}
-    />
-  );
 }
 
 export function shouldShowOpenInPicker(input: {
@@ -147,7 +128,6 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
-        <HostMetricsIndicator environmentId={activeThreadEnvironmentId} />
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

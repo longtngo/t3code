@@ -1,5 +1,5 @@
 import { assert, describe, it } from "vite-plus/test";
-import { formatBytes, metricLevel } from "./hostMetrics";
+import { formatBytes } from "./hostMetrics";
 
 describe("formatBytes", () => {
   it("formats base-1000 units", () => {
@@ -18,14 +18,5 @@ describe("formatBytes", () => {
   it("guards against non-finite and negative input", () => {
     assert.equal(formatBytes(-1), "0 B");
     assert.equal(formatBytes(Number.NaN), "0 B");
-  });
-});
-
-describe("metricLevel", () => {
-  it("maps utilization to severity thresholds", () => {
-    assert.equal(metricLevel(10), "green");
-    assert.equal(metricLevel(55), "yellow");
-    assert.equal(metricLevel(75), "orange");
-    assert.equal(metricLevel(95), "red");
   });
 });
