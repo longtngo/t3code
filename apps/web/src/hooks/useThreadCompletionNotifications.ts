@@ -50,6 +50,23 @@ export function useThreadCompletionNotifications(): void {
     });
   }, [navigate]);
 
+  // Desktop: native notifications are presented by the Electron main process,
+  // which pushes the clicked thread ref back over this bridge listener. Route
+  // to that thread (web notifications route in-process via dispatchNotification).
+  useEffect(() => {
+    const onNotificationActivated =
+      typeof window === "undefined" ? undefined : window.desktopBridge?.onNotificationActivated;
+    if (typeof onNotificationActivated !== "function") {
+      return;
+    }
+    return onNotificationActivated((threadRef) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(threadRef),
+      });
+    });
+  }, [navigate]);
+
   const enabled = useClientSettings((settings) => settings.notifyOnThreadCompletion);
   const enabledBox = useRef(enabled);
   enabledBox.current = enabled;

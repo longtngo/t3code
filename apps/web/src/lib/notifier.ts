@@ -13,6 +13,8 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 
+import { isElectron } from "../env";
+
 export type TerminalTurnOutcome = "completed" | "error" | "interrupted";
 
 export interface ThreadCompletion {
@@ -117,6 +119,22 @@ function dispatchNotification(ref: ScopedThreadRef, completion: ThreadCompletion
   const title = completion.title || "Task finished";
   const body = outcomeBody(completion.outcome);
 
+  if (isElectron) {
+    // Feature-detect so a new web bundle served to an older desktop shell that
+    // predates showNotification degrades to a no-op instead of throwing. The
+    // main process owns presentation + reveal-on-click and pushes the thread
+    // ref back over onNotificationActivated (wired in the React host).
+    const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+    if (bridge && typeof bridge.showNotification === "function") {
+      void bridge.showNotification({
+        title,
+        body,
+        threadRef: { environmentId: ref.environmentId, threadId: ref.threadId },
+      });
+    }
+    return;
+  }
+
   if (typeof Notification === "undefined" || Notification.permission !== "granted") {
     return;
   }
@@ -172,6 +190,11 @@ export function notifyThreadCompletions(input: {
 export async function ensureWebNotificationPermission(): Promise<
   "granted" | "denied" | "unsupported"
 > {
+  // Desktop presents native notifications via the Electron main process, which
+  // needs no web Notification permission — treat as granted so the toggle works.
+  if (isElectron) {
+    return "granted";
+  }
   if (typeof Notification === "undefined") {
     return "unsupported";
   }

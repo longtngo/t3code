@@ -75,3 +75,8 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+
+// Native OS notifications (thread completion). show = renderer -> main request;
+// activated = main -> renderer, fired when the user clicks a notification.
+export const SHOW_NOTIFICATION_CHANNEL = "desktop:show-notification";
+export const NOTIFICATION_ACTIVATED_CHANNEL = "desktop:notification-activated";

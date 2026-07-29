@@ -1037,6 +1037,12 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  // Optional so a new web bundle served to an older desktop shell (or a test
+  // mock) that predates these degrades to a no-op via feature detection.
+  showNotification?: (input: DesktopNotificationInput) => Promise<void>;
+  onNotificationActivated?: (
+    listener: (threadRef: DesktopNotificationThreadRef) => void,
+  ) => () => void;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
