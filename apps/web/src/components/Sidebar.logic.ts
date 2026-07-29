@@ -120,6 +120,7 @@ type ThreadStatusInput = Pick<
   SidebarThreadSummary,
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
+  | "hasPendingBackgroundTask"
   | "hasPendingUserInput"
   | "interactionMode"
   | "latestTurn"
@@ -405,7 +406,7 @@ export type SidebarV2Status = "approval" | "input" | "working" | "failed" | "rea
 
 type SidebarV2StatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session"
+  "hasPendingApprovals" | "hasPendingBackgroundTask" | "hasPendingUserInput" | "session"
 >;
 
 export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2Status {
@@ -420,6 +421,12 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
   }
   if (thread.session?.status === "error") {
     return "failed";
+  }
+  // The top-level turn can settle while a background worker is still running;
+  // keep the row in the working state during that gap (a real error still wins,
+  // checked above).
+  if (thread.hasPendingBackgroundTask) {
+    return "working";
   }
   return "ready";
 }
@@ -573,6 +580,17 @@ export function resolveThreadStatusPill(input: {
   if (thread.session?.status === "starting") {
     return {
       label: "Connecting",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+
+  // A background worker still running after the top-level turn settled keeps the
+  // row "Working" (outranks Plan Ready / Completed — work is ongoing).
+  if (thread.hasPendingBackgroundTask) {
+    return {
+      label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,

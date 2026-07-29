@@ -652,6 +652,29 @@ describe("resolveSidebarV2Status", () => {
   it("defaults to ready with no session", () => {
     expect(resolveSidebarV2Status({ ...idle, session: null })).toBe("ready");
   });
+
+  it("reports working when a background worker runs after the turn settled", () => {
+    expect(
+      resolveSidebarV2Status({ ...idle, session: null, hasPendingBackgroundTask: true }),
+    ).toBe("working");
+    expect(
+      resolveSidebarV2Status({
+        ...idle,
+        session: { ...session, status: "ready" as const, activeTurnId: null },
+        hasPendingBackgroundTask: true,
+      }),
+    ).toBe("working");
+  });
+
+  it("keeps failed ahead of a lingering background task", () => {
+    expect(
+      resolveSidebarV2Status({
+        ...idle,
+        session: { ...session, status: "error" as const, lastError: "boom" },
+        hasPendingBackgroundTask: true,
+      }),
+    ).toBe("failed");
+  });
 });
 
 describe("sortThreadsForSidebarV2", () => {
@@ -862,6 +885,18 @@ describe("resolveThreadStatusPill", () => {
     expect(
       resolveThreadStatusPill({
         thread: baseThread,
+      }),
+    ).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("shows working while a background worker runs after the turn settled", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: { ...baseThread.session, status: "ready", activeTurnId: null },
+          hasPendingBackgroundTask: true,
+        },
       }),
     ).toMatchObject({ label: "Working", pulse: true });
   });
