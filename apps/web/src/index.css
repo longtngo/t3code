@@ -1379,14 +1379,15 @@ label:has(> select#reasoning-effort) select {
   background: transparent !important;
 }
 
-/* Diagnostics-style tables: row separators only, uppercase headers, and a
-   scroll-fade container for horizontal overflow. The root chat-markdown
-   wrapping rules (overflow-wrap: anywhere) would let columns shrink to single
-   characters and defeat the overflow — restore word-boundary wrapping so the
-   min column width is the longest word. */
+/* Tables wrap their cell text to fit the chat column by default, so wide tables
+   stay readable without truncation. word-break: normal keeps the longest word
+   intact, so genuinely unbreakable content (long URLs/IDs) overflows and the
+   container scrolls horizontally rather than breaking mid-word. Row separators
+   only, uppercase-weight headers, scroll-fade container for the overflow case.
+   The footer button opens a full-width Dialog for tables too wide to read
+   inline. */
 .chat-markdown table {
   width: 100%;
-  min-width: max-content;
   border-collapse: collapse;
   overflow-wrap: normal;
   word-break: normal;
@@ -1410,19 +1411,13 @@ label:has(> select#reasoning-effort) select {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-/* Collapsed (default): single-line cells truncate so arbitrary chat content
-   cannot blow the column out; the footer toggle expands cells to wrap. */
-.chat-markdown .chat-markdown-table-container[data-expanded="false"] th,
-.chat-markdown .chat-markdown-table-container[data-expanded="false"] td {
-  overflow: hidden;
-  max-width: 24rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-markdown .chat-markdown-table-container[data-expanded="true"] td {
-  max-width: 24rem;
-  overflow-wrap: anywhere;
+/* Narrow viewports: don't let auto table-layout crush columns into
+   one-word-per-line towers — keep a usable minimum table width and let the
+   container scroll horizontally instead. */
+@media (max-width: 640px) {
+  .chat-markdown table {
+    min-width: 32rem;
+  }
 }
 
 .chat-markdown .chat-markdown-table-footer {

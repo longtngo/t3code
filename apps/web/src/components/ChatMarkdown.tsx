@@ -6,7 +6,6 @@ import {
   CopyIcon,
   GlobeIcon,
   Maximize2Icon,
-  Minimize2Icon,
   WrapTextIcon,
 } from "lucide-react";
 import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
@@ -50,6 +49,7 @@ import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
+import { Dialog, DialogPanel, DialogPopup, DialogTitle } from "./ui/dialog";
 import { ScrollArea } from "./ui/scroll-area";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -323,36 +323,11 @@ function readInitialWordWrapSetting(): boolean {
 
 function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const tableRef = useRef<HTMLTableElement | null>(null);
-  const [expanded, setExpanded] = useState(readInitialWordWrapSetting);
+  const [expandedOpen, setExpandedOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const expandLabel = expanded ? "Collapse table cells" : "Expand table cells";
+  const expandLabel = "Expand table";
   const copyLabel = copied ? "Copied" : "Copy table";
-
-  function toggleExpanded() {
-    const table = tableRef.current;
-    if (!table) return;
-
-    if (!expanded) {
-      const rows = [...table.rows];
-      const columnWidths = rows.reduce<number[]>((widths, row) => {
-        [...row.cells].forEach((cell, columnIndex) => {
-          widths[columnIndex] = Math.max(
-            widths[columnIndex] ?? 0,
-            cell.getBoundingClientRect().width,
-          );
-        });
-        return widths;
-      }, []);
-
-      [...(table.tHead?.rows[0]?.cells ?? [])].forEach((cell, columnIndex) => {
-        cell.style.minWidth = `${columnWidths[columnIndex] ?? cell.getBoundingClientRect().width}px`;
-      });
-    }
-
-    setExpanded((value) => !value);
-  }
 
   const handleCopy = useCallback((format: "markdown" | "csv") => {
     const table = containerRef.current?.querySelector("table");
@@ -391,20 +366,9 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   );
 
   return (
-    <div
-      ref={containerRef}
-      className="chat-markdown-table-container"
-      data-expanded={expanded ? "true" : "false"}
-    >
-      <ScrollArea
-        chainVerticalScroll
-        scrollFade
-        hideScrollbars
-        className="w-full max-w-full rounded-none"
-      >
-        <table ref={tableRef} {...props}>
-          {children}
-        </table>
+    <div ref={containerRef} className="chat-markdown-table-container">
+      <ScrollArea chainVerticalScroll scrollFade className="w-full max-w-full rounded-none">
+        <table {...props}>{children}</table>
       </ScrollArea>
       <div className="chat-markdown-table-footer select-none">
         <Tooltip>
@@ -415,13 +379,12 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
                 variant="ghost"
                 size="icon-xs"
                 className="chat-markdown-chrome-action"
-                aria-pressed={expanded}
-                onClick={toggleExpanded}
+                onClick={() => setExpandedOpen(true)}
                 aria-label={expandLabel}
               />
             }
           >
-            {expanded ? <Minimize2Icon className="size-3" /> : <Maximize2Icon className="size-3" />}
+            <Maximize2Icon className="size-3" />
           </TooltipTrigger>
           <TooltipPopup side="top">{expandLabel}</TooltipPopup>
         </Tooltip>
@@ -452,6 +415,16 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
           </MenuPopup>
         </Menu>
       </div>
+      <Dialog open={expandedOpen} onOpenChange={setExpandedOpen}>
+        <DialogPopup className="max-h-[88vh] max-w-[min(96vw,72rem)]">
+          <DialogTitle className="sr-only">Expanded table</DialogTitle>
+          <DialogPanel>
+            <div className="chat-markdown">
+              <table {...props}>{children}</table>
+            </div>
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
     </div>
   );
 }
