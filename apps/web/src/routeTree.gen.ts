@@ -14,6 +14,7 @@ import { Route as PairRouteImport } from './routes/pair'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as ViewerSplatRouteImport } from './routes/viewer.$'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsLocalModelsRouteImport } from './routes/settings.local-models'
@@ -50,6 +51,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => ChatRoute,
+} as any)
+const ViewerSplatRoute = ViewerSplatRouteImport.update({
+  id: '/viewer/$',
+  path: '/viewer/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
   id: '/source-control',
@@ -128,6 +134,7 @@ export interface FileRoutesByFullPath {
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/viewer/$': typeof ViewerSplatRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
@@ -145,6 +152,7 @@ export interface FileRoutesByTo {
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/viewer/$': typeof ViewerSplatRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -165,6 +173,7 @@ export interface FileRoutesById {
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/viewer/$': typeof ViewerSplatRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -186,6 +195,7 @@ export interface FileRouteTypes {
     | '/settings/local-models'
     | '/settings/providers'
     | '/settings/source-control'
+    | '/viewer/$'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
@@ -203,6 +213,7 @@ export interface FileRouteTypes {
     | '/settings/local-models'
     | '/settings/providers'
     | '/settings/source-control'
+    | '/viewer/$'
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -222,6 +233,7 @@ export interface FileRouteTypes {
     | '/settings/local-models'
     | '/settings/providers'
     | '/settings/source-control'
+    | '/viewer/$'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
@@ -233,6 +245,7 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   ConnectCallbackRoute: typeof ConnectCallbackRoute
+  ViewerSplatRoute: typeof ViewerSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -271,6 +284,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/viewer/$': {
+      id: '/viewer/$'
+      path: '/viewer/$'
+      fullPath: '/viewer/$'
+      preLoaderRoute: typeof ViewerSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/settings/source-control': {
       id: '/settings/source-control'
@@ -407,6 +427,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   ConnectCallbackRoute: ConnectCallbackRoute,
+  ViewerSplatRoute: ViewerSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

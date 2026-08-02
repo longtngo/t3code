@@ -191,6 +191,72 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
     );
   });
 
+  describe("readTrustedFile", () => {
+    it.effect("reads a UTF-8 file by absolute path inside the temp sandbox", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        // makeTempDir lives under the OS temp dir, which is an allowed read root.
+        const dir = yield* makeTempDir;
+        yield* writeTextFile(dir, "reports/summary.md", "# Report\n\nDone.\n");
+
+        const result = yield* workspaceFileSystem.readTrustedFile({
+          path: path.join(dir, "reports/summary.md"),
+        });
+
+        expect(result.contents).toBe("# Report\n\nDone.\n");
+        expect(result.truncated).toBe(false);
+      }),
+    );
+
+    it.effect("rejects a path outside the home / temp / trusted sandbox", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        // The lexical gate rejects before any filesystem access, so the path
+        // need not exist — /etc is never within home or the OS temp dir.
+        const error = yield* workspaceFileSystem
+          .readTrustedFile({ path: "/etc/definitely-not-allowed-xyz" })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+      }),
+    );
+
+    it.effect("rejects `..` traversal that escapes the sandbox", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const dir = yield* makeTempDir;
+
+        const error = yield* workspaceFileSystem
+          .readTrustedFile({ path: `${dir}/../../../../etc/passwd` })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+      }),
+    );
+
+    it.effect("rejects a symlink inside the sandbox that resolves outside it", () =>
+      Effect.gen(function* () {
+        // The lexical gate passes (the link itself lives under the temp root),
+        // so this exercises the realpath re-check — the branch that defeats a
+        // symlink escape, distinct from the `..` and lexical cases above.
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* makeTempDir;
+        const escapeLink = path.join(dir, "escape-link");
+        // /etc/hosts exists on darwin/linux and lies outside home + OS-temp.
+        yield* fileSystem.symlink("/etc/hosts", escapeLink);
+
+        const error = yield* workspaceFileSystem
+          .readTrustedFile({ path: escapeLink })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+      }),
+    );
+  });
+
   describe("writeFile", () => {
     it.effect("writes files relative to the workspace root", () =>
       Effect.gen(function* () {

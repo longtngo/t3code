@@ -122,6 +122,17 @@ export const ProjectReadFileInput = Schema.Struct({
 });
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
 
+/**
+ * Read a file by ABSOLUTE path, sandboxed server-side to home / OS-temp / trusted
+ * project roots (see readAccess.ts) — the viewer path for files outside any open
+ * workspace (e.g. `~/reports/...`). Distinct from ProjectReadFileInput so the
+ * cwd-relative read keeps its exact semantics.
+ */
+export const ProjectReadTrustedFileInput = Schema.Struct({
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectReadTrustedFileInput = typeof ProjectReadTrustedFileInput.Type;
+
 export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   contents: Schema.String,
@@ -133,6 +144,7 @@ export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 export const ProjectFileFailure = Schema.Literals([
   "workspace_path_outside_root",
   "resolved_path_outside_root",
+  "outside_sandbox",
   "path_not_file",
   "binary_file",
   "operation_failed",

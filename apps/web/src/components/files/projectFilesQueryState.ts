@@ -43,6 +43,10 @@ export function getProjectFileQueryAtom(
   });
 }
 
+export function getTrustedFileQueryAtom(environmentId: EnvironmentId, path: string) {
+  return projectEnvironment.readTrustedFile({ environmentId, input: { path } });
+}
+
 export function setProjectFileQueryData(
   environmentId: EnvironmentId,
   cwd: string,
@@ -156,6 +160,31 @@ export function useProjectFileQuery(
 
   return {
     data: optimisticFile?.data ?? data,
+    error: errorMessage(result),
+    isPending: result.waiting,
+    refresh,
+  };
+}
+
+/**
+ * Read a file by ABSOLUTE path via the server-sandboxed trusted-read RPC
+ * (home / OS-temp / trusted project roots — see readAccess.ts). Powers the
+ * standalone `/viewer/$` route for files that live outside any open workspace
+ * (e.g. `~/reports/...`). Disabled — resolving to a stable empty atom — when
+ * there is no primary environment yet or no path to read.
+ */
+export function useTrustedFileQuery(
+  environmentId: EnvironmentId | null,
+  path: string | null,
+): ProjectQueryState<ProjectReadFileResult> {
+  const enabled = environmentId !== null && path !== null;
+  const atom =
+    enabled ? getTrustedFileQueryAtom(environmentId, path) : EMPTY_PROJECT_FILE_QUERY_ATOM;
+  const result = useAtomValue(atom);
+  const refreshAtom = useAtomRefresh(atom);
+  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
+  return {
+    data: Option.getOrNull(AsyncResult.value(result)),
     error: errorMessage(result),
     isPending: result.waiting,
     refresh,

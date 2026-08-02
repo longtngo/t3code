@@ -72,6 +72,12 @@ export function createProjectEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       idleTtlMs: 5 * 60_000,
     }),
+    readTrustedFile: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:read-trusted-file",
+      tag: WS_METHODS.projectsReadTrustedFile,
+      staleTimeMs: 30_000,
+      idleTtlMs: 5 * 60_000,
+    }),
     optimisticFile: (target: OptimisticProjectFileTarget) =>
       optimisticFileFamily(optimisticProjectFileKey(target)),
     create: createEnvironmentCommand(runtime, {

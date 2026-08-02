@@ -12,6 +12,7 @@ import * as NodeFSP from "node:fs/promises";
 import type {
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectReadTrustedFileInput,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "@t3tools/contracts";
@@ -22,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { allowedReadRoots, isWithinAllowedRoots } from "./readAccess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 
@@ -92,11 +94,24 @@ export class WorkspaceBinaryFileError extends Schema.TaggedErrorClass<WorkspaceB
   }
 }
 
+export class WorkspaceReadOutsideSandboxError extends Schema.TaggedErrorClass<WorkspaceReadOutsideSandboxError>()(
+  "WorkspaceReadOutsideSandboxError",
+  {
+    requestedPath: Schema.String,
+    resolvedPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Path '${this.requestedPath}' resolves outside the allowed read sandbox (home / temp / trusted roots): ${this.resolvedPath}`;
+  }
+}
+
 export const WorkspaceFileSystemError = Schema.Union([
   WorkspaceFileSystemOperationError,
   WorkspaceFilePathEscapeError,
   WorkspacePathNotFileError,
   WorkspaceBinaryFileError,
+  WorkspaceReadOutsideSandboxError,
 ]);
 export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
 
@@ -107,6 +122,17 @@ export class WorkspaceFileSystem extends Context.Service<
     /** Read a UTF-8 text file relative to the workspace root. */
     readonly readFile: (
       input: ProjectReadFileInput,
+    ) => Effect.Effect<
+      ProjectReadFileResult,
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >;
+    /**
+     * Read a UTF-8 text file by ABSOLUTE path, sandboxed to home / OS-temp /
+     * trusted roots (readAccess). The viewer path for files outside any open
+     * workspace (e.g. `~/reports/...`). Rejects anything outside the sandbox.
+     */
+    readonly readTrustedFile: (
+      input: ProjectReadTrustedFileInput,
     ) => Effect.Effect<
       ProjectReadFileResult,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
@@ -259,6 +285,58 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // allowedReadRoots() takes no client-supplied roots — only home + OS-temp are
+  // trusted here. Resolve their realpaths too so the macOS /var/folders →
+  // /private/var/folders (and /tmp → /private/tmp) aliases match either form.
+  const realPathOrSelf = (p: string) =>
+    Effect.tryPromise(() => NodeFSP.realpath(p)).pipe(Effect.orElseSucceed(() => p));
+
+  const readTrustedFile: WorkspaceFileSystem["Service"]["readTrustedFile"] = Effect.fn(
+    "WorkspaceFileSystem.readTrustedFile",
+  )(function* (input) {
+    const baseRoots = allowedReadRoots();
+    const baseRealRoots = yield* Effect.forEach(baseRoots, realPathOrSelf);
+    const roots = [...baseRoots, ...baseRealRoots];
+
+    // Lexical gate FIRST, before any filesystem access, so a path outside the
+    // sandbox is rejected without leaking whether it exists.
+    if (!isWithinAllowedRoots(input.path, roots)) {
+      return yield* new WorkspaceReadOutsideSandboxError({
+        requestedPath: input.path,
+        resolvedPath: input.path,
+      });
+    }
+
+    // Symlink-escape gate: a link inside an allowed root can still point outside
+    // it, so re-check the realpath'd target against the realpath'd roots.
+    const realTargetPath = yield* Effect.tryPromise({
+      try: () => NodeFSP.realpath(input.path),
+      catch: (cause) =>
+        new WorkspaceFileSystemOperationError({
+          workspaceRoot: path.dirname(input.path),
+          relativePath: input.path,
+          resolvedPath: input.path,
+          operationPath: input.path,
+          operation: "realpath-target",
+          cause,
+        }),
+    });
+    if (!isWithinAllowedRoots(realTargetPath, roots)) {
+      return yield* new WorkspaceReadOutsideSandboxError({
+        requestedPath: input.path,
+        resolvedPath: realTargetPath,
+      });
+    }
+
+    // Delegate to the proven cwd-relative reader (open/stat/binary-guard/decode)
+    // against the realpath's own directory, so its escape check is trivially
+    // satisfied and the sandbox gates above are the sole authorization.
+    return yield* readFile({
+      cwd: path.dirname(realTargetPath),
+      relativePath: path.basename(realTargetPath),
+    });
+  });
+
   const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
   )(function* (input) {
@@ -297,7 +375,7 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ readFile, writeFile });
+  return WorkspaceFileSystem.of({ readFile, readTrustedFile, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

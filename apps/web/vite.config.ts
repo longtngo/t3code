@@ -130,11 +130,10 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           navigateFallback: "index.html",
           // Deny server-owned top-level routes so the SPA shell never replaces a
-          // server-rendered response. `/viewer` is opened as a real navigation
-          // (window.open) and must reach the server. `/pair` is a CLIENT route, so it
-          // is intentionally absent (it needs the shell). `/ws` is a WebSocket upgrade
-          // the service worker never sees.
-          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/, /^\/viewer/],
+          // server-rendered response. `/pair` and `/viewer` are CLIENT routes, so
+          // they are intentionally absent (they need the shell). `/ws` is a
+          // WebSocket upgrade the service worker never sees.
+          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/],
           runtimeCaching: [
             {
               // Content-hashed build assets (JS/CSS) — deliberately NOT precached (the

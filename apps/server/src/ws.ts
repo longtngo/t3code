@@ -249,6 +249,8 @@ function projectFileFailureContext(
       return { failure: "path_not_file", resolvedPath: error.resolvedPath };
     case "WorkspaceBinaryFileError":
       return { failure: "binary_file", resolvedPath: error.resolvedPath };
+    case "WorkspaceReadOutsideSandboxError":
+      return { failure: "outside_sandbox", resolvedPath: error.resolvedPath };
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -358,6 +360,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.projectsListEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
+  [WS_METHODS.projectsReadTrustedFile, AuthOrchestrationReadScope],
   [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
@@ -1797,6 +1800,24 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new ProjectReadFileError({
                     ...input,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsReadTrustedFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsReadTrustedFile,
+            workspaceFileSystem.readTrustedFile(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectReadFileError({
+                    // No cwd/relativePath split for an absolute trusted read; the
+                    // requested path fills both so the error message stays useful.
+                    cwd: input.path,
+                    relativePath: input.path,
                     ...projectFileFailureContext(cause),
                     cause,
                   }),
