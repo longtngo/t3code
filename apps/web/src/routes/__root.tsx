@@ -19,6 +19,7 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
+import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { Button } from "../components/ui/button";
 import {
   AnchoredToastProvider,
@@ -136,6 +137,9 @@ function RootRouteView() {
         <SshPasswordPromptDialog />
         <SlowRpcRequestToastCoordinator />
         <WsReconnectTimelineLog />
+        {/* Drives a cross-environment queue, so it is not gated on the primary
+            environment's auth: another environment may be connected. */}
+        <OutboxFlushCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}

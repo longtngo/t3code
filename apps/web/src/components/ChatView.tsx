@@ -158,7 +158,8 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
+import { enqueueTurn, hasQueuedTurnForThread, useCommandOutbox } from "~/rpc/commandOutbox";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
@@ -246,6 +247,8 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildThreadTurnInterruptInput,
+  canQueueOfflineTurn,
+  offlineQueueRefusalReason,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -1424,6 +1427,13 @@ function ChatViewContent(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
+  // Turns queued while this thread's environment was unreachable, awaiting the
+  // reconnect flush (see OutboxFlushCoordinator).
+  const outboxQueue = useCommandOutbox((state) => state.queue);
+  const queuedOutboxTurns = useMemo(
+    () => outboxQueue.filter((queued) => queued.threadId === activeThreadId),
+    [outboxQueue, activeThreadId],
+  );
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -2247,16 +2257,35 @@ function ChatViewContent(props: ChatViewProps) {
             return changed ? { ...message, attachments } : message;
           });
 
-    if (optimisticUserMessages.length === 0) {
+    // Turns queued while offline show as pending bubbles keyed by their message
+    // id, so the shared server-id filter below retires them once the replayed
+    // turn comes back from the server.
+    const queuedMessages: ChatMessage[] = queuedOutboxTurns.map((queued) => ({
+      id: queued.messageId,
+      role: "user",
+      text: String((queued.input.message as { text?: unknown } | undefined)?.text ?? ""),
+      turnId: null,
+      createdAt: queued.enqueuedAt,
+      updatedAt: queued.enqueuedAt,
+      streaming: false,
+    }));
+    if (optimisticUserMessages.length === 0 && queuedMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    const pendingMessages = [...optimisticUserMessages, ...queuedMessages].filter(
+      (message) => !serverIds.has(message.id),
+    );
     if (pendingMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    displayServerMessages,
+    optimisticUserMessages,
+    queuedOutboxTurns,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
@@ -4436,15 +4465,11 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    if (
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
     if (activePendingProgress) {
+      // Advancing a pending prompt is a live round-trip; it was never attempted
+      // while disconnected and still must not be.
+      if (activeEnvironmentUnavailable) return;
       onAdvanceActivePendingUserInput();
       return;
     }
@@ -4477,6 +4502,90 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    // Environment is down. Queue an offline-safe send for replay on reconnect
+    // rather than silently discarding it. Everything else — plan follow-ups,
+    // slash commands, uploads, worktree prep, first-message titling — cannot be
+    // faithfully replayed, so it keeps the previous no-op behaviour and relies
+    // on the reconnect banner as the signal. This must stay AHEAD of the
+    // branches below, which mutate the draft before doing network work.
+    if (activeEnvironmentUnavailable) {
+      const offlineQueueInput = {
+        hasText: trimmed.length > 0,
+        isServerThread,
+        isFirstMessage: !isServerThread || activeThread.messages.length === 0,
+        attachmentCount: composerImages.length,
+        contextCount:
+          sendableComposerTerminalContexts.length +
+          composerElementContexts.length +
+          composerPreviewAnnotations.length +
+          composerReviewComments.length,
+        needsWorktree: sendEnvMode === "worktree" && !activeThread.worktreePath,
+        hasPendingProgress: showPlanFollowUpPrompt && activeProposedPlan !== null,
+        modesMatchThread:
+          runtimeMode === activeThread.runtimeMode &&
+          interactionMode === activeThread.interactionMode,
+        alreadyQueuedForThread: hasQueuedTurnForThread(activeThread.id),
+      };
+      // A bare "/mode" switch is a client-side command, not message text — never
+      // queue it as one.
+      if (parseStandaloneComposerSlashCommand(trimmed)) return;
+      // The send affordance stays enabled while disconnected so a message is
+      // never lost to a dead button; when it cannot be queued, say why instead
+      // of failing silently.
+      if (!canQueueOfflineTurn(offlineQueueInput)) {
+        // An empty composer was always a silent no-op; do not start scolding.
+        if (offlineQueueInput.hasText) {
+          setThreadError(activeThread.id, offlineQueueRefusalReason(offlineQueueInput));
+        }
+        return;
+      }
+      const queuedMessageId = newMessageId();
+      const queuedCreatedAt = new Date().toISOString();
+      const queuedCommandId = randomUUID();
+      const queued = enqueueTurn({
+        environmentId,
+        threadId: activeThread.id,
+        messageId: queuedMessageId,
+        commandId: queuedCommandId,
+        enqueuedAt: queuedCreatedAt,
+        input: {
+          threadId: activeThread.id,
+          commandId: queuedCommandId,
+          message: {
+            messageId: queuedMessageId,
+            role: "user",
+            text: formatOutgoingPrompt({
+              provider: ctxSelectedProvider,
+              model: ctxSelectedModel,
+              models: ctxSelectedProviderModels,
+              effort: ctxSelectedPromptEffort,
+              text: trimmed,
+            }),
+            attachments: [],
+          },
+          modelSelection: ctxSelectedModelSelection,
+          titleSeed: truncate(trimmed),
+          // The server takes a turn's modes from the thread, not from this
+          // command; `modesMatchThread` above guarantees they already agree.
+          runtimeMode,
+          interactionMode,
+        },
+      });
+      // Queue full — leave the text in the composer rather than dropping it.
+      if (!queued) {
+        setThreadError(
+          activeThread.id,
+          "Too many messages are already waiting to send. Reconnect to send them first.",
+        );
+        return;
+      }
+      // Retire any earlier refusal banner — it now contradicts the pending bubble.
+      setThreadError(activeThread.id, null);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,

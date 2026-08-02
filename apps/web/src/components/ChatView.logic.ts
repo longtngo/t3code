@@ -542,3 +542,81 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );
 }
+
+/**
+ * Whether a send attempted while the environment is disconnected can be safely
+ * queued for replay on reconnect.
+ *
+ * The full send pipeline does network work a queued turn cannot reproduce
+ * offline (attachment upload, worktree preparation) and derives state a replay
+ * would skip (auto-title on the first message). So v1 queues only the case that
+ * actually matters day-to-day and is self-describing in a single command: a
+ * plain-text follow-up on a thread the server already knows about.
+ */
+export function canQueueOfflineTurn(input: {
+  readonly hasText: boolean;
+  readonly isServerThread: boolean;
+  readonly isFirstMessage: boolean;
+  readonly attachmentCount: number;
+  readonly contextCount: number;
+  readonly needsWorktree: boolean;
+  readonly hasPendingProgress: boolean;
+  /**
+   * Whether the composer's runtime/interaction modes already match the thread's
+   * persisted ones. The server derives a turn's modes from the THREAD, not from
+   * the turn-start command, and the online path keeps them in step by persisting
+   * the composer's modes just before sending. A queued replay skips that step, so
+   * a pending mode change would silently run the turn in the old mode — refuse to
+   * queue instead, leaving the text in the composer.
+   */
+  readonly modesMatchThread: boolean;
+  /**
+   * Whether a turn is already queued for this thread. Only one is allowed:
+   * replayed turn-starts are dispatched back to back on reconnect, and the
+   * Cursor and Grok adapters fold a second turn-start into the turn already
+   * running — so N queued messages would come back as one merged answer.
+   */
+  readonly alreadyQueuedForThread: boolean;
+}): boolean {
+  return (
+    input.hasText &&
+    input.isServerThread &&
+    !input.isFirstMessage &&
+    input.attachmentCount === 0 &&
+    input.contextCount === 0 &&
+    !input.needsWorktree &&
+    !input.hasPendingProgress &&
+    input.modesMatchThread &&
+    !input.alreadyQueuedForThread
+  );
+}
+
+export type OfflineQueueInput = Parameters<typeof canQueueOfflineTurn>[0];
+
+/**
+ * Why a disconnected send could not be queued, in the user's terms. The send
+ * control stays enabled while offline so a message is never swallowed by a dead
+ * button, which means every refusal has to explain itself.
+ */
+export function offlineQueueRefusalReason(input: OfflineQueueInput): string {
+  const reconnectFirst = "Reconnect to send it.";
+  if (input.alreadyQueuedForThread) {
+    return `A message is already waiting to send on this thread. ${reconnectFirst}`;
+  }
+  if (input.attachmentCount > 0 || input.contextCount > 0) {
+    return `Attachments and context can't be queued while disconnected. ${reconnectFirst}`;
+  }
+  if (!input.isServerThread || input.isFirstMessage) {
+    return `The first message in a thread can't be queued while disconnected. ${reconnectFirst}`;
+  }
+  if (input.needsWorktree) {
+    return `A new worktree can't be prepared while disconnected. ${reconnectFirst}`;
+  }
+  if (input.hasPendingProgress) {
+    return `A plan follow-up can't be queued while disconnected. ${reconnectFirst}`;
+  }
+  if (!input.modesMatchThread) {
+    return `A pending mode change can't be applied while disconnected. ${reconnectFirst}`;
+  }
+  return `This message can't be queued while disconnected. ${reconnectFirst}`;
+}

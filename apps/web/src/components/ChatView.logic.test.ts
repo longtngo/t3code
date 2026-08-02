@@ -15,6 +15,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildThreadTurnInterruptInput,
+  canQueueOfflineTurn,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -597,5 +598,60 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("canQueueOfflineTurn", () => {
+  const queueable = {
+    hasText: true,
+    isServerThread: true,
+    isFirstMessage: false,
+    attachmentCount: 0,
+    contextCount: 0,
+    needsWorktree: false,
+    hasPendingProgress: false,
+    modesMatchThread: true,
+    alreadyQueuedForThread: false,
+  };
+
+  it("queues a plain-text follow-up on an existing server thread", () => {
+    expect(canQueueOfflineTurn(queueable)).toBe(true);
+  });
+
+  it("refuses an empty message", () => {
+    expect(canQueueOfflineTurn({ ...queueable, hasText: false })).toBe(false);
+  });
+
+  it("refuses a local draft thread the server has never seen", () => {
+    expect(canQueueOfflineTurn({ ...queueable, isServerThread: false })).toBe(false);
+  });
+
+  it("refuses the first message, which also derives the thread title", () => {
+    expect(canQueueOfflineTurn({ ...queueable, isFirstMessage: true })).toBe(false);
+  });
+
+  it("refuses attachments and contexts, which need an upload round-trip", () => {
+    expect(canQueueOfflineTurn({ ...queueable, attachmentCount: 1 })).toBe(false);
+    expect(canQueueOfflineTurn({ ...queueable, contextCount: 1 })).toBe(false);
+  });
+
+  it("refuses a send that must first prepare a worktree", () => {
+    expect(canQueueOfflineTurn({ ...queueable, needsWorktree: true })).toBe(false);
+  });
+
+  it("refuses while an approval or user-input prompt is pending", () => {
+    expect(canQueueOfflineTurn({ ...queueable, hasPendingProgress: true })).toBe(false);
+  });
+
+  it("refuses a second message while one is already queued for the thread", () => {
+    // Replayed turn-starts land back to back and some adapters fold the second
+    // into the running turn as steering, merging N messages into one answer.
+    expect(canQueueOfflineTurn({ ...queueable, alreadyQueuedForThread: true })).toBe(false);
+  });
+
+  it("refuses when the composer has a mode change the replay would not apply", () => {
+    // The server reads a turn's runtime/interaction mode from the THREAD; a
+    // queued replay skips the settings sync, so it would run in the old mode.
+    expect(canQueueOfflineTurn({ ...queueable, modesMatchThread: false })).toBe(false);
   });
 });
