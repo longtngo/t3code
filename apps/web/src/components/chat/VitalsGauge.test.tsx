@@ -69,6 +69,7 @@ describe("VitalsGauge detail", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
+      extraWindows: [],
     };
     const markup = renderToStaticMarkup(
       <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} />,
@@ -92,13 +93,39 @@ describe("VitalsGauge detail", () => {
     const markup = renderToStaticMarkup(
       <VitalsDetail
         context={emptyContext}
-        accountUsage={{ fiveHour: null, sevenDay: null }}
+        accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [] }}
         host={host}
         now={0}
       />,
     );
     expect(markup).not.toContain("Usage limits");
     expect(markup).toContain("Machine");
+  });
+
+  it("renders Codex and Cursor provider windows as extra limit rows", () => {
+    const accountUsage: AccountUsageView = {
+      fiveHour: null,
+      sevenDay: null,
+      extraWindows: [
+        {
+          label: "Codex 5h",
+          utilization: 60,
+          resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString(),
+          windowMs: FIVE_HOUR_MS,
+        },
+        { label: "Cursor auto", utilization: 25, resetsAt: null, windowMs: null },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} />,
+    );
+    expect(markup).toContain("Usage limits");
+    expect(markup).toContain("Codex 5h");
+    // Codex window has a duration + resetsAt → pace projection (60 vs 50%).
+    expect(markup).toContain("+10% over pace");
+    expect(markup).toContain("Cursor auto");
+    // Cursor has no fixed window → utilization only, no pace label.
+    expect(markup).toContain("25% used");
   });
 
   it("shows a connecting state when host metrics are enabled but absent", () => {
@@ -134,6 +161,7 @@ describe("VitalsGauge trigger", () => {
         accountUsage={{
           fiveHour: { utilization: 88, resetsAt: null },
           sevenDay: { utilization: 41, resetsAt: null },
+          extraWindows: [],
         }}
         host={{ sample, streaming: true, enabled: true, onToggle: () => {} }}
       />,

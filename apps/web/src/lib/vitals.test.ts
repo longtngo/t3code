@@ -89,6 +89,7 @@ describe("deriveLatestAccountUsage", () => {
     expect(view).toEqual({
       fiveHour: { utilization: 88, resetsAt: "2026-07-27T02:00:00.000Z" },
       sevenDay: { utilization: 41, resetsAt: "2026-08-01T00:00:00.000Z" },
+      extraWindows: [],
     });
   });
 
@@ -99,7 +100,7 @@ describe("deriveLatestAccountUsage", () => {
         sevenDay: "nonsense",
       }),
     ]);
-    expect(view).toEqual({ fiveHour: null, sevenDay: null });
+    expect(view).toEqual({ fiveHour: null, sevenDay: null, extraWindows: [] });
   });
 
   it("coerces a non-string resetsAt to null but keeps utilization", () => {
@@ -109,13 +110,76 @@ describe("deriveLatestAccountUsage", () => {
         sevenDay: null,
       }),
     ]);
-    expect(view).toEqual({ fiveHour: { utilization: 33, resetsAt: null }, sevenDay: null });
+    expect(view).toEqual({
+      fiveHour: { utilization: 33, resetsAt: null },
+      sevenDay: null,
+      extraWindows: [],
+    });
   });
 
   it("skips activities whose payload is not an object", () => {
     expect(
       deriveLatestAccountUsage([makeActivity("x", "account.usage.updated", null)]),
     ).toBeNull();
+  });
+
+  it("surfaces Codex primary/secondary windows, labelled by window length", () => {
+    const view = deriveLatestAccountUsage([
+      makeActivity("codex", "account.usage.updated", {
+        fiveHour: null,
+        sevenDay: null,
+        codex: {
+          primary: {
+            utilization: 60,
+            resetsAt: "2026-07-27T02:00:00.000Z",
+            windowDurationMins: 300,
+          },
+          secondary: { utilization: 12, resetsAt: null, windowDurationMins: 10080 },
+        },
+      }),
+    ]);
+    expect(view?.fiveHour).toBeNull();
+    expect(view?.extraWindows).toEqual([
+      {
+        label: "Codex 5h",
+        utilization: 60,
+        resetsAt: "2026-07-27T02:00:00.000Z",
+        windowMs: 300 * 60_000,
+      },
+      { label: "Codex 7d", utilization: 12, resetsAt: null, windowMs: 10080 * 60_000 },
+    ]);
+  });
+
+  it("falls back to a generic Codex label when the window length is missing", () => {
+    const view = deriveLatestAccountUsage([
+      makeActivity("codex", "account.usage.updated", {
+        codex: { primary: { utilization: 5, resetsAt: null }, secondary: null },
+      }),
+    ]);
+    expect(view?.extraWindows).toEqual([
+      { label: "Codex primary", utilization: 5, resetsAt: null, windowMs: null },
+    ]);
+  });
+
+  it("surfaces Cursor windows with no fixed duration (utilization only)", () => {
+    const view = deriveLatestAccountUsage([
+      makeActivity("cursor", "account.usage.updated", {
+        cursor: {
+          auto: { utilization: 25, resetsAt: null },
+          api: null,
+          total: { utilization: 40, resetsAt: "2026-08-01T00:00:00.000Z" },
+        },
+      }),
+    ]);
+    expect(view?.extraWindows).toEqual([
+      { label: "Cursor auto", utilization: 25, resetsAt: null, windowMs: null },
+      {
+        label: "Cursor total",
+        utilization: 40,
+        resetsAt: "2026-08-01T00:00:00.000Z",
+        windowMs: null,
+      },
+    ]);
   });
 });
 
@@ -153,6 +217,16 @@ describe("computeWindowPace", () => {
     const pace = computeWindowPace({ utilization: 42, resetsAt: "not-a-date" }, SEVEN_DAY_MS, 0);
     expect(pace.projection).toBeNull();
     expect(pace.diff).toBeNull();
+  });
+
+  it("yields a null projection when the window has no fixed duration", () => {
+    // Cursor windows carry a resetsAt but no length, so no pace can be computed.
+    const pace = computeWindowPace(
+      { utilization: 42, resetsAt: "2026-08-01T00:00:00.000Z" },
+      null,
+      0,
+    );
+    expect(pace).toEqual({ usage: 42, projection: null, diff: null });
   });
 
   it("rounds utilization for display and diff", () => {

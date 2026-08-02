@@ -78,9 +78,26 @@ export interface UsageWindowView {
   readonly resetsAt: string | null;
 }
 
+/**
+ * A provider-native usage window (Codex primary/secondary, Cursor auto/api/total)
+ * shown in the limits popover alongside — or instead of — Claude's 5h/7d. Carries
+ * its own label and window length; `windowMs` is null when the provider exposes no
+ * fixed window duration (then the row shows utilization only, no pace projection).
+ */
+export interface LabeledUsageWindowView extends UsageWindowView {
+  readonly label: string;
+  readonly windowMs: number | null;
+}
+
 export interface AccountUsageView {
   readonly fiveHour: UsageWindowView | null;
   readonly sevenDay: UsageWindowView | null;
+  /**
+   * Extra provider-native windows for the limits block (Codex/Cursor). Empty for
+   * a Claude account. The ring glyph stays Claude-only (context + 5h + 7d); these
+   * render as additional popover rows.
+   */
+  readonly extraWindows: ReadonlyArray<LabeledUsageWindowView>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -98,6 +115,55 @@ function parseUsageWindow(value: unknown): UsageWindowView | null {
   if (utilization === null) return null;
   const resetsAt = typeof record.resetsAt === "string" ? record.resetsAt : null;
   return { utilization, resetsAt };
+}
+
+/** Human label for a Codex window from its length in minutes, else a fallback. */
+function codexWindowLabel(windowDurationMins: number | null, fallback: string): string {
+  if (windowDurationMins === null || windowDurationMins <= 0) return fallback;
+  if (windowDurationMins % 1440 === 0) return `Codex ${windowDurationMins / 1440}d`;
+  if (windowDurationMins % 60 === 0) return `Codex ${windowDurationMins / 60}h`;
+  return `Codex ${windowDurationMins}m`;
+}
+
+/** Codex primary/secondary usage windows, labelled by their window length. */
+function parseCodexWindows(value: unknown): LabeledUsageWindowView[] {
+  const record = asRecord(value);
+  if (!record) return [];
+  const windows: LabeledUsageWindowView[] = [];
+  for (const [key, fallback] of [
+    ["primary", "Codex primary"],
+    ["secondary", "Codex secondary"],
+  ] as const) {
+    const parsed = parseUsageWindow(record[key]);
+    if (!parsed) continue;
+    const durationMins = asFiniteNumber(asRecord(record[key])?.windowDurationMins);
+    windows.push({
+      ...parsed,
+      label: codexWindowLabel(durationMins, fallback),
+      windowMs: durationMins !== null && durationMins > 0 ? durationMins * 60_000 : null,
+    });
+  }
+  return windows;
+}
+
+/**
+ * Cursor usage windows (auto / api / total). Cursor exposes a period utilization
+ * but no fixed window length, so `windowMs` is null (utilization-only rows).
+ */
+function parseCursorWindows(value: unknown): LabeledUsageWindowView[] {
+  const record = asRecord(value);
+  if (!record) return [];
+  const windows: LabeledUsageWindowView[] = [];
+  for (const [key, label] of [
+    ["auto", "Cursor auto"],
+    ["api", "Cursor API"],
+    ["total", "Cursor total"],
+  ] as const) {
+    const parsed = parseUsageWindow(record[key]);
+    if (!parsed) continue;
+    windows.push({ ...parsed, label, windowMs: null });
+  }
+  return windows;
 }
 
 /**
@@ -123,6 +189,7 @@ export function deriveLatestAccountUsage(
     return {
       fiveHour: parseUsageWindow(payload.fiveHour),
       sevenDay: parseUsageWindow(payload.sevenDay),
+      extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
     };
   }
   return null;
@@ -148,12 +215,12 @@ export interface WindowPace {
  */
 export function computeWindowPace(
   window: UsageWindowView,
-  windowMs: number,
+  windowMs: number | null,
   nowMs: number,
 ): WindowPace {
   const usage = Math.round(window.utilization);
   let projection: number | null = null;
-  if (window.resetsAt !== null) {
+  if (windowMs !== null && window.resetsAt !== null) {
     const resetMs = Date.parse(window.resetsAt);
     if (Number.isFinite(resetMs)) {
       projection = Math.round(clampPct((1 - (resetMs - nowMs) / windowMs) * 100));

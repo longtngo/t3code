@@ -155,7 +155,12 @@ function ContextBlock(props: {
   );
 }
 
-function WindowRow(props: { label: string; window: UsageWindowView; windowMs: number; now: number }) {
+function WindowRow(props: {
+  label: string;
+  window: UsageWindowView;
+  windowMs: number | null;
+  now: number;
+}) {
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
   const level = windowSeverity(pace);
   return (
@@ -204,6 +209,15 @@ function LimitsBlock(props: { usage: AccountUsageView; now: number }) {
         {usage.sevenDay ? (
           <WindowRow label="7-day" window={usage.sevenDay} windowMs={SEVEN_DAY_MS} now={now} />
         ) : null}
+        {usage.extraWindows.map((window) => (
+          <WindowRow
+            key={window.label}
+            label={window.label}
+            window={window}
+            windowMs={window.windowMs}
+            now={now}
+          />
+        ))}
       </div>
     </div>
   );
@@ -308,7 +322,9 @@ export function VitalsDetail(props: {
   providerDisplayName?: string | null | undefined;
 }) {
   const { context, accountUsage, host, now } = props;
-  const hasWindows = Boolean(accountUsage?.fiveHour || accountUsage?.sevenDay);
+  const hasWindows = Boolean(
+    accountUsage?.fiveHour || accountUsage?.sevenDay || accountUsage?.extraWindows.length,
+  );
   return (
     <div className="flex flex-col">
       {context ? (
