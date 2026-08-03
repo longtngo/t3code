@@ -155,3 +155,138 @@ export const readPersistedServerRuntimeState = (path: string) =>
         ),
     }),
   );
+
+/**
+ * A boot that dies sooner than this looks like a crash loop rather than a
+ * one-off fault, and is reported at error level so it stands out in the log.
+ */
+export const crashLoopUptimeThresholdMillis = 5 * 60 * 1_000;
+
+/**
+ * What the leftover state file says about how the previous process ended. The
+ * file is written once the server is serving and removed by its release
+ * finalizer, so finding one at boot means the previous process never ran that
+ * finalizer: it crashed, was killed, or the machine went down under it.
+ */
+export type PreviousShutdownDiagnosis =
+  | { readonly _tag: "clean" }
+  | { readonly _tag: "concurrent"; readonly pid: number }
+  | {
+      readonly _tag: "unclean";
+      readonly pid: number;
+      readonly startedAt: string;
+      /**
+       * How long ago the dead process started. It is an upper bound on that
+       * process's lifetime — we know when it booted, not when it died — but a
+       * supervisor that restarts on exit closes that gap to seconds.
+       */
+      readonly previousBootAgeMillis: number | undefined;
+      readonly crashLoopSuspected: boolean;
+    };
+
+// Signal 0 delivers nothing; it only reports whether the pid exists. EPERM
+// means it exists but belongs to another user, which still counts as alive.
+export const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+};
+
+export const diagnosePreviousShutdown = (input: {
+  readonly previous: Option.Option<PersistedServerRuntimeState>;
+  readonly currentPid: number;
+  readonly nowEpochMillis: number;
+  readonly isProcessAlive?: (pid: number) => boolean;
+}): PreviousShutdownDiagnosis => {
+  if (Option.isNone(input.previous)) {
+    return { _tag: "clean" };
+  }
+
+  const previous = input.previous.value;
+  if (previous.pid === input.currentPid) {
+    return { _tag: "clean" };
+  }
+
+  // A pid the OS has since recycled reads as alive here, which downgrades a
+  // real crash to "concurrent". That costs us a warning, never a false one.
+  const alive = (input.isProcessAlive ?? isProcessAlive)(previous.pid);
+  if (alive) {
+    return { _tag: "concurrent", pid: previous.pid };
+  }
+
+  const startedAtMillis = DateTime.make(previous.startedAt).pipe(
+    Option.map(DateTime.toEpochMillis),
+    Option.getOrUndefined,
+  );
+  const previousBootAgeMillis =
+    startedAtMillis === undefined
+      ? undefined
+      : Math.max(0, input.nowEpochMillis - startedAtMillis);
+
+  return {
+    _tag: "unclean",
+    pid: previous.pid,
+    startedAt: previous.startedAt,
+    previousBootAgeMillis,
+    crashLoopSuspected:
+      previousBootAgeMillis !== undefined &&
+      previousBootAgeMillis < crashLoopUptimeThresholdMillis,
+  };
+};
+
+/**
+ * Says out loud, at boot, that the previous process did not shut down cleanly.
+ * A supervisor with restart-on-exit makes a crash loop look healthy — every
+ * health probe answers, because a fresh process answers it — so the log line
+ * is the only place the loop is visible.
+ *
+ * The state file is written once the server is serving, so a process that dies
+ * before that leaves nothing behind and goes unreported here.
+ */
+export const reportPreviousShutdown = (input: {
+  readonly path: string;
+  readonly currentPid?: number;
+  readonly isProcessAlive?: (pid: number) => boolean;
+}) =>
+  Effect.gen(function* () {
+    const previous = yield* readPersistedServerRuntimeState(input.path);
+    const now = yield* DateTime.now;
+    const diagnosis = diagnosePreviousShutdown({
+      previous,
+      currentPid: input.currentPid ?? process.pid,
+      nowEpochMillis: DateTime.toEpochMillis(now),
+      ...(input.isProcessAlive ? { isProcessAlive: input.isProcessAlive } : {}),
+    });
+
+    switch (diagnosis._tag) {
+      case "clean":
+        break;
+      case "concurrent":
+        yield* Effect.logWarning("server.boot.state-file-owned-by-live-process").pipe(
+          Effect.annotateLogs({ previousPid: diagnosis.pid, statePath: input.path }),
+        );
+        break;
+      case "unclean": {
+        const annotations = {
+          previousPid: diagnosis.pid,
+          previousStartedAt: diagnosis.startedAt,
+          previousBootAgeSeconds:
+            diagnosis.previousBootAgeMillis === undefined
+              ? undefined
+              : Math.round(diagnosis.previousBootAgeMillis / 1_000),
+          statePath: input.path,
+        };
+        yield* (
+          diagnosis.crashLoopSuspected
+            ? Effect.logError("server.boot.crash-loop-suspected")
+            : Effect.logWarning("server.boot.previous-shutdown-unclean")
+        ).pipe(Effect.annotateLogs(annotations));
+        break;
+      }
+    }
+
+    return diagnosis;
+  });

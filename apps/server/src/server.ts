@@ -118,6 +118,7 @@ import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
+  reportPreviousShutdown,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
@@ -520,6 +521,10 @@ export const makeServerLayer = Layer.unwrap(
           if (typeof address === "string" || !("port" in address)) {
             return;
           }
+
+          // Read before we overwrite it: a state file we did not write is the
+          // only trace a crashed predecessor leaves behind.
+          yield* reportPreviousShutdown({ path: config.serverRuntimeStatePath });
 
           const state = yield* makePersistedServerRuntimeState({
             config,
