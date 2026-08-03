@@ -1379,6 +1379,23 @@ label:has(> select#reasoning-effort) select {
   background: transparent !important;
 }
 
+.chat-markdown-file-code .shiki,
+.chat-markdown-file-code-fallback {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.chat-markdown-file-code-fallback {
+  color: var(--foreground);
+}
+
 /* Tables wrap their cell text to fit the chat column by default, so wide tables
    stay readable without truncation. word-break: normal keeps the longest word
    intact, so genuinely unbreakable content (long URLs/IDs) overflows and the

@@ -24,6 +24,7 @@
  *
  * @module chatFilePathLinks
  */
+import { classifyFileViewerKind } from "./lib/codeFileTypes";
 import { extractTerminalLinks, resolvePathLinkTarget, splitPathAndPosition } from "./terminal-links";
 
 export interface ChatFilePathMention {
@@ -135,6 +136,12 @@ export function resolveChatFilePathMention(
 
   const { path, line, column } = splitPathAndPosition(trimmed);
   if (path.length === 0) return null;
+
+  // The curated extension allow-list is the single gate for "is this an openable
+  // document". Linkifying any path-shaped token instead was tried and rejected:
+  // it chips prose like `example.com` and `v1.2`, and media paths the viewer
+  // cannot render. See lib/codeFileTypes.ts.
+  if (classifyFileViewerKind(path) === null) return null;
 
   if (isAbsolute(path)) return withPosition(path, line, column);
 

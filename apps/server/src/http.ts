@@ -28,6 +28,8 @@ import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { WorkspaceFileSystem } from "./workspace/WorkspaceFileSystem.ts";
+import { MarkdownHtmlRenderer, MarkdownHtmlRendererLive } from "./workspace/markdownHtmlRenderer.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
@@ -276,6 +278,157 @@ export const assetRouteLayer = HttpRouter.add(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),
+);
+
+const VIEWER_ROUTE_PREFIX = "/viewer";
+const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
+const HTML_EXTENSIONS = new Set([".html", ".htm"]);
+// Text/code files served raw (as text/plain) so the viewer's "Open in new tab"
+// works for them too. Mirrors the client allow-list in
+// apps/web/src/lib/codeFileTypes.ts (TEXT_FILE_EXTENSIONS) — keep the two in sync.
+// Excludes .md/.html (handled above), binary/media, and .env / extension-less files.
+const TEXT_VIEWER_EXTENSIONS = new Set([
+  ".txt", ".log", ".csv", ".tsv", ".json", ".json5", ".jsonc", ".yaml", ".yml",
+  ".toml", ".ini", ".conf", ".cfg", ".properties", ".xml", ".sql", ".py", ".rb",
+  ".go", ".rs", ".java", ".kt", ".kts", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
+  ".hh", ".cs", ".php", ".swift", ".scala", ".sh", ".bash", ".zsh", ".fish", ".ps1",
+  ".lua", ".pl", ".pm", ".r", ".dart", ".ex", ".exs", ".erl", ".hs", ".clj", ".cljs",
+  ".cljc", ".edn", ".js", ".cjs", ".mjs", ".jsx", ".ts", ".cts", ".mts", ".tsx",
+  ".vue", ".svelte", ".astro", ".css", ".scss", ".sass", ".less", ".graphql", ".gql",
+  ".proto", ".gradle", ".groovy", ".tf", ".hcl", ".vim", ".diff", ".patch",
+]);
+// Treat a rendered document as a sandboxed top-level page: an opaque origin with
+// no access to this app's cookies/storage, matching the no-same-origin iframe the
+// in-app viewer uses.
+const VIEWER_CSP = "sandbox allow-scripts allow-popups";
+
+/**
+ * Whether a request genuinely originates from a local process — the basis for
+ * waiving auth on the `/viewer` route. Trust is keyed on the real TCP peer
+ * address (which a remote client cannot spoof), NEVER the client-controlled
+ * `Host` header: an earlier version read `url.hostname` and was an auth bypass.
+ * A forwarded request (reverse proxy, Tailscale Serve, …) is never trusted —
+ * its loopback peer is the proxy, not the real client.
+ */
+export function isLocalLoopbackRequest(request: HttpServerRequest.HttpServerRequest): boolean {
+  if (request.headers["x-forwarded-for"] || request.headers["forwarded"]) {
+    return false;
+  }
+  const source = request.source as
+    | {
+        readonly remoteAddress?: string | null;
+        readonly socket?: { readonly remoteAddress?: string | null };
+      }
+    | null
+    | undefined;
+  const rawPeer = source?.socket?.remoteAddress ?? source?.remoteAddress ?? null;
+  if (!rawPeer) return false;
+  const peer = rawPeer.startsWith("::ffff:") ? rawPeer.slice("::ffff:".length) : rawPeer;
+  return isLoopbackHostname(peer);
+}
+
+/** How a `/viewer` request should be served. */
+export type ViewerPathKind = "markdown" | "html" | "text";
+
+/**
+ * Decode a `/viewer` URL suffix and classify it as a markdown, html, or raw-text
+ * document at an absolute path, or null when the suffix is malformed, relative, or
+ * an unsupported type. Pure posix string logic so it is unit-testable without the
+ * filesystem (and keeps the decode try/catch out of the Effect handler).
+ */
+export function classifyViewerPath(
+  encodedSuffix: string,
+): { readonly absolutePath: string; readonly kind: ViewerPathKind } | null {
+  let absolutePath: string;
+  try {
+    absolutePath = decodeURIComponent(encodedSuffix);
+  } catch {
+    return null;
+  }
+  if (!absolutePath.startsWith("/")) return null;
+  const lastSlash = absolutePath.lastIndexOf("/");
+  const lastDot = absolutePath.lastIndexOf(".");
+  const extension = lastDot > lastSlash ? absolutePath.slice(lastDot).toLowerCase() : "";
+  if (MARKDOWN_EXTENSIONS.has(extension)) return { absolutePath, kind: "markdown" };
+  if (HTML_EXTENSIONS.has(extension)) return { absolutePath, kind: "html" };
+  if (TEXT_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "text" };
+  return null;
+}
+
+/**
+ * Serve a file as a real, refreshable URL so the viewer's "Open in new tab"
+ * reloads from disk instead of showing a frozen snapshot. Markdown is rendered to
+ * HTML; `.html` is served as-is; everything else is served as text/plain.
+ *
+ * Reads go through `readTrustedFile`, which self-sandboxes to home / OS-temp /
+ * trusted roots — that sandbox, not the auth waiver, is the real boundary.
+ */
+export const viewerRouteLayer = HttpRouter.add(
+  "GET",
+  `${VIEWER_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    if (!isLocalLoopbackRequest(request)) {
+      yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    }
+
+    // The matched suffix is an absolute filesystem path (leading "/" preserved).
+    const target = classifyViewerPath(url.value.pathname.slice(VIEWER_ROUTE_PREFIX.length));
+    if (!target) {
+      return HttpServerResponse.text("Invalid or unsupported file path", { status: 400 });
+    }
+    const { absolutePath, kind } = target;
+
+    // `nosniff` makes the text/plain guarantee robust: a code file whose bytes
+    // happen to look like HTML must never be content-sniffed and rendered as a
+    // document (the sandbox CSP already neuters it, but don't rely on that alone).
+    const headers = {
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": VIEWER_CSP,
+      "X-Content-Type-Options": "nosniff",
+    };
+
+    const workspaceFileSystem = yield* WorkspaceFileSystem;
+    const file = yield* workspaceFileSystem
+      .readTrustedFile({ path: absolutePath })
+      .pipe(Effect.option);
+    if (Option.isNone(file)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    if (kind === "markdown") {
+      // The renderer layer is provided right here rather than required from the
+      // ambient context, so this route adds no service requirement to the app
+      // layer (the same containment D3 applied on the ws side).
+      const html = yield* MarkdownHtmlRenderer.pipe(
+        Effect.flatMap((renderer) => renderer.render(file.value.contents)),
+        Effect.provide(MarkdownHtmlRendererLive),
+      );
+      return HttpServerResponse.text(html, {
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        headers,
+      });
+    }
+
+    // `.html` reports are served as-is as a sandboxed page (CSP above); every other
+    // text/code file is served raw as text/plain so untrusted bytes are never
+    // parsed as HTML.
+    return HttpServerResponse.text(file.value.contents, {
+      status: 200,
+      contentType: kind === "html" ? "text/html; charset=utf-8" : "text/plain; charset=utf-8",
+      headers,
+    });
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+    }),
+  ),
 );
 
 export const staticAndDevRouteLayer = HttpRouter.add(

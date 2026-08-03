@@ -10,6 +10,7 @@ import {
   assetRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
+  viewerRouteLayer,
   browserApiCorsLayer,
   pushSubscriptionsRouteLayer,
   pushVapidPublicKeyRouteLayer,
@@ -414,6 +415,8 @@ export const makeRoutesLayer = Layer.mergeAll(
     pushSubscriptionsRouteLayer,
     pushVapidPublicKeyRouteLayer,
     assetRouteLayer,
+    // Before the static catch-all, which would otherwise swallow /viewer/*.
+    viewerRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

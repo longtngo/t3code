@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import {
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
   GlobeIcon,
@@ -76,6 +77,7 @@ import {
   isAbsoluteFilePath,
 } from "../chatFilePathLinks";
 import { splitPathAndPosition } from "../terminal-links";
+import { languageForPath } from "../lib/codeFileTypes";
 import { rehypeChatFilePathLinks } from "../rehypeChatFilePathLinks";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
@@ -716,6 +718,36 @@ function UncachedShikiCodeBlock({
   );
 }
 
+/**
+ * Syntax-highlighted read-only view of a code file, for the file viewer.
+ *
+ * Lives here because it reuses this module's Shiki infrastructure — the shared
+ * highlighter promise, the highlighted-HTML LRU, and the streaming-aware block —
+ * rather than standing up a second highlighting path. The language comes from
+ * `@pierre/diffs` via `languageForPath`, the same resolver diffs use, which
+ * falls back to "text" for anything unrecognised.
+ */
+export function HighlightedCodeView({ code, path }: { code: string; path: string }) {
+  const { resolvedTheme } = useTheme();
+  const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const language = languageForPath(path);
+  const fallback = <pre className="chat-markdown-file-code-fallback">{code}</pre>;
+  return (
+    <div className="chat-markdown-file-code">
+      <CodeHighlightErrorBoundary fallback={fallback}>
+        <Suspense fallback={fallback}>
+          <SuspenseShikiCodeBlock
+            className={`language-${language}`}
+            code={code}
+            themeName={diffThemeName}
+            isStreaming={false}
+          />
+        </Suspense>
+      </CodeHighlightErrorBoundary>
+    </div>
+  );
+}
+
 interface MarkdownFileLinkProps {
   href: string;
   targetPath: string;
@@ -1178,38 +1210,80 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
   );
 
+  const basename = targetPath.slice(targetPath.lastIndexOf("/") + 1);
+
+  /**
+   * Open the file through the server's `/viewer` route — a real, refreshable URL,
+   * so reloading the tab re-reads the file rather than showing a frozen snapshot.
+   * Same-origin, so the tab carries the session cookie; the route additionally
+   * trusts genuine loopback requests.
+   */
+  const handleOpenInNewTab = useCallback(() => {
+    const { path } = splitPathAndPosition(targetPath);
+    const url = `${window.location.origin}/viewer${path.split("/").map(encodeURIComponent).join("/")}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, [targetPath]);
+
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <a
-            href={href}
-            className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
-            data-markdown-copy={copyMarkdown}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (onOpenInBrowser) {
-                handleOpenInBrowser();
-                return;
-              }
-              handleOpenInFilePreview();
-            }}
-            onContextMenu={handleContextMenu}
-          >
-            <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
-          </a>
-        }
-      />
-      <TooltipPopup
-        side="top"
-        className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
-      >
-        <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
-          {displayPath}
-        </div>
-      </TooltipPopup>
-    </Tooltip>
+    <span className="inline-flex max-w-full items-center align-middle">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={href}
+              className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
+              data-markdown-copy={copyMarkdown}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (onOpenInBrowser) {
+                  handleOpenInBrowser();
+                  return;
+                }
+                handleOpenInFilePreview();
+              }}
+              onContextMenu={handleContextMenu}
+            >
+              <FileTagChipContent path={iconPath} label={label} theme={theme} selectable />
+            </a>
+          }
+        />
+        <TooltipPopup
+          side="top"
+          className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
+        >
+          <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
+            {displayPath}
+          </div>
+        </TooltipPopup>
+      </Tooltip>
+      {/* An in-DOM menu rather than only the native context menu above, which is
+          Electron-only (`readLocalApi`) and so unreachable on web and mobile —
+          where a long file path is exactly where these actions are wanted. */}
+      <Menu>
+        <MenuTrigger
+          render={
+            <button
+              type="button"
+              className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
+              title={`View options for ${basename}`}
+              aria-label={`View options for ${basename}`}
+              onClick={(event) => event.stopPropagation()}
+            />
+          }
+        >
+          <ChevronDownIcon className="size-3" />
+        </MenuTrigger>
+        <MenuPopup align="end">
+          <MenuItem onClick={handleOpenInFilePreview}>View in side panel</MenuItem>
+          {isAbsoluteFilePath(targetPath) ? (
+            <MenuItem onClick={handleOpenInNewTab}>Open in new tab</MenuItem>
+          ) : null}
+          <MenuItem onClick={handleOpenInEditor}>Open in editor</MenuItem>
+          <MenuItem onClick={() => handleCopy(targetPath, "Full path")}>Copy path</MenuItem>
+        </MenuPopup>
+      </Menu>
+    </span>
   );
 }, areMarkdownFileLinkPropsEqual);
 

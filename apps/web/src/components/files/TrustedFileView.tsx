@@ -18,7 +18,7 @@ import { type ReactNode, useState } from "react";
 
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import ChatMarkdown from "../ChatMarkdown";
+import ChatMarkdown, { HighlightedCodeView } from "../ChatMarkdown";
 import { isMarkdownPreviewFile } from "./filePreviewMode";
 import { useTrustedFileQuery, useTrustedMarkdownHtmlQuery } from "./projectFilesQueryState";
 import { Button } from "../ui/button";
@@ -117,9 +117,9 @@ export function TrustedFileView({ environmentId, absolutePath, className }: Trus
     }
     return (
       <ScrollArea className="min-h-0 flex-1">
-        <pre className="whitespace-pre-wrap break-words px-6 py-5 font-mono text-xs text-foreground/90">
-          {contents}
-        </pre>
+        <div className="px-6 py-5">
+          <HighlightedCodeView code={contents} path={absolutePath} />
+        </div>
       </ScrollArea>
     );
   })();

@@ -72,9 +72,32 @@ describe("resolveChatFilePathMention", () => {
     expect(resolveChatFilePathMention("util.ts", { cwd: CWD })).toBeNull();
   });
 
-  it("does not resolve anything without a cwd unless already absolute", () => {
+  it("does not resolve a relative path without a cwd", () => {
     expect(resolveChatFilePathMention("src/lib/util.ts", {})).toBeNull();
-    expect(resolveChatFilePathMention("/etc/hosts", {})).toBe("/etc/hosts");
+    expect(resolveChatFilePathMention("/Users/dev/project/a.ts", {})).toBe(
+      "/Users/dev/project/a.ts",
+    );
+  });
+
+  it("only links file kinds the viewer can render", () => {
+    // Extension-less paths and secrets are deliberately excluded, as are media
+    // files — the curated allow-list in lib/codeFileTypes.ts is the gate.
+    expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("/Users/dev/project/logo.png", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("/Users/dev/project/notes.md", { cwd: CWD })).toBe(
+      "/Users/dev/project/notes.md",
+    );
+    expect(resolveChatFilePathMention("/Users/dev/project/main.py", { cwd: CWD })).toBe(
+      "/Users/dev/project/main.py",
+    );
+  });
+
+  it("does not chip prose that merely looks path-shaped", () => {
+    // The exact false positives that sank the auto-chip-any-extension approach.
+    expect(resolveChatFilePathMention("example.com", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("v1.2", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("Node.js", { cwd: CWD })).toBeNull();
   });
 
   it("ignores urls", () => {
