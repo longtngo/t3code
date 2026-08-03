@@ -8,7 +8,7 @@ import { VcsProcessExitError, VcsProcessSpawnError, VcsProcessTimeoutError } fro
 import {
   DEFAULT_GIT_RETRY_ATTEMPTS,
   isTransientVcsError,
-  makeTransientGitRetrySchedule,
+  makeTransientGitRetryPolicy,
 } from "./gitRetry.ts";
 
 const timeoutError = () =>
@@ -90,24 +90,30 @@ describe("transient VCS retry", () => {
     }),
   );
 
-  it.effect("makeTransientGitRetrySchedule(1) disables retry (recurs(0))", () =>
+  it.effect("makeTransientGitRetryPolicy(1) disables retry (times: 0)", () =>
     Effect.gen(function* () {
       const { ref, attempt } = yield* countingAttempt(timeoutError, 100);
-      yield* attempt.pipe(
-        Effect.retry({ schedule: makeTransientGitRetrySchedule(1), while: isTransientVcsError }),
-        Effect.exit,
-      );
+      yield* attempt.pipe(Effect.retry(makeTransientGitRetryPolicy(1)), Effect.exit);
       expect(yield* Ref.get(ref)).toBe(1);
     }),
   );
 
-  // `it.live` (real Clock): exercises the real exponential+jittered+both schedule, whose
+  it("makeTransientGitRetryPolicy bounds retries via `times`, not the schedule", () => {
+    // effect beta.102 dropped `Schedule.both`, so the recurrence bound moved into
+    // the retry options. `times` is retries, so total attempts = times + 1.
+    expect(makeTransientGitRetryPolicy(3).times).toBe(2);
+    expect(makeTransientGitRetryPolicy(1).times).toBe(0);
+    expect(makeTransientGitRetryPolicy(0).times).toBe(0);
+    expect(makeTransientGitRetryPolicy(3).while).toBe(isTransientVcsError);
+  });
+
+  // `it.live` (real Clock): exercises the real exponential+jittered schedule, whose
   // backoff uses Effect.sleep. One transient failure → one real backoff (~500ms) → success.
   it.live("the real jittered schedule retries a transient failure to success", () =>
     Effect.gen(function* () {
       const { ref, attempt } = yield* countingAttempt(timeoutError, 1);
       const result = yield* attempt.pipe(
-        Effect.retry({ schedule: makeTransientGitRetrySchedule(3), while: isTransientVcsError }),
+        Effect.retry(makeTransientGitRetryPolicy(3)),
       );
       expect(result).toBe(2);
       expect(yield* Ref.get(ref)).toBe(2);

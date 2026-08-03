@@ -9,8 +9,8 @@
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -58,6 +58,10 @@ import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 // filename keeps its own 037 prefix and the CREATE TABLE IF NOT EXISTS is a no-op on
 // any fork DB that already applied the old "034_PushSubscriptions".
 import Migration0037 from "./Migrations/037_PushSubscriptions.ts";
+// Upstream's 035 arrives after the fork already deployed ids 35-37, so it takes the
+// next free id (38) rather than its filename number. Renumbering an applied id would
+// re-run or skip migrations on live fork DBs.
+import Migration0038 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -106,7 +110,10 @@ export const migrationEntries = [
   [35, "ProjectionThreadsSettled", Migration0035],
   [36, "ProjectionThreadsSnoozed", Migration0036],
   [37, "PushSubscriptions", Migration0037],
+  [38, "ProjectionThreadTitleRegeneration", Migration0038],
 ] as const;
+
+export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(

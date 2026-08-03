@@ -18,15 +18,21 @@ export const isTransientVcsError = (error: { readonly _tag: string }): boolean =
 
 /**
  * Bounded, jittered exponential backoff for retrying transient VCS failures.
- * `attempts` is the total number of tries (initial + retries); `attempts <= 1` disables
- * retry (`recurs(0)`). Uses `Schedule.both` (the v4 AND-combinator) to bound the
- * always-recurring exponential+jittered schedule by a recurrence count.
+ * `attempts` is the total number of tries (initial + retries); `attempts <= 1`
+ * disables retry (`times: 0`).
+ *
+ * The recurrence bound lives in `Effect.retry`'s `times` option rather than in the
+ * schedule: effect 4.0.0-beta.102 dropped `Schedule.both` (the AND-combinator this
+ * previously used to intersect the always-recurring backoff with `recurs`), and it
+ * has no replacement count-bounding combinator — only `upTo`, which bounds by total
+ * elapsed duration, not by attempts.
  */
-export const makeTransientGitRetrySchedule = (attempts: number) =>
-  Schedule.exponential("500 millis").pipe(
-    Schedule.jittered,
-    Schedule.both(Schedule.recurs(Math.max(0, attempts - 1))),
-  );
+export const makeTransientGitRetryPolicy = (attempts: number) =>
+  ({
+    schedule: Schedule.exponential("500 millis").pipe(Schedule.jittered),
+    times: Math.max(0, attempts - 1),
+    while: isTransientVcsError,
+  }) as const;
 
 /** Total capture attempts from `T3CODE_GIT_RETRY_ATTEMPTS` (default 3; set to 1 to disable). */
 export const resolveGitRetryAttempts = (): number =>

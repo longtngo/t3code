@@ -1,33 +1,40 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
+import * as NodeOS from "node:os";
+import { assert, it } from "vite-plus/test";
 
-import { fixPath } from "./os-jank.ts";
+import { hydratePosixHome } from "./os-jank.ts";
 
-it.layer(NodeServices.layer)("fixPath PATH hydration resilience", (it) => {
-  it.effect("leaves PATH untouched on an unsupported platform", () =>
-    Effect.gen(function* () {
-      const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" };
-      yield* fixPath().pipe(
-        Effect.provideService(HostProcessPlatform, "freebsd" as NodeJS.Platform),
-        Effect.provideService(HostProcessEnvironment, env),
-      );
-      expect(env.PATH).toBe("/usr/bin:/bin");
-    }),
-  );
+it("hydrates HOME for minimal service environments from the user account", () => {
+  const env: NodeJS.ProcessEnv = {};
 
-  it.effect("preserves the inherited PATH entries when hydrating on darwin", () =>
-    Effect.gen(function* () {
-      const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" };
-      yield* fixPath().pipe(
-        Effect.provideService(HostProcessPlatform, "darwin"),
-        Effect.provideService(HostProcessEnvironment, env),
-      );
-      // Whatever the login-shell read yields, the merge must never drop the
-      // entries the process already had, so CLIs on the inherited PATH stay
-      // reachable.
-      expect(env.PATH).toContain("/usr/bin");
-    }),
-  );
+  hydratePosixHome(env);
+
+  assert.equal(env.HOME, NodeOS.userInfo().homedir);
+});
+
+it("hydrates HOME independently of a blank process HOME", () => {
+  const originalHome = process.env.HOME;
+  const env: NodeJS.ProcessEnv = { HOME: " " };
+
+  try {
+    process.env.HOME = " ";
+    hydratePosixHome(env);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  }
+
+  assert.equal(env.HOME, NodeOS.userInfo().homedir);
+});
+
+it("preserves an explicitly configured HOME", () => {
+  const env: NodeJS.ProcessEnv = { HOME: "/custom/home" };
+
+  hydratePosixHome(env, () => {
+    throw new Error("HOME lookup should not run");
+  });
+
+  assert.equal(env.HOME, "/custom/home");
 });

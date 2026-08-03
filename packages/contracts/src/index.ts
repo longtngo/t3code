@@ -1,4 +1,5 @@
 export * from "./baseSchemas.ts";
+export * from "./background.ts";
 export * from "./auth.ts";
 export * from "./environment.ts";
 export * from "./environmentHttp.ts";
@@ -27,5 +28,6 @@ export * from "./assets.ts";
 export * from "./review.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
+export * from "./resourceTelemetry.ts";
 export * from "./hostMetrics.ts";
 export * from "./rpc.ts";

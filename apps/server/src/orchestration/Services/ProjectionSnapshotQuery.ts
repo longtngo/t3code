@@ -13,6 +13,8 @@ import type {
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
+  OrchestrationSearchThreadsInput,
+  OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadHistoryPageInput,
@@ -96,6 +98,14 @@ export interface ProjectionSnapshotQueryShape {
     OrchestrationShellSnapshot,
     ProjectionRepositoryError
   >;
+
+  /**
+   * Search active thread navigation metadata, user messages, and canonical
+   * assistant outputs without hydrating thread detail snapshots.
+   */
+  readonly searchThreads: (
+    input: OrchestrationSearchThreadsInput,
+  ) => Effect.Effect<OrchestrationSearchThreadsResult, ProjectionRepositoryError>;
 
   /**
    * Read the latest projection snapshot sequence without hydrating read-model

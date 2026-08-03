@@ -387,7 +387,8 @@ export function VitalsGauge(props: {
         tooltipStyle
         side="top"
         align="end"
-        className="w-72 max-w-none border-0! bg-secondary! p-0 shadow-none! before:hidden"
+        viewportClassName="p-0"
+        className="w-72 max-w-none text-left whitespace-normal"
       >
         <VitalsDetail
           context={context}

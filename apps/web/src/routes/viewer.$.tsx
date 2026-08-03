@@ -1,20 +1,11 @@
 import { FileTextIcon } from "lucide-react";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { TrustedFileView } from "~/components/files/TrustedFileView";
 import { absolutePathFromViewerSplat, viewerSplatFromPath } from "~/components/files/viewerPath";
-import { Button } from "~/components/ui/button";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-
-/** Directory of an absolute posix path — the `cwd` for markdown relative links. */
-function directoryOf(absolutePath: string): string {
-  const lastSlash = absolutePath.lastIndexOf("/");
-  return lastSlash <= 0 ? "/" : absolutePath.slice(0, lastSlash);
-}
 
 /**
  * Editable, URI-like path field for the viewer header. Shows the full resolved
@@ -111,25 +102,6 @@ function ViewerRouteView() {
         <TrustedFileView environmentId={environmentId} absolutePath={absolutePath} />
       </div>
     </SidebarInset>
-  );
-}
-
-function ViewerNotice({
-  children,
-  tone = "muted",
-}: {
-  children: ReactNode;
-  tone?: "muted" | "error";
-}) {
-  return (
-    <div
-      className={cn(
-        "flex min-h-0 flex-1 items-center justify-center gap-2 px-6 text-center text-sm",
-        tone === "error" ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
-      {children}
-    </div>
   );
 }
 

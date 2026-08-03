@@ -1,5 +1,5 @@
 /**
- * Integration test for the plain-text file-path linking pipeline.
+ * Integration test for the PROSE file-path linking pipeline.
  *
  * The unit tests cover resolution and the hast rewrite in isolation. This one
  * runs the real react-markdown pipeline — the same remark/rehype plugin array
@@ -50,9 +50,13 @@ describe("chat file-path links (pipeline)", () => {
     expect(html).toContain('href="/Users/dev/project/src/lib/util.ts"');
   });
 
-  it("links a path written inside inline code", () => {
+  it("leaves a path inside inline code to ChatMarkdown's own code renderer", () => {
+    // This plugin only linkifies PROSE. ChatMarkdown's `code` renderer swaps a
+    // path-only inline span for a file chip; linkifying here too nested a chip
+    // inside the bordered inline-code element and drew two frames.
     const html = render("The entry point is `/Users/dev/project/src/main.ts` now.");
-    expect(html).toContain('href="/Users/dev/project/src/main.ts"');
+    expect(html).not.toContain("<a ");
+    expect(html).toContain("<code>/Users/dev/project/src/main.ts</code>");
   });
 
   it("resolves a bare filename from an absolute path stated earlier", () => {

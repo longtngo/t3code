@@ -10,8 +10,8 @@
  *  - `pre` subtrees, so fenced code keeps its syntax highlighting untouched
  *  - existing `a` subtrees, so a real markdown link is never nested inside one
  *
- * Inline `code` IS linkified, because a path written as `` `src/main.ts` `` is
- * the single most common way one shows up in a message.
+ * Inline `code` is NOT linkified here — ChatMarkdown's `code` renderer owns that
+ * case and swaps a path-only span for the same chip.
  *
  * @module rehypeChatFilePathLinks
  */
@@ -28,8 +28,14 @@ interface HastNode {
   children?: HastNode[];
 }
 
-/** Elements whose text must stay verbatim. */
-const SKIPPED_TAGS = new Set(["pre", "a", "script", "style"]);
+/**
+ * Elements this plugin must not touch.
+ *
+ * `code` is skipped because ChatMarkdown's own `code` renderer already turns an
+ * inline span that is just a path into a file chip. Linkifying here as well
+ * nested a chip inside the bordered inline-code element and drew two frames.
+ */
+const SKIPPED_TAGS = new Set(["pre", "code", "a", "script", "style"]);
 
 /** Marks anchors this plugin created, so the renderer can tell them apart. */
 export const CHAT_FILE_PATH_LINK_ATTRIBUTE = "dataChatFilePath";
@@ -71,33 +77,6 @@ function linkifyTextValue(value: string, options: ChatFilePathResolution): HastN
   return output;
 }
 
-/** Concatenated text of a node's direct text children, or null if it has any others. */
-function plainTextOf(node: HastNode): string | null {
-  const children = node.children ?? [];
-  let text = "";
-  for (const child of children) {
-    if (child.type !== "text" || typeof child.value !== "string") return null;
-    text += child.value;
-  }
-  return text;
-}
-
-/**
- * The anchor for a `code` element that contains nothing but a single resolvable
- * path, or null when it holds anything else (so the caller linkifies in place).
- */
-function soleFilePathAnchor(node: HastNode, options: ChatFilePathResolution): HastNode | null {
-  const text = plainTextOf(node);
-  if (text === null) return null;
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return null;
-  const mentions = findChatFilePathMentions(trimmed, options);
-  const only = mentions[0];
-  if (mentions.length !== 1 || only === undefined) return null;
-  if (only.raw !== trimmed) return null;
-  return anchorNode(only.targetPath, only.raw);
-}
-
 export function rehypeChatFilePathLinks(options: ChatFilePathResolution) {
   return (tree: HastNode) => {
     const visit = (node: HastNode) => {
@@ -107,17 +86,6 @@ export function rehypeChatFilePathLinks(options: ChatFilePathResolution) {
       const next: HastNode[] = [];
       let changed = false;
       for (const child of children) {
-        // An inline `code` whose entire content is one path becomes the chip
-        // itself. Left nested, the code element's own border and background frame
-        // the chip, which then draws a second border inside the first.
-        if (child.type === "element" && child.tagName === "code") {
-          const only = soleFilePathAnchor(child, options);
-          if (only) {
-            next.push(only);
-            changed = true;
-            continue;
-          }
-        }
         if (child.type === "text" && typeof child.value === "string") {
           const replacement = linkifyTextValue(child.value, options);
           if (replacement) {

@@ -29,7 +29,7 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
-import { isTransientVcsError, makeTransientGitRetrySchedule, resolveGitRetryAttempts } from "./gitRetry.ts";
+import { makeTransientGitRetryPolicy, resolveGitRetryAttempts } from "./gitRetry.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -51,7 +51,7 @@ export const MAX_UNTRACKED_CHECKPOINT_FILE_BYTES = 10 * 1024 * 1024;
  * Whole-operation (not per-command) retry bounds latency on the serial checkpoint worker to
  * attempts × timeout and re-seeds a clean temp index each attempt. Read at module load.
  */
-const captureRetrySchedule = makeTransientGitRetrySchedule(resolveGitRetryAttempts());
+const captureRetryPolicy = makeTransientGitRetryPolicy(resolveGitRetryAttempts());
 
 // gitignore metacharacters that must be escaped so a `git clean -e` pattern matches ONE path
 // literally. This is load-bearing: an unescaped `[`/`*`/`?` makes the pattern miss the file, and
@@ -774,7 +774,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       // without this it would fail the whole capture unprotected, defeating the fix for its most
       // likely trigger.
       const gitCommonDir = yield* resolveGitCommonDir(input.cwd).pipe(
-        Effect.retry({ schedule: captureRetrySchedule, while: isTransientVcsError }),
+        Effect.retry(captureRetryPolicy),
       );
       const tempIndexPath = path.join(
         gitCommonDir,
@@ -912,7 +912,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         // `ensuring` so the temp index is cleaned up exactly once after all attempts settle;
         // each attempt re-seeds it afresh. `isTransientVcsError` matches only the transient
         // tags in the operation's error union.
-        Effect.retry({ schedule: captureRetrySchedule, while: isTransientVcsError }),
+        Effect.retry(captureRetryPolicy),
         Effect.ensuring(cleanupTempIndex),
       );
     }),
