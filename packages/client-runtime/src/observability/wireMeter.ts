@@ -9,6 +9,16 @@
  * unconditionally and is exposed on `globalThis` (`__t3WireMeter`) for console
  * inspection at any time. A one-line summary is logged on socket close only when
  * {@link wireMeterLoggingEnabled} is set, so it is silent for normal users.
+ *
+ * NOT currently wired to the transport, deliberately. This meter measures
+ * *application-level* payload bytes, which is a different quantity from what
+ * goes over the socket: the server negotiates `permessage-deflate`, and the
+ * browser inflates a frame before JavaScript ever sees `event.data`. Wiring the
+ * meter up today would therefore report pre-compression sizes and show no effect
+ * from compression at all — measure that end with the server's TCP byte counters
+ * or the DevTools network panel instead. The meter becomes the right instrument
+ * again for a change that alters the payload the client itself encodes (the
+ * deferred JSON→msgpack work), which is why it is kept rather than deleted.
  */
 
 export type WireDirection = "sent" | "recv";
