@@ -53,13 +53,25 @@ describe("rehypeChatFilePathLinks", () => {
     ]);
   });
 
-  it("linkifies a path inside inline code", () => {
+  it("replaces an inline code element that is only a path, so the chip is not double-bordered", () => {
+    // `.chat-markdown :not(pre) > code` draws its own border and background; a
+    // chip nested inside it renders two frames. When the code element is nothing
+    // but the path, the chip stands in for it.
     const tree = element("root", [
       element("p", [element("code", [text("/Users/dev/project/a.ts")])]),
     ]);
     run(tree);
+    expect(describeChildren(tree.children![0]!)).toEqual(["a:/Users/dev/project/a.ts"]);
+  });
+
+  it("still linkifies inline when the code element holds more than the path", () => {
+    const tree = element("root", [
+      element("p", [element("code", [text("cat /Users/dev/project/a.ts")])]),
+    ]);
+    run(tree);
     const code = tree.children![0]!.children![0]!;
-    expect(describeChildren(code)).toEqual(["a:/Users/dev/project/a.ts"]);
+    expect(code.tagName).toBe("code");
+    expect(describeChildren(code)).toEqual(["text:cat ", "a:/Users/dev/project/a.ts"]);
   });
 
   it("leaves fenced code blocks untouched", () => {

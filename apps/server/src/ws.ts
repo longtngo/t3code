@@ -223,6 +223,29 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
   }
 }
 
+/**
+ * A message for an absolute trusted read. The generic `ProjectReadFileError`
+ * template describes a workspace-relative read ("file 'X' in 'Y'"), which for an
+ * absolute path degenerates to the same path twice and reads like a bug in the
+ * viewer rather than a missing file.
+ */
+export function trustedReadErrorMessage(
+  path: string,
+  error:
+    | WorkspaceFileSystem.WorkspaceFileSystemError
+    | WorkspacePaths.WorkspacePathOutsideRootError,
+): string {
+  if (error._tag === "WorkspaceReadOutsideSandboxError") {
+    return `'${path}' is outside the folders this environment may read.`;
+  }
+  const cause = "cause" in error ? (error.cause as { code?: unknown } | null | undefined) : null;
+  const code = typeof cause?.code === "string" ? cause.code : null;
+  if (code === "ENOENT") return `File not found: '${path}'.`;
+  if (code === "EACCES" || code === "EPERM") return `Permission denied reading '${path}'.`;
+  if (code === "EISDIR") return `'${path}' is a directory, not a file.`;
+  return `Failed to read '${path}'.`;
+}
+
 function projectFileFailureContext(
   error:
     | WorkspaceFileSystem.WorkspaceFileSystemError
@@ -1826,6 +1849,7 @@ const makeWsRpcLayer = (
                   new ProjectReadFileError({
                     cwd: input.path,
                     relativePath: input.path,
+                    message: trustedReadErrorMessage(input.path, cause),
                     ...projectFileFailureContext(cause),
                     cause,
                   }),
@@ -1851,10 +1875,13 @@ const makeWsRpcLayer = (
               Effect.mapError(
                 (cause) =>
                   new ProjectReadFileError({
-                    // No cwd/relativePath split for an absolute trusted read; the
-                    // requested path fills both so the error message stays useful.
+                    // No cwd/relativePath split exists for an absolute trusted
+                    // read, so an explicit message is supplied rather than
+                    // letting the workspace-relative template render the same
+                    // path twice.
                     cwd: input.path,
                     relativePath: input.path,
+                    message: trustedReadErrorMessage(input.path, cause),
                     ...projectFileFailureContext(cause),
                     cause,
                   }),

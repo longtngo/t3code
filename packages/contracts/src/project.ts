@@ -178,6 +178,12 @@ type ProjectFileFailureContext = {
   readonly operation?: ProjectFileOperation;
   readonly operationPath?: string;
   readonly cause?: unknown;
+  /**
+   * Overrides the default "file 'X' in 'Y'" text. Supplied by callers whose read
+   * is not workspace-relative — an absolute trusted read has no cwd/relativePath
+   * split, so the default template would render the same path twice.
+   */
+  readonly message?: string;
 };
 
 export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFileError>()(
