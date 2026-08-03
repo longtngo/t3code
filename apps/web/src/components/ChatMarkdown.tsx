@@ -70,6 +70,8 @@ import {
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
+import { collectKnownAbsolutePaths, findChatFilePathMentions } from "../chatFilePathLinks";
+import { rehypeChatFilePathLinks } from "../rehypeChatFilePathLinks";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -1239,21 +1241,42 @@ function ChatMarkdown({
     serverConfig?.availableEditors ?? [],
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  // Absolute paths the message states outright, so a bare `util.ts` mentioned
+  // later in the same message can be placed. Computed over the whole message
+  // rather than per text node, since the defining path is often in an earlier
+  // paragraph than the shorthand reference.
+  const chatFilePathResolution = useMemo(
+    () => ({ cwd, knownPaths: collectKnownAbsolutePaths(text) }),
+    [cwd, text],
+  );
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
       string,
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
-    for (const href of extractMarkdownLinkHrefs(text)) {
+    const register = (href: string) => {
       const normalizedHref = normalizeMarkdownLinkHrefKey(href);
-      if (metaByHref.has(normalizedHref)) continue;
+      if (metaByHref.has(normalizedHref)) return;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
       if (meta) {
         metaByHref.set(normalizedHref, meta);
       }
+    };
+    for (const href of extractMarkdownLinkHrefs(text)) {
+      register(href);
+    }
+    // Plain-text paths become anchors via rehypeChatFilePathLinks; registering
+    // their resolved targets here is what makes the anchor renderer treat them
+    // as file links (chip + viewer) instead of ordinary external links.
+    for (const mention of findChatFilePathMentions(text, chatFilePathResolution)) {
+      register(mention.targetPath);
     }
     return metaByHref;
-  }, [cwd, text]);
+  }, [chatFilePathResolution, cwd, text]);
+  const rehypePlugins = useMemo(
+    () => [...CHAT_MARKDOWN_REHYPE_PLUGINS, [rehypeChatFilePathLinks, chatFilePathResolution]],
+    [chatFilePathResolution],
+  );
   const fileLinkParentSuffixByPath = useMemo(() => {
     const filePaths = [...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath);
     return buildFileLinkParentSuffixByPath(filePaths);
@@ -1526,7 +1549,7 @@ function ChatMarkdown({
         remarkPlugins={
           lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
         }
-        rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins as NonNullable<ReactMarkdownOptions["rehypePlugins"]>}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
