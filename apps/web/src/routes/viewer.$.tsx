@@ -4,7 +4,10 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { isMarkdownPreviewFile } from "~/components/files/filePreviewMode";
-import { useTrustedFileQuery } from "~/components/files/projectFilesQueryState";
+import {
+  useTrustedFileQuery,
+  useTrustedMarkdownHtmlQuery,
+} from "~/components/files/projectFilesQueryState";
 import { absolutePathFromViewerSplat, viewerSplatFromPath } from "~/components/files/viewerPath";
 import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -91,7 +94,14 @@ function ViewerRouteView() {
   const absolutePath = absolutePathFromViewerSplat(splat);
   const environmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
-  const { data, error, isPending, refresh } = useTrustedFileQuery(environmentId, absolutePath);
+  const isMarkdown = absolutePath !== null && isMarkdownPreviewFile(absolutePath);
+  const [viewMode, setViewMode] = useState<"markdown" | "html">("markdown");
+  const showHtml = isMarkdown && viewMode === "html";
+  const { data, error, isPending, refresh } = useTrustedFileQuery(
+    environmentId,
+    showHtml ? null : absolutePath,
+  );
+  const rendered = useTrustedMarkdownHtmlQuery(environmentId, showHtml ? absolutePath : null);
 
   const navigateTo = useCallback(
     (rawPath: string) => {
@@ -102,7 +112,6 @@ function ViewerRouteView() {
     [navigate, splat],
   );
 
-  const isMarkdown = absolutePath !== null && isMarkdownPreviewFile(absolutePath);
   const contents = data?.contents ?? null;
 
   return (
@@ -111,10 +120,20 @@ function ViewerRouteView() {
         <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
           <FileTextIcon className="size-4 shrink-0 text-muted-foreground/70" />
           <AddressBar value={absolutePath ?? ""} onSubmit={navigateTo} />
+          {isMarkdown ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setViewMode((mode) => (mode === "html" ? "markdown" : "html"))}
+              title={showHtml ? "Show markdown" : "Render as HTML"}
+            >
+              {showHtml ? "MD" : "HTML"}
+            </Button>
+          ) : null}
           <Button
             size="xs"
             variant="ghost"
-            onClick={() => refresh()}
+            onClick={() => (showHtml ? rendered.refresh() : refresh())}
             disabled={absolutePath === null}
             title="Reload file"
           >
@@ -134,6 +153,21 @@ function ViewerRouteView() {
               <LoaderCircle className="size-4 animate-spin" aria-hidden />
               {isPending ? "Loading…" : "No content."}
             </ViewerNotice>
+          ) : showHtml ? (
+            rendered.data ? (
+              // Sandboxed: the rendered document is treated as untrusted content
+              // and gets an opaque origin with no access to this app.
+              <iframe
+                title="Rendered document"
+                sandbox=""
+                srcDoc={rendered.data.html}
+                className="min-h-0 flex-1 border-0 bg-white"
+              />
+            ) : (
+              <ViewerNotice tone={rendered.error ? "error" : "muted"}>
+                {rendered.error ?? "Rendering…"}
+              </ViewerNotice>
+            )
           ) : isMarkdown ? (
             <ScrollArea className="min-h-0 flex-1">
               <ChatMarkdown

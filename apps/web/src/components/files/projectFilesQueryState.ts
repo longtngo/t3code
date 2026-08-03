@@ -47,6 +47,34 @@ export function getTrustedFileQueryAtom(environmentId: EnvironmentId, path: stri
   return projectEnvironment.readTrustedFile({ environmentId, input: { path } });
 }
 
+const EMPTY_RENDERED_HTML_ATOM = Atom.make(
+  AsyncResult.initial<{ readonly html: string }, never>(false),
+).pipe(Atom.withLabel("project-file-query:empty-html"));
+
+/**
+ * Server-rendered standalone HTML for a markdown file, sandboxed by the same
+ * trusted-read roots. Powers the viewer's HTML toggle.
+ */
+export function useTrustedMarkdownHtmlQuery(
+  environmentId: EnvironmentId | null,
+  path: string | null,
+): ProjectQueryState<{ readonly html: string }> {
+  const enabled = environmentId !== null && path !== null;
+  const atom =
+    enabled
+      ? projectEnvironment.renderTrustedMarkdown({ environmentId, input: { path } })
+      : EMPTY_RENDERED_HTML_ATOM;
+  const result = useAtomValue(atom);
+  const refreshAtom = useAtomRefresh(atom);
+  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
+  return {
+    data: Option.getOrNull(AsyncResult.value(result)),
+    error: errorMessage(result),
+    isPending: result.waiting,
+    refresh,
+  };
+}
+
 export function setProjectFileQueryData(
   environmentId: EnvironmentId,
   cwd: string,

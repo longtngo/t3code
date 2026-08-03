@@ -78,6 +78,7 @@ import {
   ProjectReadFileInput,
   ProjectReadFileResult,
   ProjectReadTrustedFileInput,
+  ProjectRenderMarkdownHtmlResult,
   ProjectSearchEntriesError,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -164,6 +165,7 @@ export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
   projectsReadFile: "projects.readFile",
   projectsReadTrustedFile: "projects.readTrustedFile",
+  projectsRenderTrustedMarkdown: "projects.renderTrustedMarkdown",
 
   // Attachment methods
   attachmentsUpload: "attachments.upload",
@@ -453,6 +455,15 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   success: ProjectReadFileResult,
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
 });
+
+export const WsProjectsRenderTrustedMarkdownRpc = Rpc.make(
+  WS_METHODS.projectsRenderTrustedMarkdown,
+  {
+    payload: ProjectReadTrustedFileInput,
+    success: ProjectRenderMarkdownHtmlResult,
+    error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
+  },
+);
 
 export const WsAttachmentsUploadRpc = Rpc.make(WS_METHODS.attachmentsUpload, {
   payload: AttachmentUploadInput,
@@ -950,6 +961,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsReadTrustedFileRpc,
+  WsProjectsRenderTrustedMarkdownRpc,
   WsAttachmentsUploadRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,

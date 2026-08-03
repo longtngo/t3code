@@ -72,6 +72,14 @@ export function createProjectEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       idleTtlMs: 5 * 60_000,
     }),
+    // Markdown rendered server-side to a standalone HTML document, preferring the
+    // user's uni-md2html CLI and degrading to the in-process marked renderer.
+    renderTrustedMarkdown: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:render-trusted-markdown",
+      tag: WS_METHODS.projectsRenderTrustedMarkdown,
+      staleTimeMs: 30_000,
+      idleTtlMs: 5 * 60_000,
+    }),
     readTrustedFile: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:read-trusted-file",
       tag: WS_METHODS.projectsReadTrustedFile,

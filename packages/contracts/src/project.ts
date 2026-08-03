@@ -133,6 +133,12 @@ export const ProjectReadTrustedFileInput = Schema.Struct({
 });
 export type ProjectReadTrustedFileInput = typeof ProjectReadTrustedFileInput.Type;
 
+/** A markdown file rendered to a standalone HTML document (see markdownHtmlRenderer). */
+export const ProjectRenderMarkdownHtmlResult = Schema.Struct({
+  html: Schema.String,
+});
+export type ProjectRenderMarkdownHtmlResult = typeof ProjectRenderMarkdownHtmlResult.Type;
+
 export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   contents: Schema.String,

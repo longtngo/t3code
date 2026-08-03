@@ -67,6 +67,10 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import { writeUploadedAttachment } from "./attachmentUpload.ts";
+import {
+  MarkdownHtmlRenderer,
+  MarkdownHtmlRendererLive,
+} from "./workspace/markdownHtmlRenderer.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -362,6 +366,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.projectsListEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
   [WS_METHODS.projectsReadTrustedFile, AuthOrchestrationReadScope],
+  [WS_METHODS.projectsRenderTrustedMarkdown, AuthOrchestrationReadScope],
   [WS_METHODS.attachmentsUpload, AuthOrchestrationOperateScope],
   [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
@@ -477,6 +482,7 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const markdownHtmlRenderer = yield* MarkdownHtmlRenderer;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -1809,6 +1815,24 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.projectsRenderTrustedMarkdown]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsRenderTrustedMarkdown,
+            workspaceFileSystem.readTrustedFile(input).pipe(
+              Effect.flatMap((file) => markdownHtmlRenderer.render(file.contents)),
+              Effect.map((html) => ({ html })),
+              Effect.mapError(
+                (cause) =>
+                  new ProjectReadFileError({
+                    cwd: input.path,
+                    relativePath: input.path,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.attachmentsUpload]: (input) =>
           observeRpcEffect(
             WS_METHODS.attachmentsUpload,
@@ -2308,6 +2332,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              // Provided here so the markdown→HTML requirement stays contained in
+              // the ws layer instead of propagating into every app-level caller.
+              Layer.provide(MarkdownHtmlRendererLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               Layer.provide(
