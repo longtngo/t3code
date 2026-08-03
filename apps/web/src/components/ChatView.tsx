@@ -160,6 +160,13 @@ import {
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { enqueueTurn, hasQueuedTurnForThread, useCommandOutbox } from "~/rpc/commandOutbox";
+import {
+  deriveAgentItems,
+  deriveBackgroundItems,
+  summarizeTaskActivity,
+  visibleSidebarItems,
+} from "../sidebarSections";
+import { useSidebarViewStore } from "../sidebarViewStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
@@ -1999,6 +2006,52 @@ function ChatViewContent(props: ChatViewProps) {
   const activePlan = useMemo(
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
+  );
+  // Agents/subagents and background terminals for the task sidebar's sections.
+  // Both are derived client-side from data the thread already holds — `task.*`
+  // activities and the known terminal sessions — so no extra RPC is involved.
+  const allAgentItems = useMemo(() => deriveAgentItems(threadActivities), [threadActivities]);
+  const allBackgroundItems = useMemo(
+    () => deriveBackgroundItems(activeThreadKnownSessions),
+    [activeThreadKnownSessions],
+  );
+  const dismissedSidebarIds = useSidebarViewStore((state) => state.dismissedIds);
+  const dismissedSidebarIdSet = useMemo(
+    () => new Set(Object.keys(dismissedSidebarIds)),
+    [dismissedSidebarIds],
+  );
+  // Coarse clock so the auto-clear TTL still fires on a fully idle thread, which
+  // otherwise never re-renders to re-evaluate it. 5min is far finer than the TTL.
+  const [autoClearNow, setAutoClearNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setAutoClearNow(Date.now()), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  const visibleAgentItems = useMemo(
+    () => visibleSidebarItems(allAgentItems, dismissedSidebarIdSet, autoClearNow),
+    [allAgentItems, dismissedSidebarIdSet, autoClearNow],
+  );
+  const visibleBackgroundItems = useMemo(
+    () => visibleSidebarItems(allBackgroundItems, dismissedSidebarIdSet, autoClearNow),
+    [allBackgroundItems, dismissedSidebarIdSet, autoClearNow],
+  );
+  const taskActivitySummary = useMemo(
+    () =>
+      summarizeTaskActivity({
+        planStepsCompleted: activePlan?.steps.filter((s) => s.status === "completed").length ?? 0,
+        planStepsActive: activePlan?.steps.filter((s) => s.status === "inProgress").length ?? 0,
+        planStepsTotal: activePlan?.steps.length ?? 0,
+        agents: visibleAgentItems,
+        background: visibleBackgroundItems,
+      }),
+    [activePlan, visibleAgentItems, visibleBackgroundItems],
+  );
+  const openBackgroundTerminal = useCallback(
+    (terminalId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
+    },
+    [activeThreadRef],
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const showPlanFollowUpPrompt =
@@ -5688,6 +5741,9 @@ function ChatViewContent(props: ChatViewProps) {
         workspaceRoot={activeWorkspaceRoot}
         timestampFormat={timestampFormat}
         mode="embedded"
+        backgroundItems={visibleBackgroundItems}
+        agentItems={visibleAgentItems}
+        onOpenBackgroundItem={openBackgroundTerminal}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
@@ -5924,6 +5980,7 @@ function ChatViewContent(props: ChatViewProps) {
                             activePlan={activePlan as { turnId?: TurnId } | null}
                             sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
                             planSidebarLabel={planSidebarLabel}
+                            taskActivity={taskActivitySummary}
                             planSidebarOpen={planSidebarOpen}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}

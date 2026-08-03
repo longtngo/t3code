@@ -14,6 +14,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   EllipsisIcon,
+  FileTextIcon,
   LoaderIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
@@ -28,6 +29,13 @@ import {
   stripDisplayedPlanMarkdown,
 } from "../proposedPlan";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { SidebarItemRow, SidebarSection } from "./SidebarSection";
+import { useSidebarViewStore } from "../sidebarViewStore";
+import {
+  isTerminalSidebarStatus,
+  type AgentSidebarItem,
+  type BackgroundSidebarItem,
+} from "../sidebarSections";
 import { projectEnvironment } from "~/state/projects";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -55,6 +63,54 @@ function stepStatusIcon(status: string): React.ReactNode {
   );
 }
 
+/**
+ * Expanded detail for the selected agent: its final summary, a link to any
+ * output file it wrote, and the progress log it reported while running.
+ */
+function AgentDetail({ item }: { item: AgentSidebarItem }) {
+  return (
+    <div className="mt-1 space-y-2 rounded-lg border border-border/50 bg-muted/10 p-2.5">
+      {item.finalSummary ? (
+        <p className="text-[12px] leading-relaxed text-foreground/80">{item.finalSummary}</p>
+      ) : null}
+      {item.outputFile ? (
+        <a
+          href={`/viewer/${item.outputFile.replace(/^\/+/, "")}`}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/60 px-2 py-1 text-[11px] text-foreground/80 hover:bg-accent/60"
+        >
+          <FileTextIcon className="size-3 shrink-0" />
+          <span className="truncate">{item.outputFile}</span>
+        </a>
+      ) : null}
+      <div className="space-y-1">
+        <p className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
+          Log
+        </p>
+        {item.log.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground/40">No progress reported.</p>
+        ) : (
+          item.log.map((entry) => (
+            <div key={entry.id} className="rounded-md bg-muted/20 px-2 py-1">
+              {entry.lastToolName ? (
+                <span className="mr-1.5 rounded bg-muted/50 px-1 text-[10px] text-muted-foreground/70">
+                  {entry.lastToolName}
+                </span>
+              ) : null}
+              <span className="text-[11px] text-foreground/75">{entry.text}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Stable empty defaults so the memo above does not re-render on every parent pass.
+const EMPTY_BACKGROUND_ITEMS: ReadonlyArray<BackgroundSidebarItem> = [];
+const EMPTY_AGENT_ITEMS: ReadonlyArray<AgentSidebarItem> = [];
+
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
@@ -65,6 +121,12 @@ interface PlanSidebarProps {
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
   mode?: "sheet" | "sidebar" | "embedded";
+  /** Background-process (terminal) items for the active thread, filtered + sorted. */
+  backgroundItems?: ReadonlyArray<BackgroundSidebarItem>;
+  /** Agent/subagent items for the active thread, filtered + sorted. */
+  agentItems?: ReadonlyArray<AgentSidebarItem>;
+  /** Reveals a background terminal in the right panel's terminal surface. */
+  onOpenBackgroundItem?: ((terminalId: string) => void) | undefined;
 }
 
 const PlanSidebar = memo(function PlanSidebar({
@@ -77,13 +139,27 @@ const PlanSidebar = memo(function PlanSidebar({
   workspaceRoot,
   timestampFormat,
   mode = "sidebar",
+  backgroundItems = EMPTY_BACKGROUND_ITEMS,
+  agentItems = EMPTY_AGENT_ITEMS,
+  onOpenBackgroundItem,
 }: PlanSidebarProps) {
+  const collapsedSections = useSidebarViewStore((state) => state.collapsedSections);
+  const toggleSection = useSidebarViewStore((state) => state.toggleSection);
+  const selectedDetail = useSidebarViewStore((state) => state.selectedDetail);
+  const selectDetail = useSidebarViewStore((state) => state.selectDetail);
+  const clearDetail = useSidebarViewStore((state) => state.clearDetail);
+  const dismissItem = useSidebarViewStore((state) => state.dismissItem);
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const writeProjectFile = useAtomCommand(projectEnvironment.writeFile, {
     reportFailure: false,
   });
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "plan" });
+
+  const selectedAgent =
+    selectedDetail?.kind === "agent"
+      ? (agentItems.find((item) => item.id === selectedDetail.id) ?? null)
+      : null;
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -233,6 +309,61 @@ const PlanSidebar = memo(function PlanSidebar({
                 </div>
               ))}
             </div>
+          ) : null}
+
+          {/* Background processes (terminal sessions) */}
+          {backgroundItems.length > 0 ? (
+            <SidebarSection
+              title="Background processes"
+              count={backgroundItems.length}
+              collapsed={collapsedSections.background}
+              onToggle={() => toggleSection("background")}
+            >
+              {backgroundItems.map((item) => (
+                <SidebarItemRow
+                  key={item.id}
+                  status={item.status}
+                  label={item.label}
+                  detail={item.cwd}
+                  selected={false}
+                  // Open the real terminal surface rather than a static buffer
+                  // dump: the right panel already hosts a live xterm for it.
+                  onSelect={() => onOpenBackgroundItem?.(item.id)}
+                  onRemove={
+                    isTerminalSidebarStatus(item.status) ? () => dismissItem(item.id) : undefined
+                  }
+                />
+              ))}
+            </SidebarSection>
+          ) : null}
+
+          {/* Agents / subagents */}
+          {agentItems.length > 0 ? (
+            <SidebarSection
+              title="Agents"
+              count={agentItems.length}
+              collapsed={collapsedSections.agents}
+              onToggle={() => toggleSection("agents")}
+            >
+              {agentItems.map((item) => (
+                <SidebarItemRow
+                  key={item.id}
+                  status={item.status}
+                  label={item.label}
+                  detail={item.finalSummary ?? item.log.at(-1)?.text}
+                  selected={selectedDetail?.id === item.id}
+                  onSelect={() =>
+                    selectedDetail?.id === item.id
+                      ? clearDetail()
+                      : selectDetail({ kind: "agent", id: item.id })
+                  }
+                  onRemove={
+                    isTerminalSidebarStatus(item.status) ? () => dismissItem(item.id) : undefined
+                  }
+                />
+              ))}
+              {selectedAgent ? <AgentDetail item={selectedAgent} /> : null}
+            </SidebarSection>
           ) : null}
 
           {/* Proposed Plan Markdown */}

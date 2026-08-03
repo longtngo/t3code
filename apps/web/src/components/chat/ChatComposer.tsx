@@ -93,6 +93,8 @@ import { VitalsGaugeConnected } from "./VitalsGauge";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
+import type { TaskActivitySummary } from "../../sidebarSections";
+import { Spinner } from "../ui/spinner";
 import { Separator } from "../ui/separator";
 
 function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children: ReactNode }) {
@@ -269,6 +271,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
   planSidebarLabel: string;
+  /** Completed/total + running summary across plan steps, agents, and background work. */
+  taskActivity?: TaskActivitySummary | undefined;
   planSidebarOpen: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -389,10 +393,19 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                 />
               }
             >
-              <ListTodoIcon
-                className={props.planSidebarOpen ? "text-current opacity-100" : undefined}
-              />
+              {props.taskActivity?.hasActive ? (
+                <Spinner className="size-3.5" aria-hidden="true" />
+              ) : (
+                <ListTodoIcon
+                  className={props.planSidebarOpen ? "text-current opacity-100" : undefined}
+                />
+              )}
               <span className="sr-only sm:not-sr-only">{props.planSidebarLabel}</span>
+              {props.taskActivity && props.taskActivity.totalCount > 0 ? (
+                <span className="ml-1 font-mono text-[11px] tabular-nums text-muted-foreground/60">
+                  {props.taskActivity.completedCount}/{props.taskActivity.totalCount}
+                </span>
+              ) : null}
             </TooltipTrigger>
             <TooltipPopup side="top">{planSidebarTooltip}</TooltipPopup>
           </Tooltip>
@@ -557,6 +570,8 @@ export interface ChatComposerProps {
   activePlan: { turnId?: TurnId } | null;
   sidebarProposedPlan: { turnId?: TurnId } | null;
   planSidebarLabel: string;
+  /** Completed/total + running summary across plan steps, agents, and background work. */
+  taskActivity?: TaskActivitySummary | undefined;
   planSidebarOpen: boolean;
 
   // Mode
@@ -656,6 +671,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sidebarProposedPlan,
     planSidebarLabel,
     planSidebarOpen,
+    taskActivity,
     runtimeMode,
     interactionMode,
     lockedProvider,
@@ -1137,7 +1153,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
+  // Also show when only agents / background processes exist: those sections live
+  // in the same panel and would otherwise be unreachable on a thread with no plan.
+  const showPlanSidebarToggle = Boolean(
+    activePlan || sidebarProposedPlan || planSidebarOpen || (taskActivity?.totalCount ?? 0) > 0,
+  );
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
@@ -2741,6 +2761,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showPlanToggle={showPlanSidebarToggle}
                       planSidebarLabel={planSidebarLabel}
                       planSidebarOpen={planSidebarOpen}
+                      taskActivity={taskActivity}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
                       onTogglePlanSidebar={togglePlanSidebar}
