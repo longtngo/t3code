@@ -65,7 +65,12 @@ export const make = Effect.fn("makeMarkdownHtmlRenderer")(function* () {
         // diagnostics rather than let them trip the output-size limit.
         const result = yield* processRunner.run({
           command,
-          args: [inputPath, "--theme", "report", "-o", outputPath],
+          // `--self-contained` drops the tool's Google Fonts <link>, so the document
+          // reaches the network for nothing. The viewer renders it in a `sandbox=""`
+          // iframe (scripts inert) and is served over Tailscale to devices that may
+          // have no internet; the app itself loads no external resources either.
+          // The UniUni identity is carried by the CSS tokens, not the webfonts.
+          args: [inputPath, "--theme", "report", "--self-contained", "-o", outputPath],
           timeout: RENDER_TIMEOUT,
           // Surface a timeout as a value (`timedOut`) rather than a failure, so the
           // fallback decision below stays in one place.
