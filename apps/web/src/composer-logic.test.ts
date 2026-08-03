@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildFilePathInsertion,
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   detectComposerTrigger,
@@ -9,6 +10,7 @@ import {
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
   shouldSubmitComposerOnEnter,
+  shouldUseLocalFilePath,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
@@ -372,3 +374,52 @@ describe("parseStandaloneComposerSlashCommand", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
   });
 });
+
+describe("buildFilePathInsertion", () => {
+  it("returns empty string when there are no paths", () => {
+    expect(buildFilePathInsertion("anything", [])).toBe("");
+  });
+
+  it("does not prefix a newline at the start of an empty composer", () => {
+    expect(buildFilePathInsertion("", ["/Users/x/report.pdf"])).toBe("/Users/x/report.pdf\n");
+  });
+
+  it("prefixes a newline when the preceding text ends in non-whitespace", () => {
+    expect(buildFilePathInsertion("see this", ["/a/b.md"])).toBe("\n/a/b.md\n");
+  });
+
+  it("does not double up when the preceding text already ends in whitespace", () => {
+    expect(buildFilePathInsertion("see this ", ["/a/b.md"])).toBe("/a/b.md\n");
+    expect(buildFilePathInsertion("see this\n", ["/a/b.md"])).toBe("/a/b.md\n");
+  });
+
+  it("joins multiple paths one per line", () => {
+    expect(buildFilePathInsertion("", ["/a.pdf", "/b/c d.csv", "/e.html"])).toBe(
+      "/a.pdf\n/b/c d.csv\n/e.html\n",
+    );
+  });
+});
+
+describe("shouldUseLocalFilePath", () => {
+  it("uses the local path only in the desktop app on the local (same-host) environment", () => {
+    expect(
+      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: true }),
+    ).toBe(true);
+  });
+
+  it("uploads instead of using a local path for a remote environment, even on desktop", () => {
+    expect(
+      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: false }),
+    ).toBe(false);
+  });
+
+  it("uploads in a plain browser (no desktop bridge), regardless of environment", () => {
+    expect(
+      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: true }),
+    ).toBe(false);
+    expect(
+      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: false }),
+    ).toBe(false);
+  });
+});
+

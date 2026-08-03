@@ -66,6 +66,7 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import { writeUploadedAttachment } from "./attachmentUpload.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -361,6 +362,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.projectsListEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
   [WS_METHODS.projectsReadTrustedFile, AuthOrchestrationReadScope],
+  [WS_METHODS.attachmentsUpload, AuthOrchestrationOperateScope],
   [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
@@ -1805,6 +1807,17 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.attachmentsUpload]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.attachmentsUpload,
+            writeUploadedAttachment({
+              attachmentsDir: config.attachmentsDir,
+              threadId: input.threadId,
+              fileName: input.fileName,
+              dataBase64: input.dataBase64,
+            }),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.projectsReadTrustedFile]: (input) =>

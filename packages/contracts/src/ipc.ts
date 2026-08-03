@@ -990,6 +990,14 @@ export type DesktopNotificationInput = typeof DesktopNotificationInputSchema.Typ
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  /**
+   * Resolve the absolute filesystem path of a dropped `File`, via Electron's
+   * `webUtils.getPathForFile`. Returns "" when the file has no real path backing
+   * it (e.g. a clipboard blob). Synchronous — no IPC round-trip. Optional so
+   * older shells and existing bridge mocks keep type-checking; the renderer
+   * feature-detects it.
+   */
+  getPathForFile?: (file: File) => string;
   // One bootstrap per pool instance currently registered with bootstrap
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.

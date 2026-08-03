@@ -41,6 +41,8 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
   shouldSubmitComposerOnEnter,
+  buildFilePathInsertion,
+  shouldUseLocalFilePath,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import { resizeImageForUpload } from "~/lib/imageResize";
@@ -92,6 +94,10 @@ import {
 import { VitalsGaugeConnected } from "./VitalsGauge";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
+import { ATTACHMENT_UPLOAD_MAX_BYTES } from "@t3tools/contracts";
+import { projectEnvironment } from "~/state/projects";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { cn, randomUUID } from "~/lib/utils";
 import type { TaskActivitySummary } from "../../sidebarSections";
 import { Spinner } from "../ui/spinner";
@@ -1898,6 +1904,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: images
   // ------------------------------------------------------------------
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const uploadAttachment = useAtomCommand(projectEnvironment.uploadAttachment, {
+    reportFailure: false,
+  });
+
   const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
     if (pendingUserInputs.length > 0) {
@@ -1947,6 +1958,66 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError(activeThreadId, error);
   };
 
+  /**
+   * Non-image files can't be sent as attachments, so surface an absolute
+   * filesystem path into the prompt instead and let the agent read them
+   * directly. In the desktop app talking to the same-host (primary) backend the
+   * real local path is available with no copy; in a plain browser — or for any
+   * remote agent, where a client path would be meaningless — the bytes are
+   * uploaded to the agent host and that server-side path is inserted.
+   */
+  const addComposerFilePaths = async (files: File[]): Promise<void> => {
+    if (!activeThreadId || files.length === 0) return;
+
+    const paths: string[] = [];
+    const unresolved: string[] = [];
+    const toUpload: File[] = [];
+
+    const bridge = window.desktopBridge;
+    const useLocalPath = shouldUseLocalFilePath({
+      hasDesktopBridge: typeof bridge?.getPathForFile === "function",
+      isLocalEnvironment: environmentId === primaryEnvironmentId,
+    });
+    for (const file of files) {
+      const localPath = useLocalPath ? (bridge?.getPathForFile?.(file) ?? "") : "";
+      if (localPath) paths.push(localPath);
+      else toUpload.push(file);
+    }
+
+    for (const file of toUpload) {
+      const name = file.name || "file";
+      if (file.size > ATTACHMENT_UPLOAD_MAX_BYTES) {
+        unresolved.push(name);
+        continue;
+      }
+      const dataUrl = await readFileAsDataUrl(file).catch(() => null);
+      if (dataUrl === null) {
+        unresolved.push(name);
+        continue;
+      }
+      const result = await uploadAttachment({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          fileName: name,
+          dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        },
+      });
+      if (result._tag === "Success") paths.push(result.value.path);
+      else unresolved.push(name);
+    }
+
+    if (paths.length > 0) {
+      insertComposerTextAtEnd(buildFilePathInsertion(promptRef.current, paths), {
+        ensureLeadingBoundary: false,
+      });
+    }
+    setThreadError(
+      activeThreadId,
+      unresolved.length > 0 ? `Could not attach ${unresolved.join(", ")}.` : null,
+    );
+  };
+
   const removeComposerImage = (imageId: string) => {
     removeComposerImageFromDraft(imageId);
   };
@@ -1994,7 +2065,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     const files = Array.from(event.dataTransfer.files);
-    void addComposerImages(files);
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    const others = files.filter((file) => !file.type.startsWith("image/"));
+    if (images.length > 0) void addComposerImages(images);
+    if (others.length > 0) void addComposerFilePaths(others);
     focusComposer();
   };
 

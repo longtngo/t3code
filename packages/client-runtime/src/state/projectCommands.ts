@@ -98,6 +98,18 @@ export function createProjectEnvironmentAtoms<R, E>(
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),
+    // Upload dropped file bytes to the agent host, which writes them and returns
+    // the absolute path to reference in the prompt. The web/remote fallback for
+    // non-image drops, where the browser cannot expose a real local path.
+    uploadAttachment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:attachments:upload",
+      tag: WS_METHODS.attachmentsUpload,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
+    }),
     writeFile: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:projects:write-file",
       tag: WS_METHODS.projectsWriteFile,

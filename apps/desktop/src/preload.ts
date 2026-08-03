@@ -5,7 +5,7 @@ import type {
   DesktopPreviewTabState,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 
@@ -106,6 +106,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   showNotification: (input) => ipcRenderer.invoke(IpcChannels.SHOW_NOTIFICATION_CHANNEL, input),
+  // Runs in the preload context so it can access the real File object; returns
+  // "" when the file has no filesystem backing (e.g. a clipboard blob).
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   onNotificationActivated: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, threadRef: unknown) => {
       if (typeof threadRef !== "object" || threadRef === null) return;

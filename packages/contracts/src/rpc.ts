@@ -1,4 +1,9 @@
 import * as Schema from "effect/Schema";
+import {
+  AttachmentUploadError,
+  AttachmentUploadInput,
+  AttachmentUploadResult,
+} from "./attachment.ts";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -159,6 +164,9 @@ export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
   projectsReadFile: "projects.readFile",
   projectsReadTrustedFile: "projects.readTrustedFile",
+
+  // Attachment methods
+  attachmentsUpload: "attachments.upload",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
 
@@ -444,6 +452,12 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsAttachmentsUploadRpc = Rpc.make(WS_METHODS.attachmentsUpload, {
+  payload: AttachmentUploadInput,
+  success: AttachmentUploadResult,
+  error: Schema.Union([AttachmentUploadError, EnvironmentAuthorizationError]),
 });
 
 export const WsProjectsReadTrustedFileRpc = Rpc.make(WS_METHODS.projectsReadTrustedFile, {
@@ -936,6 +950,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsReadTrustedFileRpc,
+  WsAttachmentsUploadRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
