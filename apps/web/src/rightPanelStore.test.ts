@@ -142,6 +142,43 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("opens a read-only surface for an absolute path outside the workspace", () => {
+    useRightPanelStore.getState().openTrustedFile(refA, "/Users/dev/reports/report.md");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "trustedFile:/Users/dev/reports/report.md",
+      surfaces: [
+        {
+          id: "trustedFile:/Users/dev/reports/report.md",
+          kind: "trustedFile",
+          absolutePath: "/Users/dev/reports/report.md",
+        },
+      ],
+    });
+  });
+
+  it("reuses one surface per trusted path instead of stacking duplicates", () => {
+    useRightPanelStore.getState().openTrustedFile(refA, "/Users/dev/a.md");
+    useRightPanelStore.getState().openTrustedFile(refA, "/Users/dev/a.md");
+    useRightPanelStore.getState().openTrustedFile(refA, "/Users/dev/b.md");
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toHaveLength(2);
+    expect(state.activeSurfaceId).toBe("trustedFile:/Users/dev/b.md");
+  });
+
+  it("keeps trusted surfaces when the workspace goes away", () => {
+    // They are addressed absolutely, so unlike workspace file surfaces they stay
+    // valid with no project attached.
+    useRightPanelStore.getState().openTrustedFile(refA, "/Users/dev/reports/report.md");
+    useRightPanelStore.getState().openFile(refA, "src/index.ts");
+    useRightPanelStore.getState().reconcileFileSurfaces(refA, false);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.kind)).toEqual(["trustedFile"]);
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

@@ -14,7 +14,15 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-export const RIGHT_PANEL_KINDS = ["plan", "diff", "files", "file", "preview", "terminal"] as const;
+export const RIGHT_PANEL_KINDS = [
+  "plan",
+  "diff",
+  "files",
+  "file",
+  "trustedFile",
+  "preview",
+  "terminal",
+] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
@@ -37,6 +45,14 @@ export type RightPanelSurface =
       revealLine: number | null;
       revealRequestId: number;
     }
+  // A file addressed by ABSOLUTE path, outside the workspace, read through the
+  // trusted-read RPC. Separate from `file` because there is no workspace-relative
+  // path and no write RPC for these — the surface is read-only by construction.
+  | {
+      id: `trustedFile:${string}`;
+      kind: "trustedFile";
+      absolutePath: string;
+    }
   | { id: "plan"; kind: "plan" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -50,9 +66,11 @@ export interface ThreadRightPanelState {
 
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
-  open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "trustedFile" | "terminal">) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  /** Open a read-only view of an absolute path outside the workspace. */
+  openTrustedFile: (ref: ScopedThreadRef, absolutePath: string) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -72,7 +90,7 @@ interface RightPanelStoreState {
   show: (ref: ScopedThreadRef) => void;
   close: (ref: ScopedThreadRef) => void;
   toggleVisibility: (ref: ScopedThreadRef) => void;
-  toggle: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  toggle: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "trustedFile" | "terminal">) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
 
@@ -83,7 +101,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal">,
+  kind: Exclude<RightPanelKind, "file" | "trustedFile" | "preview" | "terminal">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -183,6 +201,15 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ? surface.revealRequestId
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
+                    }
+                    if (surface.kind === "trustedFile") {
+                      // Drop a corrupted entry rather than hand the viewer an
+                      // undefined path, the way the terminal branch below does.
+                      return typeof surface.absolutePath === "string" &&
+                        surface.absolutePath.length > 0 &&
+                        surface.id === `trustedFile:${surface.absolutePath}`
+                        ? [surface]
+                        : [];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -285,6 +312,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 : [...withoutStandaloneExplorer, surface],
             };
           }),
+        })),
+      openTrustedFile: (ref, absolutePath) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, {
+              id: `trustedFile:${absolutePath}` as const,
+              kind: "trustedFile",
+              absolutePath,
+            }),
+          ),
         })),
       openTerminal: (ref, terminalId) =>
         set((state) => ({

@@ -70,7 +70,12 @@ import {
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
-import { collectKnownAbsolutePaths, findChatFilePathMentions } from "../chatFilePathLinks";
+import {
+  collectKnownAbsolutePaths,
+  findChatFilePathMentions,
+  isAbsoluteFilePath,
+} from "../chatFilePathLinks";
+import { splitPathAndPosition } from "../terminal-links";
 import { rehypeChatFilePathLinks } from "../rehypeChatFilePathLinks";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
@@ -1030,12 +1035,25 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   }, [onOpen, targetPath]);
 
   const handleOpenInFilePreview = useCallback(() => {
-    if (!threadRef || !workspaceRelativePath) {
+    if (!threadRef) {
       handleOpenInEditor();
       return;
     }
-    useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
-  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
+    if (workspaceRelativePath) {
+      useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
+      return;
+    }
+    // Outside the workspace (a report under ~/reports, a temp file) there is no
+    // workspace-relative path, so the editable file surface cannot address it.
+    // Read-only trusted view instead of the previous fall-through to an external
+    // editor, which left the in-app viewer unreachable from chat.
+    if (isAbsoluteFilePath(targetPath)) {
+      const { path } = splitPathAndPosition(targetPath);
+      useRightPanelStore.getState().openTrustedFile(threadRef, path);
+      return;
+    }
+    handleOpenInEditor();
+  }, [handleOpenInEditor, line, targetPath, threadRef, workspaceRelativePath]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {

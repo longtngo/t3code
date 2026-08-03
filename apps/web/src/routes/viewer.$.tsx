@@ -1,13 +1,8 @@
-import { FileTextIcon, LoaderCircle, RotateCcwIcon } from "lucide-react";
+import { FileTextIcon } from "lucide-react";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
-import ChatMarkdown from "~/components/ChatMarkdown";
-import { isMarkdownPreviewFile } from "~/components/files/filePreviewMode";
-import {
-  useTrustedFileQuery,
-  useTrustedMarkdownHtmlQuery,
-} from "~/components/files/projectFilesQueryState";
+import { TrustedFileView } from "~/components/files/TrustedFileView";
 import { absolutePathFromViewerSplat, viewerSplatFromPath } from "~/components/files/viewerPath";
 import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -94,15 +89,6 @@ function ViewerRouteView() {
   const absolutePath = absolutePathFromViewerSplat(splat);
   const environmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
-  const isMarkdown = absolutePath !== null && isMarkdownPreviewFile(absolutePath);
-  const [viewMode, setViewMode] = useState<"markdown" | "html">("markdown");
-  const showHtml = isMarkdown && viewMode === "html";
-  const { data, error, isPending, refresh } = useTrustedFileQuery(
-    environmentId,
-    showHtml ? null : absolutePath,
-  );
-  const rendered = useTrustedMarkdownHtmlQuery(environmentId, showHtml ? absolutePath : null);
-
   const navigateTo = useCallback(
     (rawPath: string) => {
       const nextSplat = viewerSplatFromPath(rawPath);
@@ -112,78 +98,17 @@ function ViewerRouteView() {
     [navigate, splat],
   );
 
-  const contents = data?.contents ?? null;
-
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
           <FileTextIcon className="size-4 shrink-0 text-muted-foreground/70" />
           <AddressBar value={absolutePath ?? ""} onSubmit={navigateTo} />
-          {isMarkdown ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setViewMode((mode) => (mode === "html" ? "markdown" : "html"))}
-              title={showHtml ? "Show markdown" : "Render as HTML"}
-            >
-              {showHtml ? "MD" : "HTML"}
-            </Button>
-          ) : null}
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => (showHtml ? rendered.refresh() : refresh())}
-            disabled={absolutePath === null}
-            title="Reload file"
-          >
-            <RotateCcwIcon className="size-3.5" />
-          </Button>
         </header>
 
-        <div className="min-h-0 flex flex-1 flex-col">
-          {absolutePath === null ? (
-            <ViewerNotice>Enter an absolute file path to view.</ViewerNotice>
-          ) : environmentId === null ? (
-            <ViewerNotice>Connect to an environment to view files.</ViewerNotice>
-          ) : error !== null && contents === null ? (
-            <ViewerNotice tone="error">{error}</ViewerNotice>
-          ) : contents === null ? (
-            <ViewerNotice>
-              <LoaderCircle className="size-4 animate-spin" aria-hidden />
-              {isPending ? "Loading…" : "No content."}
-            </ViewerNotice>
-          ) : showHtml ? (
-            rendered.data ? (
-              // Sandboxed: the rendered document is treated as untrusted content
-              // and gets an opaque origin with no access to this app.
-              <iframe
-                title="Rendered document"
-                sandbox=""
-                srcDoc={rendered.data.html}
-                className="min-h-0 flex-1 border-0 bg-white"
-              />
-            ) : (
-              <ViewerNotice tone={rendered.error ? "error" : "muted"}>
-                {rendered.error ?? "Rendering…"}
-              </ViewerNotice>
-            )
-          ) : isMarkdown ? (
-            <ScrollArea className="min-h-0 flex-1">
-              <ChatMarkdown
-                text={contents}
-                cwd={directoryOf(absolutePath)}
-                className="mx-auto max-w-4xl px-6 py-5"
-              />
-            </ScrollArea>
-          ) : (
-            <ScrollArea className="min-h-0 flex-1">
-              <pre className="whitespace-pre-wrap break-words px-6 py-5 font-mono text-xs text-foreground/90">
-                {contents}
-              </pre>
-            </ScrollArea>
-          )}
-        </div>
+        {/* Content, the markdown/HTML toggle, and reload all live in the shared
+            component, so this route and the right-panel surface cannot drift. */}
+        <TrustedFileView environmentId={environmentId} absolutePath={absolutePath} />
       </div>
     </SidebarInset>
   );

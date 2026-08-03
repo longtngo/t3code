@@ -389,6 +389,7 @@ const PreviewPanel = lazy(() =>
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+const TrustedFileView = lazy(() => import("./files/TrustedFileView"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -5745,6 +5746,13 @@ function ChatViewContent(props: ChatViewProps) {
         agentItems={visibleAgentItems}
         onOpenBackgroundItem={openBackgroundTerminal}
       />
+    ) : activeRightPanelSurface?.kind === "trustedFile" ? (
+      <Suspense fallback={null}>
+        <TrustedFileView
+          environmentId={activeProject?.environmentId ?? null}
+          absolutePath={activeRightPanelSurface.absolutePath}
+        />
+      </Suspense>
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (

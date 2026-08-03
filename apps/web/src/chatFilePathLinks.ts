@@ -54,9 +54,12 @@ const WINDOWS_ABSOLUTE_PATTERN = /^[A-Za-z]:[\\/]/;
  */
 const BARE_FILENAME_PATTERN = /[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?::\d+){0,2}/g;
 
-function isAbsolute(path: string): boolean {
+/** Whether a path is rooted, and so addressable without a cwd. */
+export function isAbsoluteFilePath(path: string): boolean {
   return path.startsWith("/") || WINDOWS_ABSOLUTE_PATTERN.test(path) || path.startsWith("\\\\");
 }
+
+const isAbsolute = isAbsoluteFilePath;
 
 function hasSeparator(path: string): boolean {
   return path.includes("/") || path.includes("\\");
