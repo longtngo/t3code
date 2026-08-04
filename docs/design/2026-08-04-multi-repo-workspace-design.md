@@ -170,14 +170,55 @@ So the invariant is **not** "T3 Code cuts the branch". It is narrower and covers
 > `gh-merge-base` must be set on the current branch before any PR action in a member
 > repository.
 
-`ensureMemberPrBase(cwd, branch, integrationBranch)` — idempotent, sets the key only when
-unset — is called pre-action in the git panel. That covers every branch origin uniformly:
+`ensureMemberPrBase(cwd, branch, integrationBranch)` — idempotent, called pre-action in the
+git panel — resolves the base through a ladder and covers every branch origin uniformly:
 
-| Branch origin | How the key gets set |
-|---|---|
-| Cut by T3 Code | at cut time; the pre-action call is a no-op |
-| Cut by the user by hand | pre-action |
-| Pre-dates this feature | pre-action |
+| # | Source | Quality |
+|---|---|---|
+| 1 | `branch.<name>.gh-merge-base` | explicit intent; always wins |
+| 2 | reflog creation record | **exact** when present |
+| 3 | the member's declared `integrationBranch` | ground truth for the effort |
+| 4 | `provider.getDefaultBranch()` | today's behavior |
+
+Step 2 parses `git reflog show <branch>` for the `branch: Created from X` entry. When `X` is
+a name it is used directly; when it is `HEAD` or a sha, `git branch --points-at <sha>`
+recovers the name, preferring the declared `integrationBranch` if it is among the matches,
+then local refs over remote. It is best-effort: the reflog is local-only and expires
+(`gc.reflogExpire`, 90 days by default), and is absent on a fresh clone, so an unavailable
+record simply falls through to step 3.
+
+Step 2 must outrank step 3, and this is not a nicety. A hotfix branch cut from `main` in a
+member repository pinned to `pickup-v2` would otherwise be stamped with `pickup-v2` and open
+a pull request against the wrong base — reintroducing the exact failure this section exists
+to prevent, in a case the user did nothing wrong in.
+
+**Why not infer the parent from history.** Both obvious topology heuristics were measured
+against known ground truth on four real branches in these repositories, and each was correct
+**once out of four times**:
+
+| Branch | Truth | Decoration walk | Closest merge-base |
+|---|---|---|---|
+| `t3code feat/multi-repo-workspace` | `personal` | `fork/personal` ✓ | `personal` ✓ |
+| `pickup-v2 feat/demo-suite` | `main` | none ✗ | `chore/demo-seed-db` ✗ |
+| `uniexpress pickup-v2` | integration | `origin/…UBM-1818…` ✗ | `fix/dispatch-restore-auth-checks` ✗ |
+| `prm_portal_api pickup-v2` | integration | `origin/UP-5044` ✗ | `fix/temu-pickup-idor-guard` ✗ |
+
+`feat/demo-suite` is the instructive failure: its true parent `main` and the unrelated
+`chore/demo-seed-db` are *both* one commit back from the merge-base, and the tie broke wrong.
+That is not a tuning problem. Git does not record branch ancestry, so closest-merge-base
+cannot distinguish a parent from a sibling cut at the same commit. Reflog is the only exact
+source, which is why the ladder uses it and no topology inference at all.
+
+**Two constraints on the ladder**, because steps 2 through 4 can be wrong and the failure is
+expensive:
+
+- The resolved base is **shown and editable** in the pull request confirmation.
+- `gh-merge-base` is written **only after the user confirms**, so a guess never becomes
+  sticky, and the next action short-circuits at step 1.
+
+The ladder is not workspace-specific and would improve base resolution for ordinary 1:1
+projects too; keeping it in the workspace layer, where it writes `gh-merge-base` rather than
+altering `resolveBaseBranch`, means `GitManager` does not diverge from upstream either way.
 
 The one case that cannot be fixed from outside is `runStackedAction` with
 `featureBranch: true`, which creates the branch *inside* the action (`GitManager.ts:2022`),
@@ -388,8 +429,14 @@ modes that caused past incidents.
   fixture, for both branch origins:
   - *T3 Code cut it* — cut a member branch, assert both config keys are written, assert
     `resolveBaseBranch` returns the integration branch.
-  - *The user cut it by hand* — create a branch with no config, run `ensureMemberPrBase`,
-    assert `resolveBaseBranch` returns the integration branch rather than `main`.
+  - *The user cut it from the integration branch* — create a branch with no config, run
+    `ensureMemberPrBase`, assert the base is the integration branch rather than `main`.
+  - *The user cut it from somewhere else* — create a branch from `main` in a repository
+    whose declared `integrationBranch` is `pickup-v2`, and assert the reflog step wins so
+    the base is `main`. This is the case the ladder's ordering exists for.
+  - *Reflog says `Created from HEAD`* — assert the sha is resolved back to a branch name.
+  - *Reflog expired or absent* — assert a clean fall-through to the declared
+    `integrationBranch` rather than an error.
   - *Regression guard* — with `gh-merge-base` deliberately unset, assert the base resolves
     to `main`, so the test proves the key is what is doing the work rather than passing for
     an unrelated reason.
