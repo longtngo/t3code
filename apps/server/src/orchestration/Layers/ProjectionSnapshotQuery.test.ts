@@ -384,6 +384,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          members: [],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
@@ -500,6 +501,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          members: [],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
         },
@@ -562,6 +564,96 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(threadDetail.value.oldestLoaded, undefined);
       }
     }),
+  );
+
+  it.effect("round-trips a non-empty workspace members array through the projection query", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          members_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-1',
+          'Project 1',
+          '/tmp/project-1',
+          NULL,
+          '[]',
+          '[{"id":"member-1","path":"/tmp/member-1","title":"Member One","integrationBranch":"feature/member-one"}]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      const shell = yield* snapshotQuery.getProjectShellById(asProjectId("project-1"));
+      assert.equal(shell._tag, "Some");
+      if (shell._tag === "Some") {
+        assert.deepEqual(shell.value.members, [
+          {
+            id: "member-1",
+            path: "/tmp/member-1",
+            title: "Member One",
+            integrationBranch: "feature/member-one",
+          },
+        ]);
+      }
+    }),
+  );
+
+  it.effect(
+    "decodes a project with no members_json history as an empty members array, not a decode failure",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_projects`;
+
+        // members_json is intentionally omitted from the column list so the
+        // migration's `DEFAULT '[]'` is what supplies the value, mirroring an
+        // existing row written before this column existed.
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id,
+            title,
+            workspace_root,
+            default_model_selection_json,
+            scripts_json,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'project-1',
+            'Project 1',
+            '/tmp/project-1',
+            NULL,
+            '[]',
+            '2026-02-24T00:00:00.000Z',
+            '2026-02-24T00:00:01.000Z',
+            NULL
+          )
+        `;
+
+        const shell = yield* snapshotQuery.getProjectShellById(asProjectId("project-1"));
+        assert.equal(shell._tag, "Some");
+        if (shell._tag === "Some") {
+          assert.deepEqual(shell.value.members, []);
+        }
+      }),
   );
 
   it.effect(

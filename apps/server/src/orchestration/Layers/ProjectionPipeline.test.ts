@@ -2774,4 +2774,69 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       ]);
     }),
   );
+
+  it.effect(
+    "projects preserve members through a title-only project.meta.update (no unconditional clear)",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const sql = yield* SqlClient.SqlClient;
+        const createdAt = "2026-01-01T00:00:00.000Z";
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-members-project-create"),
+          projectId: ProjectId.make("project-members"),
+          title: "Members Project",
+          workspaceRoot: "/tmp/project-members",
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt,
+        });
+
+        yield* engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-members-project-set"),
+          projectId: ProjectId.make("project-members"),
+          members: [
+            {
+              id: "member-1",
+              path: "/tmp/member-1",
+              title: "Member One",
+              integrationBranch: "feature/member-one",
+            },
+          ],
+        });
+
+        // A subsequent update that only touches the title must not clear
+        // members: the writer's `members` merge is a conditional spread, not
+        // an unconditional assignment of `event.payload.members`.
+        yield* engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-members-project-title-only"),
+          projectId: ProjectId.make("project-members"),
+          title: "Members Project Renamed",
+        });
+
+        const projectRows = yield* sql<{
+          readonly title: string;
+          readonly membersJson: string;
+        }>`
+          SELECT
+            title,
+            members_json AS "membersJson"
+          FROM projection_projects
+          WHERE project_id = 'project-members'
+        `;
+        assert.deepEqual(projectRows, [
+          {
+            title: "Members Project Renamed",
+            membersJson:
+              '[{"id":"member-1","path":"/tmp/member-1","title":"Member One","integrationBranch":"feature/member-one"}]',
+          },
+        ]);
+      }),
+  );
 });

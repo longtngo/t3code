@@ -6,7 +6,13 @@
  *
  * @module ProjectionProjectRepository
  */
-import { IsoDateTime, ModelSelection, ProjectId, ProjectScript } from "@t3tools/contracts";
+import {
+  IsoDateTime,
+  ModelSelection,
+  ProjectId,
+  ProjectScript,
+  WorkspaceMember,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -20,6 +26,7 @@ export const ProjectionProject = Schema.Struct({
   workspaceRoot: Schema.String,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  members: Schema.Array(WorkspaceMember),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -43,7 +50,7 @@ export interface ProjectionProjectRepositoryShape {
   /**
    * Insert or replace a projected project row.
    *
-   * Upserts by `projectId` and persists scripts through JSON encoding.
+   * Upserts by `projectId` and persists scripts and members through JSON encoding.
    */
   readonly upsert: (row: ProjectionProject) => Effect.Effect<void, ProjectionRepositoryError>;
 

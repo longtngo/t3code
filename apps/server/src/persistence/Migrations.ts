@@ -62,6 +62,10 @@ import Migration0037 from "./Migrations/037_PushSubscriptions.ts";
 // next free id (38) rather than its filename number. Renumbering an applied id would
 // re-run or skip migrations on live fork DBs.
 import Migration0038 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+// Adds projection_projects.members_json (workspace members), the next unused
+// migration id after 38. File is named 038 for the feature it introduces;
+// the id is 39 because 38 is already taken by the entry above.
+import Migration0039 from "./Migrations/038_ProjectionProjectMembers.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +115,7 @@ export const migrationEntries = [
   [36, "ProjectionThreadsSnoozed", Migration0036],
   [37, "PushSubscriptions", Migration0037],
   [38, "ProjectionThreadTitleRegeneration", Migration0038],
+  [39, "ProjectionProjectMembers", Migration0039],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
