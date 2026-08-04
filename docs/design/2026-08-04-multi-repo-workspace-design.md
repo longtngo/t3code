@@ -148,16 +148,45 @@ if (configured) return configured;
 It is also `gh`'s own convention, so `gh pr create` run by hand in that repository targets
 the integration branch too.
 
-### T3 Code must cut the branch itself
+### The invariant: `gh-merge-base` is set before the PR step runs
 
-`runStackedAction` with `featureBranch: true` creates the branch *inside* the action
-(`GitManager.ts:2022`) and only then resolves the base. A brand-new branch has no upstream,
-so resolution falls through to the provider default — `main` — and every member pull request
-would target the wrong base.
+Without the key, the base resolves to the wrong branch. `runPrStep` refuses to run unless
+the branch is pushed (`GitManager.ts:1565`), so at PR time every branch has an upstream, and
+it is `origin/<its own name>`. `resolveBaseBranch` then walks:
 
-The config key therefore has to exist **before** the action runs, which means T3 Code cuts
-member feature branches itself. This is not extra work: it is the same mechanism the lazy
-cut needs. The two requirements collapse into one, and `GitManager` needs no change.
+1. `branch.<name>.gh-merge-base` — absent, skip.
+2. Upstream tracking — the guard is `upstreamBranch !== branch`, and the upstream *is* the
+   branch itself, so it is correctly rejected.
+3. `provider.getDefaultBranch({ cwd })` → **`main`**.
+
+The consequences escalate: the PR diff becomes `main...feature`, which includes every commit
+on `pickup-v2` not yet merged to `main`; the generated title and body describe that same
+wrong diff, because `resolveBaseRangeRef` feeds `readRangeContext` feeds `generatePrContent`
+(`:1596`–`:1604`); and merging the PR pushes the entire effort branch into `main`
+prematurely.
+
+So the invariant is **not** "T3 Code cuts the branch". It is narrower and covers more:
+
+> `gh-merge-base` must be set on the current branch before any PR action in a member
+> repository.
+
+`ensureMemberPrBase(cwd, branch, integrationBranch)` — idempotent, sets the key only when
+unset — is called pre-action in the git panel. That covers every branch origin uniformly:
+
+| Branch origin | How the key gets set |
+|---|---|
+| Cut by T3 Code | at cut time; the pre-action call is a no-op |
+| Cut by the user by hand | pre-action |
+| Pre-dates this feature | pre-action |
+
+The one case that cannot be fixed from outside is `runStackedAction` with
+`featureBranch: true`, which creates the branch *inside* the action (`GitManager.ts:2022`),
+after the last chance to write config. Member actions therefore always run with
+`featureBranch: false` against a branch that already exists — which the post-turn cut
+provides. `GitManager` needs no change either way.
+
+A member sitting on its integration branch with no feature branch is offered commit and
+push but **not** pull request: a PR from `pickup-v2` to `pickup-v2` is meaningless.
 
 ### The classifier
 
@@ -354,11 +383,18 @@ modes that caused past incidents.
 
 - `classifyMemberBranch` — unit table across all five states, no git required.
 - Contract decode defaults for `members` in both skew directions.
-- **The load-bearing integration test:** on a real git fixture, cut a member branch, assert
-  both config keys are written, and assert `resolveBaseBranch` returns the integration
-  branch rather than `main`. The entire pull-request story rests on this, so it is verified
-  rather than trusted. `apps/server/src/vcs/testing/VcsDriverContractHarness.ts` provides
-  the harness.
+- **The load-bearing integration tests.** The entire pull-request story rests on the base
+  resolving to the integration branch, so it is verified rather than trusted, on a real git
+  fixture, for both branch origins:
+  - *T3 Code cut it* — cut a member branch, assert both config keys are written, assert
+    `resolveBaseBranch` returns the integration branch.
+  - *The user cut it by hand* — create a branch with no config, run `ensureMemberPrBase`,
+    assert `resolveBaseBranch` returns the integration branch rather than `main`.
+  - *Regression guard* — with `gh-merge-base` deliberately unset, assert the base resolves
+    to `main`, so the test proves the key is what is doing the work rather than passing for
+    an unrelated reason.
+
+  `apps/server/src/vcs/testing/VcsDriverContractHarness.ts` provides the harness.
 - Checkpoint completeness: capture with members clean → revert proceeds; capture then dirty
   a member → revert refuses and names it.
 - `useWorkspaceRepos` unit tests; diff aggregation grouping.
@@ -373,7 +409,7 @@ Each phase is independently shippable and leaves the product coherent.
 |---|---|---|
 | **1. Model + reach** | `WorkspaceMember` contract, attach UI in project settings, `additionalDirectories`, `readAccess` roots | The agent edits member repositories without prompts — the highest-value, lowest-risk slice |
 | **2. Read surfaces** | `useWorkspaceRepos` hook (replacing the six scattered cwd derivations), Files root selector, aggregated Diff with local-only status for non-active members | You can see what changed across all repositories |
-| **3. Branch lifecycle** | `classifyMemberBranch`, `ensureMemberFeatureBranch`, post-turn sweep, pre-turn guard warning, per-member git actions | Commit and pull request per repository, targeting the integration branch |
+| **3. Branch lifecycle** | `classifyMemberBranch`, `ensureMemberFeatureBranch`, `ensureMemberPrBase`, post-turn sweep, pre-turn guard warning, per-member git actions | Commit and pull request per repository, targeting the integration branch |
 | **4. Checkpoint integrity** | `memberStates` on the checkpoint summary, completeness check at revert | Revert stops being able to mislead |
 
 Phase 3 is the only one that writes to member repositories. Phases 1 and 2 are read-only
