@@ -8,6 +8,7 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type WorkspaceMember,
 } from "@t3tools/contracts";
 
 import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
@@ -79,6 +80,46 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           ),
         );
 
+    /**
+     * Workspace member paths widen the agent's out-of-workspace directory
+     * grant, so they are validated by the SERVER rather than trusted from the
+     * client: the browser check in WorkspaceMembersControl.logic.ts is a typing
+     * convenience, and any authenticated client can dispatch
+     * `project.meta.update` directly. Running each path through the same
+     * `normalizeWorkspaceRoot` used for `workspaceRoot` expands `~`, resolves to
+     * an absolute canonical path (which also collapses the `/srv/x/` vs
+     * `/srv/x` duplicate evasion), and rejects a path that does not exist or is
+     * not a directory — the existence filter the design doc promises.
+     */
+    const normalizeWorkspaceMembers = (members: ReadonlyArray<WorkspaceMember>) =>
+      Effect.gen(function* () {
+        const normalized = yield* Effect.forEach(
+          members,
+          (member) =>
+            workspacePaths.normalizeWorkspaceRoot(member.path).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Workspace member '${member.title}': ${cause.message}`,
+                  }),
+              ),
+              Effect.map((path) => ({ ...member, path })),
+            ),
+          { concurrency: 1 },
+        );
+
+        const seenPaths = new Set<string>();
+        for (const member of normalized) {
+          if (seenPaths.has(member.path)) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Workspace member path '${member.path}' is attached more than once.`,
+            });
+          }
+          seenPaths.add(member.path);
+        }
+        return normalized;
+      });
+
     if (canonicalCommand.type === "project.create") {
       return {
         ...canonicalCommand,
@@ -90,13 +131,19 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
-    if (
-      canonicalCommand.type === "project.meta.update" &&
-      canonicalCommand.workspaceRoot !== undefined
-    ) {
+    if (canonicalCommand.type === "project.meta.update") {
+      const workspaceRoot =
+        canonicalCommand.workspaceRoot !== undefined
+          ? yield* normalizeProjectWorkspaceRoot(canonicalCommand.workspaceRoot)
+          : undefined;
+      const members =
+        canonicalCommand.members !== undefined
+          ? yield* normalizeWorkspaceMembers(canonicalCommand.members)
+          : undefined;
       return {
         ...canonicalCommand,
-        workspaceRoot: yield* normalizeProjectWorkspaceRoot(canonicalCommand.workspaceRoot),
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(members !== undefined ? { members } : {}),
       } satisfies OrchestrationCommand;
     }
 

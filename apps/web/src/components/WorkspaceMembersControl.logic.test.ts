@@ -25,7 +25,27 @@ describe("validateNewMember", () => {
   it("rejects a relative path", () => {
     assert.strictEqual(
       validateNewMember({ path: "../warehouse", integrationBranch: "main" }, existing),
-      "Enter an absolute path.",
+      "Enter an absolute path, or one starting with ~/.",
+    );
+  });
+
+  it("rejects a bare tilde", () => {
+    assert.strictEqual(
+      validateNewMember({ path: "~", integrationBranch: "main" }, existing),
+      "Enter an absolute path, or one starting with ~/.",
+    );
+  });
+
+  // The server expands `~` through the same normalization it applies to a
+  // project's workspace root, and the design doc's own examples use this form,
+  // so the client must not turn it away.
+  it("accepts a home-relative path", () => {
+    assert.strictEqual(
+      validateNewMember(
+        { path: "~/src/uni/warehouse", integrationBranch: "pickup-v2" },
+        existing,
+      ),
+      null,
     );
   });
 
