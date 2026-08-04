@@ -49,7 +49,10 @@ the task commands.
 - `scripts/`: workspace tooling run through `vp run`. Dev runner, desktop artifact builds, release
   helpers, mobile static checks and showcase capture, update-manifest merging.
 - `assets/`: brand and app icon sources per channel (`dev`, `nightly`, `prod`).
-- `patches/`: pnpm patches for pinned upstream dependencies.
+- `patches/`: pnpm patches for pinned upstream dependencies. Some carry fixes upstream does not
+  have, which a version bump drops silently. `scripts/check-dependency-invariants.ts` asserts the
+  behavior we rely on is still in the installed tree; it runs as part of the test suite, and
+  `pnpm check:deps` runs it on its own.
 - `oxlint-plugin-t3code/`: repo-specific lint rules.
 - `experiments/`: throwaway prototypes. Not part of the shipped build.
 - `docs/`: this documentation tree.

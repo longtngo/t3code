@@ -1,0 +1,57 @@
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import {
+  checkInvariant,
+  checkInvariants,
+  dependencyInvariants,
+  formatFailure,
+  type DependencyInvariant,
+} from "./check-dependency-invariants.ts";
+
+const invariant: DependencyInvariant = {
+  id: "example",
+  module: "effect/Stream",
+  requires: "the fixed shape",
+  forbids: "the broken shape",
+  breaks: "everything falls over",
+  restore: "re-derive the patch",
+};
+
+it("passes when the required shape is there and the broken one is not", () => {
+  assert.strictEqual(checkInvariant(invariant, "before the fixed shape after"), undefined);
+});
+
+it("fails when the required shape is missing", () => {
+  const failure = checkInvariant(invariant, "something else entirely");
+  assert.deepStrictEqual(failure?.reason, "missing");
+});
+
+it("fails when the shape the patch replaced is back", () => {
+  const failure = checkInvariant(invariant, "the fixed shape and the broken shape");
+  assert.deepStrictEqual(failure?.reason, "reverted");
+});
+
+it("treats a missing `forbids` as nothing to check", () => {
+  const { forbids: _forbids, ...withoutForbids } = invariant;
+  assert.strictEqual(checkInvariant(withoutForbids, "the fixed shape and the broken shape"), undefined);
+});
+
+it("names the invariant and says what to do", () => {
+  const failure = checkInvariant(invariant, "");
+  assert.ok(failure !== undefined);
+  const message = formatFailure(failure);
+  assert.ok(message.includes("example"));
+  assert.ok(message.includes("everything falls over"));
+  assert.ok(message.includes("re-derive the patch"));
+});
+
+// The invariants are claims about the dependency tree that is installed right
+// now, so the only way to check them is to read it. This is the test that an
+// effect bump is meant to trip.
+it.effect("the installed dependencies still hold every invariant", () =>
+  Effect.gen(function* () {
+    const failures = yield* checkInvariants(dependencyInvariants);
+    assert.deepStrictEqual(failures.map(formatFailure), []);
+  }).pipe(Effect.provide(NodeServices.layer)));
