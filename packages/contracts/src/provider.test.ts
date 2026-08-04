@@ -205,6 +205,35 @@ describe("providerInstanceId routing key (slice-2 invariant)", () => {
     expect(session.providerInstanceId).toBe("codex_work");
   });
 
+  it("carries the granted workspace member paths on ProviderSession", () => {
+    const session = decodeProviderSession({
+      provider: "claudeAgent",
+      providerInstanceId: "claude_work",
+      status: "ready",
+      runtimeMode: "full-access",
+      cwd: "/tmp/workspace",
+      workspaceMemberPaths: ["/tmp/prm_portal_api", "/tmp/warehouse"],
+      threadId: "thread-1",
+      createdAt: "2024-01-01T00:00:00Z",
+      updatedAt: "2024-01-01T00:00:00Z",
+    });
+    expect(session.workspaceMemberPaths).toEqual(["/tmp/prm_portal_api", "/tmp/warehouse"]);
+  });
+
+  it("omits workspace member paths on a ProviderSession from an older server", () => {
+    const session = decodeProviderSession({
+      provider: "claudeAgent",
+      providerInstanceId: "claude_work",
+      status: "ready",
+      runtimeMode: "full-access",
+      cwd: "/tmp/workspace",
+      threadId: "thread-1",
+      createdAt: "2024-01-01T00:00:00Z",
+      updatedAt: "2024-01-01T00:00:00Z",
+    });
+    expect(session.workspaceMemberPaths).toBeUndefined();
+  });
+
   it("decodes ProviderSession for fork-provided driver kinds", () => {
     const session = decodeProviderSession({
       provider: "ollama",

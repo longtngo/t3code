@@ -40,6 +40,15 @@ export const ProviderSession = Schema.Struct({
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The workspace member paths this session was actually granted, echoed back
+   * from `ProviderSessionStartInput`. It is part of the session's identity, not
+   * decoration: without it, attaching a member to a running thread cannot be
+   * detected as a change (the session would keep its old grant and the next
+   * tool call would prompt), and a session recovered after a server restart
+   * would silently drop the grant.
+   */
+  workspaceMemberPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   model: Schema.optional(TrimmedNonEmptyString),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),

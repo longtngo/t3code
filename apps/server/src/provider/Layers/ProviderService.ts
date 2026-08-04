@@ -129,6 +129,7 @@ function toRuntimePayloadFromSession(
 ): Record<string, unknown> {
   return {
     cwd: session.cwd ?? null,
+    workspaceMemberPaths: session.workspaceMemberPaths ?? null,
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
@@ -160,6 +161,29 @@ function readPersistedCwd(
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * The member grant is persisted beside `cwd` because recovery after a server
+ * restart rebuilds the session from the binding alone: without it, a recovered
+ * session would be scoped to cwd plus attachments and the agent would start
+ * prompting for member repositories it had already been granted.
+ */
+function readPersistedWorkspaceMemberPaths(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): ReadonlyArray<string> | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw =
+    "workspaceMemberPaths" in runtimePayload ? runtimePayload.workspaceMemberPaths : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const paths = raw.flatMap((entry) => {
+    if (typeof entry !== "string") return [];
+    const trimmed = entry.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return paths.length > 0 ? paths : undefined;
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -395,6 +419,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
+      const persistedWorkspaceMemberPaths = readPersistedWorkspaceMemberPaths(
+        input.binding.runtimePayload,
+      );
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
@@ -404,6 +431,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
+          ...(persistedWorkspaceMemberPaths
+            ? { workspaceMemberPaths: persistedWorkspaceMemberPaths }
+            : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",

@@ -50,6 +50,7 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { workspaceMemberGrantChanged } from "./workspaceMemberGrant.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionClosedError = Schema.is(ProviderAdapterSessionClosedError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
@@ -680,6 +681,16 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
+      // Attaching or detaching a workspace member mid-thread changes what the
+      // agent may touch without prompting, and that grant is fixed when the
+      // session starts — so the session has to be restarted, exactly as it is
+      // for a changed cwd.
+      const activeMemberPaths = activeSession?.workspaceMemberPaths ?? [];
+      const membersChanged = workspaceMemberGrantChanged({
+        sessionProvider: activeSession?.provider,
+        sessionMemberPaths: activeSession?.workspaceMemberPaths,
+        desiredMemberPaths: workspaceMemberPaths,
+      });
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
@@ -698,6 +709,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
+        !membersChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
@@ -721,6 +733,9 @@ const make = Effect.gen(function* () {
         previousCwd: activeSession?.cwd,
         desiredCwd: effectiveCwd,
         cwdChanged,
+        previousWorkspaceMemberPaths: activeMemberPaths,
+        desiredWorkspaceMemberPaths: workspaceMemberPaths,
+        membersChanged,
         modelChanged,
         instanceChanged,
         shouldRestartForModelChange,
