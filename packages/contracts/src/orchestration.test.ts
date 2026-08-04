@@ -22,12 +22,15 @@ import {
   OrchestrationThreadHistoryPageInput,
   OrchestrationThread,
   OrchestrationThreadShell,
+  OrchestrationProject,
   ProjectCreateCommand,
+  ProjectMetaUpdateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  WorkspaceMember,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -37,6 +40,8 @@ const decodeThreadTurnDiff = Schema.decodeUnknownEffect(ThreadTurnDiff);
 const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateCommand);
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
+const decodeOrchestrationProject = Schema.decodeUnknownEffect(OrchestrationProject);
+const decodeProjectMetaUpdateCommand = Schema.decodeUnknownEffect(ProjectMetaUpdateCommand);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
@@ -726,6 +731,81 @@ it.effect("rejects an explicit title combined with title regeneration", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("defaults project members to an empty array for older payloads", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationProject({
+      id: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    });
+    assert.deepStrictEqual(parsed.members, []);
+  }),
+);
+
+it.effect("preserves project members when present", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationProject({
+      id: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      members: [
+        {
+          id: "member-1",
+          path: "/tmp/prm_portal_api",
+          title: "prm_portal_api",
+          integrationBranch: "pickup-v2",
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    });
+    assert.strictEqual(parsed.members.length, 1);
+    assert.strictEqual(parsed.members[0]?.integrationBranch, "pickup-v2");
+  }),
+);
+
+it.effect("accepts members on project.meta.update", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectMetaUpdateCommand({
+      type: "project.meta.update",
+      commandId: "command-1",
+      projectId: "project-1",
+      members: [
+        {
+          id: "member-1",
+          path: "/tmp/warehouse",
+          title: "warehouse",
+          integrationBranch: "pickup-v2",
+        },
+      ],
+    });
+    assert.strictEqual(parsed.members?.[0]?.title, "warehouse");
+  }),
+);
+
+it.effect("decodes project.created payloads without members", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Legacy project",
+      workspaceRoot: "/tmp/legacy",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.members, undefined);
   }),
 );
 

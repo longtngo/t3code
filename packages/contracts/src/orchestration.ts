@@ -210,6 +210,23 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+/**
+ * An additional repository a project's threads operate on, beyond `workspaceRoot`.
+ *
+ * `integrationBranch` is per member and concrete rather than nullable: once a feature
+ * branch is cut, the "current branch" IS the feature branch, so an auto-detected value
+ * would be ambiguous exactly when it matters. It is resolved once at attach time and
+ * stored. A member whose stored branch no longer matches the checkout is treated as
+ * unmanaged — see docs/design/2026-08-04-multi-repo-workspace-design.md.
+ */
+export const WorkspaceMember = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  integrationBranch: TrimmedNonEmptyString,
+});
+export type WorkspaceMember = typeof WorkspaceMember.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -217,6 +234,9 @@ export const OrchestrationProject = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  members: Schema.Array(WorkspaceMember).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -411,6 +431,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  members: Schema.Array(WorkspaceMember).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -600,7 +623,7 @@ export const ProjectCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ProjectMetaUpdateCommand = Schema.Struct({
+export const ProjectMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("project.meta.update"),
   commandId: CommandId,
   projectId: ProjectId,
@@ -608,7 +631,9 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  members: Schema.optional(Schema.Array(WorkspaceMember)),
 });
+export type ProjectMetaUpdateCommand = typeof ProjectMetaUpdateCommand.Type;
 
 const ProjectDeleteCommand = Schema.Struct({
   type: Schema.Literal("project.delete"),
@@ -1028,6 +1053,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  members: Schema.optional(Schema.Array(WorkspaceMember)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1039,6 +1065,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  members: Schema.optional(Schema.Array(WorkspaceMember)),
   updatedAt: IsoDateTime,
 });
 
