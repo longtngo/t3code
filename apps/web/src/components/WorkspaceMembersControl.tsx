@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { WorkspaceMember } from "@t3tools/contracts";
 
@@ -31,6 +31,12 @@ export default function WorkspaceMembersControl({
   const [path, setPath] = useState("");
   const [integrationBranch, setIntegrationBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The control renders once per project in a grouped project's settings
+  // dialog, so hard-coded element ids would make every <label> point at the
+  // first section's inputs.
+  const controlId = useId();
+  const pathInputId = `${controlId}-path`;
+  const branchInputId = `${controlId}-branch`;
 
   const handleAdd = async () => {
     const message = validateNewMember({ path, integrationBranch }, members);
@@ -74,16 +80,16 @@ export default function WorkspaceMembersControl({
       </ul>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="workspace-member-path">Repository path</Label>
+        <Label htmlFor={pathInputId}>Repository path</Label>
         <Input
-          id="workspace-member-path"
+          id={pathInputId}
           value={path}
-          placeholder="/Users/you/src/uni/prm_portal_api"
+          placeholder="~/src/uni/prm_portal_api"
           onChange={(event) => setPath(event.target.value)}
         />
-        <Label htmlFor="workspace-member-branch">Integration branch</Label>
+        <Label htmlFor={branchInputId}>Integration branch</Label>
         <Input
-          id="workspace-member-branch"
+          id={branchInputId}
           value={integrationBranch}
           placeholder="pickup-v2"
           onChange={(event) => setIntegrationBranch(event.target.value)}
