@@ -1,0 +1,36 @@
+diff --git a/dist/NodeHttpServer.js b/dist/NodeHttpServer.js
+index bd3d99569362635511196b8a2c5cad6ad22e1722..79c4d486b89c3bfdf44facbe311149906e5c5d89 100644
+--- a/dist/NodeHttpServer.js
++++ b/dist/NodeHttpServer.js
+@@ -170,6 +170,13 @@ export const makeUpgradeHandler = (lazyWss, httpEffect, options) => {
+       })), ws => Effect.sync(() => ws.close()))));
+       const context = Context.add(services, HttpServerRequest, new ServerRequestImpl(nodeRequest, nodeResponse, upgradeEffect));
+       const fiber = Fiber.runIn(Effect.runForkWith(context)(handledApp), options.scope);
++      // Patch (t3code): backport of Effect-TS/effect#6927, which merged 95 minutes
++      // after beta.103 was published. Node removes its own socket listeners when it
++      // emits `upgrade`, and `ws` only attaches its own once `handleUpgrade` runs, so
++      // in between the socket has NO 'error' listener and a peer RST becomes an
++      // unhandled 'error' event that kills the whole server process. Drop this patch
++      // once we are on a release that contains #6927.
++      socket.on("error", () => {});
+       socket.on("close", () => {
+         if (!socket.writableEnded) {
+           fiber.interruptUnsafe(parent.id, ClientAbort.annotation);
+diff --git a/src/NodeHttpServer.ts b/src/NodeHttpServer.ts
+index 15a63c8d1e49597d68f3e96ad3204f346853ab81..f2698b21e0c982b4e9d5a4b887bf09632f5cfd9e 100644
+--- a/src/NodeHttpServer.ts
++++ b/src/NodeHttpServer.ts
+@@ -278,6 +278,13 @@ export const makeUpgradeHandler = <
+         new ServerRequestImpl(nodeRequest, nodeResponse, upgradeEffect)
+       )
+       const fiber = Fiber.runIn(Effect.runForkWith(context as Context.Context<any>)(handledApp), options.scope)
++      // Patch (t3code): backport of Effect-TS/effect#6927, which merged 95 minutes
++      // after beta.103 was published. Node removes its own socket listeners when it
++      // emits `upgrade`, and `ws` only attaches its own once `handleUpgrade` runs, so
++      // in between the socket has NO 'error' listener and a peer RST becomes an
++      // unhandled 'error' event that kills the whole server process. Drop this patch
++      // once we are on a release that contains #6927.
++      socket.on("error", () => {})
+       socket.on("close", () => {
+         if (!socket.writableEnded) {
+           fiber.interruptUnsafe(parent.id, ClientAbort.annotation)

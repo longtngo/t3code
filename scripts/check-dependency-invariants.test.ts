@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import {
+  behaviorInvariants,
+  checkBehaviorInvariants,
   checkInvariant,
   checkInvariants,
   dependencyInvariants,
@@ -47,6 +49,17 @@ it("names the invariant and says what to do", () => {
   assert.ok(message.includes("re-derive the patch"));
 });
 
+it("reports a measurement against its budget when a behavior regresses", () => {
+  const message = formatFailure({
+    invariant: { id: "example", breaks: "the heap fills up", restore: "restore the shape" },
+    reason: "regressed",
+    detail: "measured 4 against a budget of 2 MB",
+  });
+  assert.ok(message.includes("example"));
+  assert.ok(message.includes("measured 4 against a budget of 2 MB"));
+  assert.ok(message.includes("the heap fills up"));
+});
+
 // The invariants are claims about the dependency tree that is installed right
 // now, so the only way to check them is to read it. This is the test that an
 // effect bump is meant to trip.
@@ -55,3 +68,12 @@ it.effect("the installed dependencies still hold every invariant", () =>
     const failures = yield* checkInvariants(dependencyInvariants);
     assert.deepStrictEqual(failures.map(formatFailure), []);
   }).pipe(Effect.provide(NodeServices.layer)));
+
+// Measured rather than read: beta.103 fixed the aggregate leak by refactoring,
+// which left the old source marker intact and its verdict wrong. Calibration is
+// ~3.8 MB on the leaking build against ~0.02 MB here.
+it.effect("the installed effect build does not leak on idle schedule ticks", () =>
+  Effect.gen(function* () {
+    const failures = yield* checkBehaviorInvariants(behaviorInvariants);
+    assert.deepStrictEqual(failures.map(formatFailure), []);
+  }).pipe(Effect.provide(NodeServices.layer)), { timeout: 120_000 });

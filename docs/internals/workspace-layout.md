@@ -52,7 +52,10 @@ the task commands.
 - `patches/`: pnpm patches for pinned upstream dependencies. Some carry fixes upstream does not
   have, which a version bump drops silently. `scripts/check-dependency-invariants.ts` asserts the
   behavior we rely on is still in the installed tree; it runs as part of the test suite, and
-  `pnpm check:deps` runs it on its own.
+  `pnpm check:deps` runs it on its own. It checks two ways: source markers, and measurement via a
+  probe run in its own process (`scripts/idle-aggregate-probe.ts`). Prefer measurement where the
+  behavior can be measured, because a marker can survive a refactor that changes the behavior it
+  stood for.
 - `oxlint-plugin-t3code/`: repo-specific lint rules.
 - `experiments/`: throwaway prototypes. Not part of the shipped build.
 - `docs/`: this documentation tree.
