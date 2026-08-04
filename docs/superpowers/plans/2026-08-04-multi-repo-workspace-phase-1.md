@@ -20,6 +20,8 @@
 - **Event payloads are replayed from history.** A payload field added now will be absent on every event already in the store, so payload fields are always `Schema.optional` and the projector supplies the default.
 - **Effect language service diagnostics fail typecheck.** Do not use `node:child_process`, bare `setTimeout`, `console.log`, or `Effect.fail(new Error(...))` in server code. Use `Effect.sleep`, `Console.log`, and typed `Schema.TaggedErrorClass` errors.
 - **Tests:** `import { assert, describe, it } from "@effect/vitest"`. Effect-returning tests use `it.effect(name, () => Effect.gen(function* () { ... }))`.
+- **Never write `Effect.runPromise` (or any `run*`) in a test.** The repo lint rule `t3code/no-manual-effect-runtime-in-tests` forbids it, and it enforces a **per-file legacy baseline** (`oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts`) that grandfathers existing counts and permits **no net-new** occurrences. This is a trap: a test file can be full of `Effect.runPromise` and still reject yours, because its whole existing count is already spent. Match the *rule*, not the surrounding file. Raising a baseline number is never an acceptable fix. Where a file mixes styles, the `it as effectIt` import from `@effect/vitest` is the sanctioned path for new tests.
+- **Run `pnpm lint` before committing, not just typecheck.** Typecheck passing says nothing about the repo's custom oxlint rules, and several of them are project-specific traps.
 - **Test commands:** per package, `pnpm --filter <pkg> test run <path>`. Package names: `@t3tools/contracts`, `t3` (the server), `@t3tools/web`, `@t3tools/client-runtime`.
 - **Full gate:** `pnpm verify` (typecheck + lint + test) must be green before the phase is merged. Baseline on this branch is 2139 passed / 7 skipped.
 - **No `members` on `ProjectCreateCommand`.** Members are attached after a project exists, via `project.meta.update`. Keeping create unchanged keeps the create path and its invariants untouched.
@@ -417,6 +419,38 @@ rather than clearing them, so partial updates stay partial."
 ```
 
 ---
+
+## Task 2b: Persist members to the SQL projection
+
+**Added during execution — this plan originally missed it, and the omission was load-bearing.**
+
+The plan traced `apps/server/src/orchestration/projector.ts` and concluded that was the read
+model. It is not the read path that matters. `ProviderCommandReactor.resolveProject`
+(`:445`) calls `projectionSnapshotQuery.getProjectShellById(...)`, which reads from
+**SQLite**, and the web client's project shell comes from the same place. Members written
+only to the in-memory read model are invisible to every real consumer, so Task 3 would have
+read `members: []` forever and the phase would have shipped a feature that does nothing while
+every test passed.
+
+The full brief is at `.superpowers/sdd/2026-08-04-multi-repo-workspace-phase-1/task-2b-brief.md`.
+In outline, `members` mirrors `scripts` exactly — an array persisted as JSON in a `*_json`
+column:
+
+| Site | Change |
+|---|---|
+| `persistence/Migrations/038_ProjectionProjectMembers.ts` | `ALTER TABLE projection_projects ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'` — the default is required, the column is `NOT NULL` on a live table |
+| `ProjectionSnapshotQuery.ts` row schema | `members: Schema.fromJsonString(Schema.Array(WorkspaceMember))`, beside `scripts` |
+| `ProjectionPipeline.ts` `project.created` | `members: event.payload.members ?? []` |
+| `ProjectionPipeline.ts` `project.meta-updated` | conditional spread, so a title-only update cannot clear members |
+| The project repository | `members` ↔ `members_json`, following `scripts` ↔ `scripts_json` |
+| `ProjectionSnapshotQuery.ts` read mappings | `members` from the row at each project-building site |
+| ~15 test fixtures across server, client-runtime, web, and mobile | add `members: []` |
+
+**The generalizable lesson for Phases 2-4:** this codebase has *two* projections. Any field
+added to `OrchestrationProject` or `OrchestrationProjectShell` must be carried through both
+the in-memory projector and the SQL projection, or it silently never reaches a consumer.
+Adding a field to the read-model schema also breaks every object literal that constructs one,
+across four packages — the typecheck error count is the checklist.
 
 ## Task 3: Agent reach — member paths become `additionalDirectories`
 
