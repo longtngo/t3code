@@ -1542,21 +1542,25 @@ export default function SidebarV2() {
     async (
       member: SidebarProjectGroupMember,
       workspaceMembers: ReadonlyArray<WorkspaceMember>,
-    ) => {
+    ): Promise<boolean> => {
       const result = await updateProject({
         environmentId: member.environmentId,
         input: { projectId: member.id, members: workspaceMembers },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to update workspace members",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to update workspace members",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return false;
       }
+      return true;
     },
     [updateProject],
   );
@@ -3174,9 +3178,9 @@ export default function SidebarV2() {
                     <span className="font-medium text-foreground">Workspace members</span>
                     <WorkspaceMembersControl
                       members={member.members}
-                      onMembersChange={(workspaceMembers) => {
-                        void updateProjectWorkspaceMembers(member, workspaceMembers);
-                      }}
+                      onMembersChange={(workspaceMembers) =>
+                        updateProjectWorkspaceMembers(member, workspaceMembers)
+                      }
                     />
                   </div>
                   {projectActionsTarget.memberProjects.length > 1 ? (

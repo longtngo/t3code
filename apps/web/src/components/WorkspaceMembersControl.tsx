@@ -14,7 +14,14 @@ import {
 
 interface WorkspaceMembersControlProps {
   members: ReadonlyArray<WorkspaceMember>;
-  onMembersChange: (next: ReadonlyArray<WorkspaceMember>) => void;
+  /**
+   * Dispatches the update and resolves to whether it succeeded. The caller
+   * (SidebarV2) is responsible for surfacing failure toasts; this component
+   * only uses the boolean to decide whether the add-form inputs are safe to
+   * clear — clearing them on a failed dispatch would discard what the user
+   * typed.
+   */
+  onMembersChange: (next: ReadonlyArray<WorkspaceMember>) => Promise<boolean>;
 }
 
 export default function WorkspaceMembersControl({
@@ -25,34 +32,40 @@ export default function WorkspaceMembersControl({
   const [integrationBranch, setIntegrationBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const message = validateNewMember({ path, integrationBranch }, members);
     setError(message);
     if (message !== null) return;
-    onMembersChange(
+    const succeeded = await onMembersChange(
       addMember(members, { id: randomUUID(), path, integrationBranch }),
     );
-    setPath("");
-    setIntegrationBranch("");
+    if (succeeded) {
+      setPath("");
+      setIntegrationBranch("");
+    }
   };
 
   return (
     <div className="flex flex-col gap-4">
       <ul className="flex flex-col gap-2">
-        {members.map((member) => (
-          <li key={member.id} className="flex items-center gap-3">
+        {members.map((workspaceMember) => (
+          <li key={workspaceMember.id} className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
-              <div className="truncate font-medium">{member.title}</div>
+              <div className="truncate font-medium">{workspaceMember.title}</div>
               <div className="truncate font-mono text-xs text-muted-foreground">
-                {member.path}
+                {workspaceMember.path}
               </div>
             </div>
-            <span className="shrink-0 font-mono text-xs">{member.integrationBranch}</span>
+            <span className="shrink-0 font-mono text-xs">
+              {workspaceMember.integrationBranch}
+            </span>
             <Button
               variant="ghost"
               size="sm"
-              aria-label={`Detach ${member.title}`}
-              onClick={() => onMembersChange(removeMember(members, member.id))}
+              aria-label={`Detach ${workspaceMember.title}`}
+              onClick={() => {
+                void onMembersChange(removeMember(members, workspaceMember.id));
+              }}
             >
               Detach
             </Button>
@@ -76,7 +89,13 @@ export default function WorkspaceMembersControl({
           onChange={(event) => setIntegrationBranch(event.target.value)}
         />
         {error !== null ? <p className="text-sm text-destructive">{error}</p> : null}
-        <Button onClick={handleAdd}>Attach repository</Button>
+        <Button
+          onClick={() => {
+            void handleAdd();
+          }}
+        >
+          Attach repository
+        </Button>
       </div>
     </div>
   );
