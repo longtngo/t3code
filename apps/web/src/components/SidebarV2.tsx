@@ -12,7 +12,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+  WorkspaceMember,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -138,6 +142,7 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
+import WorkspaceMembersControl from "./WorkspaceMembersControl";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
@@ -1525,6 +1530,29 @@ export default function SidebarV2() {
           stackedThreadToast({
             type: "error",
             title: "Failed to rename project",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [updateProject],
+  );
+
+  const updateProjectWorkspaceMembers = useCallback(
+    async (
+      member: SidebarProjectGroupMember,
+      workspaceMembers: ReadonlyArray<WorkspaceMember>,
+    ) => {
+      const result = await updateProject({
+        environmentId: member.environmentId,
+        input: { projectId: member.id, members: workspaceMembers },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to update workspace members",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -3141,6 +3169,15 @@ export default function SidebarV2() {
                         </SelectPopup>
                       </Select>
                     </label>
+                  </div>
+                  <div className="grid min-w-0 gap-1.5">
+                    <span className="font-medium text-foreground">Workspace members</span>
+                    <WorkspaceMembersControl
+                      members={member.members}
+                      onMembersChange={(workspaceMembers) => {
+                        void updateProjectWorkspaceMembers(member, workspaceMembers);
+                      }}
+                    />
                   </div>
                   {projectActionsTarget.memberProjects.length > 1 ? (
                     <div className="flex justify-end">
