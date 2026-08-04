@@ -1030,4 +1030,108 @@ describe("orchestration projector", () => {
       expect(thread?.proposedPlans).toEqual([]);
     }),
   );
+
+  const PROJECT_CREATED_AT = "2026-01-01T00:00:00.000Z";
+
+  const projectCreatedEvent = (sequence: number) =>
+    makeEvent({
+      sequence,
+      type: "project.created",
+      aggregateKind: "project",
+      aggregateId: "project-1",
+      occurredAt: PROJECT_CREATED_AT,
+      commandId: "cmd-project-create",
+      payload: {
+        projectId: "project-1",
+        title: "Project",
+        workspaceRoot: "/tmp/workspace",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: PROJECT_CREATED_AT,
+        updatedAt: PROJECT_CREATED_AT,
+      },
+    });
+
+  const memberFixture = {
+    id: "member-1",
+    path: "/tmp/prm_portal_api",
+    title: "prm_portal_api",
+    integrationBranch: "pickup-v2",
+  };
+
+  it("defaults members to an empty array on project.created", async () => {
+    const model = createEmptyReadModel(PROJECT_CREATED_AT);
+    const next = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+
+    expect(next.projects[0]?.members).toEqual([]);
+  });
+
+  it("applies members from project.meta-updated", async () => {
+    const model = createEmptyReadModel(PROJECT_CREATED_AT);
+    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+    const next = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "project.meta-updated",
+          aggregateKind: "project",
+          aggregateId: "project-1",
+          occurredAt: "2026-01-02T00:00:00.000Z",
+          commandId: "cmd-project-update",
+          payload: {
+            projectId: "project-1",
+            members: [memberFixture],
+            updatedAt: "2026-01-02T00:00:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(next.projects[0]?.members).toEqual([memberFixture]);
+  });
+
+  it("leaves members untouched when project.meta-updated omits them", async () => {
+    const model = createEmptyReadModel(PROJECT_CREATED_AT);
+    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+    const withMembers = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "project.meta-updated",
+          aggregateKind: "project",
+          aggregateId: "project-1",
+          occurredAt: "2026-01-02T00:00:00.000Z",
+          commandId: "cmd-project-update",
+          payload: {
+            projectId: "project-1",
+            members: [memberFixture],
+            updatedAt: "2026-01-02T00:00:00.000Z",
+          },
+        }),
+      ),
+    );
+    const renamed = await Effect.runPromise(
+      projectEvent(
+        withMembers,
+        makeEvent({
+          sequence: 3,
+          type: "project.meta-updated",
+          aggregateKind: "project",
+          aggregateId: "project-1",
+          occurredAt: "2026-01-03T00:00:00.000Z",
+          commandId: "cmd-project-rename",
+          payload: {
+            projectId: "project-1",
+            title: "Renamed",
+            updatedAt: "2026-01-03T00:00:00.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(renamed.projects[0]?.title).toBe("Renamed");
+    expect(renamed.projects[0]?.members).toEqual([memberFixture]);
+  });
 });
