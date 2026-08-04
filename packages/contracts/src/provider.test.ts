@@ -43,6 +43,25 @@ describe("ProviderSessionStartInput", () => {
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
   });
 
+  it("carries workspace member paths on session start", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      runtimeMode: "full-access",
+      cwd: "/tmp/workspace",
+      workspaceMemberPaths: ["/tmp/prm_portal_api", "/tmp/warehouse"],
+    });
+    expect(parsed.workspaceMemberPaths).toEqual(["/tmp/prm_portal_api", "/tmp/warehouse"]);
+  });
+
+  it("omits workspace member paths for older clients", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      runtimeMode: "full-access",
+      cwd: "/tmp/workspace",
+    });
+    expect(parsed.workspaceMemberPaths).toBeUndefined();
+  });
+
   it("rejects payloads without runtime mode", () => {
     expect(() =>
       decodeProviderSessionStartInput({

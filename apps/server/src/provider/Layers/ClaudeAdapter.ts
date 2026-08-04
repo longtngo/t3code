@@ -3707,8 +3707,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         env: claudeEnvironment,
         // The attachments dir holds files uploaded via the web/remote fallback for dropped
         // non-image files; allow the agent to Read them without a permission prompt.
+        // Workspace member repositories are granted for the same reason — a thread whose
+        // work spans several repos would otherwise prompt once per repo.
         additionalDirectories: [
           ...(input.cwd ? [input.cwd] : []),
+          ...(input.workspaceMemberPaths ?? []),
           serverConfig.attachmentsDir,
         ],
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),

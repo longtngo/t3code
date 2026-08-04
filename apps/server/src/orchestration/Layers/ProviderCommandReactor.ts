@@ -624,6 +624,7 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
+    const workspaceMemberPaths = (project?.members ?? []).map((member) => member.path);
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -638,6 +639,7 @@ const make = Effect.gen(function* () {
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(workspaceMemberPaths.length > 0 ? { workspaceMemberPaths } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input?.forkFrom !== undefined ? { forkFrom: input.forkFrom } : {}),

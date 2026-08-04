@@ -56,6 +56,12 @@ export const ProviderSessionStartInput = Schema.Struct({
   // See ProviderSession for the migration story.
   providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Absolute paths of the project's workspace members. Adapters that support
+   * scoped filesystem access grant these alongside `cwd`, so the agent can edit
+   * sibling repositories without a per-directory approval prompt.
+   */
+  workspaceMemberPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   // Fork directive: start this session by forking another thread's agent
