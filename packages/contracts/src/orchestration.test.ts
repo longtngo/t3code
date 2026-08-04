@@ -809,6 +809,52 @@ it.effect("decodes project.created payloads without members", () =>
   }),
 );
 
+it.effect("decodes project.created payloads with explicit empty members array", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Project with explicit empty members",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      members: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepStrictEqual(parsed.members, []);
+  }),
+);
+
+it.effect("decodes project.meta-updated payloads with explicit empty members array", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectMetaUpdatedPayload({
+      projectId: "project-1",
+      members: [],
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepStrictEqual(parsed.members, []);
+  }),
+);
+
+it.effect("decodes project.meta-updated payloads with non-empty members array", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectMetaUpdatedPayload({
+      projectId: "project-1",
+      members: [
+        {
+          id: "member-1",
+          path: "/tmp/repo",
+          title: "repo",
+          integrationBranch: "main",
+        },
+      ],
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.members?.length, 1);
+    assert.strictEqual(parsed.members?.[0]?.id, "member-1");
+  }),
+);
+
 it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
