@@ -30,7 +30,6 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
-  WorkspaceMember,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
