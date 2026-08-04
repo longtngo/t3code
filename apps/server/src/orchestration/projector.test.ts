@@ -1059,18 +1059,20 @@ describe("orchestration projector", () => {
     integrationBranch: "pickup-v2",
   };
 
-  it("defaults members to an empty array on project.created", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const next = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+  effectIt.effect("defaults members to an empty array on project.created", () =>
+    Effect.gen(function* () {
+      const model = createEmptyReadModel(PROJECT_CREATED_AT);
+      const next = yield* projectEvent(model, projectCreatedEvent(1));
 
-    expect(next.projects[0]?.members).toEqual([]);
-  });
+      expect(next.projects[0]?.members).toEqual([]);
+    }),
+  );
 
-  it("applies members from project.meta-updated", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
-    const next = await Effect.runPromise(
-      projectEvent(
+  effectIt.effect("applies members from project.meta-updated", () =>
+    Effect.gen(function* () {
+      const model = createEmptyReadModel(PROJECT_CREATED_AT);
+      const created = yield* projectEvent(model, projectCreatedEvent(1));
+      const next = yield* projectEvent(
         created,
         makeEvent({
           sequence: 2,
@@ -1085,17 +1087,17 @@ describe("orchestration projector", () => {
             updatedAt: "2026-01-02T00:00:00.000Z",
           },
         }),
-      ),
-    );
+      );
 
-    expect(next.projects[0]?.members).toEqual([memberFixture]);
-  });
+      expect(next.projects[0]?.members).toEqual([memberFixture]);
+    }),
+  );
 
-  it("leaves members untouched when project.meta-updated omits them", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
-    const withMembers = await Effect.runPromise(
-      projectEvent(
+  effectIt.effect("leaves members untouched when project.meta-updated omits them", () =>
+    Effect.gen(function* () {
+      const model = createEmptyReadModel(PROJECT_CREATED_AT);
+      const created = yield* projectEvent(model, projectCreatedEvent(1));
+      const withMembers = yield* projectEvent(
         created,
         makeEvent({
           sequence: 2,
@@ -1110,10 +1112,8 @@ describe("orchestration projector", () => {
             updatedAt: "2026-01-02T00:00:00.000Z",
           },
         }),
-      ),
-    );
-    const renamed = await Effect.runPromise(
-      projectEvent(
+      );
+      const renamed = yield* projectEvent(
         withMembers,
         makeEvent({
           sequence: 3,
@@ -1128,10 +1128,10 @@ describe("orchestration projector", () => {
             updatedAt: "2026-01-03T00:00:00.000Z",
           },
         }),
-      ),
-    );
+      );
 
-    expect(renamed.projects[0]?.title).toBe("Renamed");
-    expect(renamed.projects[0]?.members).toEqual([memberFixture]);
-  });
+      expect(renamed.projects[0]?.title).toBe("Renamed");
+      expect(renamed.projects[0]?.members).toEqual([memberFixture]);
+    }),
+  );
 });
