@@ -309,6 +309,7 @@ export function buildHomeThreadGroups(input: {
             repositoryIdentity: null,
             defaultModelSelection: null,
             scripts: [],
+            members: [],
             createdAt: pendingTask.message.createdAt,
             updatedAt: pendingTask.message.createdAt,
           },

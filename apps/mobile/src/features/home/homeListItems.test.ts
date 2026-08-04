@@ -27,6 +27,7 @@ function makeProject(id: string, title: string): EnvironmentProject {
     repositoryIdentity: null,
     defaultModelSelection: null,
     scripts: [],
+    members: [],
     createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",
   };
