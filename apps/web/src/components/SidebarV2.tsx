@@ -82,7 +82,9 @@ import {
 } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  resolveSidebarProjectGroupByRef,
   type SidebarProjectGroupMember,
+  type SidebarProjectRef,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -1238,9 +1240,15 @@ export default function SidebarV2() {
       );
     },
   });
-  const [projectActionsTarget, setProjectActionsTarget] = useState<SidebarProjectSnapshot | null>(
-    null,
-  );
+  // Only the project's identity is held in state. The snapshot itself is
+  // re-derived from the live groups on every render (see
+  // `projectActionsTarget` below), because snapshots are rebuilt on each
+  // derivation and a held copy would go stale the moment the dialog edits the
+  // project — a second edit would then be computed from the pre-edit state and
+  // silently discard the first.
+  const [projectActionsTargetRef, setProjectActionsTargetRef] =
+    useState<SidebarProjectRef | null>(null);
+  const closeProjectActions = useCallback(() => setProjectActionsTargetRef(null), []);
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
@@ -1314,6 +1322,10 @@ export default function SidebarV2() {
   const projectGroups = useMemo(
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+  );
+  const projectActionsTarget = useMemo(
+    () => resolveSidebarProjectGroupByRef(projectGroups, projectActionsTargetRef),
+    [projectActionsTargetRef, projectGroups],
   );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -1584,7 +1596,12 @@ export default function SidebarV2() {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
-      window.requestAnimationFrame(() => setProjectActionsTarget(projectGroup));
+      window.requestAnimationFrame(() =>
+        setProjectActionsTargetRef({
+          environmentId: projectGroup.environmentId,
+          projectId: projectGroup.id,
+        }),
+      );
     },
     [],
   );
@@ -3062,7 +3079,7 @@ export default function SidebarV2() {
       <Dialog
         open={projectActionsTarget !== null}
         onOpenChange={(open) => {
-          if (!open) setProjectActionsTarget(null);
+          if (!open) closeProjectActions();
         }}
       >
         <DialogPopup className="max-w-xl">
@@ -3191,7 +3208,7 @@ export default function SidebarV2() {
                         className="text-destructive-foreground hover:bg-destructive/8 hover:text-destructive-foreground"
                         onClick={() => {
                           const projectGroup = projectActionsTarget;
-                          setProjectActionsTarget(null);
+                          closeProjectActions();
                           void handleRemoveProjectMembers(projectGroup, [member]);
                         }}
                       >
@@ -3219,7 +3236,7 @@ export default function SidebarV2() {
                   className="shrink-0"
                   onClick={() => {
                     const projectGroup = projectActionsTarget;
-                    setProjectActionsTarget(null);
+                    closeProjectActions();
                     void handleRemoveProjectMembers(projectGroup, projectGroup.memberProjects);
                   }}
                 >
@@ -3240,7 +3257,7 @@ export default function SidebarV2() {
                 variant="destructive-outline"
                 onClick={() => {
                   const projectGroup = projectActionsTarget;
-                  setProjectActionsTarget(null);
+                  closeProjectActions();
                   void handleRemoveProjectMembers(projectGroup, projectGroup.memberProjects);
                 }}
               >
@@ -3248,7 +3265,7 @@ export default function SidebarV2() {
                 Remove project
               </Button>
             ) : null}
-            <Button onClick={() => setProjectActionsTarget(null)}>Close</Button>
+            <Button onClick={closeProjectActions}>Close</Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>

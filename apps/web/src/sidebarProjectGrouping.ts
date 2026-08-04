@@ -219,6 +219,39 @@ export function buildSidebarProjectSnapshots(input: {
   return result;
 }
 
+/** Identifies one physical project (its environment plus its id). */
+export interface SidebarProjectRef {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: string;
+}
+
+/**
+ * Re-derive the group a project dialog is open on from the current snapshots.
+ *
+ * A dialog must never hold the snapshot it was opened with.
+ * `buildSidebarProjectSnapshots` rebuilds every member object on each
+ * derivation, so a held copy goes stale as soon as the project is edited: an
+ * editor fed the held copy computes its next value from the pre-edit state, and
+ * a second edit silently discards the first.
+ *
+ * Matching is by physical project (environment + id) rather than by the group's
+ * logical key so that changing the grouping rule from inside the dialog
+ * re-targets the group the project moved into instead of losing it.
+ */
+export function resolveSidebarProjectGroupByRef(
+  groups: ReadonlyArray<SidebarProjectSnapshot>,
+  target: SidebarProjectRef | null,
+): SidebarProjectSnapshot | null {
+  if (!target) return null;
+  return (
+    groups.find((group) =>
+      group.memberProjects.some(
+        (member) => member.environmentId === target.environmentId && member.id === target.projectId,
+      ),
+    ) ?? null
+  );
+}
+
 export function buildSidebarProjectPickerEntries(input: {
   groups: ReadonlyArray<SidebarProjectSnapshot>;
   preferredProjectRef: ScopedProjectRef | null;
