@@ -12,17 +12,28 @@ import {
   removeQueuedTurn,
 } from "./commandOutbox";
 
-function queuedTurn(commandId: string, threadId = "t1"): QueuedTurn {
+function queuedTurn(
+  commandId: string,
+  threadId = "t1",
+  modes?: { readonly runtimeMode: string; readonly interactionMode: string },
+): QueuedTurn {
   return {
     environmentId: "env-1" as never,
     threadId: threadId as never,
     messageId: `m-${commandId}` as never,
-    commandId,
+    commandId: commandId as never,
     input: {
-      threadId,
-      commandId,
+      threadId: threadId as never,
+      commandId: commandId as never,
       createdAt: "2026-08-02T00:00:00.000Z",
-      message: { messageId: `m-${commandId}`, role: "user", text: "hi", attachments: [] },
+      message: {
+        messageId: `m-${commandId}` as never,
+        role: "user",
+        text: "hi",
+        attachments: [],
+      },
+      runtimeMode: (modes?.runtimeMode ?? "full-access") as never,
+      interactionMode: (modes?.interactionMode ?? "default") as never,
     },
     enqueuedAt: "2026-08-02T00:00:00.000Z",
   };
@@ -180,6 +191,80 @@ describe("expireQueuedTurns", () => {
 
     expect(expired.map((turn) => turn.commandId)).toEqual(["stale"]);
     expect(getQueuedTurns().map((turn) => turn.commandId)).toEqual(["fresh"]);
+  });
+});
+
+describe("flushOutbox revalidation", () => {
+  it("drops a turn whose thread changed modes while it waited, without sending it", async () => {
+    enqueueTurn(queuedTurn("a"));
+    const sent: string[] = [];
+    const dropped: Array<{ commandId: string; message: string }> = [];
+
+    await flushOutbox(
+      async (turn) => {
+        sent.push(turn.commandId);
+      },
+      {
+        rejectBeforeSend: () => "the thread's modes changed while it was queued.",
+        onTerminalError: (turn, error) =>
+          dropped.push({
+            commandId: turn.commandId,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+      },
+    );
+
+    // Not merely unsent — the queue must not hold it either, or every future
+    // flush would re-attempt a turn that can never become valid again.
+    expect(sent).toEqual([]);
+    expect(getQueuedTurns()).toHaveLength(0);
+    expect(dropped).toEqual([
+      { commandId: "a", message: "the thread's modes changed while it was queued." },
+    ]);
+  });
+
+  it("sends a turn the check accepts", async () => {
+    enqueueTurn(queuedTurn("a"));
+    const sent: string[] = [];
+
+    await flushOutbox(
+      async (turn) => {
+        sent.push(turn.commandId);
+      },
+      { rejectBeforeSend: () => null },
+    );
+
+    expect(sent).toEqual(["a"]);
+    expect(getQueuedTurns()).toHaveLength(0);
+  });
+
+  it("reports a delivered turn before it leaves the queue", async () => {
+    enqueueTurn(queuedTurn("a"));
+    const observedQueueLengths: number[] = [];
+
+    await flushOutbox(async () => {}, {
+      onDelivered: () => observedQueueLengths.push(getQueuedTurns().length),
+    });
+
+    // The bubble is handed over while the turn is still queued, so there is no
+    // instant in which neither the queue nor the delivered buffer holds it —
+    // which is the blink this exists to remove.
+    expect(observedQueueLengths).toEqual([1]);
+    expect(getQueuedTurns()).toHaveLength(0);
+  });
+
+  it("does not report a turn the transport refused as delivered", async () => {
+    enqueueTurn(queuedTurn("a"));
+    const delivered: string[] = [];
+
+    await flushOutbox(
+      async () => {
+        throw new Error("nope");
+      },
+      { onDelivered: (turn) => delivered.push(turn.commandId) },
+    );
+
+    expect(delivered).toEqual([]);
   });
 });
 

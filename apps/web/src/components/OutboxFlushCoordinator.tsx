@@ -9,9 +9,11 @@ import {
   expireQueuedTurns,
   flushOutbox,
   getQueuedTurns,
+  markTurnDelivered,
   subscribeToCrossTabOutboxUpdates,
   useCommandOutbox,
 } from "~/rpc/commandOutbox";
+import { readThreadShell } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -102,6 +104,27 @@ export function OutboxFlushCoordinator() {
         }
       },
       {
+        // The queued modes were compared against a thread row that was stale by
+        // definition — the environment was unreachable at the time. Re-check
+        // against the row we have now, which the reconnect has just synced.
+        rejectBeforeSend: (turn) => {
+          const thread = readThreadShell({
+            environmentId: turn.environmentId,
+            threadId: turn.threadId,
+          });
+          // A thread we cannot read yet is not evidence of a mismatch, and
+          // dropping the user's message on "I don't know" is the failure mode
+          // this codebase keeps rediscovering. The server still validates.
+          if (thread === null) return null;
+          if (
+            turn.input.runtimeMode === thread.runtimeMode &&
+            turn.input.interactionMode === thread.interactionMode
+          ) {
+            return null;
+          }
+          return "the thread's modes changed while it was queued.";
+        },
+        onDelivered: markTurnDelivered,
         onTerminalError: (turn, error) => {
           toastManager.add(
             stackedThreadToast({
