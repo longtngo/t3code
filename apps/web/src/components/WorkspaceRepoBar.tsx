@@ -8,7 +8,7 @@ import { useEffect, useMemo } from "react";
 
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
 import { cn } from "~/lib/utils";
-import { useThread } from "~/state/entities";
+import { useEnvironmentSupportsLocalOnlyStatus, useThread } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
 import { vcsEnvironment } from "~/state/vcs";
@@ -102,11 +102,19 @@ function WorkspaceRepoTab({
   readonly repo: WorkspaceRepo;
   readonly report: WorkspaceMemberBranchReport | null;
 }) {
+  // A server that does not honour `localOnly` drops the flag and starts a
+  // remote poller for this subscription instead. Seven attached repositories
+  // would then fetch seven remotes on a timer, which is the shape of the fetch
+  // storm that once made this backend read as unresponsive — so against such a
+  // server this tab shows no status rather than quietly paying for it.
+  const supportsLocalOnlyStatus = useEnvironmentSupportsLocalOnlyStatus(environmentId);
   const statusQuery = useEnvironmentQuery(
-    vcsEnvironment.status({
-      environmentId,
-      input: { cwd: repo.cwd, localOnly: true },
-    }),
+    supportsLocalOnlyStatus
+      ? vcsEnvironment.status({
+          environmentId,
+          input: { cwd: repo.cwd, localOnly: true },
+        })
+      : null,
   );
   const refreshLocalStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
     reportFailure: false,
@@ -116,8 +124,9 @@ function WorkspaceRepoTab({
   // the server's status cache has no expiry. Without this the first reading a
   // member ever produced would be the only one.
   useEffect(() => {
+    if (!supportsLocalOnlyStatus) return;
     void refreshLocalStatus({ environmentId, input: { cwd: repo.cwd } });
-  }, [environmentId, refreshLocalStatus, repo.cwd]);
+  }, [environmentId, refreshLocalStatus, repo.cwd, supportsLocalOnlyStatus]);
 
   const status = statusQuery.data;
   const changedFileCount = status?.workingTree.files.length ?? 0;

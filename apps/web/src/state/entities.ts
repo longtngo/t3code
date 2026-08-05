@@ -241,6 +241,16 @@ export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boo
   );
 }
 
+/** Whether the environment's server honours `localOnly` on a vcs status
+    subscription. An older one drops the flag and starts a remote poller per
+    subscription instead, so a workspace with seven attached repositories would
+    fetch seven remotes on a timer. Same version-skew contract as the rest:
+    missing reads as unsupported. */
+export function useEnvironmentSupportsLocalOnlyStatus(environmentId: EnvironmentId): boolean {
+  const serverConfigs = useServerConfigs();
+  return serverConfigs.get(environmentId)?.environment.capabilities.vcsLocalOnlyStatus === true;
+}
+
 export function readThreadDetail(ref: ScopedThreadRef): EnvironmentThread | null {
   return appAtomRegistry.get(environmentThreadDetails.detailAtom(ref));
 }

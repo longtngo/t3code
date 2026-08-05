@@ -57,6 +57,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** Server honours `localOnly` on a vcs status subscription, i.e. it will
+      read the working tree without starting a remote poller. Absent on older
+      servers, which silently drop the flag and start one poller per attached
+      repository — a workspace of seven would fetch seven remotes on a timer.
+      Clients treat missing as unsupported and do not subscribe status for
+      attached repositories at all. */
+  vcsLocalOnlyStatus: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

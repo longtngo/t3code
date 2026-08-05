@@ -124,6 +124,13 @@ export default function FileBrowserPanel({
   // The tree renders rows in shadow DOM and its anchor rect is unreliable, so
   // capture the right-click position ourselves; contextmenu is a composed
   // event, so a capture-phase listener sees it with viewport coordinates.
+  //
+  // Targeting a row from a test does NOT need anything added here: the tree
+  // stamps `data-item-path` on every row (alongside `data-item-type`,
+  // `data-item-selected` and the git-status attributes), and its shadow root is
+  // open, so `host.shadowRoot.querySelector('[data-item-path="src/x.ts"]')`
+  // reaches it. Row *text* is the thing that cannot be matched on — it comes
+  // out duplicated and ellipsis-split by the overflow renderer.
   const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
   useEffect(() => {
     const capturePointer = (event: MouseEvent) => {

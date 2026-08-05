@@ -71,6 +71,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.repositoryIdentity).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
+      // Clients skip status subscriptions for attached repositories unless the
+      // server says it honours `localOnly`, so a server that stops advertising
+      // this silently costs every workspace tab its status.
+      expect(second.capabilities.vcsLocalOnlyStatus).toBe(true);
     }),
   );
 
