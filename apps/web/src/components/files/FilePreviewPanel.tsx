@@ -1096,6 +1096,7 @@ export default function FilePreviewPanel({
                   onSelect={selectRepo}
                   repos={workspaceRepos}
                   selectedId={activeRepo.id}
+                  threadRef={threadRef}
                 />
               ) : null}
               <FileBrowserPanel

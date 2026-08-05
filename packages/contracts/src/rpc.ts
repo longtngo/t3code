@@ -70,6 +70,8 @@ import {
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
   OrchestrationRpcSchemas,
+  WorkspaceMemberBranchesInput,
+  WorkspaceMemberBranchesResult,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
@@ -201,6 +203,7 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsRefreshLocalStatus: "vcs.refreshLocalStatus",
+  workspaceMemberBranches: "workspace.memberBranches",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -604,6 +607,19 @@ export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
 export const WsVcsRefreshLocalStatusRpc = Rpc.make(WS_METHODS.vcsRefreshLocalStatus, {
   payload: VcsStatusInput,
   success: VcsStatusLocalResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Branch state for each of a project's member repositories, from one thread's
+ * point of view. The panels use it to show which repository another thread is
+ * already working in, which is the only protection available: with one shared
+ * checkout per member, two threads writing to it cannot be isolated, so the
+ * state is made visible rather than pretended away.
+ */
+export const WsWorkspaceMemberBranchesRpc = Rpc.make(WS_METHODS.workspaceMemberBranches, {
+  payload: WorkspaceMemberBranchesInput,
+  success: WorkspaceMemberBranchesResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -1080,6 +1096,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshLocalStatusRpc,
+  WsWorkspaceMemberBranchesRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,

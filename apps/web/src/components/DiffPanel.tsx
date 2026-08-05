@@ -859,12 +859,13 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
-      {activeThread && activeRepo ? (
+      {activeThread && activeRepo && routeThreadRef ? (
         <WorkspaceRepoBar
           environmentId={activeThread.environmentId}
           onSelect={selectRepo}
           repos={workspaceRepos}
           selectedId={activeRepo.id}
+          threadRef={routeThreadRef}
         />
       ) : null}
       {!activeThread ? (

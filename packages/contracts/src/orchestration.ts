@@ -227,6 +227,48 @@ export const WorkspaceMember = Schema.Struct({
 });
 export type WorkspaceMember = typeof WorkspaceMember.Type;
 
+/**
+ * What a workspace member repository's branch looks like to a thread.
+ *
+ * `unavailable` covers a path that is gone, renamed, or not a repository —
+ * a sweep runs over every member and one bad path must not fail the others.
+ */
+export const WorkspaceMemberBranchState = Schema.Literals([
+  "idle",
+  "cut-needed",
+  "owned-by-self",
+  "owned-by-other",
+  "unmanaged",
+  "unavailable",
+]);
+export type WorkspaceMemberBranchState = typeof WorkspaceMemberBranchState.Type;
+
+export const WorkspaceMemberBranchReport = Schema.Struct({
+  memberId: TrimmedNonEmptyString,
+  state: WorkspaceMemberBranchState,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  /** The thread that cut this branch, when one did. */
+  ownerThreadId: Schema.NullOr(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type WorkspaceMemberBranchReport = typeof WorkspaceMemberBranchReport.Type;
+
+/**
+ * Member paths are read from the project on the server rather than sent by the
+ * caller: this runs git in the named directory, and the set of directories a
+ * thread may reach is project state, not a client-supplied argument.
+ */
+export const WorkspaceMemberBranchesInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+});
+export type WorkspaceMemberBranchesInput = typeof WorkspaceMemberBranchesInput.Type;
+
+export const WorkspaceMemberBranchesResult = Schema.Struct({
+  reports: Schema.Array(WorkspaceMemberBranchReport),
+});
+export type WorkspaceMemberBranchesResult = typeof WorkspaceMemberBranchesResult.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,

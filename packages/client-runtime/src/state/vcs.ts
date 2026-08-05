@@ -15,7 +15,11 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -296,6 +300,14 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    // Refreshed on a timer as well as on demand: a member's branch can move
+    // because another thread swept it, and nothing pushes that to this client.
+    memberBranches: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:workspace:member-branches",
+      tag: WS_METHODS.workspaceMemberBranches,
+      staleTimeMs: 15_000,
+      refreshIntervalMs: 60_000,
     }),
     refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-local-status",

@@ -247,9 +247,6 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
-  // Consumed by CheckpointReactor's post-turn member sweep, so it provides into
-  // it and must come after it in this pipe.
-  Layer.provideMerge(WorkspaceMemberBranches.layer),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   // Web Push background-notification relay. Started by OrchestrationReactor above (so
@@ -333,6 +330,12 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ReviewLayerLive),
   Layer.provideMerge(SourceControlRepositoryServiceLayerLive),
   Layer.provideMerge(VcsStatusBroadcaster.layer.pipe(Layer.provide(GitWorkflowLayerLive))),
+  Layer.provideMerge(
+    WorkspaceMemberBranches.layer.pipe(
+      Layer.provide(VcsDriverRegistryLayerLive),
+      Layer.provide(GitVcsDriver.layer),
+    ),
+  ),
 );
 
 const CheckpointingLayerLive = Layer.empty.pipe(

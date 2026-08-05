@@ -1,9 +1,14 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import { GitBranchIcon } from "lucide-react";
-import { useEffect } from "react";
+import type {
+  EnvironmentId,
+  ScopedThreadRef,
+  WorkspaceMemberBranchReport,
+} from "@t3tools/contracts";
+import { GitBranchIcon, TriangleAlertIcon, UnplugIcon } from "lucide-react";
+import { useEffect, useMemo } from "react";
 
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
 import { cn } from "~/lib/utils";
+import { useThread } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
 import { vcsEnvironment } from "~/state/vcs";
@@ -13,6 +18,7 @@ interface WorkspaceRepoBarProps {
   readonly repos: ReadonlyArray<WorkspaceRepo>;
   readonly selectedId: string;
   readonly onSelect: (repoId: string) => void;
+  readonly threadRef: ScopedThreadRef;
   readonly className?: string;
 }
 
@@ -28,7 +34,25 @@ export default function WorkspaceRepoBar({
   onSelect,
   repos,
   selectedId,
+  threadRef,
 }: WorkspaceRepoBarProps) {
+  const thread = useThread(threadRef);
+  const projectId = thread?.projectId ?? null;
+  const hasMembers = repos.some((repo) => repo.kind === "member");
+  const branchesQuery = useEnvironmentQuery(
+    hasMembers && projectId !== null
+      ? vcsEnvironment.memberBranches({
+          environmentId,
+          input: { projectId, threadId: threadRef.threadId },
+        })
+      : null,
+  );
+  const reportsByMemberId = useMemo(() => {
+    const entries = new Map<string, WorkspaceMemberBranchReport>();
+    for (const report of branchesQuery.data?.reports ?? []) entries.set(report.memberId, report);
+    return entries;
+  }, [branchesQuery.data]);
+
   if (repos.length < 2) return null;
   return (
     <div
@@ -46,6 +70,7 @@ export default function WorkspaceRepoBar({
           key={repo.id}
           onSelect={onSelect}
           repo={repo}
+          report={reportsByMemberId.get(repo.id) ?? null}
         />
       ))}
     </div>
@@ -69,11 +94,13 @@ function WorkspaceRepoTab({
   isSelected,
   onSelect,
   repo,
+  report,
 }: {
   readonly environmentId: EnvironmentId;
   readonly isSelected: boolean;
   readonly onSelect: (repoId: string) => void;
   readonly repo: WorkspaceRepo;
+  readonly report: WorkspaceMemberBranchReport | null;
 }) {
   const statusQuery = useEnvironmentQuery(
     vcsEnvironment.status({
@@ -91,16 +118,20 @@ function WorkspaceRepoTab({
   useEffect(() => {
     void refreshLocalStatus({ environmentId, input: { cwd: repo.cwd } });
   }, [environmentId, refreshLocalStatus, repo.cwd]);
+
   const status = statusQuery.data;
   const changedFileCount = status?.workingTree.files.length ?? 0;
   // A member parked on a branch other than the one it integrates into is
   // carrying work even when its working tree is clean, because that work is
-  // already committed. Local status is the only thing read here, so this is
-  // the one signal available for it.
+  // already committed.
   const isOffIntegrationBranch =
     repo.integrationBranch !== null &&
     status?.refName != null &&
     status.refName !== repo.integrationBranch;
+  const isUnavailable = report?.state === "unavailable";
+  // One shared checkout per member means two threads writing to it cannot be
+  // isolated. Showing whose branch it is on is the whole protection available.
+  const isOwnedByOther = report?.state === "owned-by-other";
 
   return (
     <button
@@ -110,13 +141,27 @@ function WorkspaceRepoTab({
         isSelected
           ? "bg-accent text-foreground"
           : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        isUnavailable && "opacity-60",
       )}
       onClick={() => onSelect(repo.id)}
       role="tab"
-      title={repo.cwd}
+      title={
+        isUnavailable
+          ? `${repo.cwd} — ${report?.detail ?? "unavailable"}`
+          : isOwnedByOther
+            ? `${repo.cwd} — on a branch another thread is working in`
+            : repo.cwd
+      }
       type="button"
     >
       <span className="min-w-0 max-w-40 truncate font-medium">{repo.title}</span>
+      {isUnavailable ? <UnplugIcon aria-label="Unavailable" className="size-3 shrink-0" /> : null}
+      {isOwnedByOther ? (
+        <TriangleAlertIcon
+          aria-label="Another thread is working in this repository"
+          className="size-3 shrink-0 text-amber-500"
+        />
+      ) : null}
       {isOffIntegrationBranch && status?.refName ? (
         <span className="flex min-w-0 items-center gap-0.5 text-[11px] opacity-70">
           <GitBranchIcon aria-hidden="true" className="size-3 shrink-0" />

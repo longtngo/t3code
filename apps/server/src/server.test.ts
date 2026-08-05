@@ -105,6 +105,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriver from "./vcs/VcsDriver.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -547,6 +548,15 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const workspaceMemberBranchesLayer = Layer.mock(
+      WorkspaceMemberBranches.WorkspaceMemberBranches,
+    )({
+      inspect: () => Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+      ensureFeatureBranch: () =>
+        Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+      resolvePrBase: () => Effect.succeed(null),
+      writePrBase: () => Effect.succeed(true),
+    });
     const resourceTelemetryLayer = ResourceTelemetry.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -705,7 +715,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.sourceControlRepositoryService,
         }),
       ),
-      Layer.provideMerge(vcsStatusBroadcasterLayer),
+      Layer.provideMerge(Layer.merge(vcsStatusBroadcasterLayer, workspaceMemberBranchesLayer)),
       Layer.provide(
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: () => Effect.succeed({ status: "no-script" as const }),

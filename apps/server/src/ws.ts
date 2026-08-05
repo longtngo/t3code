@@ -85,6 +85,7 @@ import {
 } from "./orchestration/threadWindowBounds.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -430,6 +431,7 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const workspaceMemberBranches = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -1978,6 +1980,29 @@ const makeWsRpcLayer = (
             vcsStatusBroadcaster.refreshStatus(input.cwd),
             {
               "rpc.aggregate": "vcs",
+            },
+          ),
+        [WS_METHODS.workspaceMemberBranches]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberBranches,
+            Effect.gen(function* () {
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(input.projectId)
+                .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+              const members = project?.members ?? [];
+              const reports = yield* Effect.forEach(members, (member) =>
+                workspaceMemberBranches
+                  .inspect({
+                    cwd: member.path,
+                    integrationBranch: member.integrationBranch,
+                    threadId: input.threadId,
+                  })
+                  .pipe(Effect.map((report) => ({ ...report, memberId: member.id }))),
+              );
+              return { reports };
+            }),
+            {
+              "rpc.aggregate": "workspace",
             },
           ),
         [WS_METHODS.vcsRefreshLocalStatus]: (input) =>
