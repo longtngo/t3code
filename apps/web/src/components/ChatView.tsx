@@ -148,6 +148,7 @@ import {
   AlarmClockIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  CircleHelpIcon,
   GitBranchIcon,
   TriangleAlertIcon,
   WifiOffIcon,
@@ -247,6 +248,16 @@ import {
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import {
+  contestedMembersKey,
+  describeContestedMembers,
+  describeUnknownMemberGuard,
+  dismissContestedMembersForSession,
+  resolveMemberGuardState,
+  selectContestedMembers,
+  withoutDismissedContestedMembers,
+} from "./chat/composerMemberGuard";
+import { resolveWorkspaceRepos } from "../hooks/useWorkspaceRepos.logic";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -271,7 +282,7 @@ import {
   dismissBranchMismatchForSession,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
-  shouldShowBranchMismatchBanner,
+  shouldShowComposerIntentBanner,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -4166,11 +4177,11 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.id ?? null,
     localCheckoutBranchMismatch,
   );
-  const showBranchMismatchBanner = shouldShowBranchMismatchBanner({
-    hasMismatch: localCheckoutBranchMismatch !== null,
+  const showBranchMismatchBanner = shouldShowComposerIntentBanner({
+    hasCondition: localCheckoutBranchMismatch !== null,
     isDismissed: isBranchMismatchDismissedForSession(activeBranchMismatchKey),
     composerHasContent: composerHasDraftContent,
-    wasShownForCurrentMismatch:
+    wasShownForCurrentCondition:
       revealedBranchMismatchKey !== null && revealedBranchMismatchKey === activeBranchMismatchKey,
   });
   useEffect(() => {
@@ -4183,6 +4194,104 @@ function ChatViewContent(props: ChatViewProps) {
       return revealed !== null && revealed !== activeBranchMismatchKey ? null : revealed;
     });
   }, [activeBranchMismatchKey, showBranchMismatchBanner]);
+  // The pre-turn workspace guard. One shared checkout per attached repository
+  // means two threads writing to the same one cannot be isolated, so making the
+  // state visible before the user sends is the only protection there is — the
+  // post-turn sweep can see the collision but by then it has already happened.
+  // See docs/design/2026-08-04-multi-repo-workspace-design.md.
+  //
+  // Derived from the project rather than through `useWorkspaceRepos`, which
+  // looks the thread up in the entity store. A draft is a local thread that is
+  // not in that store yet, and a draft's first turn is exactly when a member is
+  // most likely to be sitting on somebody else's branch.
+  const workspaceRepos = useMemo(
+    () =>
+      resolveWorkspaceRepos({
+        project: activeProject ?? null,
+        threadWorktreePath: activeThread?.worktreePath ?? null,
+      }),
+    [activeProject, activeThread?.worktreePath],
+  );
+  const workspaceHasMembers = workspaceRepos.some((repo) => repo.kind === "member");
+  const memberBranchesQuery = useEnvironmentQuery(
+    workspaceHasMembers && activeThread
+      ? vcsEnvironment.memberBranches({
+          environmentId: activeThread.environmentId,
+          input: { projectId: activeThread.projectId, threadId: activeThread.id },
+        })
+      : null,
+  );
+  const memberPathsById = useMemo(
+    () => new Map((activeProject?.members ?? []).map((member) => [member.id, member.path])),
+    [activeProject?.members],
+  );
+  // Dismissals live in a module-level set so they survive a remount; this tick
+  // is what re-derives the list after one.
+  const [contestedMembersDismissTick, setContestedMembersDismissTick] = useState(0);
+  const contestedMembers = useMemo(
+    () =>
+      withoutDismissedContestedMembers(
+        activeThread?.id ?? null,
+        selectContestedMembers({
+          reports: memberBranchesQuery.data?.reports ?? [],
+          repos: workspaceRepos,
+          pathsByMemberId: memberPathsById,
+        }),
+      ),
+    [
+      activeThread?.id,
+      contestedMembersDismissTick,
+      memberBranchesQuery.data,
+      memberPathsById,
+      workspaceRepos,
+    ],
+  );
+  // A check that could not run must never read as a check that came back clean
+  // — that is the exact shape of the bug this feature was built around.
+  const memberGuardState = resolveMemberGuardState({
+    hasMembers: workspaceHasMembers,
+    hasAnswer: memberBranchesQuery.data !== null,
+    hasError: memberBranchesQuery.error !== null,
+    isEnvironmentUnavailable: activeEnvironmentUnavailableState !== null,
+    contested: contestedMembers,
+  });
+  const activeContestedMembersKey = contestedMembersKey(activeThread?.id ?? null, contestedMembers);
+  // The banner's identity has to cover the unknown states too, or moving from
+  // "checking" to a warning would inherit the hysteresis of the wrong thing.
+  const memberGuardKey =
+    memberGuardState.kind === "contested"
+      ? activeContestedMembersKey
+      : memberGuardState.kind === "unknown"
+        ? `${activeThread?.id ?? "none"}:unknown:${memberGuardState.reason}`
+        : null;
+  const [revealedContestedMembersKey, setRevealedContestedMembersKey] = useState<string | null>(
+    null,
+  );
+  const showContestedMembersBanner = shouldShowComposerIntentBanner({
+    hasCondition: memberGuardKey !== null,
+    isDismissed: false,
+    composerHasContent: composerHasDraftContent,
+    wasShownForCurrentCondition:
+      revealedContestedMembersKey !== null && revealedContestedMembersKey === memberGuardKey,
+  });
+  useEffect(() => {
+    setRevealedContestedMembersKey((revealed) => {
+      if (showContestedMembersBanner) return memberGuardKey;
+      return revealed !== null && revealed !== memberGuardKey ? null : revealed;
+    });
+  }, [memberGuardKey, showContestedMembersBanner]);
+  // Re-read the moment there is intent to send. The query is otherwise on a
+  // 60 second timer, which is long enough for another thread's post-turn sweep
+  // to have moved a branch since the last poll — and this banner's whole job is
+  // to be right at the moment the user is about to write there.
+  const refreshMemberBranches = memberBranchesQuery.refresh;
+  const hadDraftContentRef = useRef(false);
+  useEffect(() => {
+    const hadContent = hadDraftContentRef.current;
+    hadDraftContentRef.current = composerHasDraftContent;
+    if (!composerHasDraftContent || hadContent || !workspaceHasMembers) return;
+    refreshMemberBranches();
+  }, [composerHasDraftContent, refreshMemberBranches, workspaceHasMembers]);
   const handleSwitchCheckoutToThread = useCallback(async () => {
     if (
       !activeProjectCwd ||
@@ -4300,12 +4409,65 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
+  const contestedMembersBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!showContestedMembersBanner || memberGuardKey === null) return null;
+    if (memberGuardState.kind === "unknown") {
+      return {
+        id: `workspace-members-unknown:${memberGuardKey}`,
+        variant: "default",
+        icon: <CircleHelpIcon />,
+        title: describeUnknownMemberGuard(memberGuardState.reason),
+        description:
+          "Until it comes back, there is no telling whether another thread is working in one of them.",
+      };
+    }
+    const described = describeContestedMembers(contestedMembers);
+    const threadId = activeThread?.id ?? null;
+    // Unreachable: `contested` requires a key, and the key requires both.
+    if (described === null || threadId === null) return null;
+    return {
+      id: `workspace-members-contested:${memberGuardKey}`,
+      variant: "warning",
+      icon: <TriangleAlertIcon />,
+      title: described.title,
+      description:
+        described.kind === "one" ? (
+          <span className="min-w-0">
+            {described.beforeBranch}
+            <code className="font-medium text-foreground">{described.branch}</code>
+            {described.afterBranch}
+          </span>
+        ) : (
+          described.description
+        ),
+      dismissLabel: "Dismiss branch warning",
+      onDismiss: () => {
+        dismissContestedMembersForSession(threadId, contestedMembers);
+        setContestedMembersDismissTick((tick) => tick + 1);
+      },
+    };
+  }, [
+    activeThread?.id,
+    contestedMembers,
+    memberGuardKey,
+    memberGuardState,
+    showContestedMembersBanner,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    // Ahead of the system banners, which is the one place in this stack that
+    // ordering is load-bearing: only `items[0]` is visible, and the rest are
+    // collapsed behind a hover target that a touch device cannot reach. A
+    // reconnect notice is transient and explains itself; this one says a turn
+    // is about to write into another thread's branch, and losing it behind a
+    // two-second connection blip is the same silent-inertness this guard was
+    // built to end.
+    const contestedItems = contestedMembersBannerItem === null ? [] : [contestedMembersBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...systemComposerBannerItems, ...parkedThreadItems];
+      return [...contestedItems, ...systemComposerBannerItems, ...parkedThreadItems];
     }
     return [
+      ...contestedItems,
       ...systemComposerBannerItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -4350,6 +4512,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    contestedMembersBannerItem,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
