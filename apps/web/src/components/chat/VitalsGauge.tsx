@@ -13,6 +13,7 @@ import {
   clampPct,
   computeWindowPace,
   fullnessArc,
+  readingPct,
   windowArc,
   type VitalsGaugeArc,
   FIVE_HOUR_MS,
@@ -118,7 +119,7 @@ function ContextBlock(props: {
   providerDisplayName?: string | null | undefined;
 }) {
   const { usage } = props;
-  const pct = Math.round(clampPct(usage.usedPercentage ?? 0));
+  const pct = readingPct(usage.usedPercentage ?? 0);
   const level: Severity = vitalsLevel(pct);
   const hasMax = usage.maxTokens !== null;
   return (
@@ -262,7 +263,12 @@ function BalanceRow(props: { balance: UsageBalanceView }) {
 
 function MetricRow(props: { label: string; pct: number | null }) {
   const known = props.pct !== null && Number.isFinite(props.pct);
-  const level = known ? vitalsLevel(clampPct(props.pct as number)) : null;
+  // Bucket the rounded reading, not the raw one: this row displays
+  // `Math.round(pct)`, so colouring from the unrounded value would let it show
+  // "50%" in yellow — the same split that made the glyph and the context block
+  // disagree.
+  const reading = known ? readingPct(props.pct as number) : null;
+  const level = reading === null ? null : vitalsLevel(reading);
   return (
     <div className="flex items-center gap-3 py-1">
       <span className="w-9 text-xs font-semibold text-foreground">{props.label}</span>
@@ -270,7 +276,7 @@ function MetricRow(props: { label: string; pct: number | null }) {
         {level ? (
           <span
             className={cn("block h-full rounded-full", SEVERITY_BG[level])}
-            style={{ width: `${clampPct(props.pct ?? 0)}%` }}
+            style={{ width: `${reading ?? 0}%` }}
           />
         ) : null}
       </span>
@@ -280,7 +286,7 @@ function MetricRow(props: { label: string; pct: number | null }) {
           level ? SEVERITY_TEXT[level] : "text-muted-foreground/50",
         )}
       >
-        {known ? `${Math.round(props.pct as number)}%` : "—"}
+        {reading === null ? "—" : `${reading}%`}
       </span>
     </div>
   );
@@ -502,14 +508,16 @@ export function VitalsGauge(props: {
           <button
             type="button"
             className={cn(
-              "inline-flex size-7 cursor-pointer items-center justify-center rounded-full border border-transparent text-muted-foreground outline-none transition-colors",
+              // size-8 matches the composer's send button, so the two controls
+              // in the footer share one hit-target size.
+              "inline-flex size-8 cursor-pointer items-center justify-center rounded-full border border-transparent text-muted-foreground outline-none transition-colors",
               "hover:bg-accent data-[pressed]:bg-accent",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             )}
             aria-label={describeInputs(inputs)}
           >
-            <span className="flex size-5 items-center justify-center">
-              <VitalsGaugeIcon inputs={inputs} />
+            <span className="flex size-6 items-center justify-center">
+              <VitalsGaugeIcon inputs={inputs} size={24} />
             </span>
           </button>
         }
