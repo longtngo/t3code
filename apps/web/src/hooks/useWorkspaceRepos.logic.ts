@@ -43,10 +43,15 @@ function normalizeCwd(cwd: string): string {
  *
  * Members whose path repeats one already in the list are dropped: the same
  * checkout appearing twice would run every query twice and render two groups
- * that can never disagree. Comparison is by trailing-separator-insensitive
- * string, which catches the spellings the attach UI can produce but not a
- * member written as `~/x` against a workspace root stored as `/Users/me/x` —
- * the server resolves those to the same directory, the client cannot.
+ * that can never disagree.
+ *
+ * Comparison is a trailing-separator-insensitive string match, which is enough
+ * because both sides arrive canonical: the server expands `~` and resolves
+ * every member path — and the workspace root — before either is persisted, so
+ * a member spelled `~/x` is already stored as `/Users/me/x` by the time it
+ * reaches here. `Normalizer.members.test.ts` pins that. What this still cannot
+ * see through is a symlink, since the server resolves paths without following
+ * one; two spellings of one directory across a symlink would show twice.
  */
 export function resolveWorkspaceRepos(input: WorkspaceReposInput): ReadonlyArray<WorkspaceRepo> {
   const { project } = input;

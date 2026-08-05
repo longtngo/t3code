@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -77,6 +79,40 @@ it.layer(TestLayer)("normalizeDispatchCommand workspace members", (it) => {
             integrationBranch: "pickup-v2",
           },
         ]);
+      }),
+    );
+
+    it.effect("expands a member path written with a home shorthand", () =>
+      Effect.gen(function* () {
+        // The client compares a member's path against the workspace root as
+        // plain strings to drop a repository attached twice. That comparison is
+        // only sound because a `~` spelling never reaches it: the two would
+        // otherwise name one directory and render as two repositories, each
+        // running every query a second time.
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        // `~` alone and `~/x` take different branches in the expansion, and a
+        // real attach only ever produces the second.
+        const home = NodeOS.homedir();
+        const underHome = yield* fileSystem.makeTempDirectoryScoped({
+          directory: home,
+          prefix: "t3code-normalizer-home-",
+        });
+        const relativeToHome = path.relative(home, underHome);
+
+        const normalized = yield* normalizeDispatchCommand(
+          metaUpdateWithMembers([
+            { id: "member-home", path: "~", title: "home", integrationBranch: "main" },
+            {
+              id: "member-under-home",
+              path: `~/${relativeToHome}`,
+              title: "under-home",
+              integrationBranch: "main",
+            },
+          ]),
+        );
+
+        expect(readMembers(normalized)?.map((member) => member.path)).toEqual([home, underHome]);
       }),
     );
 
