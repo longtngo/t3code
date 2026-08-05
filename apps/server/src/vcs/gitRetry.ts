@@ -13,8 +13,20 @@ export const DEFAULT_GIT_RETRY_ATTEMPTS = 3;
  * dependency. `VcsProcessExitError` (a real non-zero git exit) and decode/detection/unsupported
  * failures are NOT transient and must not be retried.
  */
-export const isTransientVcsError = (error: { readonly _tag: string }): boolean =>
-  error._tag === "VcsProcessTimeoutError" || error._tag === "VcsProcessSpawnError";
+export const isTransientVcsError = (error: {
+  readonly _tag: string;
+  readonly reason?: string | undefined;
+}): boolean => {
+  if (error._tag === "VcsProcessTimeoutError" || error._tag === "VcsProcessSpawnError") {
+    return true;
+  }
+  // The read-only status and detection paths fail with `GitCommandError`, not
+  // the VCS-tagged errors, so a host-overload timeout on `rev-parse` used to be
+  // reported as a hard failure and retried by nobody — which is most of the
+  // repeated `rev-parse` noise in the log. The reason field carries the same
+  // distinction structurally; `detail` is prose and must not be matched on.
+  return error._tag === "GitCommandError" && (error.reason === "timeout" || error.reason === "spawn");
+};
 
 /**
  * Bounded, jittered exponential backoff for retrying transient VCS failures.
