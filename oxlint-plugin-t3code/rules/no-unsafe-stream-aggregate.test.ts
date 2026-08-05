@@ -94,4 +94,65 @@ describe("t3code/no-unsafe-stream-aggregate", () => {
         source.pipe(Stream.aggregateWithinEither(Sink.collectAll(), Schedule.spaced("1 second")));
     `,
   );
+
+  // Every case below walked straight past the rule while it matched only on an
+  // object literally named `Stream`.
+  rule.invalid(
+    "reports a bare named import of an unsafe combinator",
+    `
+      import { groupedWithin } from "effect/Stream";
+      import * as Stream from "effect/Stream";
+
+      export const batched = (source: Stream.Stream<number>) =>
+        source.pipe(groupedWithin(64, "20 millis"));
+    `,
+  );
+
+  rule.invalid(
+    "reports a named import renamed on the way in",
+    `
+      import { groupedWithin as coalesce } from "effect/Stream";
+      import * as Stream from "effect/Stream";
+
+      export const batched = (source: Stream.Stream<number>) =>
+        source.pipe(coalesce(64, "20 millis"));
+    `,
+  );
+
+  rule.invalid(
+    "reports a namespace import bound to another name",
+    `
+      import * as S from "effect/Stream";
+
+      export const batched = (source: S.Stream<number>) =>
+        source.pipe(S.groupedWithin(64, "20 millis"));
+    `,
+  );
+
+  rule.invalid(
+    "reports the Stream namespace pulled off the effect barrel under an alias",
+    `
+      import { Stream as S } from "effect";
+
+      export const batched = (source: S.Stream<number>) =>
+        source.pipe(S.groupedWithin(64, "20 millis"));
+    `,
+  );
+
+  rule.valid(
+    "ignores a same-named import from somewhere else entirely",
+    `
+      import { groupedWithin } from "./my-own-batcher.ts";
+
+      export const batched = (values: ReadonlyArray<number>) => groupedWithin(values, 64);
+    `,
+  );
+
+  rule.valid(
+    "ignores a locally declared function of the same name",
+    `
+      const groupedWithin = (n: number) => n;
+      export const x = groupedWithin(64);
+    `,
+  );
 });
