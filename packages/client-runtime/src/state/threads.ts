@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationHistoryCursor,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
@@ -73,6 +74,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
     error: Option.none(),
+    // Seed the history cursor from the cache too. A warm cache resumes the
+    // subscription via `afterSequence`, which emits NO snapshot frame — so a
+    // cursor that only ever arrived on a snapshot would be lost exactly on the
+    // path that skips it, leaving older turns unreachable after a reload.
+    oldestLoaded: Option.match(cached, {
+      onNone: () => undefined,
+      onSome: (snapshot) => snapshot.oldestLoaded,
+    }),
+    hasMoreHistory: Option.match(cached, {
+      onNone: () => false,
+      onSome: (snapshot) => snapshot.hasMoreHistory ?? false,
+    }),
   });
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
@@ -143,19 +156,37 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
+    /**
+     * Only a snapshot frame carries a history window. Incremental events do not,
+     * so they pass `undefined` and the current cursor is preserved rather than
+     * cleared — otherwise the first live event after a snapshot would erase the
+     * cursor and hide the older history that is still there.
+     */
+    history?: {
+      readonly oldestLoaded: OrchestrationHistoryCursor | undefined;
+      readonly hasMoreHistory: boolean;
+    },
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.set(state, {
+    yield* SubscriptionRef.update(state, (current) => ({
       data: Option.some(thread),
-      status: waiting ? "synchronizing" : "live",
+      status: waiting ? ("synchronizing" as const) : ("live" as const),
       error: Option.none(),
-    });
+      oldestLoaded: history === undefined ? current.oldestLoaded : history.oldestLoaded,
+      hasMoreHistory: history === undefined ? current.hasMoreHistory : history.hasMoreHistory,
+    }));
     // Active threads can update many times per second and retain large tool
     // payloads. The server remains the source of truth while a turn is active;
     // persist once it settles so cache encoding stays off the streaming path.
     if (shouldPersistThread(thread)) {
       const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
-      yield* Queue.offer(persistence, { snapshotSequence, thread });
+      const current = yield* SubscriptionRef.get(state);
+      yield* Queue.offer(persistence, {
+        snapshotSequence,
+        thread,
+        ...(current.oldestLoaded === undefined ? {} : { oldestLoaded: current.oldestLoaded }),
+        hasMoreHistory: current.hasMoreHistory,
+      });
     }
   });
 
@@ -165,6 +196,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       data: Option.none(),
       status: "deleted",
       error: Option.none(),
+      oldestLoaded: undefined,
+      hasMoreHistory: false,
     });
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
@@ -194,7 +227,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
-      yield* setThread(item.snapshot.thread);
+      yield* setThread(item.snapshot.thread, {
+        oldestLoaded: item.snapshot.oldestLoaded,
+        hasMoreHistory: item.snapshot.hasMoreHistory ?? false,
+      });
       return;
     }
 
@@ -309,7 +345,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         Option.match(current.data, {
           onNone: () => Effect.void,
           onSome: (thread) =>
-            shouldPersistThread(thread) ? persist({ snapshotSequence, thread }) : Effect.void,
+            shouldPersistThread(thread)
+              ? persist({
+                  snapshotSequence,
+                  thread,
+                  ...(current.oldestLoaded === undefined
+                    ? {}
+                    : { oldestLoaded: current.oldestLoaded }),
+                  hasMoreHistory: current.hasMoreHistory,
+                })
+              : Effect.void,
         }),
       ),
     ),
@@ -355,6 +400,7 @@ export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
 export * from "./threadDetail.ts";
+export * from "./threadHistory.ts";
 export * from "./threadHistoryBackfill.ts";
 export * from "./threadReducer.ts";
 export * from "./threadShell.ts";

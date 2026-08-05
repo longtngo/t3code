@@ -630,6 +630,99 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-testid="file-diff"');
   });
 
+  it("offers to load earlier messages when the window did not reach the beginning", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        olderHistory={{
+          canLoadOlder: true,
+          isLoading: false,
+          error: null,
+          onLoadOlder: () => {},
+        }}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="timeline-load-older-history"');
+    expect(markup).toContain("Load earlier messages");
+  });
+
+  it("hides the load-earlier control on a thread that starts at the beginning", () => {
+    // A thread whose snapshot covered its whole history has nothing older; a
+    // permanently visible control there would be noise on every short thread.
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        olderHistory={{
+          canLoadOlder: false,
+          isLoading: false,
+          error: null,
+          onLoadOlder: () => {},
+        }}
+      />,
+    );
+
+    expect(markup).not.toContain('data-testid="timeline-load-older-history"');
+  });
+
+  it("disables the load-earlier control while a page is in flight", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        olderHistory={{
+          canLoadOlder: true,
+          isLoading: true,
+          error: null,
+          onLoadOlder: () => {},
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Loading earlier messages");
+    expect(markup).toContain("disabled");
+  });
+
+  it("surfaces a failed backfill instead of silently doing nothing", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        olderHistory={{
+          canLoadOlder: true,
+          isLoading: false,
+          error: "Could not load earlier messages.",
+          onLoadOlder: () => {},
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Could not load earlier messages.");
+    // Still retryable — the control stays.
+    expect(markup).toContain('data-testid="timeline-load-older-history"');
+  });
+
+  it("keeps the top spacer when the load-earlier control is shown", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        topFadeEnabled
+        olderHistory={{
+          canLoadOlder: true,
+          isLoading: false,
+          error: null,
+          onLoadOlder: () => {},
+        }}
+      />,
+    );
+
+    expect(markup).toContain('class="h-10 sm:h-12"');
+    expect(markup).toContain('data-testid="timeline-load-older-history"');
+  });
+
   it("renders a failure marker for failed tool lifecycle entries", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

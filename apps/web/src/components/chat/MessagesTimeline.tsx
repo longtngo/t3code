@@ -150,6 +150,58 @@ const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
+
+/**
+ * Older-history paging state for the top of the transcript. Thread snapshots are
+ * windowed to the most recent turns, so a long thread opens mid-conversation and
+ * the reader pages further back from here.
+ */
+export interface TimelineOlderHistory {
+  readonly canLoadOlder: boolean;
+  readonly isLoading: boolean;
+  readonly error: string | null;
+  readonly onLoadOlder: () => void;
+}
+
+export function TimelineOlderHistoryHeader({
+  olderHistory,
+}: {
+  olderHistory: TimelineOlderHistory;
+}) {
+  return (
+    <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col items-center gap-1 pb-3">
+      {olderHistory.canLoadOlder ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-testid="timeline-load-older-history"
+          disabled={olderHistory.isLoading}
+          onClick={olderHistory.onLoadOlder}
+          className="h-7 rounded-full px-3 text-xs text-muted-foreground"
+        >
+          {olderHistory.isLoading ? "Loading earlier messages…" : "Load earlier messages"}
+        </Button>
+      ) : null}
+      {olderHistory.error === null ? null : (
+        <p className="text-xs text-destructive" role="status">
+          {olderHistory.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Only render the header control when there is something to say. `canLoadOlder`
+ * false with no error means the transcript already starts at the beginning, and a
+ * permanently visible "nothing older" row would be noise on every short thread.
+ */
+export function timelineOlderHistoryIsVisible(
+  olderHistory: TimelineOlderHistory | undefined,
+): olderHistory is TimelineOlderHistory {
+  return olderHistory !== undefined && (olderHistory.canLoadOlder || olderHistory.error !== null);
+}
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 
@@ -186,6 +238,7 @@ interface MessagesTimelineProps {
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
+  olderHistory?: TimelineOlderHistory;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +274,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onManualNavigation,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
+  olderHistory,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -458,6 +512,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestTurn?.turnId],
   );
 
+  // The list header doubles as the older-history control: it sits above the
+  // first row, so reaching the top of the transcript is what reveals it.
+  const listHeader = useMemo(() => {
+    const spacer = topFadeEnabled ? TIMELINE_LIST_FADE_HEADER : TIMELINE_LIST_HEADER;
+    if (!timelineOlderHistoryIsVisible(olderHistory)) {
+      return spacer;
+    }
+    return (
+      <Fragment>
+        {spacer}
+        <TimelineOlderHistoryHeader olderHistory={olderHistory} />
+      </Fragment>
+    );
+  }, [olderHistory, topFadeEnabled]);
+
   // Stable renderItem — no closure deps. Row components read shared state
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
@@ -517,7 +586,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
               topFadeEnabled && "chat-timeline-scroll-fade",
             )}
-            ListHeaderComponent={topFadeEnabled ? TIMELINE_LIST_FADE_HEADER : TIMELINE_LIST_HEADER}
+            ListHeaderComponent={listHeader}
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap
