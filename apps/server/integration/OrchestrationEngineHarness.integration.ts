@@ -48,6 +48,7 @@ import {
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import * as WorkspaceMemberBranches from "../src/workspace/WorkspaceMemberBranches.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
@@ -334,6 +335,16 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(serverSettingsLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
+      Layer.provideMerge(
+        Layer.succeed(WorkspaceMemberBranches.WorkspaceMemberBranches, {
+          inspect: () =>
+            Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+          ensureFeatureBranch: () =>
+            Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+          resolvePrBase: () => Effect.succeed(null),
+          writePrBase: () => Effect.succeed(true),
+        }),
+      ),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(
         Layer.succeed(VcsStatusBroadcaster, {

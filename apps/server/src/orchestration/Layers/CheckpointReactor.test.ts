@@ -36,6 +36,7 @@ import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { CheckpointReactorLive } from "./CheckpointReactor.ts";
+import * as WorkspaceMemberBranches from "../../workspace/WorkspaceMemberBranches.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -339,6 +340,16 @@ describe("CheckpointReactor", () => {
     });
 
     const layer = CheckpointReactorLive.pipe(
+      Layer.provideMerge(
+        Layer.succeed(WorkspaceMemberBranches.WorkspaceMemberBranches, {
+          inspect: () =>
+            Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+          ensureFeatureBranch: () =>
+            Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
+          resolvePrBase: () => Effect.succeed(null),
+          writePrBase: () => Effect.succeed(true),
+        }),
+      ),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(RuntimeReceiptBusLive),

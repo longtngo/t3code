@@ -38,6 +38,7 @@ import type { OrchestrationDispatchError } from "../Errors.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
+import { WorkspaceMemberBranches } from "../../workspace/WorkspaceMemberBranches.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -88,6 +89,70 @@ const make = Effect.gen(function* () {
   const receiptBus = yield* RuntimeReceiptBus;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
+  const memberBranches = yield* WorkspaceMemberBranches;
+
+  /**
+   * Puts every member repository a turn touched onto a feature branch that
+   * records the thread that owns it.
+   *
+   * Runs after the checkpoint capture, where the turn's writes are already on
+   * disk. Members are swept one at a time rather than concurrently: this writes
+   * to the user's own long-lived checkouts, and a predictable order is worth
+   * more than the milliseconds. Every member is isolated — one bad path must
+   * never fail the turn or stop the others.
+   */
+  const sweepWorkspaceMembers = Effect.fn("sweepWorkspaceMembers")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly threadTitle: string | null;
+    readonly members: ReadonlyArray<{
+      readonly id: string;
+      readonly path: string;
+      readonly title: string;
+      readonly integrationBranch: string;
+    }>;
+  }) {
+    for (const member of input.members) {
+      const report = yield* memberBranches
+        .ensureFeatureBranch({
+          cwd: member.path,
+          integrationBranch: member.integrationBranch,
+          threadId: input.threadId,
+          threadTitle: input.threadTitle,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("workspace member sweep failed", {
+              threadId: input.threadId,
+              member: member.title,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(null)),
+          ),
+        );
+      if (report === null) continue;
+      if (report.state === "unavailable") {
+        yield* Effect.logInfo("workspace member unavailable", {
+          threadId: input.threadId,
+          member: member.title,
+          detail: report.detail,
+        });
+        continue;
+      }
+      if (report.state === "owned-by-other") {
+        yield* Effect.logWarning("workspace member is on another thread's branch", {
+          threadId: input.threadId,
+          member: member.title,
+          branch: report.branch,
+          ownerThreadId: report.ownerThreadId,
+        });
+      }
+      // A member's status is cached per directory and nothing else recomputes a
+      // directory that is not some thread's own cwd, so the panels would keep
+      // showing what they read before the sweep moved the branch.
+      yield* vcsStatusBroadcaster
+        .refreshLocalStatus(member.path)
+        .pipe(Effect.ignoreCause({ log: true }));
+    }
+  });
 
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -414,6 +479,13 @@ const make = Effect.gen(function* () {
         assistantMessageId: undefined,
         createdAt: event.createdAt,
       });
+      // Members are swept after the capture, so the staging checkpoint reflects
+      // the tree the turn produced before any member branch moves.
+      yield* sweepWorkspaceMembers({
+        threadId: thread.id,
+        threadTitle: thread.title ?? null,
+        members: projects[0]?.members ?? [],
+      });
     },
   );
 
@@ -476,6 +548,11 @@ const make = Effect.gen(function* () {
       status: "ready",
       assistantMessageId: event.payload.assistantMessageId ?? undefined,
       createdAt: event.payload.completedAt,
+    });
+    yield* sweepWorkspaceMembers({
+      threadId,
+      threadTitle: thread.title ?? null,
+      members: projects[0]?.members ?? [],
     });
   });
 
