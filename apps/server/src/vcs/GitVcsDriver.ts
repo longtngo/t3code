@@ -265,6 +265,8 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       key: string,
     ) => Effect.Effect<string | null, GitCommandError>;
+    /** The commit HEAD points at, or null when the repository has no commits. */
+    readonly readHeadSha: (cwd: string) => Effect.Effect<string | null, GitCommandError>;
     readonly writeConfigValue: (
       cwd: string,
       key: string,

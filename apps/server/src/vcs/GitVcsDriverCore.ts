@@ -2318,6 +2318,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
+  const readHeadSha: GitVcsDriver.GitVcsDriver["Service"]["readHeadSha"] = (cwd) =>
+    // A repository with no commits exits non-zero here, which is an absent
+    // head rather than a failure.
+    runGitStdout("GitVcsDriver.readHeadSha", cwd, ["rev-parse", "HEAD"], true).pipe(
+      Effect.map((stdout) => stdout.trim()),
+      Effect.map((sha) => (sha.length > 0 ? sha : null)),
+    );
+
   const writeConfigValue: GitVcsDriver.GitVcsDriver["Service"]["writeConfigValue"] = (
     cwd,
     key,
@@ -2978,6 +2986,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readRangeContext,
     getReviewDiffPreview,
     readConfigValue,
+    readHeadSha,
     writeConfigValue,
     readBranchReflog,
     listBranchNamesPointingAt,

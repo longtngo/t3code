@@ -39,6 +39,11 @@ import { isGitRepository } from "../../git/Utils.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import { WorkspaceMemberBranches } from "../../workspace/WorkspaceMemberBranches.ts";
+import {
+  describeCheckpointDrift,
+  isCheckpointComplete,
+  resolveCheckpointDrift,
+} from "../../workspace/CheckpointMemberDrift.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -298,6 +303,7 @@ const make = Effect.gen(function* () {
     readonly status: "ready" | "missing" | "error";
     readonly assistantMessageId: MessageId | undefined;
     readonly createdAt: string;
+    readonly members: ReadonlyArray<{ readonly id: string; readonly path: string }>;
   }) {
     const fromTurnCount = Math.max(0, input.turnCount - 1);
     const fromCheckpointRef = checkpointRefForThreadTurn(input.threadId, fromTurnCount);
@@ -375,6 +381,9 @@ const make = Effect.gen(function* () {
       checkpointRef: targetCheckpointRef,
       status: input.status,
       files,
+      // Recorded, not snapshotted: enough to tell at revert time whether
+      // restoring staging alone still produces the tree this describes.
+      memberStates: yield* memberBranches.readCheckpointStates(input.members),
       assistantMessageId,
       checkpointTurnCount: input.turnCount,
       createdAt: input.createdAt,
@@ -478,6 +487,7 @@ const make = Effect.gen(function* () {
         status: checkpointStatusFromRuntime(event.payload.state),
         assistantMessageId: undefined,
         createdAt: event.createdAt,
+        members: projects[0]?.members ?? [],
       });
       // Members are swept after the capture, so the staging checkpoint reflects
       // the tree the turn produced before any member branch moves.
@@ -548,6 +558,7 @@ const make = Effect.gen(function* () {
       status: "ready",
       assistantMessageId: event.payload.assistantMessageId ?? undefined,
       createdAt: event.payload.completedAt,
+      members: projects[0]?.members ?? [],
     });
     yield* sweepWorkspaceMembers({
       threadId,
@@ -815,12 +826,38 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const targetCheckpoint = thread.checkpoints.find(
+      (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
+    );
     const targetCheckpointRef =
       event.payload.turnCount === 0
         ? checkpointRefForThreadTurn(event.payload.threadId, 0)
-        : thread.checkpoints.find(
-            (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
-          )?.checkpointRef;
+        : targetCheckpoint?.checkpointRef;
+
+    // Checkpoints snapshot the staging repository only. Restoring it while a
+    // member repository has moved leaves an inconsistent tree behind a UI that
+    // implies a clean undo, so the revert is refused and the repositories are
+    // named — the user has to know which checkouts to deal with by hand.
+    const revertProjects = yield* resolveThreadProjects(thread.projectId);
+    const revertMembers = revertProjects[0]?.members ?? [];
+    if (revertMembers.length > 0) {
+      const drift = resolveCheckpointDrift(
+        targetCheckpoint?.memberStates,
+        yield* memberBranches.readCheckpointStates(revertMembers),
+      );
+      if (!isCheckpointComplete(drift)) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: describeCheckpointDrift(
+            drift,
+            (memberId) => revertMembers.find((m) => m.id === memberId)?.title ?? memberId,
+          ),
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+    }
 
     if (!targetCheckpointRef) {
       yield* appendRevertFailureActivity({

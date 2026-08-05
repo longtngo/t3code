@@ -37,6 +37,12 @@ export interface MemberBranchTarget {
   readonly threadId: string;
 }
 
+export interface MemberCheckpointState {
+  readonly memberId: string;
+  readonly headSha: string;
+  readonly isDirty: boolean;
+}
+
 export interface MemberPrBase {
   readonly base: string;
   readonly source: MemberPrBaseSource;
@@ -65,6 +71,14 @@ export class WorkspaceMemberBranches extends Context.Service<
       readonly cwd: string;
       readonly integrationBranch: string;
     }) => Effect.Effect<MemberPrBase | null>;
+    /**
+     * Where each member stands right now, for recording on a checkpoint or for
+     * comparing against one. Members that cannot be read are omitted, which the
+     * comparison reads as drift — a revert cannot restore what it cannot see.
+     */
+    readonly readCheckpointStates: (
+      members: ReadonlyArray<{ readonly id: string; readonly path: string }>,
+    ) => Effect.Effect<ReadonlyArray<MemberCheckpointState>>;
     /**
      * Persists a confirmed base so the next pull request action short-circuits
      * on it instead of walking the ladder again.
@@ -208,6 +222,19 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const readCheckpointStates: WorkspaceMemberBranches["Service"]["readCheckpointStates"] =
+    Effect.fn("WorkspaceMemberBranches.readCheckpointStates")(function* (members) {
+      const states: Array<MemberCheckpointState> = [];
+      for (const member of members) {
+        const local = yield* readLocalState(member.path);
+        if (local === null) continue;
+        const headSha = yield* git.readHeadSha(member.path).pipe(Effect.orElseSucceed(() => null));
+        if (headSha === null) continue;
+        states.push({ memberId: member.id, headSha, isDirty: local.isDirty });
+      }
+      return states;
+    });
+
   const writePrBase: WorkspaceMemberBranches["Service"]["writePrBase"] = (input) =>
     git
       .writeConfigValue(input.cwd, memberPrBaseConfigKey(input.branch), input.base)
@@ -217,6 +244,7 @@ export const make = Effect.gen(function* () {
     inspect,
     ensureFeatureBranch,
     resolvePrBase,
+    readCheckpointStates,
     writePrBase,
   });
 });

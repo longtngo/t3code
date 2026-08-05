@@ -5,6 +5,7 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  OrchestrationCheckpointMemberState,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationThreadSearchSource,
@@ -100,6 +101,9 @@ const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+    memberStates: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(OrchestrationCheckpointMemberState)),
+    ),
   }),
 );
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
@@ -789,6 +793,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
+          checkpoint_member_states_json AS "memberStates",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
@@ -1209,6 +1214,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
+          checkpoint_member_states_json AS "memberStates",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
@@ -1432,6 +1438,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
+          checkpoint_member_states_json AS "memberStates",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
@@ -1616,6 +1623,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
+          checkpoint_member_states_json AS "memberStates",
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
@@ -1826,6 +1834,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   checkpointRef: row.checkpointRef,
                   status: row.status,
                   files: row.files,
+                  ...(row.memberStates === null ? {} : { memberStates: row.memberStates }),
                   assistantMessageId: row.assistantMessageId,
                   completedAt: row.completedAt,
                 });
@@ -2584,6 +2593,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             checkpointRef: row.checkpointRef,
             status: row.status,
             files: row.files,
+            ...(row.memberStates === null ? {} : { memberStates: row.memberStates }),
             assistantMessageId: row.assistantMessageId,
             completedAt: row.completedAt,
           }),

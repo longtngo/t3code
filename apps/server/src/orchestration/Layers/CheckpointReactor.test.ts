@@ -347,6 +347,7 @@ describe("CheckpointReactor", () => {
           ensureFeatureBranch: () =>
             Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
           resolvePrBase: () => Effect.succeed(null),
+          readCheckpointStates: () => Effect.succeed([]),
           writePrBase: () => Effect.succeed(true),
         }),
       ),

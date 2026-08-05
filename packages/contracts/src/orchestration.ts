@@ -359,12 +359,35 @@ export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Typ
 export const OrchestrationCheckpointStatus = Schema.Literals(["ready", "missing", "error"]);
 export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus.Type;
 
+/**
+ * Where a workspace member repository stood when a checkpoint was captured.
+ *
+ * Checkpoints snapshot the staging repository only. This records enough about
+ * each member to tell, at revert time, whether restoring staging alone would
+ * still produce the tree the checkpoint describes — no snapshot, no objects
+ * written, one `git rev-parse HEAD` and the dirty flag the sweep already reads.
+ */
+export const OrchestrationCheckpointMemberState = Schema.Struct({
+  memberId: TrimmedNonEmptyString,
+  headSha: TrimmedNonEmptyString,
+  isDirty: Schema.Boolean,
+});
+export type OrchestrationCheckpointMemberState =
+  typeof OrchestrationCheckpointMemberState.Type;
+
 export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
   checkpointRef: CheckpointRef,
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
+  /**
+   * Optional rather than defaulted, deliberately. A checkpoint captured before
+   * this existed is then distinguishable from one captured with no members:
+   * the former cannot make a completeness claim and is treated as complete,
+   * which is exactly the behavior it was captured under.
+   */
+  memberStates: Schema.optional(Schema.Array(OrchestrationCheckpointMemberState)),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
 });
@@ -1006,6 +1029,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   checkpointRef: CheckpointRef,
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
+  memberStates: Schema.optional(Schema.Array(OrchestrationCheckpointMemberState)),
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
   createdAt: IsoDateTime,
@@ -1309,6 +1333,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   checkpointRef: CheckpointRef,
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
+  memberStates: Schema.optional(Schema.Array(OrchestrationCheckpointMemberState)),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
 });

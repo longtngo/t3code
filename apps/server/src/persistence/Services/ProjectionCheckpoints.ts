@@ -12,6 +12,7 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  OrchestrationCheckpointMemberState,
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
@@ -30,6 +31,12 @@ export const ProjectionCheckpoint = Schema.Struct({
   checkpointRef: CheckpointRef,
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
+  /**
+   * Null for a checkpoint captured before member states were recorded, which
+   * cannot make a completeness claim. Distinct from an empty array, which
+   * claims there were no members.
+   */
+  memberStates: Schema.NullOr(Schema.Array(OrchestrationCheckpointMemberState)),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
 });
