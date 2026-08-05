@@ -3,7 +3,11 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { TrustedFileView } from "~/components/files/TrustedFileView";
-import { absolutePathFromViewerSplat, viewerSplatFromPath } from "~/components/files/viewerPath";
+import {
+  absolutePathFromViewerSplat,
+  resolveAddressBarCommit,
+  resolveViewerNavigation,
+} from "~/components/files/viewerPath";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 
@@ -36,13 +40,17 @@ function AddressBar({
   // its blur reverts the draft instead.
   const commit = useCallback(() => {
     setEditing(false);
-    const next = draft.trim();
-    if (revertOnBlurRef.current || !next || next === value) {
-      revertOnBlurRef.current = false;
+    const outcome = resolveAddressBarCommit({
+      draft,
+      value,
+      reverting: revertOnBlurRef.current,
+    });
+    revertOnBlurRef.current = false;
+    if (outcome.kind === "revert") {
       setDraft(value);
       return;
     }
-    onSubmit(next);
+    onSubmit(outcome.path);
   }, [draft, value, onSubmit]);
 
   return (
@@ -82,8 +90,8 @@ function ViewerRouteView() {
   const navigate = useNavigate();
   const navigateTo = useCallback(
     (rawPath: string) => {
-      const nextSplat = viewerSplatFromPath(rawPath);
-      if (nextSplat === null || nextSplat === splat) return;
+      const nextSplat = resolveViewerNavigation(rawPath, splat);
+      if (nextSplat === null) return;
       void navigate({ to: "/viewer/$", params: { _splat: nextSplat } });
     },
     [navigate, splat],
