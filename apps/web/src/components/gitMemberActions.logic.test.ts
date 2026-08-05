@@ -56,9 +56,23 @@ describe("gateMemberAction", () => {
 });
 
 describe("describePrBaseSource", () => {
-  it("distinguishes a record from an inference", () => {
-    assert.notEqual(describePrBaseSource("configured"), describePrBaseSource("reflog"));
-    assert.notEqual(describePrBaseSource("reflog"), describePrBaseSource("integration"));
+  // The wording carries the confidence, so the assertions are on the words: a
+  // shuffled mapping would tell the user an inference was a record.
+  it("says a configured base was recorded", () => {
+    assert.match(describePrBaseSource("configured"), /recorded/i);
+  });
+
+  it("says a reflog base came from where the branch was cut", () => {
+    assert.match(describePrBaseSource("reflog"), /cut from/i);
+  });
+
+  it("names the integration branch fallback as such", () => {
+    assert.match(describePrBaseSource("integration"), /integration branch/i);
+  });
+
+  it("gives all three a distinct answer", () => {
+    const described = (["configured", "reflog", "integration"] as const).map(describePrBaseSource);
+    assert.equal(new Set(described).size, 3);
   });
 });
 

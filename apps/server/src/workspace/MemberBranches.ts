@@ -133,9 +133,13 @@ export function memberFeatureBranchName(input: {
     .slice(0, MAX_SLUG_LENGTH)
     .replace(/-+$/g, "");
   const id = input.threadId.replace(/[^a-zA-Z0-9]/g, "").slice(0, THREAD_ID_PREFIX_LENGTH);
+  // `t3code/<8 hex>` is the shape `isTemporaryWorktreeBranch` recognises as a
+  // disposable placeholder that other code is free to rename, and a titleless
+  // thread with a UUID id lands exactly on it. The literal keeps a member's
+  // long-lived branch out of that space.
   return slug.length > 0
     ? `${MEMBER_BRANCH_PREFIX}${slug}-${id}`
-    : `${MEMBER_BRANCH_PREFIX}${id}`;
+    : `${MEMBER_BRANCH_PREFIX}member-${id}`;
 }
 
 export interface BranchCreationRecord {

@@ -108,6 +108,9 @@ interface GitActionsControlProps {
 interface PendingDefaultBranchAction {
   action: DefaultBranchConfirmableAction;
   branchName: string;
+  /** The repository the action was raised against, not whichever is selected now. */
+  repoId?: string;
+  skipMemberPrBasePrompt?: boolean;
   includesCommit: boolean;
   commitMessage?: string;
   onConfirmed?: () => void;
@@ -144,6 +147,15 @@ interface RunGitActionWithToastInput {
   filePaths?: string[];
   /** Set once the user has confirmed the base this pull request compares against. */
   skipMemberPrBasePrompt?: boolean;
+  /**
+   * The repository this run belongs to.
+   *
+   * Anything that re-enters this function later — a toast's follow-up action, a
+   * confirmation dialog — records the repository it was raised against, because
+   * the picker may have moved in between and the action must not quietly land
+   * somewhere else.
+   */
+  repoId?: string;
 }
 
 /** A pull request from an attached repository, waiting on its base. */
@@ -156,6 +168,9 @@ interface PendingMemberPrBase {
   readonly source: WorkspaceMemberPrBaseSource;
   readonly commitMessage?: string;
   readonly filePaths?: string[];
+  readonly repoId: string;
+  readonly skipDefaultBranchPrompt: boolean;
+  readonly featureBranch: boolean;
 }
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
@@ -1048,6 +1063,9 @@ export default function GitActionsControl({
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const [pendingMemberPrBase, setPendingMemberPrBase] = useState<PendingMemberPrBase | null>(null);
+  // The prepare step cuts and checks out a branch. A second one racing it in
+  // the same checkout is how a half-created branch gets deleted under the first.
+  const [isPreparingMember, setIsPreparingMember] = useState(false);
   const [memberPrBaseDraft, setMemberPrBaseDraft] = useState("");
   const prepareMemberAction = useAtomCommand(
     vcsEnvironment.memberActionPrepare,
@@ -1302,23 +1320,66 @@ export default function GitActionsControl({
       action,
       commitMessage,
       onConfirmed,
-      skipDefaultBranchPrompt = false,
+      skipDefaultBranchPrompt: skipDefaultBranchPromptInput = false,
       statusOverride,
-      featureBranch = false,
+      featureBranch: featureBranchInput = false,
       progressToastId,
       filePaths,
       skipMemberPrBasePrompt = false,
+      repoId,
     }: RunGitActionWithToastInput) => {
+      let skipDefaultBranchPrompt = skipDefaultBranchPromptInput;
+      let featureBranch = featureBranchInput;
+      // Everything below runs against the repository selected right now. A run
+      // raised earlier — a toast's follow-up, a confirmation the user left open
+      // — names the repository it belongs to, and is refused rather than
+      // silently redirected if the picker has moved since.
+      if (repoId !== undefined && activeRepo !== null && repoId !== activeRepo.id) {
+        const owner = workspaceRepos.find((repo) => repo.id === repoId);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Repository changed",
+            description: owner
+              ? `That action belongs to ${owner.title}. Select it again to continue.`
+              : "That action belongs to a repository that is no longer attached.",
+            ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+          }),
+        );
+        return;
+      }
+
       // An attached repository is readied before the action rather than only
       // after a turn, so a commit made mid-turn does not race the post-turn
       // sweep for the same branch — and so the action never runs in a checkout
       // another thread has already claimed.
-      if (
-        activeMemberRepo !== null &&
-        activeEnvironmentId !== null &&
-        memberProjectId !== null &&
-        memberThreadId !== null
-      ) {
+      if (activeMemberRepo !== null) {
+        // Members always run on a branch that already exists: `runStackedAction`
+        // with `featureBranch` creates one inside the action, after the last
+        // chance to record its base and its owner.
+        featureBranch = false;
+        if (
+          activeEnvironmentId === null ||
+          memberProjectId === null ||
+          memberThreadId === null ||
+          isPreparingMember
+        ) {
+          // Falling through here would run the action with none of the checks
+          // below — no branch cut, no ownership gate. A guard whose failure
+          // mode is "skip every protection" has to be a stop.
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Not ready for ${activeMemberRepo.title}`,
+              description: isPreparingMember
+                ? "Another action is still being prepared for this repository."
+                : "This thread is still loading. Try again in a moment.",
+              ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+            }),
+          );
+          return;
+        }
+        setIsPreparingMember(true);
         const prepared = await prepareMemberAction({
           environmentId: activeEnvironmentId,
           input: {
@@ -1327,6 +1388,7 @@ export default function GitActionsControl({
             memberId: activeMemberRepo.id,
           },
         });
+        setIsPreparingMember(false);
         if (prepared._tag !== "Success") {
           if (isAtomCommandInterrupted(prepared)) return;
           const error = squashAtomCommandFailure(prepared);
@@ -1378,8 +1440,18 @@ export default function GitActionsControl({
             source: prBase.source,
             ...(commitMessage ? { commitMessage } : {}),
             ...(filePaths ? { filePaths } : {}),
+            repoId: activeMemberRepo.id,
+            skipDefaultBranchPrompt,
+            featureBranch,
           });
           return;
+        }
+        // The cut has already moved this repository off its integration branch,
+        // but the client's git status is a cached read from before it. Warning
+        // about a default branch we are demonstrably no longer on would be
+        // false, and its "checkout a feature branch" remedy would cut a second.
+        if (prepared.value.report.state === "owned-by-self") {
+          skipDefaultBranchPrompt = true;
         }
       }
 
@@ -1411,6 +1483,9 @@ export default function GitActionsControl({
           ...(commitMessage ? { commitMessage } : {}),
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
+          ...(repoId !== undefined ? { repoId } : {}),
+          ...(activeMemberRepo !== null ? { repoId: activeMemberRepo.id } : {}),
+          skipMemberPrBasePrompt: true,
         });
         return;
       }
@@ -1546,7 +1621,13 @@ export default function GitActionsControl({
       }
 
       const actionResult = result.value;
-      syncThreadBranchAfterGitAction(actionResult);
+      const ctaRepoId = activeRepo?.id;
+      // `thread.branch` describes the thread's own worktree. A branch created
+      // inside an attached repository is not that, and recording it there
+      // orphans the thread's pull-request metadata.
+      if (activeMemberRepo === null) {
+        syncThreadBranchAfterGitAction(actionResult);
+      }
       const closeResultToast = () => {
         toastManager.close(resolvedProgressToastId);
       };
@@ -1563,6 +1644,7 @@ export default function GitActionsControl({
             closeResultToast();
             void runGitActionWithToast({
               action: toastCta.action.kind,
+              ...(ctaRepoId !== undefined ? { repoId: ctaRepoId } : {}),
             });
           },
         };
@@ -1609,13 +1691,16 @@ export default function GitActionsControl({
 
   const continuePendingDefaultBranchAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, onConfirmed, filePaths, repoId, skipMemberPrBasePrompt } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(repoId !== undefined ? { repoId } : {}),
+      ...(skipMemberPrBasePrompt ? { skipMemberPrBasePrompt } : {}),
       skipDefaultBranchPrompt: true,
     });
   };
@@ -1658,11 +1743,29 @@ export default function GitActionsControl({
           );
           return;
         }
+        // A refused write is reported as an outcome, not an error: the branch
+        // may have moved, or the config may not be writable. Continuing anyway
+        // would open the pull request against the inferred base the user just
+        // corrected, which is the one thing this dialog exists to prevent.
+        if (!written.value.written) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Base not recorded for ${pending.repositoryTitle}`,
+              description: `${pending.branch} may have moved since you confirmed. Nothing was opened.`,
+              ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+            }),
+          );
+          return;
+        }
       }
       await runGitActionWithToast({
         action: pending.action,
         ...(pending.commitMessage ? { commitMessage: pending.commitMessage } : {}),
         ...(pending.filePaths ? { filePaths: pending.filePaths } : {}),
+        ...(pending.featureBranch ? { featureBranch: true } : {}),
+        ...(pending.skipDefaultBranchPrompt ? { skipDefaultBranchPrompt: true } : {}),
+        repoId: pending.repoId,
         skipMemberPrBasePrompt: true,
       });
     })();
@@ -1670,13 +1773,16 @@ export default function GitActionsControl({
 
   const checkoutFeatureBranchAndContinuePendingAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, onConfirmed, filePaths, repoId, skipMemberPrBasePrompt } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(repoId !== undefined ? { repoId } : {}),
+      ...(skipMemberPrBasePrompt ? { skipMemberPrBasePrompt } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
@@ -1697,6 +1803,7 @@ export default function GitActionsControl({
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
+      ...(activeRepo !== null ? { repoId: activeRepo.id } : {}),
     });
   };
 
@@ -1710,6 +1817,18 @@ export default function GitActionsControl({
       return;
     }
     if (quickAction.kind === "run_pull") {
+      if (activeMemberRepo !== null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Pull is not available for ${activeMemberRepo.title}`,
+            description:
+              "Attached repositories are shared checkouts; pull them yourself so you can see what it merges into.",
+            ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+          }),
+        );
+        return;
+      }
       const toastId = toastManager.add({
         type: "loading",
         title: "Pulling...",
@@ -1830,13 +1949,47 @@ export default function GitActionsControl({
 
   if (!gitCwd) return null;
 
+  const repositoryPicker =
+    workspaceRepos.length > 1 && threadKey !== null ? (
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label="Repository for git actions"
+              className="max-w-40 rounded-e-none border-e-0 before:rounded-e-none"
+              size="xs"
+              variant="outline"
+            />
+          }
+        >
+          <FolderGit2Icon className="size-3.5 shrink-0" aria-hidden />
+          <span className="truncate">{activeRepo?.title ?? ""}</span>
+        </MenuTrigger>
+        <MenuPopup align="start">
+          {workspaceRepos.map((repo) => (
+            <MenuItem
+              key={repo.id}
+              onClick={() => setRepoSelection({ threadKey, repoId: repo.id })}
+            >
+              <span className="truncate">{repo.title}</span>
+              {repo.id === activeRepo?.id ? (
+                <CheckIcon className="ml-auto size-3.5" aria-hidden />
+              ) : null}
+            </MenuItem>
+          ))}
+        </MenuPopup>
+      </Menu>
+    ) : null;
+
   return (
     <>
       {!isRepo ? (
-        <Button
+        <Group aria-label="Git actions" className="shrink-0">
+          {repositoryPicker}
+          <Button
           variant="outline"
           size="xs"
-          disabled={initAction.isPending}
+          disabled={initAction.isPending || activeMemberRepo !== null}
           onClick={() => {
             void (async () => {
               const result = await initAction.run();
@@ -1855,43 +2008,15 @@ export default function GitActionsControl({
             })();
           }}
         >
-          <GitBranchPlusIcon className="size-3.5" aria-hidden />
-          <span className="ml-0.5">
-            {initAction.isPending ? "Initializing..." : "Initialize Git"}
-          </span>
-        </Button>
+            <GitBranchPlusIcon className="size-3.5" aria-hidden />
+            <span className="ml-0.5">
+              {initAction.isPending ? "Initializing..." : "Initialize Git"}
+            </span>
+          </Button>
+        </Group>
       ) : (
         <Group aria-label="Git actions" className="shrink-0">
-          {workspaceRepos.length > 1 && threadKey !== null ? (
-            <Menu>
-              <MenuTrigger
-                render={
-                  <Button
-                    aria-label="Repository for git actions"
-                    className="max-w-40 rounded-e-none border-e-0 before:rounded-e-none"
-                    size="xs"
-                    variant="outline"
-                  />
-                }
-              >
-                <FolderGit2Icon className="size-3.5 shrink-0" aria-hidden />
-                <span className="truncate">{activeRepo?.title ?? ""}</span>
-              </MenuTrigger>
-              <MenuPopup align="start">
-                {workspaceRepos.map((repo) => (
-                  <MenuItem
-                    key={repo.id}
-                    onClick={() => setRepoSelection({ threadKey, repoId: repo.id })}
-                  >
-                    <span className="truncate">{repo.title}</span>
-                    {repo.id === activeRepo?.id ? (
-                      <CheckIcon className="ml-auto size-3.5" aria-hidden />
-                    ) : null}
-                  </MenuItem>
-                ))}
-              </MenuPopup>
-            </Menu>
-          ) : null}
+          {repositoryPicker}
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1922,7 +2047,7 @@ export default function GitActionsControl({
               variant="outline"
               size="xs"
               className="ps-[8.5px]"
-              disabled={isGitActionRunning || quickAction.disabled}
+              disabled={isGitActionRunning || isPreparingMember || quickAction.disabled}
               onClick={runQuickAction}
             >
               <GitQuickActionIcon quickAction={quickAction} SourceControlIcon={SourceControlIcon} />

@@ -58,9 +58,19 @@ export class WorkspaceMemberBranches extends Context.Service<
      * Puts a member on a feature branch when it is carrying uncommitted work on
      * its integration branch, recording the base and the owning thread.
      * Idempotent, and never fails.
+     *
+     * `cutOn` is the difference between the two callers. The post-turn sweep
+     * passes `tracked`, because a stray untracked file the user left lying
+     * around is not evidence a turn wrote here and must not move their
+     * checkout. The git panel passes `any`, because there the user has asked
+     * to commit in this repository — and `git add -A` would otherwise land
+     * those same untracked files directly on the integration branch.
      */
     readonly ensureFeatureBranch: (
-      target: MemberBranchTarget & { readonly threadTitle: string | null },
+      target: MemberBranchTarget & {
+        readonly threadTitle: string | null;
+        readonly cutOn?: "tracked" | "any";
+      },
     ) => Effect.Effect<MemberBranchReport>;
     /**
      * The branch a pull request from this member should compare against, and
@@ -150,9 +160,10 @@ export const make = Effect.gen(function* () {
   const readOwner = (cwd: string, branch: string) =>
     git.readConfigValue(cwd, memberOwnerConfigKey(branch)).pipe(Effect.orElseSucceed(() => null));
 
-  const inspect: WorkspaceMemberBranches["Service"]["inspect"] = Effect.fn(
-    "WorkspaceMemberBranches.inspect",
-  )(function* (target) {
+  const inspectWith = Effect.fn("WorkspaceMemberBranches.inspectWith")(function* (
+    target: MemberBranchTarget,
+    cutOn: "tracked" | "any",
+  ) {
     const local = yield* readLocalState(target.cwd);
     if (local === null) return unavailable("Not a readable git repository.");
     const ownerThreadId = local.branch === null ? null : yield* readOwner(target.cwd, local.branch);
@@ -162,17 +173,20 @@ export const make = Effect.gen(function* () {
         integrationBranch: target.integrationBranch,
         ownerThreadId,
         threadId: target.threadId,
-        hasTrackedChanges: local.hasTrackedChanges,
+        hasTrackedChanges: cutOn === "any" ? local.isDirty : local.hasTrackedChanges,
       }),
       branch: local.branch,
       ownerThreadId,
     };
   });
 
+  const inspect: WorkspaceMemberBranches["Service"]["inspect"] = (target) =>
+    inspectWith(target, "tracked");
+
   const ensureFeatureBranch: WorkspaceMemberBranches["Service"]["ensureFeatureBranch"] = Effect.fn(
     "WorkspaceMemberBranches.ensureFeatureBranch",
   )(function* (target) {
-    const report = yield* inspect(target);
+    const report = yield* inspectWith(target, target.cutOn ?? "tracked");
     if (report.state !== "cut-needed") return report;
 
     const preferredBranch = memberFeatureBranchName({
