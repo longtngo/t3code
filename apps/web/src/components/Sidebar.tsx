@@ -2550,7 +2550,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           }
         }}
       >
-        <DialogPopup className="max-w-lg">
+        <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Workspace repositories</DialogTitle>
             <DialogDescription>
@@ -2562,6 +2562,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           <DialogPanel className="space-y-4">
             {workspaceMembersTarget ? (
               <WorkspaceMembersControl
+                environmentId={workspaceMembersTarget.environmentId}
                 members={workspaceMembersTarget.members}
                 onMembersChange={(members) => updateWorkspaceMembers(workspaceMembersTarget, members)}
               />

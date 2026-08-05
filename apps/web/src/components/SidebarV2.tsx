@@ -3194,6 +3194,7 @@ export default function SidebarV2() {
                   <div className="grid min-w-0 gap-1.5">
                     <span className="font-medium text-foreground">Workspace members</span>
                     <WorkspaceMembersControl
+                      environmentId={member.environmentId}
                       members={member.members}
                       onMembersChange={(workspaceMembers) =>
                         updateProjectWorkspaceMembers(member, workspaceMembers)
