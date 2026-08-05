@@ -69,6 +69,11 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsRefreshLocalStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.workspaceMemberBranches]: AuthOrchestrationReadScope,
+  // Both write to the user's own checkouts — moving a branch and recording a
+  // pull-request base — so they take the operate scope, unlike the read-only
+  // inspection above.
+  [WS_METHODS.workspaceMemberActionPrepare]: AuthOrchestrationOperateScope,
+  [WS_METHODS.workspaceMemberPrBaseWrite]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsPull]: AuthOrchestrationOperateScope,
   [WS_METHODS.gitRunStackedAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.gitResolvePullRequest]: AuthOrchestrationOperateScope,

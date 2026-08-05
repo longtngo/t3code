@@ -432,6 +432,22 @@ const makeWsRpcLayer = (
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const workspaceMemberBranches = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      /**
+       * The attached repository a member id names, read from the project.
+       *
+       * These handlers run git in the directory they resolve, so the directory
+       * comes from project state and never from the caller: a client that could
+       * name a path could run git anywhere the server can reach.
+       */
+      const resolveProjectMember = Effect.fn("ws.resolveProjectMember")(function* (
+        projectId: ProjectId,
+        memberId: string,
+      ) {
+        const project = yield* projectionSnapshotQuery
+          .getProjectShellById(projectId)
+          .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+        return project?.members.find((member) => member.id === memberId);
+      });
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -2000,6 +2016,70 @@ const makeWsRpcLayer = (
                   .pipe(Effect.map((report) => ({ ...report, memberId: member.id }))),
               );
               return { reports };
+            }),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberActionPrepare,
+            Effect.gen(function* () {
+              const member = yield* resolveProjectMember(input.projectId, input.memberId);
+              if (member === undefined) {
+                return {
+                  report: {
+                    memberId: input.memberId,
+                    state: "unavailable" as const,
+                    branch: null,
+                    ownerThreadId: null,
+                    detail: "This repository is no longer attached to the project.",
+                  },
+                  prBase: null,
+                };
+              }
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.threadId)
+                .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+              const report = yield* workspaceMemberBranches.ensureFeatureBranch({
+                cwd: member.path,
+                integrationBranch: member.integrationBranch,
+                threadId: input.threadId,
+                threadTitle: thread?.title ?? null,
+              });
+              // The status cache is keyed by directory and nothing else
+              // recomputes a directory that is not some thread's own cwd, so a
+              // branch this just moved would keep reporting the old one.
+              yield* vcsStatusBroadcaster
+                .refreshLocalStatus(member.path)
+                .pipe(Effect.ignoreCause({ log: true }));
+              // A member still on its integration branch has no branch to open a
+              // pull request from, and comparing it against itself is meaningless.
+              const prBase =
+                report.branch === null || report.branch === member.integrationBranch
+                  ? null
+                  : yield* workspaceMemberBranches.resolvePrBase({
+                      cwd: member.path,
+                      integrationBranch: member.integrationBranch,
+                    });
+              return { report: { ...report, memberId: member.id }, prBase };
+            }),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberPrBaseWrite,
+            Effect.gen(function* () {
+              const member = yield* resolveProjectMember(input.projectId, input.memberId);
+              if (member === undefined) return { written: false };
+              const written = yield* workspaceMemberBranches.writePrBase({
+                cwd: member.path,
+                branch: input.branch,
+                base: input.base,
+              });
+              return { written };
             }),
             {
               "rpc.aggregate": "workspace",

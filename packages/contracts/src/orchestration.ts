@@ -269,6 +269,60 @@ export const WorkspaceMemberBranchesResult = Schema.Struct({
 });
 export type WorkspaceMemberBranchesResult = typeof WorkspaceMemberBranchesResult.Type;
 
+/** Where the pull-request base came from, weakest last. */
+export const WorkspaceMemberPrBaseSource = Schema.Literals(["configured", "reflog", "integration"]);
+export type WorkspaceMemberPrBaseSource = typeof WorkspaceMemberPrBaseSource.Type;
+
+/**
+ * Readies one member repository for a git action the user is about to run.
+ *
+ * Called from the git panel rather than only after a turn, so a commit made
+ * mid-turn does not race the post-turn sweep for the same branch.
+ */
+export const WorkspaceMemberActionPrepareInput = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  memberId: TrimmedNonEmptyString,
+});
+export type WorkspaceMemberActionPrepareInput = typeof WorkspaceMemberActionPrepareInput.Type;
+
+export const WorkspaceMemberActionPrepareResult = Schema.Struct({
+  report: WorkspaceMemberBranchReport,
+  /**
+   * The branch a pull request from this member should compare against, and
+   * where that answer came from. Null when there is no branch to compare — a
+   * member still sitting on its integration branch has nothing to open.
+   */
+  prBase: Schema.NullOr(
+    Schema.Struct({
+      branch: TrimmedNonEmptyString,
+      base: TrimmedNonEmptyString,
+      source: WorkspaceMemberPrBaseSource,
+    }),
+  ),
+});
+export type WorkspaceMemberActionPrepareResult = typeof WorkspaceMemberActionPrepareResult.Type;
+
+/**
+ * Records the base the user confirmed, so the pull request compares against it
+ * and the next action short-circuits on it instead of inferring again.
+ *
+ * Deliberately separate from the prepare step: an inferred base must never
+ * become sticky without the user having seen it.
+ */
+export const WorkspaceMemberPrBaseWriteInput = Schema.Struct({
+  projectId: ProjectId,
+  memberId: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  base: TrimmedNonEmptyString,
+});
+export type WorkspaceMemberPrBaseWriteInput = typeof WorkspaceMemberPrBaseWriteInput.Type;
+
+export const WorkspaceMemberPrBaseWriteResult = Schema.Struct({
+  written: Schema.Boolean,
+});
+export type WorkspaceMemberPrBaseWriteResult = typeof WorkspaceMemberPrBaseWriteResult.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
