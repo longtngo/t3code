@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,19 +7,75 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
+import { ProjectionCheckpointRepositoryLive } from "./ProjectionCheckpoints.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
+import { ProjectionCheckpointRepository } from "../Services/ProjectionCheckpoints.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionCheckpointRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  // Every turn row that existed before member states were recorded has SQL NULL
+  // in this column. Nothing else exercises that path — new rows are written with
+  // `[]` even for a project with no members — and a decode failure here would
+  // break reading the checkpoint history of every existing thread.
+  it.effect("decodes a checkpoint row that predates member states", () =>
+    Effect.gen(function* () {
+      const checkpoints = yield* ProjectionCheckpointRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-legacy-checkpoint");
+
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, completed_at,
+          checkpoint_turn_count, checkpoint_ref, checkpoint_status, checkpoint_files_json
+        ) VALUES (
+          ${threadId}, 'turn-legacy', 'completed',
+          '2026-03-24T00:00:00.000Z', '2026-03-24T00:00:00.000Z',
+          1, 'refs/t3code/checkpoints/legacy', 'ready', '[]'
+        )
+      `;
+
+      const rows = yield* checkpoints.listByThreadId({ threadId });
+
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.memberStates, null);
+    }),
+  );
+
+  it.effect("round-trips recorded member states", () =>
+    Effect.gen(function* () {
+      const checkpoints = yield* ProjectionCheckpointRepository;
+      const threadId = ThreadId.make("thread-member-states");
+
+      yield* checkpoints.upsert({
+        threadId,
+        turnId: TurnId.make("turn-with-members"),
+        checkpointTurnCount: 1,
+        checkpointRef: CheckpointRef.make("refs/t3code/checkpoints/members"),
+        status: "ready",
+        files: [],
+        memberStates: [{ memberId: "m1", headSha: "abc123", isDirty: true }],
+        assistantMessageId: null,
+        completedAt: "2026-03-24T00:00:00.000Z",
+      });
+
+      const rows = yield* checkpoints.listByThreadId({ threadId });
+
+      assert.deepStrictEqual(rows[0]?.memberStates, [
+        { memberId: "m1", headSha: "abc123", isDirty: true },
+      ]);
+    }),
+  );
+
   it.effect("stores SQL NULL for missing project model options", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
