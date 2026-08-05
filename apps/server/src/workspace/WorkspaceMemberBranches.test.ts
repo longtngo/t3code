@@ -308,6 +308,44 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // Driven through real git rather than a hand-written ref list, because the
+  // hand-written list is what hid this: the pure tests asserted against a
+  // `remotes/origin/main` shape `git branch` does not print.
+  it.effect("resolves a branch cut from the default branch to that branch", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd, defaultBranch } = yield* makeMemberRepo();
+      yield* git(cwd, ["switch", defaultBranch]);
+      yield* git(cwd, ["switch", "-c", "hotfix"]);
+
+      const resolved = yield* service.resolvePrBase({ cwd, integrationBranch: INTEGRATION_BRANCH });
+
+      assert.strictEqual(resolved?.base, defaultBranch);
+      assert.strictEqual(resolved?.source, "reflog");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // `git switch -c` records `Created from HEAD`, so two branches cut without
+  // moving off the same commit are indistinguishable from a parent and its
+  // child. Answering `hotfix` here would base a pull request on another
+  // in-flight feature branch; the declared integration branch is the honest
+  // fallback.
+  it.effect("falls back to the integration branch when siblings share a commit", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd, defaultBranch } = yield* makeMemberRepo();
+      yield* git(cwd, ["switch", defaultBranch]);
+      yield* git(cwd, ["switch", "-c", "hotfix"]);
+      yield* git(cwd, ["switch", defaultBranch]);
+      yield* git(cwd, ["switch", "-c", "hotfix-2"]);
+
+      const resolved = yield* service.resolvePrBase({ cwd, integrationBranch: INTEGRATION_BRANCH });
+
+      assert.strictEqual(resolved?.base, INTEGRATION_BRANCH);
+      assert.strictEqual(resolved?.source, "integration");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("falls through to the integration branch when the reflog is gone", () =>
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;

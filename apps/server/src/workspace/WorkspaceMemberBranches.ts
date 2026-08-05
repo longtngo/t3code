@@ -234,15 +234,10 @@ export const make = Effect.gen(function* () {
         return record.createdFrom;
       }
 
-      const names = yield* git
+      const refNames = yield* git
         .listBranchNamesPointingAt(cwd, record.sha)
         .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
-      // The branch itself points at that commit until it moves on, and it
-      // cannot be its own base.
-      return pickBranchAtCommit(
-        names.filter((name) => name !== branch),
-        integrationBranch,
-      );
+      return pickBranchAtCommit(refNames, { integrationBranch, branch });
     },
   );
 
