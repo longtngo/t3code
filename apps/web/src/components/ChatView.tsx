@@ -164,8 +164,14 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
-import { enqueueTurn, hasQueuedTurnForThread, useCommandOutbox } from "~/rpc/commandOutbox";
+import { newCommandId, newDraftId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
+import {
+  enqueueTurn,
+  hasQueuedTurnForThread,
+  retireDeliveredTurns,
+  useCommandOutbox,
+  useDeliveredTurns,
+} from "~/rpc/commandOutbox";
 import {
   deriveAgentItems,
   deriveBackgroundItems,
@@ -1492,6 +1498,13 @@ function ChatViewContent(props: ChatViewProps) {
     () => outboxQueue.filter((queued) => queued.threadId === activeThreadId),
     [outboxQueue, activeThreadId],
   );
+  // Sent and accepted, still waiting for the server to reflect the message
+  // back. Retired below once it does.
+  const deliveredOutbox = useDeliveredTurns((state) => state.delivered);
+  const deliveredOutboxTurns = useMemo(
+    () => deliveredOutbox.filter((delivered) => delivered.threadId === activeThreadId),
+    [deliveredOutbox, activeThreadId],
+  );
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -2450,13 +2463,23 @@ function ChatViewContent(props: ChatViewProps) {
     // Turns queued while offline show as pending bubbles keyed by their message
     // id, so the shared server-id filter below retires them once the replayed
     // turn comes back from the server.
-    const queuedMessages: ChatMessage[] = queuedOutboxTurns.map((queued) => ({
-      id: queued.messageId,
+    const queuedMessages: ChatMessage[] = [
+      ...queuedOutboxTurns.map((queued) => ({
+        messageId: queued.messageId,
+        text: queued.input.message.text,
+        enqueuedAt: queued.enqueuedAt,
+      })),
+      // Accepted, but the echo has not arrived. Without these the bubble blinks
+      // out for a round trip between the send being acknowledged and the server
+      // reflecting the message back.
+      ...deliveredOutboxTurns,
+    ].map((pending) => ({
+      id: pending.messageId,
       role: "user",
-      text: String((queued.input.message as { text?: unknown } | undefined)?.text ?? ""),
+      text: pending.text,
       turnId: null,
-      createdAt: queued.enqueuedAt,
-      updatedAt: queued.enqueuedAt,
+      createdAt: pending.enqueuedAt,
+      updatedAt: pending.enqueuedAt,
       streaming: false,
     }));
     if (optimisticUserMessages.length === 0 && queuedMessages.length === 0) {
@@ -2474,6 +2497,7 @@ function ChatViewContent(props: ChatViewProps) {
     attachmentPreviewHandoffByMessageId,
     displayServerMessages,
     optimisticUserMessages,
+    deliveredOutboxTurns,
     queuedOutboxTurns,
   ]);
   const timelineEntries = useMemo(
@@ -3973,6 +3997,9 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const serverIds = new Set(activeThread.messages.map((message) => message.id));
+    // A delivered turn's bubble is held only until its echo arrives; the same
+    // server-id set that retires an optimistic message retires it.
+    retireDeliveredTurns(serverIds);
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
     if (removedMessages.length === 0) {
       return;
@@ -4893,7 +4920,9 @@ function ChatViewContent(props: ChatViewProps) {
       }
       const queuedMessageId = newMessageId();
       const queuedCreatedAt = new Date().toISOString();
-      const queuedCommandId = randomUUID();
+      // Minted through the branded constructor rather than a bare uuid, so the
+      // value the server dedupes on cannot drift from what a CommandId is.
+      const queuedCommandId = newCommandId();
       const queued = enqueueTurn({
         environmentId,
         threadId: activeThread.id,

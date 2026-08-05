@@ -1,4 +1,5 @@
-import type { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
+import type { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { type StateStorage, createJSONStorage, persist } from "zustand/middleware";
 
@@ -18,13 +19,34 @@ export interface QueuedTurn {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
   /** Stable across replays — the server dedupes on it. */
-  readonly commandId: string;
+  readonly commandId: CommandId;
   /**
    * The `startThreadTurn` input, carrying `commandId`. The flusher supplies a
    * fresh `createdAt` at send time because the field is required on the command
    * (the server canonicalizes it to its own receive time regardless).
+   *
+   * Typed against the real command input rather than a bag of unknowns: this
+   * payload is written now and sent hours later, so a field renamed in between
+   * would otherwise be a runtime rejection at replay, when the user is no longer
+   * looking.
    */
-  readonly input: Record<string, unknown>;
+  readonly input: StartThreadTurnInput;
+  readonly enqueuedAt: string;
+}
+
+/**
+ * A turn that reached the server but whose echo has not arrived yet.
+ *
+ * Deliberately NOT part of the persisted queue: the queue's contract is "not
+ * yet delivered", and giving it a second lifecycle state would put a durable,
+ * cross-tab, replayed structure in charge of a one-round-trip rendering
+ * detail. These are ephemeral, capped, and dropped on reload — the worst case
+ * is the blink they exist to remove.
+ */
+export interface DeliveredTurn {
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly text: string;
   readonly enqueuedAt: string;
 }
 
@@ -128,6 +150,37 @@ export function getQueuedTurns(): readonly QueuedTurn[] {
 }
 
 /**
+ * Turns that have been accepted but not yet echoed back, newest last.
+ *
+ * Separate store so nothing here is persisted, replayed, or shared across tabs.
+ */
+export const useDeliveredTurns = create<{ readonly delivered: readonly DeliveredTurn[] }>()(() => ({
+  delivered: [],
+}));
+
+/** Bound the buffer; a stuck echo must not accumulate bubbles without limit. */
+const MAX_DELIVERED_TURNS = MAX_QUEUED_TURNS;
+
+/** Remember a delivered turn so its bubble survives the wait for the echo. */
+export function markTurnDelivered(turn: QueuedTurn): void {
+  const text = typeof turn.input.message?.text === "string" ? turn.input.message.text : "";
+  useDeliveredTurns.setState((state) => ({
+    delivered: [
+      ...state.delivered.filter((entry) => entry.messageId !== turn.messageId),
+      { threadId: turn.threadId, messageId: turn.messageId, text, enqueuedAt: turn.enqueuedAt },
+    ].slice(-MAX_DELIVERED_TURNS),
+  }));
+}
+
+/** Retire delivered turns the server has now echoed. */
+export function retireDeliveredTurns(echoedMessageIds: ReadonlySet<string>): void {
+  useDeliveredTurns.setState((state) => {
+    const remaining = state.delivered.filter((entry) => !echoedMessageIds.has(entry.messageId));
+    return remaining.length === state.delivered.length ? state : { delivered: remaining };
+  });
+}
+
+/**
  * zustand's persist middleware writes to storage synchronously inside
  * `setState`, so a quota or permission failure throws straight into the caller.
  * Losing durability is tolerable; losing the queue update — or rejecting a send
@@ -190,7 +243,22 @@ function errorMessageOf(error: unknown): string {
  */
 export async function flushOutbox(
   send: (turn: QueuedTurn) => Promise<unknown>,
-  options?: { readonly onTerminalError?: (turn: QueuedTurn, error: unknown) => void },
+  options?: {
+    readonly onTerminalError?: (turn: QueuedTurn, error: unknown) => void;
+    /**
+     * Checked against freshly-synced thread state immediately before sending.
+     * Return a reason to drop the turn instead.
+     *
+     * The enqueue-time check compared against a thread row that was stale by
+     * definition — the environment was unreachable — so a mode changed from
+     * another device, or changed here after queueing, was invisible. Sending a
+     * turn into a thread whose modes have since moved runs it under settings
+     * the user did not choose for it.
+     */
+    readonly rejectBeforeSend?: (turn: QueuedTurn) => string | null;
+    /** Called when a turn is accepted, before it is removed from the queue. */
+    readonly onDelivered?: (turn: QueuedTurn) => void;
+  },
 ): Promise<void> {
   const blockedEnvironments = new Set<string>();
   for (const { commandId } of getQueuedTurns()) {
@@ -199,8 +267,15 @@ export async function flushOutbox(
     const turn = getQueuedTurns().find((queued) => queued.commandId === commandId);
     if (turn === undefined) continue;
     if (blockedEnvironments.has(turn.environmentId)) continue;
+    const rejection = options?.rejectBeforeSend?.(turn) ?? null;
+    if (rejection !== null) {
+      options?.onTerminalError?.(turn, new Error(rejection));
+      removeQueuedTurn(commandId);
+      continue;
+    }
     try {
       await send(turn);
+      options?.onDelivered?.(turn);
       // Remove by identity, never by position: a concurrent clear/enqueue during
       // the await can shift index 0 onto a different, unsent turn.
       removeQueuedTurn(commandId);
