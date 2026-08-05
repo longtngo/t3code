@@ -788,6 +788,11 @@ export default function FilePreviewPanel({
   // against whatever the tree is showing. That is what lets the two move
   // independently without either of them reading the wrong file.
   const cwd = fileRepoCwd ?? projectCwd;
+  // The breadcrumb names the repository the open file actually came from. It
+  // said "pickup-v2" over a file read out of an attached member, which is the
+  // same wrong-root confusion the surface root exists to prevent, just in words.
+  const fileRepoName =
+    workspaceRepos.find((repo) => repo.cwd === fileRepoCwd)?.title ?? projectName;
   const openFileFromTree = (nextRelativePath: string) => {
     onOpenFile(nextRelativePath, activeRepo?.kind === "member" ? activeRepo.cwd : undefined);
   };
@@ -832,8 +837,8 @@ export default function FilePreviewPanel({
     relativePath !== null && isPreviewSupportedInRuntime() && isBrowserPreviewFile(relativePath);
   const absolutePath = relativePath ? resolvePathLinkTarget(relativePath, cwd) : null;
   const breadcrumbs = useMemo(
-    () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
-    [projectName, relativePath],
+    () => (relativePath ? fileBreadcrumbs(fileRepoName, relativePath) : []),
+    [fileRepoName, relativePath],
   );
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
 
@@ -908,7 +913,7 @@ export default function FilePreviewPanel({
                         ? "font-medium text-foreground"
                         : "text-muted-foreground",
                     )}
-                    title={crumb.path || projectName}
+                    title={crumb.path || fileRepoName}
                   >
                     {crumb.label}
                   </span>
@@ -1097,7 +1102,7 @@ export default function FilePreviewPanel({
                 key={`${environmentId}:${treeCwd}`}
                 environmentId={environmentId}
                 cwd={treeCwd}
-                projectName={projectName}
+                projectName={activeRepo?.title ?? projectName}
                 // Only highlight the open file in the tree that actually
                 // contains it.
                 selectedPath={treeCwd === cwd ? relativePath : null}
