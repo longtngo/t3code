@@ -96,6 +96,7 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeAccountUsagePoll } from "./OAuthUsage.ts";
+import { releaseOldTurnItems } from "./turnItemRetention.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
@@ -2101,6 +2102,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       id: turnState.turnId,
       items: [...turnState.items],
     });
+    // The entries stay — the resume cursor counts them and a revert splices by
+    // count — but the items of older turns are released, so a long session's
+    // memory tracks what is in flight rather than everything ever said.
+    releaseOldTurnItems(context.turns);
 
     yield* emitThreadTokenUsage(context, usageSnapshot, {
       rawMethod: "claude/result",
