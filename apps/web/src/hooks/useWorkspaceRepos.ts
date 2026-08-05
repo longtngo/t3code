@@ -8,6 +8,7 @@ export {
   isWorkspaceProject,
   PRIMARY_REPO_ID,
   resolveActiveRepo,
+  resolveVisibleFilePath,
   type WorkspaceRepo,
   type WorkspaceRepoKind,
 } from "./useWorkspaceRepos.logic";

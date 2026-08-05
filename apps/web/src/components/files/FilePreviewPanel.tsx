@@ -57,7 +57,11 @@ import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRev
 import { fileBreadcrumbs } from "./filePath";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
-import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
+import {
+  resolveActiveRepo,
+  resolveVisibleFilePath,
+  useWorkspaceRepos,
+} from "~/hooks/useWorkspaceRepos";
 import WorkspaceRepoBar from "../WorkspaceRepoBar";
 
 import {
@@ -771,7 +775,7 @@ export default function FilePreviewPanel({
   // therefore parks the open file rather than re-resolving it under the new
   // root, where it would usually resolve to nothing and read as an error.
   const [parkedPath, setParkedPath] = useState<string | null>(null);
-  const relativePath = openRelativePath !== null && openRelativePath === parkedPath ? null : openRelativePath;
+  const relativePath = resolveVisibleFilePath(openRelativePath, parkedPath);
   const onOpenFile = (nextRelativePath: string) => {
     setParkedPath(null);
     onOpenFileProp(nextRelativePath);
