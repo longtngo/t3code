@@ -25,6 +25,8 @@ import {
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { PresetDialog } from "./providers/PresetDialog";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -150,6 +152,62 @@ function ProviderAuthEmail(props: {
         hideTooltip="Click to hide email"
       />
     </span>
+  );
+}
+
+/**
+ * Opens the local-LLM preset dialog for this one instance.
+ *
+ * The dialog was ported with the rest of the local-models work but had no
+ * caller, so the env vars that point an agent at a local model still had to be
+ * typed by hand — the one part of that flow a person is likely to get wrong.
+ *
+ * Scoped to the instance being edited rather than offering every instance as a
+ * target: the button lives on the card whose environment it rewrites, so the
+ * thing it changes is the thing you are looking at.
+ *
+ * Hidden entirely when no model configs exist, since there would be nothing to
+ * apply — the settings page is where configs are created.
+ */
+function LocalLlmPresetAction(props: {
+  readonly instanceId: string;
+  readonly label: string;
+  readonly driver: string;
+  readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+  readonly onApply: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
+}) {
+  const localLlm = usePrimarySettings((settings) => settings.localLlm);
+  const [open, setOpen] = useState(false);
+
+  if (localLlm.models.length === 0) return null;
+
+  return (
+    <>
+      <Button
+        className="mt-2"
+        onClick={() => setOpen(true)}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        Apply a local-LLM preset
+      </Button>
+      <PresetDialog
+        models={localLlm.models}
+        onApply={(_targetId, mergedEnv) => props.onApply(mergedEnv)}
+        onOpenChange={setOpen}
+        open={open}
+        settings={localLlm}
+        targets={[
+          {
+            id: props.instanceId,
+            label: props.label,
+            driver: props.driver,
+            environment: props.environment,
+          },
+        ]}
+      />
+    </>
   );
 }
 
@@ -761,6 +819,13 @@ export function ProviderInstanceCard({
               <ProviderEnvironmentSection
                 environment={instance.environment ?? []}
                 onChange={updateEnvironment}
+              />
+              <LocalLlmPresetAction
+                instanceId={instanceId}
+                label={displayName}
+                driver={instance.driver}
+                environment={instance.environment ?? []}
+                onApply={updateEnvironment}
               />
             </div>
 
