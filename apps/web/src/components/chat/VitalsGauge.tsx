@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
-import type { HostMetricsSample } from "~/lib/hostMetrics";
+import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
+import { ChevronRightIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import {
   type AccountUsageView,
+  type UsageBalanceView,
   type Severity,
   type UsageWindowView,
   clampPct,
@@ -101,8 +103,7 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
 // Detail popover
 // ---------------------------------------------------------------------------
 
-const CAP_CLASS =
-  "text-[10.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground";
+const CAP_CLASS = "text-[10.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground";
 const BLOCK_CLASS = "border-t border-border px-4 py-3 first:border-t-0";
 const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
 
@@ -127,11 +128,14 @@ function ContextBlock(props: {
       {hasMax ? (
         <>
           <div className="mt-1.5 flex items-end gap-2">
-            <span className={cn("font-mono text-2xl font-semibold leading-none", SEVERITY_TEXT[level])}>
+            <span
+              className={cn("font-mono text-2xl font-semibold leading-none", SEVERITY_TEXT[level])}
+            >
               {pct}%
             </span>
             <span className="font-mono text-xs text-muted-foreground">
-              {formatContextWindowTokens(usage.usedTokens)} / {formatContextWindowTokens(usage.maxTokens ?? null)}
+              {formatContextWindowTokens(usage.usedTokens)} /{" "}
+              {formatContextWindowTokens(usage.maxTokens ?? null)}
             </span>
           </div>
           <div className={cn("mt-2.5 h-1.5 w-full", TRACK_CLASS)}>
@@ -218,7 +222,34 @@ function LimitsBlock(props: { usage: AccountUsageView; now: number }) {
             now={now}
           />
         ))}
+        {usage.balances.map((balance) => (
+          <BalanceRow key={balance.label} balance={balance} />
+        ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A balance, not a window. No pace bar: these have no reset time, so there is
+ * no elapsed fraction to be ahead or behind, and a pace treatment would imply
+ * a deadline that does not exist. Coloured by absolute utilization when the
+ * balance has a ceiling, and left neutral when it does not.
+ */
+function BalanceRow(props: { balance: UsageBalanceView }) {
+  const { balance } = props;
+  const level = balance.utilization === null ? null : vitalsLevel(clampPct(balance.utilization));
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <span className="min-w-0 flex-1 truncate text-xs text-foreground">{balance.label}</span>
+      <span
+        className={cn(
+          "font-mono text-[11px] tabular-nums",
+          level === null ? "text-muted-foreground" : SEVERITY_TEXT[level],
+        )}
+      >
+        {balance.detail}
+      </span>
     </div>
   );
 }
@@ -285,8 +316,94 @@ function MachineBlock(props: {
           <MetricRow label="CPU" pct={sample.cpu.pct} />
           <MetricRow label="GPU" pct={sample.gpu?.pct ?? null} />
           <MetricRow label="MEM" pct={sample.mem.pct} />
+          <MachineDetails sample={sample} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The detail the three summary bars leave out — per-core load, load average,
+ * GPU name and VRAM, and memory in bytes.
+ *
+ * Collapsed by default: the three bars answer "is the machine busy", which is
+ * what the gauge is for, and this answers "busy with what", which is a question
+ * you ask second. Every value here already arrives on each sample, so opening
+ * it costs no extra traffic.
+ *
+ * The per-core display is a bar per core, not a sparkline: a sample carries
+ * instantaneous per-core utilization and no history, and drawing a line through
+ * points we never kept would invent a trend.
+ */
+function MachineDetails(props: { sample: HostMetricsSample }) {
+  const [open, setOpen] = useState(false);
+  const { sample } = props;
+
+  return (
+    <div className="mt-1 border-t border-border/40 pt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRightIcon className={cn("size-3 transition-transform", open && "rotate-90")} />
+        details
+      </button>
+      {open ? <MachineDetailList sample={sample} /> : null}
+    </div>
+  );
+}
+
+/** Split out from the disclosure so its contents are renderable in a test. */
+export function MachineDetailList(props: { sample: HostMetricsSample }) {
+  const { sample } = props;
+  const loadAvg = sample.cpu.loadAvg.filter((value) => Number.isFinite(value));
+  return (
+    <dl className="mt-1 space-y-1 text-[11px]">
+      {sample.cpu.perCore.length > 0 ? (
+        <div>
+          <dt className="text-muted-foreground">
+            Cores{sample.host ? ` (${String(sample.host.cores)})` : ""}
+          </dt>
+          <dd className="mt-0.5 flex items-end gap-px" aria-label="Per-core utilization">
+            {sample.cpu.perCore.map((corePct, index) => (
+              <span
+                // Cores have no identity beyond their position, and the
+                // list is fixed for the life of the host.
+                key={index}
+                title={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
+                className={cn("w-1 rounded-t-[1px]", SEVERITY_BG[vitalsLevel(clampPct(corePct))])}
+                style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
+              />
+            ))}
+          </dd>
+        </div>
+      ) : null}
+      {loadAvg.length > 0 ? (
+        <DetailRow label="Load" value={loadAvg.map((value) => value.toFixed(2)).join("  ")} />
+      ) : null}
+      <DetailRow
+        label="Memory"
+        value={`${formatBytes(sample.mem.usedBytes)} of ${formatBytes(sample.mem.totalBytes)}`}
+      />
+      {sample.gpu?.name ? <DetailRow label="GPU" value={sample.gpu.name} /> : null}
+      {sample.gpu?.vramUsedBytes !== undefined ? (
+        <DetailRow label="VRAM" value={formatBytes(sample.gpu.vramUsedBytes)} />
+      ) : null}
+      {sample.host ? (
+        <DetailRow label="Host" value={`${sample.host.platform} ${sample.host.arch}`} />
+      ) : null}
+    </dl>
+  );
+}
+
+function DetailRow(props: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted-foreground">{props.label}</dt>
+      <dd className="min-w-0 truncate font-mono tabular-nums text-foreground/90">{props.value}</dd>
     </div>
   );
 }
@@ -323,7 +440,10 @@ export function VitalsDetail(props: {
 }) {
   const { context, accountUsage, host, now } = props;
   const hasWindows = Boolean(
-    accountUsage?.fiveHour || accountUsage?.sevenDay || accountUsage?.extraWindows.length,
+    accountUsage?.fiveHour ||
+    accountUsage?.sevenDay ||
+    accountUsage?.extraWindows.length ||
+    accountUsage?.balances.length,
   );
   return (
     <div className="flex flex-col">

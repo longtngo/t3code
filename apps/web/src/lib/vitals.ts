@@ -89,6 +89,20 @@ export interface LabeledUsageWindowView extends UsageWindowView {
   readonly windowMs: number | null;
 }
 
+/**
+ * A limits row that is a balance rather than a window.
+ *
+ * Credits and on-demand spend have no reset time and no elapsed fraction, so
+ * they cannot be paced and must not be rendered as a window: a pace bar implies
+ * a deadline that these do not have. `detail` is already display-ready.
+ */
+export interface UsageBalanceView {
+  readonly label: string;
+  readonly detail: string;
+  /** Present only when the balance genuinely has a ceiling to sit against. */
+  readonly utilization: number | null;
+}
+
 export interface AccountUsageView {
   readonly fiveHour: UsageWindowView | null;
   readonly sevenDay: UsageWindowView | null;
@@ -98,6 +112,11 @@ export interface AccountUsageView {
    * render as additional popover rows.
    */
   readonly extraWindows: ReadonlyArray<LabeledUsageWindowView>;
+  /**
+   * Provider balances that are not windows — Cursor on-demand spend and request
+   * count, Codex credits. Empty for a Claude account.
+   */
+  readonly balances: ReadonlyArray<UsageBalanceView>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -167,6 +186,80 @@ function parseCursorWindows(value: unknown): LabeledUsageWindowView[] {
 }
 
 /**
+ * Format a spend figure with its currency, falling back to a bare number.
+ *
+ * A money amount keeps both decimals on both sides — "$12.50 of $50" reads as
+ * two different kinds of number — while a currency-less figure is a plain count
+ * and drops them.
+ */
+function formatSpend(used: number, limit: number | null, currency: string | null): string {
+  const symbol = currency === "USD" ? "$" : currency === null ? "" : `${currency} `;
+  const amount = (value: number) =>
+    currency === null ? `${String(value)}` : `${symbol}${value.toFixed(2)}`;
+  return limit === null ? amount(used) : `${amount(used)} of ${amount(limit)}`;
+}
+
+/**
+ * Cursor's non-window rows: on-demand spend, and the enterprise request bucket.
+ *
+ * Both are ceilings you sit under rather than periods you burn through, so
+ * neither carries a reset time.
+ */
+function parseCursorBalances(value: unknown): UsageBalanceView[] {
+  const record = asRecord(value);
+  if (!record) return [];
+  const balances: UsageBalanceView[] = [];
+
+  const onDemand = asRecord(record.onDemand);
+  const used = asFiniteNumber(onDemand?.used);
+  if (onDemand !== null && used !== null) {
+    const limit = asFiniteNumber(onDemand.limit);
+    const currency = typeof onDemand.currency === "string" ? onDemand.currency : null;
+    const scope = record.onDemandScope;
+    balances.push({
+      label: scope === "team" ? "Cursor on-demand (team)" : "Cursor on-demand",
+      detail: formatSpend(used, limit, currency),
+      utilization: asFiniteNumber(onDemand.utilization),
+    });
+  }
+
+  const requests = asRecord(record.requests);
+  const requestsUsed = asFiniteNumber(requests?.used);
+  const requestsLimit = asFiniteNumber(requests?.limit);
+  if (requestsUsed !== null && requestsLimit !== null) {
+    balances.push({
+      label: "Cursor requests",
+      detail: `${String(requestsUsed)} of ${String(requestsLimit)}`,
+      utilization: asFiniteNumber(requests?.utilization),
+    });
+  }
+
+  return balances;
+}
+
+/**
+ * Codex credits. `balance` is a pre-formatted string from the app server, so it
+ * is shown as given rather than reformatted into a number we did not parse.
+ */
+function parseCodexBalances(value: unknown): UsageBalanceView[] {
+  const credits = asRecord(asRecord(value)?.credits);
+  if (!credits) return [];
+  if (credits.unlimited === true) {
+    return [{ label: "Codex credits", detail: "Unlimited", utilization: null }];
+  }
+  const balance = typeof credits.balance === "string" ? credits.balance.trim() : "";
+  if (balance.length > 0) {
+    return [{ label: "Codex credits", detail: balance, utilization: null }];
+  }
+  // `hasCredits: false` with no balance string is still worth saying: it is the
+  // difference between "none left" and "this account does not use credits".
+  if (credits.hasCredits === false) {
+    return [{ label: "Codex credits", detail: "None remaining", utilization: null }];
+  }
+  return [];
+}
+
+/**
  * Latest account-usage snapshot from the thread activity log. Mirrors
  * {@link deriveLatestContextWindowSnapshot}: the activity payload is untyped on
  * the wire (`Schema.Unknown`), so parse defensively. Returns `null` when no
@@ -190,6 +283,7 @@ export function deriveLatestAccountUsage(
       fiveHour: parseUsageWindow(payload.fiveHour),
       sevenDay: parseUsageWindow(payload.sevenDay),
       extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
+      balances: [...parseCodexBalances(payload.codex), ...parseCursorBalances(payload.cursor)],
     };
   }
   return null;
