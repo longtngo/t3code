@@ -1,8 +1,11 @@
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
+  type OrchestrationMessage,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -18,11 +21,16 @@ import {
   parseProjectKey,
   parseProjectRefCollectionKey,
   parseThreadKey,
+  threadKey,
 } from "./entities.ts";
 import type { EnvironmentShellState } from "./shell.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threads.ts";
 import { createEnvironmentProjectAtoms } from "./projectEntities.ts";
 import { createEnvironmentSnapshotAtom } from "./snapshots.ts";
+import {
+  EMPTY_THREAD_HISTORY_BACKFILL_STATE,
+  threadHistoryBackfillAtom,
+} from "./threadHistory.ts";
 import { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 import { mergeEnvironmentThread } from "./threadDetail.ts";
 import { createEnvironmentThreadShellAtoms } from "./threadShell.ts";
@@ -149,6 +157,19 @@ function shellState(snapshot: OrchestrationShellSnapshot): EnvironmentShellState
     snapshot: Option.some(snapshot),
     status: "live",
     error: Option.none(),
+  };
+}
+
+function message(id: string, createdAt: string): OrchestrationMessage {
+  return {
+    id: MessageId.make(id),
+    turnId: TurnId.make("turn-1"),
+    role: "user",
+    text: id,
+    attachments: [],
+    createdAt,
+    updatedAt: createdAt,
+    streaming: false,
   };
 }
 
@@ -305,6 +326,54 @@ describe("environment entity projections", () => {
     expect(harness.registry.get(threadsAtom)).toBe(threads);
   });
 
+  it("folds backfilled older history into the thread detail", () => {
+    // The snapshot is windowed to recent turns; pages fetched through
+    // `getThreadHistoryPage` land in the backfill store, and folding them in here
+    // is what makes them visible to every derived collection.
+    const harness = makeHarness();
+    const threadRef = { environmentId: ENVIRONMENT_ID, threadId: THREAD_ID };
+    const messagesAtom = harness.threadDetails.messagesAtom(threadRef);
+    const newer = message("message-newer", "2026-04-02T00:00:00.000Z");
+    const older = message("message-older", "2026-04-01T00:00:00.000Z");
+
+    harness.registry.set(
+      harness.threadStateAtom(THREAD_ID),
+      AsyncResult.success<EnvironmentThreadState>({
+        data: Option.some({
+          ...THREAD_SHELL,
+          deletedAt: null,
+          messages: [newer],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+        } satisfies OrchestrationThread),
+        status: "live",
+        error: Option.none(),
+        oldestLoaded: undefined,
+        hasMoreHistory: true,
+      }),
+    );
+
+    expect(harness.registry.get(messagesAtom).map((row) => row.id)).toEqual(["message-newer"]);
+
+    harness.registry.set(threadHistoryBackfillAtom(threadKey(threadRef)), {
+      ...EMPTY_THREAD_HISTORY_BACKFILL_STATE,
+      pages: {
+        messages: [older],
+        activities: [],
+        proposedPlans: [],
+        checkpoints: [],
+        hasMoreHistory: false,
+      },
+    });
+
+    // Oldest first — the page reconstructs the start of the transcript.
+    expect(harness.registry.get(messagesAtom).map((row) => row.id)).toEqual([
+      "message-older",
+      "message-newer",
+    ]);
+  });
+
   it("updates only the requested thread detail and preserves untouched field identities", () => {
     const harness = makeHarness();
     const threadRef = {
@@ -336,6 +405,8 @@ describe("environment entity projections", () => {
         data: Option.some(detail),
         status: "live",
         error: Option.none(),
+        oldestLoaded: undefined,
+        hasMoreHistory: false,
       }),
     );
 
@@ -364,6 +435,8 @@ describe("environment entity projections", () => {
         }),
         status: "live",
         error: Option.none(),
+        oldestLoaded: undefined,
+        hasMoreHistory: false,
       }),
     );
 

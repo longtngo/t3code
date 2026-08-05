@@ -225,6 +225,7 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { useThreadOlderHistory } from "../state/threadHistory";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -2504,6 +2505,19 @@ function ChatViewContent(props: ChatViewProps) {
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
     [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+  );
+  // Thread snapshots are windowed to the most recent turns, so a long thread
+  // opens mid-conversation. This drives the "load earlier messages" control at
+  // the top of the transcript; the fetched pages fold into the thread detail.
+  const olderHistory = useThreadOlderHistory(routeKind === "server" ? routeThreadRef : null);
+  const timelineOlderHistory = useMemo(
+    () => ({
+      canLoadOlder: olderHistory.canLoadOlder,
+      isLoading: olderHistory.isLoading,
+      error: olderHistory.error,
+      onLoadOlder: olderHistory.loadOlder,
+    }),
+    [olderHistory.canLoadOlder, olderHistory.error, olderHistory.isLoading, olderHistory.loadOlder],
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
@@ -6211,6 +6225,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
+                olderHistory={timelineOlderHistory}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
