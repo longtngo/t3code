@@ -6,6 +6,7 @@ import {
   memberTitleFromPath,
   normalizeMemberPath,
   removeMember,
+  resolveBranchHint,
   resolveBranchOptions,
   resolveMemberCwd,
   splitMemberPath,
@@ -260,5 +261,60 @@ describe("canAutofillBranch", () => {
 
   it("never overwrites what the user typed", () => {
     assert.strictEqual(canAutofillBranch("my-branch", "pickup-v2"), false);
+  });
+});
+
+describe("resolveBranchHint", () => {
+  const answered = {
+    branchCwd: "/srv/api",
+    hasRefsAnswer: true,
+    isRepository: true,
+    currentBranch: "pickup-v2",
+    branch: "",
+  };
+
+  it("asks for a repository before one is chosen", () => {
+    assert.strictEqual(
+      resolveBranchHint({ ...answered, branchCwd: null }),
+      "Choose a repository to list its branches.",
+    );
+  });
+
+  it("says it is still reading rather than saying nothing", () => {
+    // This is the flicker. Returning nothing here removed the line from the
+    // DOM, and a vertically centred dialog moves by half the height it loses —
+    // so every keystroke jumped the modal up and back down.
+    assert.strictEqual(
+      resolveBranchHint({ ...answered, hasRefsAnswer: false }),
+      "Reading branches…",
+    );
+  });
+
+  it("prefers the in-flight message over a stale answer's verdict", () => {
+    // A previous directory's refs must not be reported as this one's: while the
+    // query has not answered for the current path, "not a git repository" would
+    // be a confident claim about a directory nothing has looked at.
+    assert.strictEqual(
+      resolveBranchHint({ ...answered, hasRefsAnswer: false, isRepository: false }),
+      "Reading branches…",
+    );
+  });
+
+  it("names a folder that is not a repository", () => {
+    assert.strictEqual(
+      resolveBranchHint({ ...answered, isRepository: false }),
+      "That folder is not a git repository.",
+    );
+  });
+
+  it("confirms when the typed branch is the one checked out", () => {
+    assert.strictEqual(
+      resolveBranchHint({ ...answered, branch: " pickup-v2 " }),
+      "pickup-v2 is checked out in that repository.",
+    );
+  });
+
+  it("has nothing to say for a branch that is not checked out", () => {
+    assert.strictEqual(resolveBranchHint({ ...answered, branch: "other" }), null);
   });
 });
