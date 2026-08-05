@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
 import {
   classifyMemberBranch,
@@ -148,15 +149,30 @@ describe("memberFeatureBranchName", () => {
   it("still produces a branch for an unusable title", () => {
     assert.strictEqual(
       memberFeatureBranchName({ threadId: "abcd1234", threadTitle: "###" }),
-      "t3code/abcd1234",
+      "t3code/member-abcd1234",
     );
   });
 
   it("still produces a branch with no title at all", () => {
     assert.strictEqual(
       memberFeatureBranchName({ threadId: "abcd1234", threadTitle: null }),
-      "t3code/abcd1234",
+      "t3code/member-abcd1234",
     );
+  });
+
+  // `t3code/<8 hex>` is the shape other code recognises as a disposable
+  // worktree placeholder it may rename. A member's branch is long-lived and
+  // must never land in that space — which a titleless thread with a UUID id
+  // otherwise would, every time.
+  it("stays clear of the disposable-worktree branch shape", () => {
+    const name = memberFeatureBranchName({
+      threadId: "4d544e9e-0a3f-49f5-9699-951616e9da93",
+      threadTitle: null,
+    });
+    assert.strictEqual(name, "t3code/member-4d544e9e");
+    assert.isFalse(isTemporaryWorktreeBranch(name));
+    // The shape it would have had, to show the test is not vacuous.
+    assert.isTrue(isTemporaryWorktreeBranch("t3code/4d544e9e"));
   });
 
   it("does not leave a separator where the slug was truncated", () => {

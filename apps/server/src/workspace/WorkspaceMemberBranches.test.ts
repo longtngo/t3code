@@ -259,6 +259,31 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // The panel's rule, and the reason it differs from the sweep's: a user who
+  // presses Commit here has asked for these files, and `git add -A` would put
+  // them straight onto the long-lived integration branch.
+  it.effect("cuts for untracked files when the user asked to act here", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd } = yield* makeMemberRepo();
+      yield* writeFile(cwd, "notes.md", "a file the user is about to commit\n");
+
+      const report = yield* service.ensureFeatureBranch({
+        cwd,
+        integrationBranch: INTEGRATION_BRANCH,
+        threadId: THREAD_ID,
+        threadTitle: "Add demo suite",
+        cutOn: "any",
+      });
+
+      assert.strictEqual(report.state, "owned-by-self");
+      assert.notStrictEqual(
+        yield* git(cwd, ["branch", "--show-current"]),
+        INTEGRATION_BRANCH,
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   // Second load-bearing case: the user cut the branch from the integration
   // branch by hand, so there is no config at all and the base must still be the
   // integration branch rather than the repository default.

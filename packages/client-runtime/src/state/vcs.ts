@@ -309,6 +309,28 @@ export function createVcsEnvironmentAtoms<R, E>(
       staleTimeMs: 15_000,
       refreshIntervalMs: 60_000,
     }),
+    // Commands, not queries: both write. The prepare step moves a branch in the
+    // user's checkout, so it runs when an action is about to, never on a timer.
+    // Serialized per member rather than per path. These name a member id and
+    // let the server resolve the directory, but a member id still maps to one
+    // checkout — and `memberActionPrepare` cuts and checks out a branch there,
+    // which two concurrent calls must not do at once.
+    memberActionPrepare: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workspace:member-action-prepare",
+      tag: WS_METHODS.workspaceMemberActionPrepare,
+      concurrency: {
+        mode: "serial",
+        key: (target) => `${target.environmentId}:${target.input.memberId}`,
+      },
+    }),
+    memberPrBaseWrite: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workspace:member-pr-base-write",
+      tag: WS_METHODS.workspaceMemberPrBaseWrite,
+      concurrency: {
+        mode: "serial",
+        key: (target) => `${target.environmentId}:${target.input.memberId}`,
+      },
+    }),
     refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-local-status",
       tag: WS_METHODS.vcsRefreshLocalStatus,

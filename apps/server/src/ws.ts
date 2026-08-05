@@ -33,6 +33,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
+  type WorkspaceMember,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -432,6 +433,33 @@ const makeWsRpcLayer = (
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const workspaceMemberBranches = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      /**
+       * The attached repository a member id names, read from the project.
+       *
+       * These handlers run git in the directory they resolve, so the directory
+       * comes from project state and never from the caller: a client that could
+       * name a path could run git anywhere the server can reach.
+       */
+      const resolveProjectMember = Effect.fn("ws.resolveProjectMember")(function* (
+        projectId: ProjectId,
+        memberId: string,
+      ): Effect.fn.Return<
+        | { readonly kind: "found"; readonly member: WorkspaceMember }
+        | { readonly kind: "detached" }
+        | { readonly kind: "unreadable" }
+      > {
+        const project = yield* projectionSnapshotQuery.getProjectShellById(projectId).pipe(
+          Effect.map(Option.getOrUndefined),
+          // A projection that could not be read is a different answer from a
+          // project that no longer lists this repository, and saying the
+          // second when the first happened is confidently wrong.
+          Effect.map((value) => ({ ok: true as const, value })),
+          Effect.orElseSucceed(() => ({ ok: false as const, value: undefined })),
+        );
+        if (!project.ok) return { kind: "unreadable" };
+        const member = project.value?.members.find((entry) => entry.id === memberId);
+        return member === undefined ? { kind: "detached" } : { kind: "found", member };
+      });
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -2000,6 +2028,104 @@ const makeWsRpcLayer = (
                   .pipe(Effect.map((report) => ({ ...report, memberId: member.id }))),
               );
               return { reports };
+            }),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberActionPrepare,
+            Effect.gen(function* () {
+              const unavailable = (detail: string) => ({
+                report: {
+                  memberId: input.memberId,
+                  state: "unavailable" as const,
+                  branch: null,
+                  ownerThreadId: null,
+                  detail,
+                },
+                prBase: null,
+              });
+              const resolved = yield* resolveProjectMember(input.projectId, input.memberId);
+              if (resolved.kind === "unreadable") {
+                return unavailable("This project could not be read.");
+              }
+              if (resolved.kind === "detached") {
+                return unavailable("This repository is no longer attached to the project.");
+              }
+              const member = resolved.member;
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.threadId)
+                .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+              // The branch this cuts records the thread as its owner, so a
+              // thread from another project must not be able to claim a
+              // repository here by naming someone else's project id.
+              if (thread !== undefined && thread.projectId !== input.projectId) {
+                return unavailable("This thread does not belong to that project.");
+              }
+              const report = yield* workspaceMemberBranches.ensureFeatureBranch({
+                cwd: member.path,
+                integrationBranch: member.integrationBranch,
+                threadId: input.threadId,
+                threadTitle: thread?.title ?? null,
+                // The user asked to act in this repository, so anything
+                // `git add -A` would sweep up counts — untracked files
+                // included. The post-turn sweep deliberately uses the narrower
+                // rule; see `ensureFeatureBranch`.
+                cutOn: "any",
+              });
+              // The status cache is keyed by directory and nothing else
+              // recomputes a directory that is not some thread's own cwd, so a
+              // branch this just moved would keep reporting the old one.
+              yield* vcsStatusBroadcaster
+                .refreshLocalStatus(member.path)
+                .pipe(Effect.ignoreCause({ log: true }));
+              // A member still on its integration branch has no branch to open a
+              // pull request from, and comparing it against itself is meaningless.
+              const prBase =
+                report.branch === null || report.branch === member.integrationBranch
+                  ? null
+                  : yield* workspaceMemberBranches.resolvePrBase({
+                      cwd: member.path,
+                      integrationBranch: member.integrationBranch,
+                    });
+              return { report: { ...report, memberId: member.id }, prBase };
+            }),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
+        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberPrBaseWrite,
+            Effect.gen(function* () {
+              const resolved = yield* resolveProjectMember(input.projectId, input.memberId);
+              if (resolved.kind !== "found") return { written: false };
+              // `git config` takes its arguments positionally with no `--`, and
+              // a branch name cannot begin with `-` anyway, so anything
+              // option-shaped is rejected rather than handed to git.
+              if (input.base.startsWith("-") || input.branch.startsWith("-")) {
+                return { written: false };
+              }
+              // The key is read back for whichever branch is checked out at
+              // pull-request time. Writing it for a branch that has since moved
+              // leaves an orphan key and the base silently falls back to
+              // inference — the failure the confirmation exists to prevent.
+              const current = yield* workspaceMemberBranches
+                .inspect({
+                  cwd: resolved.member.path,
+                  integrationBranch: resolved.member.integrationBranch,
+                  threadId: "",
+                })
+                .pipe(Effect.map((report) => report.branch));
+              if (current !== input.branch) return { written: false };
+              const written = yield* workspaceMemberBranches.writePrBase({
+                cwd: resolved.member.path,
+                branch: input.branch,
+                base: input.base,
+              });
+              return { written };
             }),
             {
               "rpc.aggregate": "workspace",

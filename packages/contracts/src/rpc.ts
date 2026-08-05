@@ -70,8 +70,12 @@ import {
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
   OrchestrationRpcSchemas,
+  WorkspaceMemberActionPrepareInput,
+  WorkspaceMemberActionPrepareResult,
   WorkspaceMemberBranchesInput,
   WorkspaceMemberBranchesResult,
+  WorkspaceMemberPrBaseWriteInput,
+  WorkspaceMemberPrBaseWriteResult,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
@@ -204,6 +208,8 @@ export const WS_METHODS = {
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsRefreshLocalStatus: "vcs.refreshLocalStatus",
   workspaceMemberBranches: "workspace.memberBranches",
+  workspaceMemberActionPrepare: "workspace.memberActionPrepare",
+  workspaceMemberPrBaseWrite: "workspace.memberPrBaseWrite",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -620,6 +626,29 @@ export const WsVcsRefreshLocalStatusRpc = Rpc.make(WS_METHODS.vcsRefreshLocalSta
 export const WsWorkspaceMemberBranchesRpc = Rpc.make(WS_METHODS.workspaceMemberBranches, {
   payload: WorkspaceMemberBranchesInput,
   success: WorkspaceMemberBranchesResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Puts a member repository on its feature branch before the user's action runs,
+ * and reports the pull-request base that action would use.
+ *
+ * Separate from `workspace.memberBranches`, which only reads: this one writes,
+ * and it is the git panel's half of the same cut the post-turn sweep performs.
+ */
+export const WsWorkspaceMemberActionPrepareRpc = Rpc.make(
+  WS_METHODS.workspaceMemberActionPrepare,
+  {
+    payload: WorkspaceMemberActionPrepareInput,
+    success: WorkspaceMemberActionPrepareResult,
+    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  },
+);
+
+/** Records a pull-request base the user confirmed. */
+export const WsWorkspaceMemberPrBaseWriteRpc = Rpc.make(WS_METHODS.workspaceMemberPrBaseWrite, {
+  payload: WorkspaceMemberPrBaseWriteInput,
+  success: WorkspaceMemberPrBaseWriteResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -1097,6 +1126,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsPullRpc,
   WsVcsRefreshLocalStatusRpc,
   WsWorkspaceMemberBranchesRpc,
+  WsWorkspaceMemberActionPrepareRpc,
+  WsWorkspaceMemberPrBaseWriteRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
