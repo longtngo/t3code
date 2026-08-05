@@ -293,7 +293,11 @@ export class GitVcsDriver extends Context.Service<
      * where nothing can be lost.
      */
     readonly deleteRef: (cwd: string, refName: string) => Effect.Effect<void, GitCommandError>;
-    /** Branch names, local and remote-tracking, whose tip is this commit. */
+    /**
+     * Full refnames — `refs/heads/x`, `refs/remotes/origin/x` — whose tip is
+     * this commit. Full rather than short so local and remote-tracking refs
+     * stay distinguishable without knowing the remote's name.
+     */
     readonly listBranchNamesPointingAt: (
       cwd: string,
       commit: string,

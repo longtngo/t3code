@@ -2359,7 +2359,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "--no-column",
         "--points-at",
         commit,
-        "--format=%(refname:short)",
+        // Full refnames, not `%(refname:short)`: the short form prints a remote
+        // branch as `origin/main` and a local one as `feat/thing`, so the only
+        // thing that tells them apart is knowing the remote's name.
+        "--format=%(refname)",
       ]).pipe(
         Effect.map((stdout) =>
           stdout

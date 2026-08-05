@@ -200,27 +200,60 @@ describe("parseBranchCreationRecord", () => {
   });
 });
 
+// These take the refnames `git branch --all --format=%(refname)` really prints.
+// The previous version of this suite invented a `remotes/origin/main` shape git
+// never emits, so it agreed with the code while both were wrong about the input.
 describe("pickBranchAtCommit", () => {
+  const at = (refNames: ReadonlyArray<string>, branch = "hotfix") =>
+    pickBranchAtCommit(refNames, { integrationBranch: "pickup-v2", branch });
+
   it("prefers the declared integration branch", () => {
     assert.strictEqual(
-      pickBranchAtCommit(["chore/seed", "pickup-v2", "main"], "pickup-v2"),
+      at(["refs/heads/chore/seed", "refs/heads/pickup-v2", "refs/heads/main"]),
       "pickup-v2",
     );
   });
 
-  it("prefers a local branch over a remote-tracking one", () => {
+  // The case the reflog step exists for: a branch cut from `main` in a
+  // repository pinned to `pickup-v2` must compare against `main`.
+  it("resolves the one branch left at the commit", () => {
+    assert.strictEqual(at(["refs/heads/hotfix", "refs/heads/main"]), "main");
+  });
+
+  it("counts a branch and its remote-tracking ref as one candidate", () => {
     assert.strictEqual(
-      pickBranchAtCommit(["remotes/origin/main", "feat/thing"], "pickup-v2"),
-      "feat/thing",
+      at(["refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD"]),
+      "main",
     );
   });
 
-  it("strips the remote prefix when only remote refs are left", () => {
-    assert.strictEqual(pickBranchAtCommit(["remotes/origin/main"], "pickup-v2"), "main");
+  // The defect this rewrite fixes. `git switch -c` records "Created from HEAD",
+  // so every branch cut while sitting on the same commit lands here together,
+  // and the old rule returned whichever came first — basing a pull request on
+  // another in-flight feature branch.
+  it("refuses to choose between siblings at the same commit", () => {
+    assert.strictEqual(at(["refs/heads/hotfix", "refs/heads/hotfix-2", "refs/heads/main"]), null);
+  });
+
+  it("never treats a branch T3 Code cut as a base", () => {
+    assert.strictEqual(at(["refs/heads/t3code/other-thread-abc12345", "refs/heads/main"]), "main");
+  });
+
+  it("ignores the branch being resolved", () => {
+    assert.strictEqual(at(["refs/heads/hotfix"]), null);
+  });
+
+  it("reads a remote branch when only remote refs are left", () => {
+    assert.strictEqual(at(["refs/remotes/origin/main"]), "main");
+  });
+
+  // A tag at the same commit is not a branch and cannot be a pull-request base.
+  it("ignores refs that are not branches", () => {
+    assert.strictEqual(at(["refs/tags/v1.0.0", "refs/heads/main"]), "main");
   });
 
   it("is null when nothing points at the commit", () => {
-    assert.strictEqual(pickBranchAtCommit([], "pickup-v2"), null);
+    assert.strictEqual(at([]), null);
   });
 });
 

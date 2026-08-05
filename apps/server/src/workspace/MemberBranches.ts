@@ -110,6 +110,8 @@ export function resolveMemberPrBase(input: MemberPrBaseInput): {
 
 const MAX_SLUG_LENGTH = 32;
 const THREAD_ID_PREFIX_LENGTH = 8;
+/** Everything under this prefix in a member repository was cut by T3 Code. */
+export const MEMBER_BRANCH_PREFIX = "t3code/";
 
 /**
  * The branch name to cut for a thread.
@@ -131,7 +133,9 @@ export function memberFeatureBranchName(input: {
     .slice(0, MAX_SLUG_LENGTH)
     .replace(/-+$/g, "");
   const id = input.threadId.replace(/[^a-zA-Z0-9]/g, "").slice(0, THREAD_ID_PREFIX_LENGTH);
-  return slug.length > 0 ? `t3code/${slug}-${id}` : `t3code/${id}`;
+  return slug.length > 0
+    ? `${MEMBER_BRANCH_PREFIX}${slug}-${id}`
+    : `${MEMBER_BRANCH_PREFIX}${id}`;
 }
 
 export interface BranchCreationRecord {
@@ -159,34 +163,65 @@ export function parseBranchCreationRecord(reflogOutput: string): BranchCreationR
   return { createdFrom, sha };
 }
 
-/** `git branch --all` marks remote-tracking refs with this prefix. */
-const REMOTE_REF_PREFIX = "remotes/";
+const LOCAL_REF_PREFIX = "refs/heads/";
+const REMOTE_REF_PREFIX = "refs/remotes/";
+
+/**
+ * The branch a ref names, or null when it does not name one a pull request
+ * could target.
+ *
+ * Full refnames are the input rather than short ones because short names are
+ * genuinely ambiguous: `git branch --all --format=%(refname:short)` prints a
+ * remote branch as `origin/main` and a local branch as `feat/thing`, and
+ * nothing in either string says which is which.
+ */
+function branchNameFromRef(ref: string): string | null {
+  if (ref.startsWith(LOCAL_REF_PREFIX)) {
+    const name = ref.slice(LOCAL_REF_PREFIX.length);
+    return name.length > 0 ? name : null;
+  }
+  if (!ref.startsWith(REMOTE_REF_PREFIX)) return null;
+  const withoutPrefix = ref.slice(REMOTE_REF_PREFIX.length);
+  const slash = withoutPrefix.indexOf("/");
+  if (slash < 0) return null;
+  const name = withoutPrefix.slice(slash + 1);
+  // `refs/remotes/origin/HEAD` is a pointer at the remote's default branch, not
+  // a branch of its own, and it sits at that branch's tip — so it would show up
+  // as a second candidate for the same branch.
+  return name.length > 0 && name !== "HEAD" ? name : null;
+}
 
 /**
  * Which of the branches at a commit to treat as the one a branch was cut from.
  *
- * `git branch --points-at` can name several branches at one commit, and git
- * gives no way to tell which one the user branched from. The declared
- * integration branch wins when it is among them, because that is the effort's
- * ground truth. Otherwise a local branch beats a remote-tracking one: the
- * remote-tracking name would have to be stripped back to a branch name anyway,
- * and the local ref is the one a pull request base can actually be.
+ * `git branch --points-at` can name several, and git records no ancestry: a
+ * parent and a sibling cut at the same commit are indistinguishable. The
+ * declared integration branch wins when it is among them, because that is the
+ * effort's ground truth.
  *
- * Local and remote are told apart by git's own `remotes/` prefix rather than by
- * looking for a slash — plenty of local branches are named `feat/thing`.
+ * When it is not, and more than one candidate remains, this returns null rather
+ * than picking one. Choosing arbitrarily is how a member's pull request ends up
+ * based on *another in-flight feature branch* — a wrong answer with no
+ * provenance. Null falls through to the declared integration branch, which is
+ * at least an answer the user stated, and which the pull-request flow shows
+ * before anything is written.
+ *
+ * Branches T3 Code cut are never candidates. One thread's feature branch is not
+ * the base for another's, and those branches carry an explicit recorded base
+ * anyway.
  */
 export function pickBranchAtCommit(
-  branchNames: ReadonlyArray<string>,
-  integrationBranch: string,
+  refNames: ReadonlyArray<string>,
+  input: { readonly integrationBranch: string; readonly branch: string },
 ): string | null {
-  const usable = branchNames.map((name) => name.trim()).filter((name) => name.length > 0);
-  if (usable.includes(integrationBranch)) return integrationBranch;
-  const local = usable.find((name) => !name.startsWith(REMOTE_REF_PREFIX));
-  if (local !== undefined) return local;
-  const remote = usable[0];
-  if (remote === undefined) return null;
-  // `remotes/origin/pickup-v2` names the branch `pickup-v2`.
-  const withoutPrefix = remote.slice(REMOTE_REF_PREFIX.length);
-  const slash = withoutPrefix.indexOf("/");
-  return slash < 0 ? withoutPrefix : withoutPrefix.slice(slash + 1);
+  const candidates = new Set<string>();
+  for (const ref of refNames) {
+    const name = branchNameFromRef(ref.trim());
+    if (name === null || name === input.branch) continue;
+    if (name.startsWith(MEMBER_BRANCH_PREFIX)) continue;
+    candidates.add(name);
+  }
+  if (candidates.has(input.integrationBranch)) return input.integrationBranch;
+  if (candidates.size !== 1) return null;
+  return candidates.values().next().value ?? null;
 }
