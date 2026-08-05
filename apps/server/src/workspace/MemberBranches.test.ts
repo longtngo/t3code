@@ -14,7 +14,7 @@ const base = {
   integrationBranch: "pickup-v2",
   threadId: "thread-a",
   ownerThreadId: null,
-  isDirty: false,
+  hasTrackedChanges: false,
 } as const;
 
 describe("classifyMemberBranch", () => {
@@ -22,10 +22,20 @@ describe("classifyMemberBranch", () => {
     assert.strictEqual(classifyMemberBranch({ ...base, currentBranch: "pickup-v2" }), "idle");
   });
 
-  it("needs a cut on a dirty integration branch", () => {
+  it("needs a cut when a tracked file changed on the integration branch", () => {
     assert.strictEqual(
-      classifyMemberBranch({ ...base, currentBranch: "pickup-v2", isDirty: true }),
+      classifyMemberBranch({ ...base, currentBranch: "pickup-v2", hasTrackedChanges: true }),
       "cut-needed",
+    );
+  });
+
+  // A file the user left lying around is not evidence that a turn wrote here,
+  // and acting on it would move their checkout onto a branch they never asked
+  // for, on every turn, forever.
+  it("stays idle for untracked files alone", () => {
+    assert.strictEqual(
+      classifyMemberBranch({ ...base, currentBranch: "pickup-v2", hasTrackedChanges: false }),
+      "idle",
     );
   });
 
@@ -55,7 +65,7 @@ describe("classifyMemberBranch", () => {
 
   it("leaves a hand-cut branch unmanaged", () => {
     assert.strictEqual(
-      classifyMemberBranch({ ...base, currentBranch: "hotfix/urgent", isDirty: true }),
+      classifyMemberBranch({ ...base, currentBranch: "hotfix/urgent", hasTrackedChanges: true }),
       "unmanaged",
     );
   });
@@ -64,7 +74,7 @@ describe("classifyMemberBranch", () => {
   // would move the user off whatever they were inspecting.
   it("leaves a detached HEAD unmanaged", () => {
     assert.strictEqual(
-      classifyMemberBranch({ ...base, currentBranch: null, isDirty: true }),
+      classifyMemberBranch({ ...base, currentBranch: null, hasTrackedChanges: true }),
       "unmanaged",
     );
   });

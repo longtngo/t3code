@@ -124,7 +124,7 @@ describe("WorkspaceMemberBranches", () => {
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const { cwd } = yield* makeMemberRepo();
-      yield* writeFile(cwd, "changed.md", "uncommitted\n");
+      yield* writeFile(cwd, "effort.md", "# effort, edited by a turn\n");
 
       const report = yield* service.ensureFeatureBranch({
         cwd,
@@ -146,7 +146,7 @@ describe("WorkspaceMemberBranches", () => {
       );
       // The uncommitted work must still be there: creating a branch at HEAD and
       // switching to it does not check anything out.
-      assert.include(yield* git(cwd, ["status", "--porcelain"]), "changed.md");
+      assert.include(yield* git(cwd, ["status", "--porcelain"]), "effort.md");
     }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -154,7 +154,7 @@ describe("WorkspaceMemberBranches", () => {
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const { cwd } = yield* makeMemberRepo();
-      yield* writeFile(cwd, "changed.md", "uncommitted\n");
+      yield* writeFile(cwd, "effort.md", "# effort, edited by a turn\n");
       const target = {
         cwd,
         integrationBranch: INTEGRATION_BRANCH,
@@ -174,7 +174,7 @@ describe("WorkspaceMemberBranches", () => {
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const { cwd } = yield* makeMemberRepo();
-      yield* writeFile(cwd, "changed.md", "uncommitted\n");
+      yield* writeFile(cwd, "effort.md", "# effort, edited by a turn\n");
       yield* service.ensureFeatureBranch({
         cwd,
         integrationBranch: INTEGRATION_BRANCH,
@@ -190,6 +190,72 @@ describe("WorkspaceMemberBranches", () => {
 
       assert.strictEqual(report.state, "owned-by-other");
       assert.strictEqual(report.ownerThreadId, "thread-other");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // The branch name is a pure function of the thread, so it can already exist.
+  // Reusing our own rather than failing is what keeps a repository from being
+  // stuck after any single failed attempt.
+  it.effect("reuses a branch this thread already owns", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd } = yield* makeMemberRepo();
+      const target = {
+        cwd,
+        integrationBranch: INTEGRATION_BRANCH,
+        threadId: THREAD_ID,
+        threadTitle: "Add demo suite",
+      };
+      yield* writeFile(cwd, "effort.md", "# first turn\n");
+      const first = yield* service.ensureFeatureBranch(target);
+      yield* git(cwd, ["commit", "-am", "first turn"]);
+      yield* git(cwd, ["switch", INTEGRATION_BRANCH]);
+      // A different tracked file, so switching back to the branch this thread
+      // owns carries the change over instead of being refused.
+      yield* writeFile(cwd, "README.md", "# second turn\n");
+
+      const second = yield* service.ensureFeatureBranch(target);
+
+      assert.strictEqual(second.branch, first.branch);
+      assert.strictEqual(yield* git(cwd, ["branch", "--show-current"]), first.branch);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("steps aside from a branch another thread owns", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd } = yield* makeMemberRepo();
+      const shared = { cwd, integrationBranch: INTEGRATION_BRANCH, threadTitle: "Shared title" };
+      yield* writeFile(cwd, "effort.md", "# other thread\n");
+      const other = yield* service.ensureFeatureBranch({ ...shared, threadId: "thread-other" });
+      yield* git(cwd, ["commit", "-am", "other thread"]);
+      yield* git(cwd, ["switch", INTEGRATION_BRANCH]);
+      yield* writeFile(cwd, "README.md", "# this thread\n");
+
+      const mine = yield* service.ensureFeatureBranch({ ...shared, threadId: THREAD_ID });
+
+      assert.notStrictEqual(mine.branch, other.branch);
+      assert.strictEqual(mine.state, "owned-by-self");
+      assert.strictEqual(yield* git(cwd, ["branch", "--show-current"]), mine.branch);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // A stray file the user left lying around is not evidence a turn wrote here.
+  it.effect("leaves a member carrying only untracked files alone", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const { cwd } = yield* makeMemberRepo();
+      yield* writeFile(cwd, "notes.md", "a file the user left here\n");
+
+      const report = yield* service.ensureFeatureBranch({
+        cwd,
+        integrationBranch: INTEGRATION_BRANCH,
+        threadId: THREAD_ID,
+        threadTitle: "Add demo suite",
+      });
+
+      assert.strictEqual(report.state, "idle");
+      assert.strictEqual(yield* git(cwd, ["branch", "--show-current"]), INTEGRATION_BRANCH);
     }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -298,7 +364,7 @@ describe("the base GitManager will read", () => {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const gitCore = yield* GitVcsDriver.GitVcsDriver;
       const { cwd } = yield* makeMemberRepo();
-      yield* writeFile(cwd, "changed.md", "uncommitted\n");
+      yield* writeFile(cwd, "effort.md", "# effort, edited by a turn\n");
 
       const report = yield* service.ensureFeatureBranch({
         cwd,
@@ -322,7 +388,7 @@ describe("the base GitManager will read", () => {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const gitCore = yield* GitVcsDriver.GitVcsDriver;
       const { cwd } = yield* makeMemberRepo();
-      yield* writeFile(cwd, "changed.md", "uncommitted\n");
+      yield* writeFile(cwd, "effort.md", "# effort, edited by a turn\n");
       const report = yield* service.ensureFeatureBranch({
         cwd,
         integrationBranch: INTEGRATION_BRANCH,

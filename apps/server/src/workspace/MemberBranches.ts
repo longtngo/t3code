@@ -32,11 +32,23 @@ export interface MemberBranchInput {
   /** From `branch.<current>.t3code-thread`, or null when the key is absent. */
   readonly ownerThreadId: string | null;
   readonly threadId: string;
-  readonly isDirty: boolean;
+  /**
+   * Whether any file git already tracks differs from HEAD.
+   *
+   * Untracked files are deliberately excluded from this signal. A stray
+   * `notes.md` or a build artifact the user left lying around says nothing
+   * about whether a turn wrote here, and treating it as work meant every turn
+   * of every thread in the project would cut a branch in that repository and
+   * move the user's checkout onto it.
+   */
+  readonly hasTrackedChanges: boolean;
 }
 
 /**
  * What a thread may do with a member repository right now.
+ *
+ * `cut-needed` requires a change to a tracked file, not merely a dirty working
+ * tree — see `hasTrackedChanges`.
  *
  * `unmanaged` is the deliberate do-nothing state. These checkouts are
  * long-lived and hand-pinned, so a repository sitting on a branch T3 Code did
@@ -49,7 +61,7 @@ export interface MemberBranchInput {
 export function classifyMemberBranch(input: MemberBranchInput): MemberBranchState {
   if (input.currentBranch === null) return "unmanaged";
   if (input.currentBranch === input.integrationBranch) {
-    return input.isDirty ? "cut-needed" : "idle";
+    return input.hasTrackedChanges ? "cut-needed" : "idle";
   }
   if (input.ownerThreadId === null) return "unmanaged";
   return input.ownerThreadId === input.threadId ? "owned-by-self" : "owned-by-other";

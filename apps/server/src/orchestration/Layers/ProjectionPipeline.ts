@@ -1230,6 +1230,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               checkpointRef: null,
               checkpointStatus: null,
               checkpointFiles: [],
+              checkpointMemberStates: null,
             });
           }
 
@@ -1294,6 +1295,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointRef: null,
             checkpointStatus: null,
             checkpointFiles: [],
+            checkpointMemberStates: null,
           });
           return;
         }
@@ -1331,6 +1333,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointRef: null,
             checkpointStatus: null,
             checkpointFiles: [],
+            checkpointMemberStates: null,
           });
           return;
         }
@@ -1386,6 +1389,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointRef: event.payload.checkpointRef,
             checkpointStatus: event.payload.status,
             checkpointFiles: event.payload.files,
+            checkpointMemberStates: event.payload.memberStates ?? null,
           });
           return;
         }

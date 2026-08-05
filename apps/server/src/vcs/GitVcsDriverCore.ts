@@ -2318,6 +2318,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
+  const hasTrackedChanges: GitVcsDriver.GitVcsDriver["Service"]["hasTrackedChanges"] = (cwd) =>
+    runGitStdout(
+      "GitVcsDriver.hasTrackedChanges",
+      cwd,
+      ["status", "--porcelain", "--untracked-files=no"],
+      true,
+    ).pipe(Effect.map((stdout) => stdout.trim().length > 0));
+
+  const deleteRef: GitVcsDriver.GitVcsDriver["Service"]["deleteRef"] = (cwd, refName) =>
+    runGit("GitVcsDriver.deleteRef", cwd, ["branch", "-d", refName]);
+
   const readHeadSha: GitVcsDriver.GitVcsDriver["Service"]["readHeadSha"] = (cwd) =>
     // A repository with no commits exits non-zero here, which is an absent
     // head rather than a failure.
@@ -2986,6 +2997,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readRangeContext,
     getReviewDiffPreview,
     readConfigValue,
+    deleteRef,
+    hasTrackedChanges,
     readHeadSha,
     writeConfigValue,
     readBranchReflog,

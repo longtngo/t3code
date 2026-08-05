@@ -91,6 +91,8 @@ export class WorkspaceMemberBranches extends Context.Service<
   }
 >()("t3/workspace/WorkspaceMemberBranches") {}
 
+const MAX_BRANCH_NAME_ATTEMPTS = 5;
+
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
@@ -110,8 +112,40 @@ export const make = Effect.gen(function* () {
     if (!handle || handle.kind !== "git") return null;
     const status = yield* git.statusDetailsLocal(cwd).pipe(Effect.orElseSucceed(() => null));
     if (status === null || !status.isRepo) return null;
-    return { branch: status.branch, isDirty: status.hasWorkingTreeChanges };
+    const hasTrackedChanges = yield* git
+      .hasTrackedChanges(cwd)
+      .pipe(Effect.orElseSucceed(() => false));
+    return {
+      branch: status.branch,
+      isDirty: status.hasWorkingTreeChanges,
+      hasTrackedChanges,
+    };
   });
+
+  const branchExists = (cwd: string, branch: string) =>
+    git.listLocalBranchNames(cwd).pipe(
+      Effect.map((names) => names.includes(branch)),
+      Effect.orElseSucceed(() => false),
+    );
+
+  /**
+   * The name to cut, stepping aside from a branch that is not ours.
+   *
+   * An existing branch this thread already owns is reused; anything else gets a
+   * numbered suffix rather than colliding. Bounded, because an unbounded search
+   * on a repository full of near-miss names is a worse failure than giving up.
+   */
+  const resolveFreeBranchName = Effect.fn("WorkspaceMemberBranches.resolveFreeBranchName")(
+    function* (cwd: string, preferred: string, threadId: string) {
+      for (let attempt = 0; attempt < MAX_BRANCH_NAME_ATTEMPTS; attempt += 1) {
+        const candidate = attempt === 0 ? preferred : `${preferred}-${attempt + 1}`;
+        if (!(yield* branchExists(cwd, candidate))) return candidate;
+        const owner = yield* readOwner(cwd, candidate);
+        if (owner === threadId) return candidate;
+      }
+      return `${preferred}-${MAX_BRANCH_NAME_ATTEMPTS}`;
+    },
+  );
 
   const readOwner = (cwd: string, branch: string) =>
     git.readConfigValue(cwd, memberOwnerConfigKey(branch)).pipe(Effect.orElseSucceed(() => null));
@@ -128,7 +162,7 @@ export const make = Effect.gen(function* () {
         integrationBranch: target.integrationBranch,
         ownerThreadId,
         threadId: target.threadId,
-        isDirty: local.isDirty,
+        hasTrackedChanges: local.hasTrackedChanges,
       }),
       branch: local.branch,
       ownerThreadId,
@@ -141,18 +175,34 @@ export const make = Effect.gen(function* () {
     const report = yield* inspect(target);
     if (report.state !== "cut-needed") return report;
 
-    const branch = memberFeatureBranchName({
+    const preferredBranch = memberFeatureBranchName({
       threadId: target.threadId,
       threadTitle: target.threadTitle,
     });
+    // The name is a pure function of the thread, so it can already exist: from
+    // an earlier attempt that failed after creating the ref, or from another
+    // member backed by the same repository. Reusing our own and stepping aside
+    // from anyone else's is what keeps a second attempt from failing forever on
+    // "a branch named X already exists".
+    const branch = yield* resolveFreeBranchName(target.cwd, preferredBranch, target.threadId);
+    const existed = branch === preferredBranch && (yield* branchExists(target.cwd, branch));
+
     // Creating the branch at HEAD and switching to it carries uncommitted work
     // over untouched: both refer to the same commit, so no checkout happens and
     // nothing is stashed.
-    const created = yield* git
-      .createRef({ cwd: target.cwd, refName: branch, switchRef: true })
-      .pipe(Effect.as(true), Effect.orElseSucceed(() => false));
-    if (!created) {
-      return unavailable(`Could not create ${branch}.`);
+    const switched = yield* (existed
+      ? git.switchRef({ cwd: target.cwd, refName: branch }).pipe(Effect.asVoid)
+      : git.createRef({ cwd: target.cwd, refName: branch, switchRef: true }).pipe(Effect.asVoid)
+    ).pipe(Effect.as(true), Effect.orElseSucceed(() => false));
+    if (!switched) {
+      // `createRef` creates the ref and then checks it out, so a refused
+      // checkout — an unresolved merge, an index that needs resolving — would
+      // otherwise leave a branch behind that permanently blocks every later
+      // attempt under the same name.
+      if (!existed) {
+        yield* git.deleteRef(target.cwd, branch).pipe(Effect.ignore);
+      }
+      return unavailable(`Could not switch ${target.cwd} to ${branch}.`);
     }
 
     // The base is known exactly here — this branch was just cut from the

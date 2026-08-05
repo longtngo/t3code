@@ -1,4 +1,4 @@
-import { OrchestrationCheckpointFile } from "@t3tools/contracts";
+import { OrchestrationCheckpointFile, OrchestrationCheckpointMemberState } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -24,12 +24,18 @@ import {
 const ProjectionTurnDbRowSchema = ProjectionTurn.mapFields(
   Struct.assign({
     checkpointFiles: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+    checkpointMemberStates: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(OrchestrationCheckpointMemberState)),
+    ),
   }),
 );
 
 const ProjectionTurnByIdDbRowSchema = ProjectionTurnById.mapFields(
   Struct.assign({
     checkpointFiles: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
+    checkpointMemberStates: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(OrchestrationCheckpointMemberState)),
+    ),
   }),
 );
 
@@ -61,7 +67,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count,
           checkpoint_ref,
           checkpoint_status,
-          checkpoint_files_json
+          checkpoint_files_json,
+          checkpoint_member_states_json
         )
         VALUES (
           ${row.threadId},
@@ -77,7 +84,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.checkpointTurnCount},
           ${row.checkpointRef},
           ${row.checkpointStatus},
-          ${row.checkpointFiles}
+          ${row.checkpointFiles},
+          ${row.checkpointMemberStates}
         )
         ON CONFLICT (thread_id, turn_id)
         DO UPDATE SET
@@ -92,7 +100,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count = excluded.checkpoint_turn_count,
           checkpoint_ref = excluded.checkpoint_ref,
           checkpoint_status = excluded.checkpoint_status,
-          checkpoint_files_json = excluded.checkpoint_files_json
+          checkpoint_files_json = excluded.checkpoint_files_json,
+          checkpoint_member_states_json = excluded.checkpoint_member_states_json
       `,
   });
 
@@ -126,7 +135,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count,
           checkpoint_ref,
           checkpoint_status,
-          checkpoint_files_json
+          checkpoint_files_json,
+          checkpoint_member_states_json
         )
         VALUES (
           ${row.threadId},
@@ -142,7 +152,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           NULL,
           NULL,
           NULL,
-          '[]'
+          '[]',
+          NULL
         )
       `,
   });
@@ -188,7 +199,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          checkpoint_member_states_json AS "checkpointMemberStates"
         FROM projection_turns
         WHERE thread_id = ${threadId}
         ORDER BY
@@ -221,7 +233,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          checkpoint_member_states_json AS "checkpointMemberStates"
         FROM projection_turns
         WHERE thread_id = ${threadId}
           AND turn_id = ${turnId}

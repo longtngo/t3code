@@ -265,6 +265,12 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       key: string,
     ) => Effect.Effect<string | null, GitCommandError>;
+    /**
+     * Whether any file git already tracks differs from HEAD. Deliberately
+     * excludes untracked files, which say nothing about whether anything wrote
+     * to this repository.
+     */
+    readonly hasTrackedChanges: (cwd: string) => Effect.Effect<boolean, GitCommandError>;
     /** The commit HEAD points at, or null when the repository has no commits. */
     readonly readHeadSha: (cwd: string) => Effect.Effect<string | null, GitCommandError>;
     readonly writeConfigValue: (
@@ -281,6 +287,12 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       branch: string,
     ) => Effect.Effect<string, GitCommandError>;
+    /**
+     * Deletes a local branch, refusing when it holds commits that are not
+     * merged elsewhere. Used only to undo a branch this just created at HEAD,
+     * where nothing can be lost.
+     */
+    readonly deleteRef: (cwd: string, refName: string) => Effect.Effect<void, GitCommandError>;
     /** Branch names, local and remote-tracking, whose tip is this commit. */
     readonly listBranchNamesPointingAt: (
       cwd: string,

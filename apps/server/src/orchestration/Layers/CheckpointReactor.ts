@@ -841,10 +841,35 @@ const make = Effect.gen(function* () {
     const revertProjects = yield* resolveThreadProjects(thread.projectId);
     const revertMembers = revertProjects[0]?.members ?? [];
     if (revertMembers.length > 0) {
-      const drift = resolveCheckpointDrift(
-        targetCheckpoint?.memberStates,
-        yield* memberBranches.readCheckpointStates(revertMembers),
-      );
+      // Reverting to turn 0 discards everything this thread did, and there is
+      // no recorded baseline to compare against — no checkpoint is ever
+      // projected for turn count 0. Comparing state would report "no claim" and
+      // wave through the deepest revert of all, so this asks the other question
+      // instead: is any member still carrying this thread's work?
+      const drift =
+        event.payload.turnCount === 0
+          ? {
+              hasClaim: true,
+              driftedMemberIds: (yield* Effect.forEach(revertMembers, (member) =>
+                memberBranches
+                  .inspect({
+                    cwd: member.path,
+                    integrationBranch: member.integrationBranch,
+                    threadId: event.payload.threadId,
+                  })
+                  .pipe(
+                    Effect.map((report) =>
+                      report.state === "cut-needed" || report.state === "owned-by-self"
+                        ? member.id
+                        : null,
+                    ),
+                  ),
+              )).filter((memberId): memberId is string => memberId !== null),
+            }
+          : resolveCheckpointDrift(
+              targetCheckpoint?.memberStates,
+              yield* memberBranches.readCheckpointStates(revertMembers),
+            );
       if (!isCheckpointComplete(drift)) {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,

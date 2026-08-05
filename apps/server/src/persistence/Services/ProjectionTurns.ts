@@ -13,6 +13,7 @@ import {
   NonNegativeInt,
   OrchestrationProposedPlanId,
   OrchestrationCheckpointFile,
+  OrchestrationCheckpointMemberState,
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
@@ -48,6 +49,8 @@ export const ProjectionTurn = Schema.Struct({
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
+  /** Null for a turn captured before member states were recorded. */
+  checkpointMemberStates: Schema.NullOr(Schema.Array(OrchestrationCheckpointMemberState)),
 });
 export type ProjectionTurn = typeof ProjectionTurn.Type;
 
@@ -66,6 +69,8 @@ export const ProjectionTurnById = Schema.Struct({
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
+  /** Null for a turn captured before member states were recorded. */
+  checkpointMemberStates: Schema.NullOr(Schema.Array(OrchestrationCheckpointMemberState)),
 });
 export type ProjectionTurnById = typeof ProjectionTurnById.Type;
 
