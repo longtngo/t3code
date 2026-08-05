@@ -2509,6 +2509,20 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    /**
+     * Distinct upgrade shapes already reported, so a reconnect storm logs
+     * nothing new.
+     *
+     * The server offers `permessage-deflate`, but phone access arrives through
+     * a `tailscale serve` reverse proxy, and whether that hop forwards the
+     * extension offer end-to-end was never established — it cannot be probed
+     * from outside, because auth rejects a synthetic upgrade before the
+     * extension is ever negotiated, making the proxied and direct hops
+     * indistinguishable. What each real client offers, on the other hand, is
+     * readable right here, and that is the half that was unknown: the server's
+     * own half is configuration we already control.
+     */
+    const reportedUpgradeShapes = yield* Ref.make(new Set<string>());
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2559,6 +2573,20 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ),
           ),
         );
+        const offeredExtensions = request.headers["sec-websocket-extensions"] ?? "(none)";
+        const upgradeShape = `${request.headers.host ?? "(no host)"} ${offeredExtensions}`;
+        const alreadyReported = yield* Ref.modify(reportedUpgradeShapes, (seen) => {
+          if (seen.has(upgradeShape)) return [true, seen] as const;
+          const next = new Set(seen);
+          next.add(upgradeShape);
+          return [false, next] as const;
+        });
+        if (!alreadyReported) {
+          yield* Effect.logInfo(
+            `websocket upgrade via ${request.headers.host ?? "(no host)"} offers extensions: ${offeredExtensions}`,
+          );
+        }
+
         return yield* Effect.acquireUseRelease(
           sessions.markConnected(session.sessionId),
           () => rpcWebSocketHttpEffect,

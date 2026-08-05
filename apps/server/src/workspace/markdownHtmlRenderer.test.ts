@@ -3,6 +3,7 @@ import { it, describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 
 import {
   ProcessRunner,
@@ -11,7 +12,7 @@ import {
   type ProcessRunInput,
   type ProcessRunOutput,
 } from "../processRunner.ts";
-import { MarkdownHtmlRenderer, make } from "./markdownHtmlRenderer.ts";
+import { MarkdownHtmlRenderer, make, resolveRendererCommand } from "./markdownHtmlRenderer.ts";
 
 const BRANDED = '<!DOCTYPE html><html><body><div class="masthead">Branded</div></body></html>';
 
@@ -57,6 +58,103 @@ const writesOutput =
   (body: string): RunHandler =>
   (input, fileSystem) =>
     fileSystem.writeFileString(outputPath(input), body).pipe(Effect.orDie, Effect.as(SUCCESS));
+
+describe("resolveRendererCommand", () => {
+  /** A real executable and a real non-executable file, in a real temp dir. */
+  const withCandidates = <A, E, R>(
+    body: (input: {
+      readonly dir: string;
+      readonly executable: string;
+      readonly plainFile: string;
+      readonly fileSystem: FileSystem.FileSystem;
+      readonly path: Path.Path;
+    }) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-md2html-probe-" });
+      const executable = path.join(dir, "uni-md2html");
+      const plainFile = path.join(dir, "not-executable");
+      yield* fileSystem.writeFileString(executable, "#!/bin/sh\n");
+      yield* fileSystem.chmod(executable, 0o755);
+      yield* fileSystem.writeFileString(plainFile, "");
+      yield* fileSystem.chmod(plainFile, 0o644);
+      return yield* body({ dir, executable, plainFile, fileSystem, path });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+  it.effect("finds a bare command name on PATH", () =>
+    withCandidates(({ dir, executable, fileSystem, path }) =>
+      Effect.gen(function* () {
+        const resolved = yield* resolveRendererCommand({
+          command: "uni-md2html",
+          pathEnv: `/nonexistent-first:${dir}`,
+          fileSystem,
+          path,
+        });
+        expect(resolved).toBe(executable);
+      }),
+    ),
+  );
+
+  it.effect("returns null when the command is on no PATH entry", () =>
+    withCandidates(({ fileSystem, path }) =>
+      Effect.gen(function* () {
+        const resolved = yield* resolveRendererCommand({
+          command: "uni-md2html",
+          pathEnv: "/nonexistent-a:/nonexistent-b",
+          fileSystem,
+          path,
+        });
+        expect(resolved).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("rejects a file that carries the right name but is not executable", () =>
+    withCandidates(({ plainFile, fileSystem, path }) =>
+      Effect.gen(function* () {
+        // Reporting this one as found would announce a renderer that then fails
+        // at spawn time — the exact confusion the startup line exists to remove.
+        const resolved = yield* resolveRendererCommand({
+          command: plainFile,
+          pathEnv: undefined,
+          fileSystem,
+          path,
+        });
+        expect(resolved).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("takes a command containing a separator as a direct path, not a PATH search", () =>
+    withCandidates(({ executable, fileSystem, path }) =>
+      Effect.gen(function* () {
+        const resolved = yield* resolveRendererCommand({
+          command: executable,
+          pathEnv: "/nonexistent",
+          fileSystem,
+          path,
+        });
+        expect(resolved).toBe(executable);
+      }),
+    ),
+  );
+
+  it.effect("survives an unset PATH", () =>
+    withCandidates(({ fileSystem, path }) =>
+      Effect.gen(function* () {
+        const resolved = yield* resolveRendererCommand({
+          command: "uni-md2html",
+          pathEnv: undefined,
+          fileSystem,
+          path,
+        });
+        expect(resolved).toBeNull();
+      }),
+    ),
+  );
+});
 
 describe("MarkdownHtmlRenderer", () => {
   it.effect("asks the CLI to drop its webfont CDN link", () =>
