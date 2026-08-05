@@ -57,6 +57,9 @@ import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRev
 import { fileBreadcrumbs } from "./filePath";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
+import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
+import WorkspaceRepoBar from "../WorkspaceRepoBar";
+
 import {
   confirmProjectFileQueryData,
   getOptimisticProjectFileQueryData,
@@ -746,18 +749,37 @@ function initialExplorerOpen(): boolean {
 
 export default function FilePreviewPanel({
   environmentId,
-  cwd,
+  cwd: projectCwd,
   projectName,
-  relativePath,
+  relativePath: openRelativePath,
   threadRef,
   composerDraftTarget,
   keybindings,
   availableEditors,
   revealLine,
   revealRequestId,
-  onOpenFile,
+  onOpenFile: onOpenFileProp,
   onPendingChange,
 }: FilePreviewPanelProps) {
+  const workspaceRepos = useWorkspaceRepos(threadRef);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const activeRepo = resolveActiveRepo(workspaceRepos, selectedRepoId);
+  // Only an explicitly selected member moves the root. Everything else keeps
+  // the cwd the caller passed, so an ordinary project is untouched.
+  const cwd = activeRepo?.kind === "member" ? activeRepo.cwd : projectCwd;
+  // A path is relative to the repository it was opened from. Switching roots
+  // therefore parks the open file rather than re-resolving it under the new
+  // root, where it would usually resolve to nothing and read as an error.
+  const [parkedPath, setParkedPath] = useState<string | null>(null);
+  const relativePath = openRelativePath !== null && openRelativePath === parkedPath ? null : openRelativePath;
+  const onOpenFile = (nextRelativePath: string) => {
+    setParkedPath(null);
+    onOpenFileProp(nextRelativePath);
+  };
+  const selectRepo = (repoId: string) => {
+    setSelectedRepoId(repoId);
+    setParkedPath(openRelativePath);
+  };
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1048,15 +1070,25 @@ export default function FilePreviewPanel({
                 : "min-w-0 flex-1",
             )}
           >
-            <FileBrowserPanel
-              key={`${environmentId}:${cwd}`}
-              environmentId={environmentId}
-              cwd={cwd}
-              projectName={projectName}
-              selectedPath={relativePath}
-              selectedPathRevealId={revealRequestId}
-              onOpenFile={onOpenFile}
-            />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {activeRepo ? (
+                <WorkspaceRepoBar
+                  environmentId={environmentId}
+                  onSelect={selectRepo}
+                  repos={workspaceRepos}
+                  selectedId={activeRepo.id}
+                />
+              ) : null}
+              <FileBrowserPanel
+                key={`${environmentId}:${cwd}`}
+                environmentId={environmentId}
+                cwd={cwd}
+                projectName={projectName}
+                selectedPath={relativePath}
+                selectedPathRevealId={revealRequestId}
+                onOpenFile={onOpenFile}
+              />
+            </div>
           </aside>
         ) : null}
       </div>

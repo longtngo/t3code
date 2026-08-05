@@ -71,6 +71,8 @@ import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
+import { resolveActiveRepo, useWorkspaceRepos } from "../hooks/useWorkspaceRepos";
+import WorkspaceRepoBar from "./WorkspaceRepoBar";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
@@ -222,7 +224,19 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const workspaceRepos = useWorkspaceRepos(routeThreadRef);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const activeRepo = resolveActiveRepo(workspaceRepos, selectedRepoId);
+  // Only an explicitly selected member overrides the working directory. Every
+  // other case keeps the exact expression the panel used before workspaces
+  // existed, so an ordinary project cannot change behavior here.
+  const activeCwd =
+    activeRepo?.kind === "member"
+      ? activeRepo.cwd
+      : (activeThread?.worktreePath ?? activeProject?.workspaceRoot);
+  // Checkpoints are captured for the staging repository only, so a turn diff
+  // has no meaning while a member repository is selected.
+  const isPrimaryRepo = activeRepo === null || activeRepo.kind === "primary";
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -529,6 +543,16 @@ export default function DiffPanel({
     if (!routeThreadRef) return;
     useDiffPanelStore.getState().selectBranchBaseRef(routeThreadRef, baseRef);
   };
+  const selectRepo = (repoId: string) => {
+    setSelectedRepoId(repoId);
+    // Turn diffs come from staging checkpoints. Moving to a member repository
+    // while one is selected would leave the panel showing the staging turn's
+    // patch under another repository's name, so the scope moves with it.
+    const nextRepo = workspaceRepos.find((repo) => repo.id === repoId);
+    if (nextRepo?.kind === "member" && selectedTurnId !== null) {
+      selectGitScope("branch");
+    }
+  };
 
   const headerRow = (
     <>
@@ -562,18 +586,21 @@ export default function DiffPanel({
             >
               <span>Branch changes</span>
             </DropdownMenuItem>
-            <DropdownMenuItem
-              className={
-                selectedTurnId !== null && selectedTurn?.turnId === latestTurn?.turnId
-                  ? "bg-foreground/[0.08]"
-                  : undefined
-              }
-              onClick={() => {
-                if (latestTurn) selectTurn(latestTurn.turnId);
-              }}
-            >
-              <span>Latest turn</span>
-            </DropdownMenuItem>
+            {isPrimaryRepo && (
+              <DropdownMenuItem
+                className={
+                  selectedTurnId !== null && selectedTurn?.turnId === latestTurn?.turnId
+                    ? "bg-foreground/[0.08]"
+                    : undefined
+                }
+                onClick={() => {
+                  if (latestTurn) selectTurn(latestTurn.turnId);
+                }}
+              >
+                <span>Latest turn</span>
+              </DropdownMenuItem>
+            )}
+            {isPrimaryRepo && (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>Turn</DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-64">
@@ -599,6 +626,7 @@ export default function DiffPanel({
                 })}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {selectedTurnId === null && selectedGitScope === "branch" && selectedGitSource?.baseRef && (
@@ -815,6 +843,14 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      {activeThread && activeRepo ? (
+        <WorkspaceRepoBar
+          environmentId={activeThread.environmentId}
+          onSelect={selectRepo}
+          repos={workspaceRepos}
+          selectedId={activeRepo.id}
+        />
+      ) : null}
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
