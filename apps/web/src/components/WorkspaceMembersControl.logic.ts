@@ -183,3 +183,33 @@ export function resolveBranchOptions(
 export function canAutofillBranch(branchValue: string, autofilledValue: string | null): boolean {
   return branchValue.trim().length === 0 || branchValue === autofilledValue;
 }
+
+/**
+ * The one-line explanation under the branch field.
+ *
+ * Every state answers, including "still reading". An earlier version returned
+ * nothing while the branch query was in flight, which read as *no element* — and
+ * since the dialog is vertically centred, losing that line moved the whole modal
+ * by half its height and moved it back a frame later. Once per keystroke, that
+ * is the flicker.
+ *
+ * The caller renders the returned value in a slot that reserves a line even when
+ * this is null, so no state can collapse the layout.
+ */
+export function resolveBranchHint(input: {
+  /** The resolved repository directory, or null while the path is unusable. */
+  readonly branchCwd: string | null;
+  /** False while the branch query has not answered for the current directory. */
+  readonly hasRefsAnswer: boolean;
+  readonly isRepository: boolean;
+  readonly currentBranch: string | null;
+  readonly branch: string;
+}): string | null {
+  if (input.branchCwd === null) return "Choose a repository to list its branches.";
+  if (!input.hasRefsAnswer) return "Reading branches…";
+  if (!input.isRepository) return "That folder is not a git repository.";
+  if (input.currentBranch !== null && input.branch.trim() === input.currentBranch) {
+    return `${input.currentBranch} is checked out in that repository.`;
+  }
+  return null;
+}

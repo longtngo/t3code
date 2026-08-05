@@ -4,7 +4,8 @@ import {
 } from "@t3tools/client-runtime/state/filesystem";
 import type { EnvironmentId, WorkspaceMember } from "@t3tools/contracts";
 import { CornerLeftUpIcon, FolderIcon, GitBranchIcon } from "lucide-react";
-import { useDeferredValue, useEffect, useId, useMemo, useState } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { filesystemEnvironment } from "../state/filesystem";
 import { useEnvironmentQuery } from "../state/query";
@@ -21,6 +22,7 @@ import {
 } from "./ui/autocomplete";
 import {
   canAutofillBranch,
+  resolveBranchHint,
   resolveBranchOptions,
   resolveMemberCwd,
   splitMemberPath,
@@ -35,6 +37,14 @@ import {
  * remote-only ref is never the answer.
  */
 const BRANCH_LIST_LIMIT = 200;
+/**
+ * How long typing must pause before the branch list is read.
+ *
+ * Each read spawns git in the named directory, so this is not a rendering
+ * nicety: without it a 19-character path spawned 18 of them, nearly all against
+ * directories that do not exist.
+ */
+const BRANCH_QUERY_DEBOUNCE_MS = 250;
 
 const EMPTY_BROWSE_ENTRIES: ReadonlyArray<{ readonly name: string; readonly fullPath: string }> =
   [];
@@ -112,9 +122,13 @@ export default function WorkspaceMemberEditor({
   // ---------------------------------------------------------------------------
   // Integration branch
   // ---------------------------------------------------------------------------
-  // Deferred so that typing a path does not fire a git call per character.
-  const deferredPath = useDeferredValue(path);
-  const branchCwd = useMemo(() => resolveMemberCwd(deferredPath), [deferredPath]);
+  // Debounced, not deferred. `useDeferredValue` is a scheduling hint: it catches
+  // up on the very next transition render, so the previous version here fired
+  // one `vcs.listRefs` — a real git spawn, almost always against a directory
+  // that does not exist yet — for every character typed, and left one live atom
+  // per prefix behind it.
+  const [debouncedPath] = useDebouncedValue(path, { wait: BRANCH_QUERY_DEBOUNCE_MS });
+  const branchCwd = useMemo(() => resolveMemberCwd(debouncedPath), [debouncedPath]);
   const refsQuery = useEnvironmentQuery(
     branchCwd !== null
       ? vcsEnvironment.listRefs({
@@ -167,14 +181,13 @@ export default function WorkspaceMemberEditor({
     }
   };
 
-  const branchHint = (() => {
-    if (branchCwd === null) return "Choose a repository to list its branches.";
-    if (!isRepository) return "That folder is not a git repository.";
-    if (currentBranch !== null && branch.trim() === currentBranch) {
-      return `${currentBranch} is checked out in that repository.`;
-    }
-    return null;
-  })();
+  const branchHint = resolveBranchHint({
+    branch,
+    branchCwd,
+    currentBranch,
+    hasRefsAnswer: refsQuery.data !== null,
+    isRepository,
+  });
 
   return (
     <div className="rounded-lg border border-border/70 bg-muted/40 p-3">
@@ -195,13 +208,18 @@ export default function WorkspaceMemberEditor({
         <Autocomplete
           filter={null}
           items={pathItems}
-          onOpenChange={(nextOpen) => setIsPathOpen(nextOpen)}
-          onValueChange={(nextValue, details) => {
-            setPath(nextValue);
-            setError(null);
+          onOpenChange={(nextOpen, details) => {
             // Selecting a folder descends into it, so the list must stay up to
             // show what is inside rather than closing on every step down.
-            if (details.reason === "item-press") setIsPathOpen(true);
+            // Re-opening from `onValueChange` did not work: the library calls
+            // the value change first and its own close second, so the close won
+            // the batch and the popup shut on every step down.
+            if (!nextOpen && details.reason === "item-press") return;
+            setIsPathOpen(nextOpen);
+          }}
+          onValueChange={(nextValue) => {
+            setPath(nextValue);
+            setError(null);
           }}
           open={isPathOpen}
           openOnInputClick
@@ -284,9 +302,10 @@ export default function WorkspaceMemberEditor({
             </AutocompleteList>
           </AutocompletePopup>
         </Autocomplete>
-        {branchHint !== null ? (
-          <p className="text-muted-foreground text-xs">{branchHint}</p>
-        ) : null}
+        {/* Always rendered, so the last remaining "nothing to say" case cannot
+            collapse the line box either. `min-h-4` reserves exactly the height
+            of one line at this size. */}
+        <p className="min-h-4 text-muted-foreground text-xs">{branchHint}</p>
       </div>
 
       {error !== null ? <p className="mt-3 text-destructive text-sm">{error}</p> : null}
