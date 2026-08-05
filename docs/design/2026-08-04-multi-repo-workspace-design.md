@@ -528,3 +528,11 @@ already does, searching the selected root first and reporting which roots it did
 reach; or make it a deliberate "search every repository" action rather than an
 as-you-type default, so the block is paid once per intent instead of eight times a
 second. Both are new surface this design does not need.
+
+---
+
+## Follow-up disposition (2026-08-05)
+
+Stamped when the drain from the [2026-08-05 follow-up catalog](~/reports/t3code/2026-08/2026-08-05/2026-08-05-followup-catalog.md) closed.
+
+Design-doc items were catalogued under section J. **J5, J7, J8, J9 resolved** (`92f733f42`, `f0dc59254`, `d30a4c818`); **J6, J13, J14 deferred** behind gates that have not fired; **J4, J10, J11, J12 declined** as deliberate or accepted at design time. Full detail in the catalog.
