@@ -247,6 +247,14 @@ import {
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import {
+  contestedMembersKey,
+  describeContestedMembers,
+  dismissContestedMembersForSession,
+  isContestedMembersDismissedForSession,
+  selectContestedMembers,
+} from "./chat/composerMemberGuard";
+import { resolveWorkspaceRepos } from "../hooks/useWorkspaceRepos.logic";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -271,7 +279,7 @@ import {
   dismissBranchMismatchForSession,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
-  shouldShowBranchMismatchBanner,
+  shouldShowComposerIntentBanner,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -4166,11 +4174,11 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.id ?? null,
     localCheckoutBranchMismatch,
   );
-  const showBranchMismatchBanner = shouldShowBranchMismatchBanner({
-    hasMismatch: localCheckoutBranchMismatch !== null,
+  const showBranchMismatchBanner = shouldShowComposerIntentBanner({
+    hasCondition: localCheckoutBranchMismatch !== null,
     isDismissed: isBranchMismatchDismissedForSession(activeBranchMismatchKey),
     composerHasContent: composerHasDraftContent,
-    wasShownForCurrentMismatch:
+    wasShownForCurrentCondition:
       revealedBranchMismatchKey !== null && revealedBranchMismatchKey === activeBranchMismatchKey,
   });
   useEffect(() => {
@@ -4183,6 +4191,60 @@ function ChatViewContent(props: ChatViewProps) {
       return revealed !== null && revealed !== activeBranchMismatchKey ? null : revealed;
     });
   }, [activeBranchMismatchKey, showBranchMismatchBanner]);
+  // The pre-turn workspace guard. One shared checkout per attached repository
+  // means two threads writing to the same one cannot be isolated, so making the
+  // state visible before the user sends is the only protection there is — the
+  // post-turn sweep can see the collision but by then it has already happened.
+  // See docs/design/2026-08-04-multi-repo-workspace-design.md.
+  //
+  // Derived from the project rather than through `useWorkspaceRepos`, which
+  // looks the thread up in the entity store. A draft is a local thread that is
+  // not in that store yet, and a draft's first turn is exactly when a member is
+  // most likely to be sitting on somebody else's branch.
+  const workspaceRepos = useMemo(
+    () =>
+      resolveWorkspaceRepos({
+        project: activeProject ?? null,
+        threadWorktreePath: activeThread?.worktreePath ?? null,
+      }),
+    [activeProject, activeThread?.worktreePath],
+  );
+  const workspaceHasMembers = workspaceRepos.some((repo) => repo.kind === "member");
+  const memberBranchesQuery = useEnvironmentQuery(
+    workspaceHasMembers && activeThread
+      ? vcsEnvironment.memberBranches({
+          environmentId: activeThread.environmentId,
+          input: { projectId: activeThread.projectId, threadId: activeThread.id },
+        })
+      : null,
+  );
+  const contestedMembers = useMemo(
+    () =>
+      selectContestedMembers({
+        reports: memberBranchesQuery.data?.reports ?? [],
+        repos: workspaceRepos,
+      }),
+    [memberBranchesQuery.data, workspaceRepos],
+  );
+  const activeContestedMembersKey = contestedMembersKey(activeThread?.id ?? null, contestedMembers);
+  const [revealedContestedMembersKey, setRevealedContestedMembersKey] = useState<string | null>(
+    null,
+  );
+  const [, setContestedMembersDismissTick] = useState(0);
+  const showContestedMembersBanner = shouldShowComposerIntentBanner({
+    hasCondition: activeContestedMembersKey !== null,
+    isDismissed: isContestedMembersDismissedForSession(activeContestedMembersKey),
+    composerHasContent: composerHasDraftContent,
+    wasShownForCurrentCondition:
+      revealedContestedMembersKey !== null &&
+      revealedContestedMembersKey === activeContestedMembersKey,
+  });
+  useEffect(() => {
+    setRevealedContestedMembersKey((revealed) => {
+      if (showContestedMembersBanner) return activeContestedMembersKey;
+      return revealed !== null && revealed !== activeContestedMembersKey ? null : revealed;
+    });
+  }, [activeContestedMembersKey, showContestedMembersBanner]);
   const handleSwitchCheckoutToThread = useCallback(async () => {
     if (
       !activeProjectCwd ||
@@ -4300,13 +4362,32 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
+  const contestedMembersBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!showContestedMembersBanner || activeContestedMembersKey === null) return null;
+    const described = describeContestedMembers(contestedMembers);
+    if (described === null) return null;
+    return {
+      id: `workspace-members-contested:${activeContestedMembersKey}`,
+      variant: "warning",
+      icon: <TriangleAlertIcon />,
+      title: described.title,
+      description: described.description,
+      dismissLabel: "Dismiss shared repository warning",
+      onDismiss: () => {
+        dismissContestedMembersForSession(activeContestedMembersKey);
+        setContestedMembersDismissTick((tick) => tick + 1);
+      },
+    };
+  }, [activeContestedMembersKey, contestedMembers, showContestedMembersBanner]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const contestedItems = contestedMembersBannerItem === null ? [] : [contestedMembersBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...systemComposerBannerItems, ...parkedThreadItems];
+      return [...systemComposerBannerItems, ...contestedItems, ...parkedThreadItems];
     }
     return [
       ...systemComposerBannerItems,
+      ...contestedItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
         variant: "info",
@@ -4350,6 +4431,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    contestedMembersBannerItem,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,

@@ -28,7 +28,7 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
-  shouldShowBranchMismatchBanner,
+  shouldShowComposerIntentBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -357,34 +357,34 @@ describe("branchMismatchKey", () => {
   });
 });
 
-describe("shouldShowBranchMismatchBanner", () => {
+describe("shouldShowComposerIntentBanner", () => {
   const base = {
-    hasMismatch: true,
+    hasCondition: true,
     isDismissed: false,
     composerHasContent: false,
-    wasShownForCurrentMismatch: false,
+    wasShownForCurrentCondition: false,
   };
 
   it("stays hidden during passive browsing (even though the composer autofocuses)", () => {
-    expect(shouldShowBranchMismatchBanner(base)).toBe(false);
+    expect(shouldShowComposerIntentBanner(base)).toBe(false);
   });
 
   it("shows once the composer has draft content", () => {
-    expect(shouldShowBranchMismatchBanner({ ...base, composerHasContent: true })).toBe(true);
+    expect(shouldShowComposerIntentBanner({ ...base, composerHasContent: true })).toBe(true);
   });
 
-  it("stays mounted after the draft clears once shown for the current mismatch", () => {
-    expect(shouldShowBranchMismatchBanner({ ...base, wasShownForCurrentMismatch: true })).toBe(
+  it("stays mounted after the draft clears once shown for the current condition", () => {
+    expect(shouldShowComposerIntentBanner({ ...base, wasShownForCurrentCondition: true })).toBe(
       true,
     );
   });
 
-  it("never shows when dismissed or without a mismatch", () => {
+  it("never shows when dismissed or without the condition", () => {
     expect(
-      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, isDismissed: true }),
+      shouldShowComposerIntentBanner({ ...base, composerHasContent: true, isDismissed: true }),
     ).toBe(false);
     expect(
-      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
+      shouldShowComposerIntentBanner({ ...base, composerHasContent: true, hasCondition: false }),
     ).toBe(false);
   });
 });
