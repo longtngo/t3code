@@ -28,6 +28,7 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
+  shouldAbortSendBeforeOfflineQueue,
   shouldShowComposerIntentBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -732,5 +733,54 @@ describe("canQueueOfflineTurn", () => {
     // The server reads a turn's runtime/interaction mode from the THREAD; a
     // queued replay skips the settings sync, so it would run in the old mode.
     expect(canQueueOfflineTurn({ ...queueable, modesMatchThread: false })).toBe(false);
+  });
+});
+
+describe("shouldAbortSendBeforeOfflineQueue", () => {
+  const sendable = {
+    hasActiveThread: true,
+    isSendBusy: false,
+    isConnecting: false,
+    threadDetailLoading: false,
+    sendInFlight: false,
+    environmentUnavailable: false,
+    hasDirectAnnotation: false,
+  };
+
+  it("does not abort a plain send while the environment is unavailable", () => {
+    // The regression this pins: an unavailable environment is the offline
+    // outbox's whole reason to exist, and the queue branch sits further down
+    // the same function. Aborting here makes the outbox unreachable while
+    // every canQueueOfflineTurn test above keeps passing.
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, environmentUnavailable: true })).toBe(
+      false,
+    );
+  });
+
+  it("aborts a direct annotation while the environment is unavailable", () => {
+    // An annotation carries an image and a preview payload, which
+    // canQueueOfflineTurn refuses anyway; it stays on the draft instead.
+    expect(
+      shouldAbortSendBeforeOfflineQueue({
+        ...sendable,
+        environmentUnavailable: true,
+        hasDirectAnnotation: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not abort a direct annotation while the environment is available", () => {
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, hasDirectAnnotation: true })).toBe(
+      false,
+    );
+  });
+
+  it("aborts on every non-connectivity reason", () => {
+    expect(shouldAbortSendBeforeOfflineQueue(sendable)).toBe(false);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, hasActiveThread: false })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isSendBusy: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isConnecting: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, sendInFlight: true })).toBe(true);
   });
 });

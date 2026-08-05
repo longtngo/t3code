@@ -620,6 +620,41 @@ export function canQueueOfflineTurn(input: {
 export type OfflineQueueInput = Parameters<typeof canQueueOfflineTurn>[0];
 
 /**
+ * Whether `onSend` must return before it reaches the offline-queue branch.
+ *
+ * This exists as a named predicate rather than an inline `if` because an
+ * unavailable environment is deliberately NOT a reason to bail: bailing is
+ * exactly what the offline outbox exists to prevent, and the queue branch sits
+ * further down the same function. An upstream reconcile silently re-added
+ * `activeEnvironmentUnavailable` to that inline guard once (756b9c9af), which
+ * made the whole outbox unreachable while every one of its unit tests kept
+ * passing — the queue logic was covered, its REACHABILITY was not. The tests
+ * on this function are that missing coverage.
+ *
+ * The one offline case that still bails is a direct annotation: it carries an
+ * image and a preview payload that `canQueueOfflineTurn` refuses anyway, so it
+ * stays attached to the draft and the caller explains that with a toast.
+ */
+export function shouldAbortSendBeforeOfflineQueue(input: {
+  readonly hasActiveThread: boolean;
+  readonly isSendBusy: boolean;
+  readonly isConnecting: boolean;
+  readonly threadDetailLoading: boolean;
+  readonly sendInFlight: boolean;
+  readonly environmentUnavailable: boolean;
+  readonly hasDirectAnnotation: boolean;
+}): boolean {
+  return (
+    !input.hasActiveThread ||
+    input.isSendBusy ||
+    input.isConnecting ||
+    input.threadDetailLoading ||
+    input.sendInFlight ||
+    (input.environmentUnavailable && input.hasDirectAnnotation)
+  );
+}
+
+/**
  * Why a disconnected send could not be queued, in the user's terms. The send
  * control stays enabled while offline so a message is never swallowed by a dead
  * button, which means every refusal has to explain itself.

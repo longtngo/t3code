@@ -304,6 +304,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldAbortSendBeforeOfflineQueue,
   shouldWriteThreadErrorToCurrentServerThread,
   startNewThreadForProject,
   waitForStartedServerThread,
@@ -4868,16 +4869,20 @@ function ChatViewContent(props: ChatViewProps) {
       );
     };
     if (
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      threadDetailLoading ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
+      shouldAbortSendBeforeOfflineQueue({
+        hasActiveThread: activeThread !== null && activeThread !== undefined,
+        isSendBusy,
+        isConnecting,
+        threadDetailLoading,
+        sendInFlight: sendInFlightRef.current,
+        environmentUnavailable: activeEnvironmentUnavailable,
+        hasDirectAnnotation: directAnnotation !== undefined,
+      })
     ) {
       notifyDirectAnnotationAttached();
       return;
     }
+    if (!activeThread) return;
     if (activePendingProgress) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
