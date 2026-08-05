@@ -250,9 +250,6 @@ export function trustedReadErrorMessage(
     | WorkspaceFileSystem.WorkspaceFileSystemError
     | WorkspacePaths.WorkspacePathOutsideRootError,
 ): string {
-  if (error._tag === "WorkspaceReadOutsideSandboxError") {
-    return `'${path}' is outside the folders this environment may read.`;
-  }
   const cause = "cause" in error ? (error.cause as { code?: unknown } | null | undefined) : null;
   const code = typeof cause?.code === "string" ? cause.code : null;
   if (code === "ENOENT") return `File not found: '${path}'.`;
@@ -292,8 +289,6 @@ function projectFileFailureContext(
       return { failure: "path_not_file", resolvedPath: error.resolvedPath };
     case "WorkspaceBinaryFileError":
       return { failure: "binary_file", resolvedPath: error.resolvedPath };
-    case "WorkspaceReadOutsideSandboxError":
-      return { failure: "outside_sandbox", resolvedPath: error.resolvedPath };
     default:
       return unexpectedCompatibilityError(error);
   }

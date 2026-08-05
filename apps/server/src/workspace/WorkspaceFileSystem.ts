@@ -23,7 +23,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { allowedReadRoots, isWithinAllowedRoots } from "./readAccess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 
@@ -94,24 +93,11 @@ export class WorkspaceBinaryFileError extends Schema.TaggedErrorClass<WorkspaceB
   }
 }
 
-export class WorkspaceReadOutsideSandboxError extends Schema.TaggedErrorClass<WorkspaceReadOutsideSandboxError>()(
-  "WorkspaceReadOutsideSandboxError",
-  {
-    requestedPath: Schema.String,
-    resolvedPath: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Path '${this.requestedPath}' resolves outside the allowed read sandbox (home / temp / trusted roots): ${this.resolvedPath}`;
-  }
-}
-
 export const WorkspaceFileSystemError = Schema.Union([
   WorkspaceFileSystemOperationError,
   WorkspaceFilePathEscapeError,
   WorkspacePathNotFileError,
   WorkspaceBinaryFileError,
-  WorkspaceReadOutsideSandboxError,
 ]);
 export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
 
@@ -127,9 +113,9 @@ export class WorkspaceFileSystem extends Context.Service<
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
     /**
-     * Read a UTF-8 text file by ABSOLUTE path, sandboxed to home / OS-temp /
-     * trusted roots (readAccess). The viewer path for files outside any open
-     * workspace (e.g. `~/reports/...`). Rejects anything outside the sandbox.
+     * Read a UTF-8 text file by ABSOLUTE path — the viewer path for files
+     * outside any open workspace (e.g. `~/reports/...`, `/tmp/...`). Any file
+     * the server process can read is allowed; only binaries are refused.
      */
     readonly readTrustedFile: (
       input: ProjectReadTrustedFileInput,
@@ -285,30 +271,18 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  // allowedReadRoots() takes no client-supplied roots — only home + OS-temp are
-  // trusted here. Resolve their realpaths too so the macOS /var/folders →
-  // /private/var/folders (and /tmp → /private/tmp) aliases match either form.
-  const realPathOrSelf = (p: string) =>
-    Effect.tryPromise(() => NodeFSP.realpath(p)).pipe(Effect.orElseSucceed(() => p));
-
   const readTrustedFile: WorkspaceFileSystem["Service"]["readTrustedFile"] = Effect.fn(
     "WorkspaceFileSystem.readTrustedFile",
   )(function* (input) {
-    const baseRoots = allowedReadRoots();
-    const baseRealRoots = yield* Effect.forEach(baseRoots, realPathOrSelf);
-    const roots = [...baseRoots, ...baseRealRoots];
-
-    // Lexical gate FIRST, before any filesystem access, so a path outside the
-    // sandbox is rejected without leaking whether it exists.
-    if (!isWithinAllowedRoots(input.path, roots)) {
-      return yield* new WorkspaceReadOutsideSandboxError({
-        requestedPath: input.path,
-        resolvedPath: input.path,
-      });
-    }
-
-    // Symlink-escape gate: a link inside an allowed root can still point outside
-    // it, so re-check the realpath'd target against the realpath'd roots.
+    // No path sandbox: any file the server process can read is readable here.
+    //
+    // There used to be a home + `os.tmpdir()` allowlist, but it denied ordinary
+    // paths the user expected to open — notably `/tmp/...`, which on darwin is
+    // `/private/tmp` while `os.tmpdir()` is `/var/folders/.../T` — while barely
+    // narrowing what a caller could reach, since all of `$HOME` (every dotfile,
+    // key, and `.env` under it) was already inside the allowlist. What keeps
+    // this to *text* is the NUL-byte guard in `readFile` below; what keeps it
+    // authorized is the `orchestration:read` scope on the calling RPCs.
     const realTargetPath = yield* Effect.tryPromise({
       try: () => NodeFSP.realpath(input.path),
       catch: (cause) =>
@@ -321,16 +295,10 @@ export const make = Effect.gen(function* () {
           cause,
         }),
     });
-    if (!isWithinAllowedRoots(realTargetPath, roots)) {
-      return yield* new WorkspaceReadOutsideSandboxError({
-        requestedPath: input.path,
-        resolvedPath: realTargetPath,
-      });
-    }
 
     // Delegate to the proven cwd-relative reader (open/stat/binary-guard/decode)
     // against the realpath's own directory, so its escape check is trivially
-    // satisfied and the sandbox gates above are the sole authorization.
+    // satisfied.
     return yield* readFile({
       cwd: path.dirname(realTargetPath),
       relativePath: path.basename(realTargetPath),
