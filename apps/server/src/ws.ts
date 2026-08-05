@@ -139,6 +139,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import { enableWebSocketKeepAlive } from "./wsKeepAlive.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -2568,6 +2569,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ),
           ),
         );
+        // Must happen before the upgrade: afterwards the socket belongs to the
+        // `ws` library inside the platform layer and application code can no
+        // longer reach it. Without this a peer that vanishes without a FIN/RST
+        // holds this connection's scope — session, subscriptions, drain pumps —
+        // for the lifetime of the process.
+        if (!enableWebSocketKeepAlive(request)) {
+          yield* Effect.logWarning(
+            "websocket upgrade exposed no socket; TCP keepalive is not enabled and a silently dead peer will not be reclaimed",
+          );
+        }
+
         const offeredExtensions = request.headers["sec-websocket-extensions"] ?? "(none)";
         const upgradeShape = `${request.headers.host ?? "(no host)"} ${offeredExtensions}`;
         const alreadyReported = yield* Ref.modify(reportedUpgradeShapes, (seen) => {
