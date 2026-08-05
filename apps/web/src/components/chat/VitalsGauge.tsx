@@ -12,6 +12,9 @@ import {
   type UsageWindowView,
   clampPct,
   computeWindowPace,
+  fullnessArc,
+  windowArc,
+  type VitalsGaugeArc,
   FIVE_HOUR_MS,
   GAUGE_MIRROR_TRANSFORM,
   GAUGE_RINGS,
@@ -35,10 +38,12 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 // ---------------------------------------------------------------------------
 
 /** One right-side half-ring (track + optional severity-colored fill). */
-function HalfArc(props: { r: number; pct: number | null; mirror?: boolean }) {
-  const { trackD, fillD } = rightHalfArc(props.r, props.pct);
-  const fillStroke =
-    props.pct === null ? undefined : SEVERITY_STROKE[vitalsLevel(clampPct(props.pct))];
+function HalfArc(props: { r: number; arc: VitalsGaugeArc; mirror?: boolean }) {
+  const { trackD, fillD } = rightHalfArc(props.r, props.arc.pct);
+  // The severity travels on the arc rather than being re-derived from `pct`
+  // here: a usage window is coloured by pace, not fullness, and deriving it at
+  // draw time is exactly how this glyph drifted from the detail panel.
+  const fillStroke = props.arc.level === null ? undefined : SEVERITY_STROKE[props.arc.level];
   const paths = (
     <>
       <path
@@ -63,13 +68,14 @@ function HalfArc(props: { r: number; pct: number | null; mirror?: boolean }) {
 }
 
 export interface VitalsGaugeInputs {
-  /** Context fullness 0–100, or null when no snapshot yet. */
-  readonly context: number | null;
-  readonly fiveHour: number | null;
-  readonly sevenDay: number | null;
-  readonly cpu: number | null;
-  readonly gpu: number | null;
-  readonly mem: number | null;
+  /** Context fullness, or a null arc when there is no snapshot yet. */
+  readonly context: VitalsGaugeArc;
+  /** Rolling windows: swept by usage, coloured by pace (see {@link windowArc}). */
+  readonly fiveHour: VitalsGaugeArc;
+  readonly sevenDay: VitalsGaugeArc;
+  readonly cpu: VitalsGaugeArc;
+  readonly gpu: VitalsGaugeArc;
+  readonly mem: VitalsGaugeArc;
 }
 
 /**
@@ -89,12 +95,12 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
       aria-hidden="true"
       className="transform-gpu"
     >
-      <HalfArc r={GAUGE_RINGS.outer} pct={context} mirror />
-      <HalfArc r={GAUGE_RINGS.outer} pct={cpu} />
-      <HalfArc r={GAUGE_RINGS.middle} pct={fiveHour} mirror />
-      <HalfArc r={GAUGE_RINGS.middle} pct={gpu} />
-      <HalfArc r={GAUGE_RINGS.inner} pct={sevenDay} mirror />
-      <HalfArc r={GAUGE_RINGS.inner} pct={mem} />
+      <HalfArc r={GAUGE_RINGS.outer} arc={context} mirror />
+      <HalfArc r={GAUGE_RINGS.outer} arc={cpu} />
+      <HalfArc r={GAUGE_RINGS.middle} arc={fiveHour} mirror />
+      <HalfArc r={GAUGE_RINGS.middle} arc={gpu} />
+      <HalfArc r={GAUGE_RINGS.inner} arc={sevenDay} mirror />
+      <HalfArc r={GAUGE_RINGS.inner} arc={mem} />
     </svg>
   );
 }
@@ -414,12 +420,15 @@ function DetailRow(props: { label: string; value: string }) {
 
 function describeInputs(inputs: VitalsGaugeInputs): string {
   const parts: string[] = [];
-  if (inputs.context !== null) parts.push(`context ${Math.round(inputs.context)}%`);
-  if (inputs.fiveHour !== null) parts.push(`5-hour ${Math.round(inputs.fiveHour)}%`);
-  if (inputs.sevenDay !== null) parts.push(`7-day ${Math.round(inputs.sevenDay)}%`);
-  if (inputs.cpu !== null) parts.push(`CPU ${Math.round(inputs.cpu)}%`);
-  if (inputs.gpu !== null) parts.push(`GPU ${Math.round(inputs.gpu)}%`);
-  if (inputs.mem !== null) parts.push(`memory ${Math.round(inputs.mem)}%`);
+  const push = (label: string, arc: VitalsGaugeArc) => {
+    if (arc.pct !== null) parts.push(`${label} ${Math.round(arc.pct)}%`);
+  };
+  push("context", inputs.context);
+  push("5-hour", inputs.fiveHour);
+  push("7-day", inputs.sevenDay);
+  push("CPU", inputs.cpu);
+  push("GPU", inputs.gpu);
+  push("memory", inputs.mem);
   return parts.length ? `Vitals — ${parts.join(", ")}` : "Vitals";
 }
 
@@ -469,16 +478,18 @@ export function VitalsGauge(props: {
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
-  // Only advance the pace clock while the detail is open — the icon doesn't
-  // depend on `now`, and the popup unmounts when closed.
-  const now = useNow(30_000, open);
+  // The pace clock has to run even while the detail is closed: the icon colours
+  // its two window arcs by pace, and pace is a function of how much of the
+  // window's clock has elapsed. Leaving it frozen would let the glyph keep
+  // showing a severity the panel no longer agrees with.
+  const now = useNow(30_000, true);
   const inputs: VitalsGaugeInputs = {
-    context: context?.usedPercentage ?? null,
-    fiveHour: accountUsage?.fiveHour?.utilization ?? null,
-    sevenDay: accountUsage?.sevenDay?.utilization ?? null,
-    cpu: host.sample?.cpu.pct ?? null,
-    gpu: host.sample?.gpu?.pct ?? null,
-    mem: host.sample?.mem.pct ?? null,
+    context: fullnessArc(context?.usedPercentage ?? null),
+    fiveHour: windowArc(accountUsage?.fiveHour, FIVE_HOUR_MS, now),
+    sevenDay: windowArc(accountUsage?.sevenDay, SEVEN_DAY_MS, now),
+    cpu: fullnessArc(host.sample?.cpu.pct ?? null),
+    gpu: fullnessArc(host.sample?.gpu?.pct ?? null),
+    mem: fullnessArc(host.sample?.mem.pct ?? null),
   };
 
   return (

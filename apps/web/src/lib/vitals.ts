@@ -329,6 +329,43 @@ export function windowSeverity(pace: WindowPace): Severity {
   return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff);
 }
 
+/**
+ * One gauge arc: how far it sweeps, and what colour it is.
+ *
+ * The two are NOT the same question, and conflating them is what made the icon
+ * disagree with the detail panel: a usage window sweeps by fullness but is
+ * coloured by *pace*, so a window at 74% that is comfortably under pace reads
+ * green in the panel while colouring it by fullness alone would paint it
+ * yellow. Carrying the severity on the arc — rather than re-deriving it from
+ * the percentage at draw time — is what keeps the two surfaces from drifting.
+ */
+export interface VitalsGaugeArc {
+  /** Sweep, 0–100, or null when there is no reading yet. */
+  readonly pct: number | null;
+  /** Fill colour, or null when there is nothing to fill. */
+  readonly level: Severity | null;
+}
+
+/** An arc whose colour is absolute fullness: context and host resources. */
+export function fullnessArc(pct: number | null): VitalsGaugeArc {
+  return pct === null ? { pct: null, level: null } : { pct, level: vitalsLevel(clampPct(pct)) };
+}
+
+/**
+ * An arc for a rolling usage window: swept by usage, coloured by pace — the
+ * same `computeWindowPace` → `windowSeverity` pair the detail panel's row uses,
+ * so the glyph and the row cannot report different severities for one window.
+ */
+export function windowArc(
+  window: UsageWindowView | null | undefined,
+  windowMs: number | null,
+  nowMs: number,
+): VitalsGaugeArc {
+  if (!window) return { pct: null, level: null };
+  const pace = computeWindowPace(window, windowMs, nowMs);
+  return { pct: pace.usage, level: windowSeverity(pace) };
+}
+
 /** Signed pace label, e.g. "on pace", "4% under pace", "+57% over pace". */
 export function paceDiffLabel(diff: number): string {
   if (diff === 0) return "on pace";

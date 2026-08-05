@@ -4,7 +4,13 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ContextWindowSnapshot } from "~/lib/contextWindow";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import type { AccountUsageView } from "~/lib/vitals";
-import { FIVE_HOUR_MS } from "~/lib/vitals";
+import {
+  FIVE_HOUR_MS,
+  SEVERITY_STROKE,
+  fullnessArc,
+  vitalsLevel,
+  windowArc,
+} from "~/lib/vitals";
 import { MachineDetailList, VitalsDetail, VitalsGauge, VitalsGaugeIcon } from "./VitalsGauge";
 
 function countPaths(markup: string): number {
@@ -41,10 +47,26 @@ const sample: HostMetricsSample = {
 };
 
 describe("VitalsGaugeIcon", () => {
+  const NO_ARCS = {
+    context: { pct: null, level: null },
+    fiveHour: { pct: null, level: null },
+    sevenDay: { pct: null, level: null },
+    cpu: { pct: null, level: null },
+    gpu: { pct: null, level: null },
+    mem: { pct: null, level: null },
+  } as const;
+
   it("renders a track for every ring half and a fill for each non-null metric", () => {
     const markup = renderToStaticMarkup(
       <VitalsGaugeIcon
-        inputs={{ context: 40, fiveHour: 60, sevenDay: 30, cpu: 22, gpu: 44, mem: 50 }}
+        inputs={{
+          context: fullnessArc(40),
+          fiveHour: fullnessArc(60),
+          sevenDay: fullnessArc(30),
+          cpu: fullnessArc(22),
+          gpu: fullnessArc(44),
+          mem: fullnessArc(50),
+        }}
       />,
     );
     // 6 halves × (track + fill) = 12 paths when every metric is present.
@@ -52,13 +74,38 @@ describe("VitalsGaugeIcon", () => {
   });
 
   it("omits the fill path for a null metric (track only)", () => {
-    const markup = renderToStaticMarkup(
-      <VitalsGaugeIcon
-        inputs={{ context: null, fiveHour: null, sevenDay: null, cpu: null, gpu: null, mem: null }}
-      />,
-    );
+    const markup = renderToStaticMarkup(<VitalsGaugeIcon inputs={NO_ARCS} />);
     // 6 tracks, no fills.
     expect(countPaths(markup)).toBe(6);
+  });
+
+  it("colours an under-pace window by pace, matching the detail row, not by fullness", () => {
+    // The reported mismatch: a 5-hour window 74% used but 22% UNDER pace reads
+    // green in the detail panel, while colouring by fullness alone paints it
+    // yellow (vitalsLevel(74) === "warn"). Only the 5-hour arc is populated so
+    // the asserted stroke can only have come from it.
+    const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    // 4% of the window's clock left => projection 96%; 74 − 96 = −22 => "ok".
+    const resetsAt = new Date(now + FIVE_HOUR_MS * 0.04).toISOString();
+    const arc = windowArc({ utilization: 74, resetsAt }, FIVE_HOUR_MS, now);
+
+    expect(arc).toEqual({ pct: 74, level: "ok" });
+    expect(vitalsLevel(74)).toBe("warn");
+
+    const markup = renderToStaticMarkup(<VitalsGaugeIcon inputs={{ ...NO_ARCS, fiveHour: arc }} />);
+    expect(markup).toContain(SEVERITY_STROKE.ok);
+    expect(markup).not.toContain(SEVERITY_STROKE.warn);
+  });
+
+  it("still colours a window by fullness when there is no pace projection", () => {
+    // No `resetsAt` => no projection => windowSeverity falls back to fullness,
+    // so this path must keep behaving exactly as it did before.
+    const arc = windowArc({ utilization: 74, resetsAt: null }, FIVE_HOUR_MS, Date.now());
+
+    expect(arc).toEqual({ pct: 74, level: "warn" });
+
+    const markup = renderToStaticMarkup(<VitalsGaugeIcon inputs={{ ...NO_ARCS, fiveHour: arc }} />);
+    expect(markup).toContain(SEVERITY_STROKE.warn);
   });
 });
 
