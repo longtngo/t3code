@@ -67,6 +67,9 @@ import Migration0038 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts
 // the id is 39 because 38 is already taken by the entry above.
 import Migration0039 from "./Migrations/038_ProjectionProjectMembers.ts";
 import Migration0040 from "./Migrations/039_ProjectionCheckpointMemberStates.ts";
+// Upstream's 036 (thread pinning) arrives after the fork already deployed ids
+// 33-40, so it takes the next free id (41) rather than its filename number.
+import Migration0041 from "./Migrations/036_ProjectionThreadsPinned.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -118,6 +121,7 @@ export const migrationEntries = [
   [38, "ProjectionThreadTitleRegeneration", Migration0038],
   [39, "ProjectionProjectMembers", Migration0039],
   [40, "ProjectionCheckpointMemberStates", Migration0040],
+  [41, "ProjectionThreadsPinned", Migration0041],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
