@@ -346,9 +346,24 @@ export interface VitalsGaugeArc {
   readonly level: Severity | null;
 }
 
+/**
+ * The single percentage a surface both DISPLAYS and colours by.
+ *
+ * Every reading is shown rounded, so the severity has to be bucketed from the
+ * rounded value too — otherwise a reading of 50.4 renders as "50%" (which
+ * `vitalsLevel` calls green) while colouring itself from 50.4 (which it calls
+ * yellow), and the number disagrees with its own colour. Round once, here, and
+ * derive both from the result.
+ */
+export function readingPct(pct: number): number {
+  return Math.round(clampPct(pct));
+}
+
 /** An arc whose colour is absolute fullness: context and host resources. */
 export function fullnessArc(pct: number | null): VitalsGaugeArc {
-  return pct === null ? { pct: null, level: null } : { pct, level: vitalsLevel(clampPct(pct)) };
+  if (pct === null || !Number.isFinite(pct)) return { pct: null, level: null };
+  const reading = readingPct(pct);
+  return { pct: reading, level: vitalsLevel(reading) };
 }
 
 /**

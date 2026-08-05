@@ -97,6 +97,26 @@ describe("VitalsGaugeIcon", () => {
     expect(markup).not.toContain(SEVERITY_STROKE.warn);
   });
 
+  it("buckets the rounded reading, so a fraction over a boundary is not yellow at 50%", () => {
+    // The reported split: context at 50.4 renders "50%" in the panel — which
+    // rounds first and calls it green — while the glyph bucketed 50.4 and
+    // painted it yellow. Both must now read the same number.
+    const arc = fullnessArc(50.4);
+
+    expect(arc).toEqual({ pct: 50, level: "ok" });
+    expect(vitalsLevel(50.4)).toBe("warn"); // what the glyph used to use
+
+    const markup = renderToStaticMarkup(<VitalsGaugeIcon inputs={{ ...NO_ARCS, context: arc }} />);
+    expect(markup).toContain(SEVERITY_STROKE.ok);
+    expect(markup).not.toContain(SEVERITY_STROKE.warn);
+  });
+
+  it("still crosses a boundary once the rounded reading crosses it", () => {
+    // Guard against "fix" by clamping: 50.6 rounds to 51, which is genuinely
+    // past the ≤50 green bucket and must stay yellow.
+    expect(fullnessArc(50.6)).toEqual({ pct: 51, level: "warn" });
+  });
+
   it("still colours a window by fullness when there is no pace projection", () => {
     // No `resetsAt` => no projection => windowSeverity falls back to fullness,
     // so this path must keep behaving exactly as it did before.
