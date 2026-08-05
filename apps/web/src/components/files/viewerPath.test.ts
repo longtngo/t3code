@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { absolutePathFromViewerSplat, viewerSplatFromPath } from "./viewerPath";
+import {
+  absolutePathFromViewerSplat,
+  resolveAddressBarCommit,
+  resolveViewerNavigation,
+  viewerSplatFromPath,
+} from "./viewerPath";
 
 
 describe("absolutePathFromViewerSplat", () => {
@@ -19,6 +24,55 @@ describe("absolutePathFromViewerSplat", () => {
     expect(absolutePathFromViewerSplat(null)).toBeNull();
     expect(absolutePathFromViewerSplat("/")).toBeNull();
     expect(absolutePathFromViewerSplat("///")).toBeNull();
+  });
+});
+
+describe("resolveAddressBarCommit", () => {
+  const loaded = { value: "/Users/me/report.md", reverting: false };
+
+  it("submits a path the user actually changed", () => {
+    expect(resolveAddressBarCommit({ ...loaded, draft: "/Users/me/other.md" })).toEqual({
+      kind: "submit",
+      path: "/Users/me/other.md",
+    });
+  });
+
+  it("trims before deciding, so trailing whitespace is not a new path", () => {
+    expect(resolveAddressBarCommit({ ...loaded, draft: "  /Users/me/report.md  " })).toEqual({
+      kind: "revert",
+    });
+  });
+
+  it("reverts an emptied field instead of asking the viewer to open nothing", () => {
+    expect(resolveAddressBarCommit({ ...loaded, draft: "   " })).toEqual({ kind: "revert" });
+  });
+
+  it("reverts when Escape ended the edit, even though the draft differs", () => {
+    // Escape and focus loss both end the edit through the same blur, so without
+    // this flag abandoning an edit would commit it.
+    expect(
+      resolveAddressBarCommit({ ...loaded, draft: "/Users/me/other.md", reverting: true }),
+    ).toEqual({ kind: "revert" });
+  });
+});
+
+describe("resolveViewerNavigation", () => {
+  it("returns the splat to navigate to", () => {
+    expect(resolveViewerNavigation("/Users/me/x.md", "Users/me/report.md")).toBe("Users/me/x.md");
+  });
+
+  it("declines a path the viewer is already showing", () => {
+    // Navigating to the current location pushes a history entry that goes
+    // nowhere, so Back stops working as the user expects.
+    expect(resolveViewerNavigation("/Users/me/report.md", "Users/me/report.md")).toBeNull();
+  });
+
+  it("declines a relative path the route cannot express", () => {
+    expect(resolveViewerNavigation("report.md", "Users/me/report.md")).toBeNull();
+  });
+
+  it("navigates from a viewer that has nothing open", () => {
+    expect(resolveViewerNavigation("/Users/me/x.md", undefined)).toBe("Users/me/x.md");
   });
 });
 
