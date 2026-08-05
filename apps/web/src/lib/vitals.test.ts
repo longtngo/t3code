@@ -90,6 +90,7 @@ describe("deriveLatestAccountUsage", () => {
       fiveHour: { utilization: 88, resetsAt: "2026-07-27T02:00:00.000Z" },
       sevenDay: { utilization: 41, resetsAt: "2026-08-01T00:00:00.000Z" },
       extraWindows: [],
+      balances: [],
     });
   });
 
@@ -100,7 +101,7 @@ describe("deriveLatestAccountUsage", () => {
         sevenDay: "nonsense",
       }),
     ]);
-    expect(view).toEqual({ fiveHour: null, sevenDay: null, extraWindows: [] });
+    expect(view).toEqual({ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] });
   });
 
   it("coerces a non-string resetsAt to null but keeps utilization", () => {
@@ -114,6 +115,7 @@ describe("deriveLatestAccountUsage", () => {
       fiveHour: { utilization: 33, resetsAt: null },
       sevenDay: null,
       extraWindows: [],
+      balances: [],
     });
   });
 
@@ -284,5 +286,112 @@ describe("rightHalfArc", () => {
 
   it("floors a tiny sweep so a rounded cap still renders", () => {
     expect(rightHalfArc(18.5, 0.01).fillD).not.toBeNull();
+  });
+});
+
+describe("deriveLatestAccountUsage balances", () => {
+  const usageActivity = (payload: unknown) => [makeActivity("a", "account.usage.updated", payload)];
+
+  it("surfaces Cursor on-demand spend as a balance, not a window", () => {
+    // A window implies a reset time and therefore a pace. Spend has neither, and
+    // rendering it with a pace bar would claim a deadline that does not exist.
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        cursor: {
+          auto: null,
+          api: null,
+          total: null,
+          onDemand: { used: 12.5, limit: 50, utilization: 25, currency: "USD" },
+        },
+      }),
+    );
+
+    expect(view?.extraWindows).toEqual([]);
+    expect(view?.balances).toEqual([
+      { label: "Cursor on-demand", detail: "$12.50 of $50.00", utilization: 25 },
+    ]);
+  });
+
+  it("names a team-scoped on-demand budget as the team's", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        cursor: {
+          auto: null,
+          api: null,
+          total: null,
+          onDemand: { used: 3, limit: null, utilization: 0, currency: null },
+          onDemandScope: "team",
+        },
+      }),
+    );
+
+    expect(view?.balances[0]?.label).toBe("Cursor on-demand (team)");
+    expect(view?.balances[0]?.detail).toBe("3");
+  });
+
+  it("surfaces the enterprise request bucket", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        cursor: {
+          auto: null,
+          api: null,
+          total: null,
+          onDemand: null,
+          requests: { used: 120, limit: 500, utilization: 24 },
+        },
+      }),
+    );
+
+    expect(view?.balances).toEqual([
+      { label: "Cursor requests", detail: "120 of 500", utilization: 24 },
+    ]);
+  });
+
+  it("shows a Codex credits balance exactly as the server formatted it", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        codex: {
+          primary: null,
+          secondary: null,
+          credits: { balance: "$4.20", hasCredits: true, unlimited: false },
+        },
+      }),
+    );
+
+    expect(view?.balances).toEqual([
+      { label: "Codex credits", detail: "$4.20", utilization: null },
+    ]);
+  });
+
+  it("distinguishes an unlimited plan from an exhausted one", () => {
+    const unlimited = deriveLatestAccountUsage(
+      usageActivity({
+        codex: {
+          primary: null,
+          secondary: null,
+          credits: { hasCredits: true, unlimited: true },
+        },
+      }),
+    );
+    const exhausted = deriveLatestAccountUsage(
+      usageActivity({
+        codex: {
+          primary: null,
+          secondary: null,
+          credits: { hasCredits: false, unlimited: false },
+        },
+      }),
+    );
+
+    expect(unlimited?.balances[0]?.detail).toBe("Unlimited");
+    expect(exhausted?.balances[0]?.detail).toBe("None remaining");
+  });
+
+  it("leaves a Claude account with no balance rows at all", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({ fiveHour: { utilization: 10, resetsAt: null }, sevenDay: null }),
+    );
+
+    expect(view?.balances).toEqual([]);
   });
 });
