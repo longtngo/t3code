@@ -104,6 +104,28 @@ export const VcsStatusInput = Schema.Struct({
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
+/**
+ * `localOnly` asks the server not to poll this repository's remote for the
+ * lifetime of the subscription.
+ *
+ * A workspace project watches every attached repository at once so the diff
+ * panel can show which ones changed. Remote status reaches the network, so
+ * subscribing to seven repositories the ordinary way would start seven
+ * periodic fetches — the shape of the fetch storm that once pegged the CPU and
+ * made the backend read as unresponsive. Only the repository the user has
+ * expanded needs ahead/behind counts and pull request state.
+ *
+ * The flag suppresses this subscription's own poller, not remote data as such:
+ * if another subscriber is already polling the same directory, its updates
+ * still arrive here, which is strictly more information and never a fetch this
+ * subscription caused.
+ */
+export const VcsStatusSubscribeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  localOnly: Schema.optional(Schema.Boolean),
+});
+export type VcsStatusSubscribeInput = typeof VcsStatusSubscribeInput.Type;
+
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });

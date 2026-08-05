@@ -474,6 +474,101 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
   });
 
+  // A workspace project subscribes to every attached repository at once. If each
+  // of those subscriptions started a remote poller, seven repositories would mean
+  // seven periodic fetches — the shape of the fetch storm that once pegged the CPU.
+  it.effect("never loads remote status for a local-only subscriber", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      yield* Stream.runForEach(
+        broadcaster.streamStatus(
+          { cwd: "/repo", localOnly: true },
+          { automaticRemoteRefreshInterval: Effect.succeed(Duration.zero) },
+        ),
+        (event) =>
+          event._tag === "snapshot"
+            ? Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore)
+            : Effect.void,
+      ).pipe(Effect.forkIn(scope));
+
+      const snapshot = yield* Deferred.await(snapshotDeferred);
+      assert.deepStrictEqual(snapshot, {
+        _tag: "snapshot",
+        local: baseLocalStatus,
+        remote: null,
+      } satisfies VcsStatusStreamEvent);
+      assert.equal(state.localStatusCalls, 1);
+      assert.equal(state.remoteStatusCalls, 0);
+
+      yield* TestClock.adjust(Duration.minutes(5));
+      assert.equal(state.remoteStatusCalls, 0);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
+  });
+
+  // Retain and release must stay symmetric. A local-only subscriber that released
+  // a poller it never retained would drop the refcount below what the expanded
+  // repository holds and silently stop its polling too.
+  it.effect("leaves another subscriber's remote polling running when a local-only one ends", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const pollingScope = yield* Scope.make();
+      const localOnlyScope = yield* Scope.make();
+      const pollingSnapshot = yield* Deferred.make<VcsStatusStreamEvent>();
+      const localOnlySnapshot = yield* Deferred.make<VcsStatusStreamEvent>();
+
+      yield* Stream.runForEach(
+        broadcaster.streamStatus(
+          { cwd: "/repo" },
+          { automaticRemoteRefreshInterval: Effect.succeed(Duration.minutes(1)) },
+        ),
+        (event) =>
+          event._tag === "snapshot"
+            ? Deferred.succeed(pollingSnapshot, event).pipe(Effect.ignore)
+            : Effect.void,
+      ).pipe(Effect.forkIn(pollingScope));
+      yield* Deferred.await(pollingSnapshot);
+
+      yield* Stream.runForEach(
+        broadcaster.streamStatus({ cwd: "/repo", localOnly: true }),
+        (event) =>
+          event._tag === "snapshot"
+            ? Deferred.succeed(localOnlySnapshot, event).pipe(Effect.ignore)
+            : Effect.void,
+      ).pipe(Effect.forkIn(localOnlyScope));
+      yield* Deferred.await(localOnlySnapshot);
+
+      const callsBeforeClose = state.remoteStatusCalls;
+      yield* Scope.close(localOnlyScope, Exit.void);
+      yield* TestClock.adjust(Duration.minutes(3));
+
+      assert.isAbove(state.remoteStatusCalls, callsBeforeClose);
+
+      yield* Scope.close(pollingScope, Exit.void);
+    }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
+  });
+
   it.effect("retries the initial remote load when periodic refreshes are disabled", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
