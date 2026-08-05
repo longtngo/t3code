@@ -3,7 +3,12 @@ import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 
-import { VcsProcessExitError, VcsProcessSpawnError, VcsProcessTimeoutError } from "@t3tools/contracts";
+import {
+  GitCommandError,
+  VcsProcessExitError,
+  VcsProcessSpawnError,
+  VcsProcessTimeoutError,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_GIT_RETRY_ATTEMPTS,
@@ -15,6 +20,14 @@ const timeoutError = () =>
   new VcsProcessTimeoutError({ operation: "op", command: "git x", cwd: "/tmp", timeoutMs: 30_000 });
 const spawnError = () =>
   new VcsProcessSpawnError({ operation: "op", command: "git x", cwd: "/tmp", cause: "boom" });
+const gitCommandError = (reason: "timeout" | "spawn" | undefined) =>
+  new GitCommandError({
+    operation: "op",
+    command: "git rev-parse",
+    cwd: "/tmp",
+    detail: "d",
+    ...(reason === undefined ? {} : { reason }),
+  });
 const exitError = () =>
   new VcsProcessExitError({ operation: "op", command: "git x", cwd: "/tmp", exitCode: 1, detail: "d" });
 
@@ -36,6 +49,31 @@ describe("isTransientVcsError", () => {
     expect(isTransientVcsError(exitError())).toBe(false);
     expect(isTransientVcsError({ _tag: "VcsOutputDecodeError" })).toBe(false);
     expect(isTransientVcsError({ _tag: "VcsRepositoryDetectionError" })).toBe(false);
+  });
+
+  it("classifies a read-only git command's timeout and spawn failures as transient", () => {
+    // The status and detection paths fail with GitCommandError rather than the
+    // VCS-tagged errors, so before this they were retried by nobody even though
+    // a host-overload timeout is the most retryable failure there is.
+    expect(isTransientVcsError(gitCommandError("timeout"))).toBe(true);
+    expect(isTransientVcsError(gitCommandError("spawn"))).toBe(true);
+  });
+
+  it("does not retry a git command that actually ran and failed", () => {
+    // No reason means it exited non-zero, or it predates the field. Retrying a
+    // real `git` verdict just runs it again for the same answer.
+    expect(isTransientVcsError(gitCommandError(undefined))).toBe(false);
+  });
+
+  it("decides on the reason field, not the human-readable detail", () => {
+    // `detail` is prose and has been reworded before. A guard that reads it
+    // stops guarding the day someone improves the wording.
+    expect(
+      isTransientVcsError({
+        _tag: "GitCommandError",
+        detail: "Git command timed out.",
+      } as never),
+    ).toBe(false);
   });
 });
 

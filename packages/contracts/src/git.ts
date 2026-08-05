@@ -353,6 +353,15 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
   detail: Schema.String,
+  /**
+   * Why the command failed, in a form code can branch on.
+   *
+   * `detail` is prose for a human and has been rewritten more than once;
+   * deciding whether to retry by matching strings against it is how a guard
+   * silently stops guarding. Absent on failures that predate this field and on
+   * an ordinary non-zero exit, neither of which is retryable.
+   */
+  reason: Schema.optional(Schema.Literals(["timeout", "spawn"])),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {

@@ -30,6 +30,7 @@ import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { makeTransientGitRetryPolicy, resolveGitRetryAttempts } from "./gitRetry.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -38,6 +39,23 @@ import {
 import { ServerConfig } from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Shared with the checkpoint capture path; same transient set, same backoff. */
+const transientReadRetryPolicy = makeTransientGitRetryPolicy(resolveGitRetryAttempts());
+
+const retryTransientRead = <A, E extends { readonly _tag: string }, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> => Effect.retry(effect, transientReadRetryPolicy);
+
+/**
+ * How long a terminated git process has to exit before it is killed outright.
+ *
+ * Long enough that an ordinary git handling SIGTERM finishes its own cleanup —
+ * releasing `index.lock` matters, since a killed git leaves it behind and the
+ * next command in that repository fails on it. Short enough that a wedged one
+ * cannot outlast the command timeout it is holding open.
+ */
+const FORCE_KILL_AFTER = "5 seconds";
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
@@ -742,6 +760,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 ...input.env,
                 ...trace2Monitor.env,
               },
+              // The timeout below interrupts this effect, which closes the scope,
+              // which terminates the child and AWAITS its exit. `forceKillAfter`
+              // defaults to undefined — no escalation — so a git wedged in
+              // uninterruptible IO that never handles SIGTERM would hold the
+              // finalizer open, and the timeout that was supposed to bound this
+              // command would never resolve. The retry that timeout exists to
+              // trigger could then never fire either.
+              forceKillAfter: FORCE_KILL_AFTER,
             }),
           )
           .pipe(
@@ -750,6 +776,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 new GitCommandError({
                   ...gitCommandContext(commandInput),
                   detail: "Failed to spawn Git process.",
+                  reason: "spawn",
                   cause,
                 }),
             ),
@@ -827,6 +854,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 new GitCommandError({
                   ...gitCommandContext(commandInput),
                   detail: "Git command timed out.",
+                  reason: "timeout",
                 }),
               ),
             onSome: Effect.succeed,
@@ -2987,9 +3015,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   return GitVcsDriver.GitVcsDriver.of({
     execute,
-    status,
-    statusDetails,
-    statusDetailsLocal,
+    // These read the working tree and nothing else, so re-running one after a
+    // host-overload timeout costs a second read and answers the same question.
+    // A zero-work `rev-parse` is the command that most often times out when the
+    // machine is saturated, and until now nothing on this path retried it —
+    // which is most of the repeated status noise in the log.
+    //
+    // `statusDetailsRemote` is deliberately NOT here: it reaches the network,
+    // and retrying a fetch that timed out under overload is how a slow host
+    // becomes a fetch storm.
+    status: (input) => retryTransientRead(status(input)),
+    statusDetails: (cwd) => retryTransientRead(statusDetails(cwd)),
+    statusDetailsLocal: (cwd) => retryTransientRead(statusDetailsLocal(cwd)),
     statusDetailsRemote,
     prepareCommitContext,
     commit: (cwd, subject, body, options) =>
