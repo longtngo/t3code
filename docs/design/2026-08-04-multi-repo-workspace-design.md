@@ -320,10 +320,11 @@ rather than new machinery.
 ### Files selects
 
 A file tree needs a single root, so Files gets a root selector over
-`[staging, ...members]`. **Search stays scoped to the selected root in v1.** Cross-root
-fan-out would make all seven `WorkspaceSearchIndex` instances resident at up to
-`WORKSPACE_INDEX_MAX_ENTRIES` (25,000) entries each; given this codebase's history with
-memory growth, that is measured before it ships rather than assumed cheap.
+`[staging, ...members]`. **Search stays scoped to the selected root.** The worry when this
+was written was memory — seven `WorkspaceSearchIndex` instances resident at up to
+`WORKSPACE_INDEX_MAX_ENTRIES` (25,000) entries each, in a codebase with a history of memory
+growth. That worry turned out to be wrong, and a different one turned out to be right; see
+[the fan-out measurement](#the-fan-out-measurement).
 
 ### Agent reach
 
@@ -484,5 +485,46 @@ per-repository pull request flow.
 
 ## Open items
 
-- Cross-root search fan-out: measure `WorkspaceSearchIndex` residency and latency across
-  seven roots before enabling it. v1 ships search scoped to the selected root.
+- **Cross-root search fan-out: measured, and declined.** Search stays scoped to the
+  selected root. The measurement is below, because the reason is not the one this
+  design expected.
+
+### The fan-out measurement
+
+Run 2026-08-05 against `FileFinder` with the exact options
+`WorkspaceSearchIndex.createFinder` uses. RSS, not `heapUsed`: the index is a native
+Rust allocation, so a heap gauge reads nearly flat while the process grows.
+
+Two workspaces were measured. The first is the seven real repositories this design
+imagines as members. The second saturates every root at
+`WORKSPACE_INDEX_MAX_ENTRIES` — the case the fear was written about.
+
+| | Entries | RSS over baseline, 7 resident | Slowest cold build | One-root search p95 | Seven-root search p95 |
+|---|---|---|---|---|---|
+| Real repositories | 664–17,572 | 179 MB | 353 ms | 8.7 ms | 34.2 ms |
+| Saturated at the cap | 25,250 each | 298 MB | 535 ms | 4.0 ms | 40.4 ms |
+
+**The memory worry was misplaced.** Even with every root at the entry cap, seven
+resident indexes cost 298 MB — under the server's own steady-state footprint, and
+nowhere near a problem on any machine that runs this. The real repositories do not
+come close to the cap either: `.gitignore` does most of the work, and the largest of
+the seven holds 17,572 entries out of 776,611 files on disk. Nor is this cost new —
+a user who clicks through all seven roots in the Files panel already makes all seven
+indexes resident for the 15 minute idle TTL. Fan-out would make that the default, not
+create it.
+
+**The cost is the event loop.** `mixedSearch` is a synchronous native call, so the
+thread is pinned for its whole duration. Measured directly with a 5 ms timer: a
+seven-root search blocks the loop for 34–38 ms, against 3–5 ms for one root. Path
+search is debounced at 120 ms, so sustained typing in one search box is up to eight
+searches a second — roughly 300 ms of blocked event loop per second of typing, from
+one user, in one panel. That is the same shape as the git-fetch storm that once made
+this backend read as unresponsive, and it is the reason to decline.
+
+So the ceiling is not how many indexes fit in memory. It is how much of the server's
+only thread one keystroke may spend. If cross-root search is ever wanted, the fix
+follows from that: give the fan-out a wall-clock budget the way `searchContents`
+already does, searching the selected root first and reporting which roots it did not
+reach; or make it a deliberate "search every repository" action rather than an
+as-you-type default, so the block is paid once per intent instead of eight times a
+second. Both are new surface this design does not need.
