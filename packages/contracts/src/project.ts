@@ -197,10 +197,10 @@ export const ProjectReadFileInput = Schema.Struct({
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
 
 /**
- * Read a file by ABSOLUTE path, sandboxed server-side to home / OS-temp / trusted
- * project roots (see readAccess.ts) — the viewer path for files outside any open
- * workspace (e.g. `~/reports/...`). Distinct from ProjectReadFileInput so the
- * cwd-relative read keeps its exact semantics.
+ * Read a file by ABSOLUTE path — the viewer path for files outside any open
+ * workspace (e.g. `~/reports/...`, `/tmp/...`). Any text file the server process
+ * can read is allowed; binaries are refused. Distinct from ProjectReadFileInput
+ * so the cwd-relative read keeps its exact semantics.
  */
 export const ProjectReadTrustedFileInput = Schema.Struct({
   path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
@@ -224,6 +224,9 @@ export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 export const ProjectFileFailure = Schema.Literals([
   "workspace_path_outside_root",
   "resolved_path_outside_root",
+  // Retired: the absolute-path read no longer has a sandbox, so no current
+  // server emits this. Kept in the union so a newer client can still decode the
+  // error from an older server (a stale PWA bundle pairs both ways).
   "outside_sandbox",
   "path_not_file",
   "binary_file",

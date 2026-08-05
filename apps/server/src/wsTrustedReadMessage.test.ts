@@ -36,17 +36,6 @@ describe("trustedReadErrorMessage", () => {
     );
   });
 
-  it("explains a sandbox rejection in terms the reader can act on", () => {
-    const message = trustedReadErrorMessage(
-      PATH,
-      new WorkspaceFileSystem.WorkspaceReadOutsideSandboxError({
-        requestedPath: PATH,
-        resolvedPath: PATH,
-      }),
-    );
-    expect(message).toContain("outside the folders this environment may read");
-  });
-
   it("falls back to a plain read failure for an unknown cause", () => {
     expect(trustedReadErrorMessage(PATH, operationError({ code: "EIO" }))).toBe(
       `Failed to read '${PATH}'.`,

@@ -222,11 +222,11 @@ export function useProjectFileQuery(
 }
 
 /**
- * Read a file by ABSOLUTE path via the server-sandboxed trusted-read RPC
- * (home / OS-temp / trusted project roots — see readAccess.ts). Powers the
- * standalone `/viewer/$` route for files that live outside any open workspace
- * (e.g. `~/reports/...`). Disabled — resolving to a stable empty atom — when
- * there is no primary environment yet or no path to read.
+ * Read a file by ABSOLUTE path via the trusted-read RPC, which reads any text
+ * file the server process can open. Powers the standalone `/viewer/$` route for
+ * files that live outside any open workspace (e.g. `~/reports/...`,
+ * `/tmp/...`). Disabled — resolving to a stable empty atom — when there is no
+ * primary environment yet or no path to read.
  */
 export function useTrustedFileQuery(
   environmentId: EnvironmentId | null,

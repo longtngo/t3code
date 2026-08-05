@@ -192,11 +192,10 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
   });
 
   describe("readTrustedFile", () => {
-    it.effect("reads a UTF-8 file by absolute path inside the temp sandbox", () =>
+    it.effect("reads a UTF-8 file by absolute path", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
         const path = yield* Path.Path;
-        // makeTempDir lives under the OS temp dir, which is an allowed read root.
         const dir = yield* makeTempDir;
         yield* writeTextFile(dir, "reports/summary.md", "# Report\n\nDone.\n");
 
@@ -209,50 +208,90 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
       }),
     );
 
-    it.effect("rejects a path outside the home / temp / trusted sandbox", () =>
+    it.effect("reads a text file outside home and the OS temp dir", () =>
       Effect.gen(function* () {
+        // `/etc/hosts` exists on darwin/linux and is under neither home nor
+        // `os.tmpdir()` — the two roots the old sandbox allowed. This is the
+        // reported case: `/tmp/...` is `/private/tmp` on darwin while
+        // `os.tmpdir()` is `/var/folders/.../T`, so it was rejected too.
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        // The lexical gate rejects before any filesystem access, so the path
-        // need not exist — /etc is never within home or the OS temp dir.
-        const error = yield* workspaceFileSystem
-          .readTrustedFile({ path: "/etc/definitely-not-allowed-xyz" })
-          .pipe(Effect.flip);
 
-        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+        const result = yield* workspaceFileSystem.readTrustedFile({ path: "/etc/hosts" });
+
+        expect(result.contents.length).toBeGreaterThan(0);
       }),
     );
 
-    it.effect("rejects `..` traversal that escapes the sandbox", () =>
+    it.effect("reads a file under /tmp, the reported denial", () =>
       Effect.gen(function* () {
+        // The literal reported path shape. On darwin `/tmp` is a symlink to
+        // `/private/tmp`, which is neither `os.tmpdir()` (`/var/folders/.../T`)
+        // nor a prefix of it — so both the lexical gate and the realpath
+        // re-check used to reject it.
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
-        const dir = yield* makeTempDir;
-
-        const error = yield* workspaceFileSystem
-          .readTrustedFile({ path: `${dir}/../../../../etc/passwd` })
-          .pipe(Effect.flip);
-
-        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+        const fileSystem = yield* FileSystem.FileSystem;
+        const target = `/tmp/t3code-read-any-text-file-${process.pid}.md`;
+        yield* Effect.acquireUseRelease(
+          fileSystem.writeFileString(target, "# Review\n"),
+          () =>
+            Effect.gen(function* () {
+              const result = yield* workspaceFileSystem.readTrustedFile({ path: target });
+              expect(result.contents).toBe("# Review\n");
+            }),
+          () => fileSystem.remove(target).pipe(Effect.orElseSucceed(() => undefined)),
+        );
       }),
     );
 
-    it.effect("rejects a symlink inside the sandbox that resolves outside it", () =>
+    it.effect("follows a symlink that points outside home and the OS temp dir", () =>
       Effect.gen(function* () {
-        // The lexical gate passes (the link itself lives under the temp root),
-        // so this exercises the realpath re-check — the branch that defeats a
-        // symlink escape, distinct from the `..` and lexical cases above.
+        // Previously the realpath re-check rejected this as a sandbox escape.
+        // With no path sandbox there is nothing to escape, so the link resolves
+        // and the target is read.
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const dir = yield* makeTempDir;
-        const escapeLink = path.join(dir, "escape-link");
-        // /etc/hosts exists on darwin/linux and lies outside home + OS-temp.
-        yield* fileSystem.symlink("/etc/hosts", escapeLink);
+        const link = path.join(dir, "hosts-link");
+        yield* fileSystem.symlink("/etc/hosts", link);
+
+        const result = yield* workspaceFileSystem.readTrustedFile({ path: link });
+
+        expect(result.contents.length).toBeGreaterThan(0);
+      }),
+    );
+
+    it.effect("still refuses a binary file, so only text is readable", () =>
+      Effect.gen(function* () {
+        // Dropping the path sandbox widens *which paths* may be read, not what
+        // a read may return: the NUL-byte guard is what makes this "any text
+        // file" rather than "any file".
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* makeTempDir;
+        const binaryPath = path.join(dir, "payload.bin");
+        yield* fileSystem.writeFile(binaryPath, new Uint8Array([0x00, 0x01, 0x02]));
 
         const error = yield* workspaceFileSystem
-          .readTrustedFile({ path: escapeLink })
+          .readTrustedFile({ path: binaryPath })
           .pipe(Effect.flip);
 
-        expect(error._tag).toBe("WorkspaceReadOutsideSandboxError");
+        expect(error._tag).toBe("WorkspaceBinaryFileError");
+      }),
+    );
+
+    it.effect("reports a missing absolute path as a failed realpath, not a sandbox denial", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+
+        const error = yield* workspaceFileSystem
+          .readTrustedFile({ path: "/etc/definitely-not-here-xyz" })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceFileSystemOperationError");
+        expect(error).toMatchObject({ operation: "realpath-target" });
+        expect((error as { cause?: NodeJS.ErrnoException }).cause?.code).toBe("ENOENT");
       }),
     );
   });

@@ -373,8 +373,11 @@ export function classifyViewerPath(
  * reloads from disk instead of showing a frozen snapshot. Markdown is rendered to
  * HTML; `.html` is served as-is; everything else is served as text/plain.
  *
- * Reads go through `readTrustedFile`, which self-sandboxes to home / OS-temp /
- * trusted roots — that sandbox, not the auth waiver, is the real boundary.
+ * `readTrustedFile` applies no path sandbox, so for a remote request the
+ * `orchestration:read` scope below is the boundary. The loopback waiver is not a
+ * hole it opens: a local process already reads the user's files directly with the
+ * user's own permissions, and `classifyViewerPath` still limits this route to the
+ * viewer's known text/markdown/html extensions.
  */
 export const viewerRouteLayer = HttpRouter.add(
   "GET",
