@@ -1,8 +1,10 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { GitBranchIcon } from "lucide-react";
+import { useEffect } from "react";
 
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
 import { cn } from "~/lib/utils";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
 import { vcsEnvironment } from "~/state/vcs";
 
@@ -79,6 +81,16 @@ function WorkspaceRepoTab({
       input: { cwd: repo.cwd, localOnly: true },
     }),
   );
+  const refreshLocalStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
+  // Nothing else recomputes a member's status: the file watchers and the
+  // post-turn reactors all run against the thread's own working directory, and
+  // the server's status cache has no expiry. Without this the first reading a
+  // member ever produced would be the only one.
+  useEffect(() => {
+    void refreshLocalStatus({ environmentId, input: { cwd: repo.cwd } });
+  }, [environmentId, refreshLocalStatus, repo.cwd]);
   const status = statusQuery.data;
   const changedFileCount = status?.workingTree.files.length ?? 0;
   // A member parked on a branch other than the one it integrates into is

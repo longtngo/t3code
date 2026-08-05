@@ -4,7 +4,6 @@ import {
   isWorkspaceProject,
   PRIMARY_REPO_ID,
   resolveActiveRepo,
-  resolveVisibleFilePath,
   resolveWorkspaceRepos,
 } from "./useWorkspaceRepos.logic";
 
@@ -146,26 +145,5 @@ describe("isWorkspaceProject", () => {
 
   it("is true once a member is attached", () => {
     assert.strictEqual(isWorkspaceProject(resolveWorkspaceRepos({ project })), true);
-  });
-});
-
-describe("resolveVisibleFilePath", () => {
-  it("shows the open file when nothing is parked", () => {
-    assert.strictEqual(resolveVisibleFilePath("app/Http/Kernel.php", null), "app/Http/Kernel.php");
-  });
-
-  it("hides the file the root switch parked", () => {
-    assert.strictEqual(
-      resolveVisibleFilePath("app/Http/Kernel.php", "app/Http/Kernel.php"),
-      null,
-    );
-  });
-
-  it("shows a file opened after the switch", () => {
-    assert.strictEqual(resolveVisibleFilePath("routes/web.php", "app/Http/Kernel.php"), "routes/web.php");
-  });
-
-  it("stays empty when no file is open", () => {
-    assert.strictEqual(resolveVisibleFilePath(null, "app/Http/Kernel.php"), null);
   });
 });

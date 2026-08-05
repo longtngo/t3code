@@ -3217,9 +3217,9 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
   const openFileSurface = useCallback(
-    (relativePath: string) => {
+    (relativePath: string, repoCwd?: string) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
+      useRightPanelStore.getState().openFile(activeThreadRef, relativePath, undefined, repoCwd);
     },
     [activeProject, activeThreadRef],
   );
@@ -5903,6 +5903,9 @@ function ChatViewContent(props: ChatViewProps) {
           availableEditors={availableEditors}
           relativePath={
             activeRightPanelSurface.kind === "file" ? activeRightPanelSurface.relativePath : null
+          }
+          fileRepoCwd={
+            activeRightPanelSurface.kind === "file" ? activeRightPanelSurface.repoCwd : undefined
           }
           revealLine={activeFileSurface?.revealLine ?? null}
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}

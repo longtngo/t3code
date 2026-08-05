@@ -308,7 +308,15 @@ export default function DiffPanel({
       : selectedTurn?.turnId === latestTurn?.turnId
         ? "Latest turn"
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
+  // The repository is part of the section identity. Without it a comment left on
+  // `README.md` in one repository is looked up under the same key as a
+  // `README.md` in another, and the composer draft that reaches the agent names
+  // a file it cannot attribute to a repository.
+  const reviewSectionId = selectedTurn
+    ? `turn:${selectedTurn.turnId}`
+    : isPrimaryRepo
+      ? selectedGitScope
+      : `${selectedGitScope}@${activeRepo?.id ?? ""}`;
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
@@ -316,11 +324,13 @@ export default function DiffPanel({
     collapsedDiffFiles.scopeKey === collapseScopeKey
       ? collapsedDiffFiles.fileKeys
       : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
+  const reviewScopeTitle =
+    selectedGitScope === "unstaged" ? "Working tree" : "Branch changes";
   const reviewSectionTitle = selectedTurn
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : selectedGitScope === "unstaged"
-      ? "Working tree"
-      : "Branch changes";
+    : isPrimaryRepo
+      ? reviewScopeTitle
+      : `${reviewScopeTitle} — ${activeRepo?.title ?? ""}`;
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -354,7 +364,12 @@ export default function DiffPanel({
         })
       : null,
   );
+  // The fallback re-runs the diff at the server's own root. That is a
+  // reasonable last resort for the project's repository, and a silent lie for a
+  // member: it would render some other repository's changes under the member's
+  // name. A member outside the server root shows its error instead.
   const shouldRetryBranchDiffAtEnvironmentCwd =
+    isPrimaryRepo &&
     selectedTurnId === null &&
     primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
     serverConfig?.cwd !== undefined &&
@@ -483,6 +498,7 @@ export default function DiffPanel({
         threadRef: routeThreadRef,
         filePath,
         activeCwd,
+        repoCwd: isPrimaryRepo ? undefined : activeCwd,
         openInEditor: (targetPath) => {
           void (async () => {
             const result = await openInPreferredEditor(targetPath);
@@ -502,7 +518,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, openInPreferredEditor, routeThreadRef],
+    [activeCwd, isPrimaryRepo, openInPreferredEditor, routeThreadRef],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {

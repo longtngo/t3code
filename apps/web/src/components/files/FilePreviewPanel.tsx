@@ -57,11 +57,7 @@ import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRev
 import { fileBreadcrumbs } from "./filePath";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
-import {
-  resolveActiveRepo,
-  resolveVisibleFilePath,
-  useWorkspaceRepos,
-} from "~/hooks/useWorkspaceRepos";
+import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
 import WorkspaceRepoBar from "../WorkspaceRepoBar";
 
 import {
@@ -76,13 +72,19 @@ interface FilePreviewPanelProps {
   cwd: string;
   projectName: string;
   relativePath: string | null;
+  /**
+   * The repository `relativePath` belongs to, when it is not the project's own.
+   * The open file keeps the root it was opened from; the browser's own root
+   * selector moves only the tree.
+   */
+  fileRepoCwd?: string | undefined;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   revealLine: number | null;
   revealRequestId: number;
-  onOpenFile: (relativePath: string) => void;
+  onOpenFile: (relativePath: string, repoCwd?: string) => void;
   onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
@@ -755,34 +757,42 @@ export default function FilePreviewPanel({
   environmentId,
   cwd: projectCwd,
   projectName,
-  relativePath: openRelativePath,
+  relativePath,
+  fileRepoCwd,
   threadRef,
   composerDraftTarget,
   keybindings,
   availableEditors,
   revealLine,
   revealRequestId,
-  onOpenFile: onOpenFileProp,
+  onOpenFile,
   onPendingChange,
 }: FilePreviewPanelProps) {
   const workspaceRepos = useWorkspaceRepos(threadRef);
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
-  const activeRepo = resolveActiveRepo(workspaceRepos, selectedRepoId);
-  // Only an explicitly selected member moves the root. Everything else keeps
-  // the cwd the caller passed, so an ordinary project is untouched.
-  const cwd = activeRepo?.kind === "member" ? activeRepo.cwd : projectCwd;
-  // A path is relative to the repository it was opened from. Switching roots
-  // therefore parks the open file rather than re-resolving it under the new
-  // root, where it would usually resolve to nothing and read as an error.
-  const [parkedPath, setParkedPath] = useState<string | null>(null);
-  const relativePath = resolveVisibleFilePath(openRelativePath, parkedPath);
-  const onOpenFile = (nextRelativePath: string) => {
-    setParkedPath(null);
-    onOpenFileProp(nextRelativePath);
+  // Keyed by thread: two threads in the same project share this component
+  // instance when neither uses a worktree, and a root chosen on one of them
+  // must not silently repoint the other's file browser.
+  const threadKey = `${threadRef.environmentId}:${threadRef.threadId}`;
+  const [treeSelection, setTreeSelection] = useState<{
+    readonly threadKey: string;
+    readonly repoId: string;
+  } | null>(null);
+  const activeRepo = resolveActiveRepo(
+    workspaceRepos,
+    treeSelection?.threadKey === threadKey ? treeSelection.repoId : null,
+  );
+  // Only an explicitly selected member moves the tree's root. Everything else
+  // keeps the cwd the caller passed, so an ordinary project is untouched.
+  const treeCwd = activeRepo?.kind === "member" ? activeRepo.cwd : projectCwd;
+  // The open file resolves against the repository it was opened from, not
+  // against whatever the tree is showing. That is what lets the two move
+  // independently without either of them reading the wrong file.
+  const cwd = fileRepoCwd ?? projectCwd;
+  const openFileFromTree = (nextRelativePath: string) => {
+    onOpenFile(nextRelativePath, activeRepo?.kind === "member" ? activeRepo.cwd : undefined);
   };
   const selectRepo = (repoId: string) => {
-    setSelectedRepoId(repoId);
-    setParkedPath(openRelativePath);
+    setTreeSelection({ threadKey, repoId });
   };
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
@@ -1084,13 +1094,15 @@ export default function FilePreviewPanel({
                 />
               ) : null}
               <FileBrowserPanel
-                key={`${environmentId}:${cwd}`}
+                key={`${environmentId}:${treeCwd}`}
                 environmentId={environmentId}
-                cwd={cwd}
+                cwd={treeCwd}
                 projectName={projectName}
-                selectedPath={relativePath}
+                // Only highlight the open file in the tree that actually
+                // contains it.
+                selectedPath={treeCwd === cwd ? relativePath : null}
                 selectedPathRevealId={revealRequestId}
-                onOpenFile={onOpenFile}
+                onOpenFile={openFileFromTree}
               />
             </div>
           </aside>

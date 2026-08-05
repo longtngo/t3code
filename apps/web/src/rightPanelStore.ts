@@ -42,6 +42,15 @@ export type RightPanelSurface =
       id: `file:${string}`;
       kind: "file";
       relativePath: string;
+      /**
+       * The repository root the path is relative to, when it is not the
+       * project's own. A path means nothing without the root it belongs to, so
+       * a file opened from a workspace member carries that root here instead of
+       * being re-resolved against whatever root a panel happens to be showing.
+       * Absent on surfaces persisted before workspace members existed, which is
+       * exactly the project root they were opened from.
+       */
+      repoCwd?: string;
       revealLine: number | null;
       revealRequestId: number;
     }
@@ -68,7 +77,16 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "trustedFile" | "terminal">) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
-  openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  /**
+   * `repoCwd` names the repository the path is relative to, for a file opened
+   * from a workspace member. Omit it for the project's own repository.
+   */
+  openFile: (
+    ref: ScopedThreadRef,
+    relativePath: string,
+    line?: number,
+    repoCwd?: string,
+  ) => void;
   /** Open a read-only view of an absolute path outside the workspace. */
   openTrustedFile: (ref: ScopedThreadRef, absolutePath: string) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
@@ -122,13 +140,22 @@ const fileSurface = (
   relativePath: string,
   revealLine: number | null,
   revealRequestId: number,
+  repoCwd?: string,
 ): RightPanelSurface => ({
-  id: `file:${relativePath}`,
+  id: fileSurfaceId(relativePath, repoCwd),
   kind: "file",
   relativePath,
+  ...(repoCwd === undefined ? {} : { repoCwd }),
   revealLine,
   revealRequestId,
 });
+
+/**
+ * The same relative path in two repositories is two different files, so the
+ * root is part of the surface identity rather than only its payload.
+ */
+const fileSurfaceId = (relativePath: string, repoCwd?: string): `file:${string}` =>
+  repoCwd === undefined ? `file:${relativePath}` : `file:${repoCwd}\u0000${relativePath}`;
 
 const terminalSurface = (terminalId: string): RightPanelSurface => ({
   id: `terminal:${terminalId}`,
@@ -286,13 +313,13 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
           }),
         })),
-      openFile: (ref, relativePath, line) =>
+      openFile: (ref, relativePath, line, repoCwd) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             const withoutStandaloneExplorer = current.surfaces.filter(
               (surface) => surface.kind !== "files",
             );
-            const surfaceId = `file:${relativePath}` as const;
+            const surfaceId = fileSurfaceId(relativePath, repoCwd);
             const existing = withoutStandaloneExplorer.find(
               (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
                 surface.id === surfaceId && surface.kind === "file",
@@ -301,6 +328,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               relativePath,
               normalizeRevealLine(line),
               (existing?.revealRequestId ?? 0) + 1,
+              repoCwd,
             );
             return {
               isOpen: true,

@@ -46,6 +46,7 @@ import {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   VcsStatusInput,
+  VcsStatusLocalResult,
   VcsStatusResult,
   VcsStatusStreamEvent,
   VcsStatusSubscribeInput,
@@ -199,6 +200,7 @@ export const WS_METHODS = {
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
+  vcsRefreshLocalStatus: "vcs.refreshLocalStatus",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -588,6 +590,20 @@ export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
 export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   payload: VcsStatusInput,
   success: VcsStatusResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Recomputes a repository's local status without touching its remote.
+ *
+ * A workspace project shows every attached repository at once, and nothing else
+ * ever refreshes a repository that is not some thread's own working directory —
+ * the file watchers and reactors all run against the thread cwd. Without this
+ * a member's badge would show whatever it read the first time, forever.
+ */
+export const WsVcsRefreshLocalStatusRpc = Rpc.make(WS_METHODS.vcsRefreshLocalStatus, {
+  payload: VcsStatusInput,
+  success: VcsStatusLocalResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -1063,6 +1079,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsCreateUrlRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
+  WsVcsRefreshLocalStatusRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,

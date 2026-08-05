@@ -99,20 +99,3 @@ export function resolveActiveRepo(
 export function isWorkspaceProject(repos: ReadonlyArray<WorkspaceRepo>): boolean {
   return repos.some((repo) => repo.kind === "member");
 }
-
-/**
- * The open file a panel should still show after the root changed under it.
- *
- * A path is relative to the repository it was opened from, so re-resolving
- * `app/Http/Kernel.php` under a different root usually finds nothing and reads
- * as an error the user did not cause. Switching roots parks the open path
- * instead; opening anything afterwards clears the park, which is why the
- * comparison is against the path itself rather than a boolean — a file opened
- * from elsewhere while a path is parked is a different path, and shows.
- */
-export function resolveVisibleFilePath(
-  openRelativePath: string | null,
-  parkedPath: string | null,
-): string | null {
-  return openRelativePath !== null && openRelativePath === parkedPath ? null : openRelativePath;
-}
