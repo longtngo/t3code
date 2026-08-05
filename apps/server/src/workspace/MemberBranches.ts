@@ -122,19 +122,29 @@ export function memberFeatureBranchName(input: {
   return slug.length > 0 ? `t3code/${slug}-${id}` : `t3code/${id}`;
 }
 
+export interface BranchCreationRecord {
+  /** What git recorded: a branch name, `HEAD`, or a sha. */
+  readonly createdFrom: string;
+  /** The commit the branch pointed at when it was created. */
+  readonly sha: string;
+}
+
 /**
- * The branch name a reflog creation record points at.
+ * The creation entry in a branch's reflog, if it still has one.
  *
  * `git reflog show <branch>` ends with the entry that created the branch:
- * `branch: Created from <X>`, where X is a branch name, `HEAD`, or a sha.
- * Only a usable branch name is returned; `HEAD` and raw shas resolve through
- * `git branch --points-at` instead, which the caller does.
+ * `<sha> <branch>@{n}: branch: Created from <X>`, where X is a branch name when
+ * the user branched from one, and `HEAD` or a sha when they did not. Both are
+ * returned, because a name is usable directly while `HEAD` has to be resolved
+ * through the commit — and that commit is on this same line, not somewhere in
+ * the branch's later history.
  */
-export function parseBranchCreationRecord(reflogOutput: string): string | null {
-  const match = /branch:\s+Created from (.+)$/m.exec(reflogOutput);
-  const created = match?.[1]?.trim();
-  if (created === undefined || created.length === 0) return null;
-  return created;
+export function parseBranchCreationRecord(reflogOutput: string): BranchCreationRecord | null {
+  const match = /^(\S+)\s.*branch:\s+Created from (.+)$/m.exec(reflogOutput);
+  const sha = match?.[1]?.trim();
+  const createdFrom = match?.[2]?.trim();
+  if (sha === undefined || createdFrom === undefined || createdFrom.length === 0) return null;
+  return { createdFrom, sha };
 }
 
 /** `git branch --all` marks remote-tracking refs with this prefix. */

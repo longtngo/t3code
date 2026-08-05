@@ -265,6 +265,25 @@ export class GitVcsDriver extends Context.Service<
       cwd: string,
       key: string,
     ) => Effect.Effect<string | null, GitCommandError>;
+    readonly writeConfigValue: (
+      cwd: string,
+      key: string,
+      value: string,
+    ) => Effect.Effect<void, GitCommandError>;
+    /**
+     * A branch's raw reflog, empty when it has none. The reflog is local-only
+     * and expires under `gc.reflogExpire`, so absence is ordinary rather than
+     * an error.
+     */
+    readonly readBranchReflog: (
+      cwd: string,
+      branch: string,
+    ) => Effect.Effect<string, GitCommandError>;
+    /** Branch names, local and remote-tracking, whose tip is this commit. */
+    readonly listBranchNamesPointingAt: (
+      cwd: string,
+      commit: string,
+    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;

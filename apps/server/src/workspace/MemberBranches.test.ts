@@ -165,13 +165,18 @@ describe("parseBranchCreationRecord", () => {
       "91352dc79 pickup-v2-prm2.0@{16}: Branch: renamed refs/heads/x to refs/heads/y",
       "33935d34a pickup-v2-prm2.0@{18}: branch: Created from pickup-v2",
     ].join("\n");
-    assert.strictEqual(parseBranchCreationRecord(reflog), "pickup-v2");
+    assert.deepStrictEqual(parseBranchCreationRecord(reflog), {
+      createdFrom: "pickup-v2",
+      sha: "33935d34a",
+    });
   });
 
-  it("reports HEAD verbatim so the caller can resolve it", () => {
-    assert.strictEqual(
-      parseBranchCreationRecord("abc t3code/x@{0}: branch: Created from HEAD"),
-      "HEAD",
+  // `HEAD` is not a base. It is returned verbatim so the caller can resolve it
+  // through the sha on the same line, which is where the branch started.
+  it("reports HEAD with the commit it was created at", () => {
+    assert.deepStrictEqual(
+      parseBranchCreationRecord("abc1234 t3code/x@{0}: branch: Created from HEAD"),
+      { createdFrom: "HEAD", sha: "abc1234" },
     );
   });
 

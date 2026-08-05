@@ -2318,6 +2318,38 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
+  const writeConfigValue: GitVcsDriver.GitVcsDriver["Service"]["writeConfigValue"] = (
+    cwd,
+    key,
+    value,
+  ) => runGit("GitVcsDriver.writeConfigValue", cwd, ["config", key, value]);
+
+  const readBranchReflog: GitVcsDriver.GitVcsDriver["Service"]["readBranchReflog"] = (
+    cwd,
+    branch,
+  ) =>
+    // A branch with no reflog exits non-zero. That is an absent record rather
+    // than a failure, so the non-zero exit is allowed and yields empty output.
+    runGitStdout("GitVcsDriver.readBranchReflog", cwd, ["reflog", "show", branch], true);
+
+  const listBranchNamesPointingAt: GitVcsDriver.GitVcsDriver["Service"]["listBranchNamesPointingAt"] =
+    (cwd, commit) =>
+      runGitStdout("GitVcsDriver.listBranchNamesPointingAt", cwd, [
+        "branch",
+        "--all",
+        "--no-column",
+        "--points-at",
+        commit,
+        "--format=%(refname:short)",
+      ]).pipe(
+        Effect.map((stdout) =>
+          stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0),
+        ),
+      );
+
   const readGitRefsSnapshot = Effect.fn("readGitRefsSnapshot")(function* (gitCommonDir: string) {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
@@ -2946,6 +2978,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readRangeContext,
     getReviewDiffPreview,
     readConfigValue,
+    writeConfigValue,
+    readBranchReflog,
+    listBranchNamesPointingAt,
     listRefs,
     createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
     fetchPullRequestBranch: (input) =>
