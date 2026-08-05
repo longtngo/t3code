@@ -1767,10 +1767,26 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-conflict/turn/1"),
             status: "ready",
             files: [],
+            memberStates: [{ memberId: "m1", headSha: "abc123", isDirty: true }],
             assistantMessageId: MessageId.make("assistant-conflict"),
             completedAt: "2026-02-26T13:00:04.000Z",
           },
         });
+
+        // The whole revert guard reads this column back. The runtime writer for
+        // a completed turn diff is the turns projection, not the checkpoint
+        // repository, so a break here would leave the feature silently inert.
+        const memberStateRows = yield* sql<{
+          readonly memberStates: string | null;
+        }>`
+          SELECT checkpoint_member_states_json AS "memberStates"
+          FROM projection_turns
+          WHERE thread_id = 'thread-conflict' AND turn_id = 'turn-completed'
+        `;
+        assert.equal(
+          memberStateRows[0]?.memberStates,
+          '[{"memberId":"m1","headSha":"abc123","isDirty":true}]',
+        );
 
         const turnRows = yield* sql<{
           readonly turnId: string;
