@@ -348,6 +348,7 @@ const buildAppUnderTest = (options?: {
     >;
     reviewService?: Partial<ReviewService.ReviewService["Service"]>;
     vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>;
+    workspaceMemberBranches?: Partial<WorkspaceMemberBranches.WorkspaceMemberBranches["Service"]>;
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
@@ -557,6 +558,7 @@ const buildAppUnderTest = (options?: {
       resolvePrBase: () => Effect.succeed(null),
       readCheckpointStates: () => Effect.succeed([]),
       writePrBase: () => Effect.succeed(true),
+      ...options?.layers?.workspaceMemberBranches,
     });
     const resourceTelemetryLayer = ResourceTelemetry.layer.pipe(
       Layer.provide(
@@ -7853,6 +7855,392 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, terminalError);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The two member handlers run git in a directory read from project state, and
+  // they move branches in the user's real checkouts. Their guards are the only
+  // thing standing between a client-supplied id and a `git switch` somewhere it
+  // has no business being, so each guard is exercised over a real RPC call
+  // rather than trusted to read correctly.
+  const memberProjectId = ProjectId.make("project-members");
+  const memberThreadId = ThreadId.make("thread-members");
+  const attachedMember = {
+    id: "member-api",
+    path: "/tmp/members/api",
+    title: "api",
+    integrationBranch: "main",
+  };
+  const makeMemberProjectShell = (
+    members: ReadonlyArray<typeof attachedMember> = [attachedMember],
+  ) => {
+    const now = "2026-01-01T00:00:00.000Z";
+    return {
+      id: memberProjectId,
+      title: "Members Project",
+      workspaceRoot: "/tmp/members",
+      defaultModelSelection,
+      scripts: [],
+      members,
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
+
+  it.effect("prepares a member action and reports the branch it cut", () =>
+    Effect.gen(function* () {
+      const ensureCalls: Array<{ readonly cwd: string; readonly cutOn: string | undefined }> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: memberThreadId,
+                    projectId: memberProjectId,
+                    title: "Members Thread",
+                  }),
+                ),
+              ),
+          },
+          workspaceMemberBranches: {
+            ensureFeatureBranch: (input) =>
+              Effect.sync(() => {
+                ensureCalls.push({ cwd: input.cwd, cutOn: input.cutOn });
+                return {
+                  state: "owned-by-self" as const,
+                  branch: "t3code/members-thread-abcd1234",
+                  ownerThreadId: memberThreadId,
+                };
+              }),
+            resolvePrBase: () =>
+              Effect.succeed({
+                branch: "t3code/members-thread-abcd1234",
+                base: "pickup-v2",
+                source: "configured" as const,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberActionPrepare]({
+            projectId: memberProjectId,
+            threadId: memberThreadId,
+            memberId: attachedMember.id,
+          }),
+        ),
+      );
+
+      assert.equal(result.report.memberId, attachedMember.id);
+      assert.equal(result.report.branch, "t3code/members-thread-abcd1234");
+      assert.equal(result.prBase?.base, "pickup-v2");
+      // The directory comes from the project, never from the caller, and the
+      // git panel's threshold counts untracked files where the sweep does not.
+      assert.deepEqual(ensureCalls, [{ cwd: attachedMember.path, cutOn: "any" }]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to prepare a member for a thread belonging to another project", () =>
+    Effect.gen(function* () {
+      let ensureCalled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+            // A thread that belongs somewhere else: claiming this repository
+            // for it would record the wrong owner on the branch.
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: memberThreadId,
+                    projectId: ProjectId.make("project-elsewhere"),
+                  }),
+                ),
+              ),
+          },
+          workspaceMemberBranches: {
+            ensureFeatureBranch: () =>
+              Effect.sync(() => {
+                ensureCalled = true;
+                return { state: "idle" as const, branch: null, ownerThreadId: null };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberActionPrepare]({
+            projectId: memberProjectId,
+            threadId: memberThreadId,
+            memberId: attachedMember.id,
+          }),
+        ),
+      );
+
+      assert.equal(result.report.state, "unavailable");
+      assert.equal(result.prBase, null);
+      assert.equal(ensureCalled, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("reports a member the project no longer lists as unavailable", () =>
+    Effect.gen(function* () {
+      let ensureCalled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell([]))),
+          },
+          workspaceMemberBranches: {
+            ensureFeatureBranch: () =>
+              Effect.sync(() => {
+                ensureCalled = true;
+                return { state: "idle" as const, branch: null, ownerThreadId: null };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberActionPrepare]({
+            projectId: memberProjectId,
+            threadId: memberThreadId,
+            memberId: attachedMember.id,
+          }),
+        ),
+      );
+
+      assert.equal(result.report.state, "unavailable");
+      assert.equal(ensureCalled, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("skips the pull-request base while a member sits on its integration branch", () =>
+    Effect.gen(function* () {
+      let resolveCalled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: memberThreadId,
+                    projectId: memberProjectId,
+                  }),
+                ),
+              ),
+          },
+          workspaceMemberBranches: {
+            ensureFeatureBranch: () =>
+              Effect.succeed({
+                state: "idle" as const,
+                branch: attachedMember.integrationBranch,
+                ownerThreadId: null,
+              }),
+            resolvePrBase: () =>
+              Effect.sync(() => {
+                resolveCalled = true;
+                return null;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberActionPrepare]({
+            projectId: memberProjectId,
+            threadId: memberThreadId,
+            memberId: attachedMember.id,
+          }),
+        ),
+      );
+
+      assert.equal(result.prBase, null);
+      // Comparing the integration branch against itself is meaningless, so the
+      // ladder must not run at all rather than run and return null.
+      assert.equal(resolveCalled, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("records a confirmed pull-request base for the branch that is checked out", () =>
+    Effect.gen(function* () {
+      const writes: Array<{ readonly cwd: string; readonly branch: string; readonly base: string }> =
+        [];
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+          },
+          workspaceMemberBranches: {
+            inspect: () =>
+              Effect.succeed({
+                state: "owned-by-self" as const,
+                branch: "t3code/members-thread-abcd1234",
+                ownerThreadId: memberThreadId,
+              }),
+            writePrBase: (input) =>
+              Effect.sync(() => {
+                writes.push({ cwd: input.cwd, branch: input.branch, base: input.base });
+                return true;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberPrBaseWrite]({
+            projectId: memberProjectId,
+            memberId: attachedMember.id,
+            branch: "t3code/members-thread-abcd1234",
+            base: "pickup-v2",
+          }),
+        ),
+      );
+
+      assert.equal(result.written, true);
+      assert.deepEqual(writes, [
+        {
+          cwd: attachedMember.path,
+          branch: "t3code/members-thread-abcd1234",
+          base: "pickup-v2",
+        },
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to record a base for a branch that has since moved", () =>
+    Effect.gen(function* () {
+      let written = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+          },
+          workspaceMemberBranches: {
+            // Something moved the checkout between the confirmation and this
+            // call; writing now would orphan the key and let the base fall
+            // back to inference — the failure the confirmation prevents.
+            inspect: () =>
+              Effect.succeed({
+                state: "idle" as const,
+                branch: "some-other-branch",
+                ownerThreadId: null,
+              }),
+            writePrBase: () =>
+              Effect.sync(() => {
+                written = true;
+                return true;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberPrBaseWrite]({
+            projectId: memberProjectId,
+            memberId: attachedMember.id,
+            branch: "t3code/members-thread-abcd1234",
+            base: "pickup-v2",
+          }),
+        ),
+      );
+
+      assert.equal(result.written, false);
+      assert.equal(written, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses an option-shaped pull-request base rather than handing it to git", () =>
+    Effect.gen(function* () {
+      let written = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell())),
+          },
+          workspaceMemberBranches: {
+            inspect: () =>
+              Effect.succeed({
+                state: "owned-by-self" as const,
+                branch: "--upload-pack=touch /tmp/pwned",
+                ownerThreadId: memberThreadId,
+              }),
+            writePrBase: () =>
+              Effect.sync(() => {
+                written = true;
+                return true;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberPrBaseWrite]({
+            projectId: memberProjectId,
+            memberId: attachedMember.id,
+            branch: "--upload-pack=touch /tmp/pwned",
+            base: "pickup-v2",
+          }),
+        ),
+      );
+
+      assert.equal(result.written, false);
+      assert.equal(written, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to record a base for a member the project no longer lists", () =>
+    Effect.gen(function* () {
+      let written = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell([]))),
+          },
+          workspaceMemberBranches: {
+            writePrBase: () =>
+              Effect.sync(() => {
+                written = true;
+                return true;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberPrBaseWrite]({
+            projectId: memberProjectId,
+            memberId: attachedMember.id,
+            branch: "t3code/members-thread-abcd1234",
+            base: "pickup-v2",
+          }),
+        ),
+      );
+
+      assert.equal(result.written, false);
+      assert.equal(written, false);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });
