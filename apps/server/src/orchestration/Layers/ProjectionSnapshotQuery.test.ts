@@ -1571,6 +1571,64 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  // The revert guard reads the target checkpoint's member states out of
+  // `getThreadDetailById`, and a checkpoint that reports no member states is
+  // treated as making no claim — which lets the revert through. So a read path
+  // that quietly drops the column does not fail loudly; it disarms the guard.
+  // Every path that returns checkpoints is asserted here for that reason.
+  it.effect("every checkpoint read path carries the recorded member states", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* seedWindowThread(sql, { turnCount: 3, activitiesPerTurn: 1 });
+      const recorded = '[{"memberId":"member-1","headSha":"abc123","isDirty":true}]';
+      yield* sql`
+        UPDATE projection_turns
+        SET checkpoint_member_states_json = ${recorded}
+        WHERE thread_id = 'thread-1' AND checkpoint_turn_count = 1
+      `;
+      const expected = [{ memberId: "member-1", headSha: "abc123", isDirty: true }];
+      const atTurn =
+        (turnCount: number) =>
+        <T extends { readonly checkpointTurnCount: number }>(checkpoints: ReadonlyArray<T>) =>
+          checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === turnCount);
+      const recordedTurn = atTurn(1);
+      const legacyTurn = atTurn(2);
+
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        assert.deepStrictEqual(recordedTurn(detail.value.value.checkpoints)?.memberStates, expected);
+        // A checkpoint captured before member recording claims nothing, which is
+        // the one case the guard is allowed to wave through.
+        assert.equal(legacyTurn(detail.value.value.checkpoints)?.memberStates, undefined);
+      }
+
+      const context = yield* snapshotQuery.getThreadCheckpointContext(ThreadId.make("thread-1"));
+      assert.equal(context._tag, "Some");
+      if (context._tag === "Some") {
+        assert.deepStrictEqual(recordedTurn(context.value.checkpoints)?.memberStates, expected);
+      }
+
+      const shell = yield* snapshotQuery.getSnapshot();
+      const snapshotThread = shell.threads.find((thread) => thread.id === ThreadId.make("thread-1"));
+      assert.deepStrictEqual(recordedTurn(snapshotThread?.checkpoints ?? [])?.memberStates, expected);
+
+      const page = yield* snapshotQuery.getThreadHistoryPage({
+        threadId: ThreadId.make("thread-1"),
+        beforeTurn: {
+          requestedAt: "2026-05-01T00:02:00.000Z",
+          turnId: asTurnId("turn-02"),
+          checkpointTurnCount: 2,
+        },
+        maxTurns: NonNegativeInt.make(20),
+        maxRows: NonNegativeInt.make(100),
+      });
+      assert.deepStrictEqual(recordedTurn(page.checkpoints)?.memberStates, expected);
+    }),
+  );
+
   it.effect("getThreadDetailById windowed to the latest 15 turns caps rows and reports more history", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

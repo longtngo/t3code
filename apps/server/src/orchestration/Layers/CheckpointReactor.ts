@@ -834,6 +834,20 @@ const make = Effect.gen(function* () {
         ? checkpointRefForThreadTurn(event.payload.threadId, 0)
         : targetCheckpoint?.checkpointRef;
 
+    // Ordered before the member guard deliberately. A checkpoint missing from
+    // the read model gives the guard nothing to compare against, and its
+    // "nothing recorded" answer is *permission* — so the guard must only ever
+    // run on a checkpoint that was actually found.
+    if (!targetCheckpointRef) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     // Checkpoints snapshot the staging repository only. Restoring it while a
     // member repository has moved leaves an inconsistent tree behind a UI that
     // implies a clean undo, so the revert is refused and the repositories are
@@ -882,16 +896,6 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.catch(() => Effect.void));
         return;
       }
-    }
-
-    if (!targetCheckpointRef) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
     }
 
     const restored = yield* checkpointStore.restoreCheckpoint({
