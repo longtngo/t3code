@@ -2377,9 +2377,8 @@ export default function GitActionsControl({
               Open from {pendingMemberPrBase?.repositoryTitle ?? "this repository"}
             </DialogTitle>
             <DialogDescription>
-              Git records no branch ancestry, so the base below is the best answer available.
-              Check it before continuing — it decides which commits the {""}
-              {changeRequestTerminology.shortLabel.toLowerCase()} contains.
+              The base decides which commits are included. Git records no branch ancestry, so
+              this is the best answer available — check it before continuing.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
