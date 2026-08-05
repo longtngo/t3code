@@ -466,6 +466,34 @@ function mapProposedPlanRow(
   };
 }
 
+/**
+ * The single place a checkpoint row becomes a checkpoint summary.
+ *
+ * Four queries read these rows and every one of them used to map the columns by
+ * hand, which is how two of the four silently stopped forwarding `memberStates`
+ * — including the one the revert guard reads, leaving that guard inert against
+ * a member repository that had moved. The field is optional on the summary, so
+ * dropping it is not a type error; sharing the mapper is what makes it
+ * impossible to drop in one caller and not another.
+ */
+function mapCheckpointRow(
+  row: Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>,
+): OrchestrationCheckpointSummary {
+  return {
+    turnId: row.turnId,
+    checkpointTurnCount: row.checkpointTurnCount,
+    checkpointRef: row.checkpointRef,
+    status: row.status,
+    files: row.files,
+    // NULL means the checkpoint predates member recording and cannot claim
+    // anything; an empty array claims "there were no members". Absent and empty
+    // are different answers, so the key stays off rather than becoming `[]`.
+    ...(row.memberStates === null ? {} : { memberStates: row.memberStates }),
+    assistantMessageId: row.assistantMessageId,
+    completedAt: row.completedAt,
+  };
+}
+
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown): ProjectionRepositoryError =>
     Schema.isSchemaError(cause)
@@ -1828,16 +1856,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of checkpointRows) {
                 updatedAt = maxIso(updatedAt, row.completedAt);
                 const threadCheckpoints = checkpointsByThread.get(row.threadId) ?? [];
-                threadCheckpoints.push({
-                  turnId: row.turnId,
-                  checkpointTurnCount: row.checkpointTurnCount,
-                  checkpointRef: row.checkpointRef,
-                  status: row.status,
-                  files: row.files,
-                  ...(row.memberStates === null ? {} : { memberStates: row.memberStates }),
-                  assistantMessageId: row.assistantMessageId,
-                  completedAt: row.completedAt,
-                });
+                threadCheckpoints.push(mapCheckpointRow(row));
                 checkpointsByThread.set(row.threadId, threadCheckpoints);
               }
 
@@ -2586,18 +2605,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         projectId: threadRow.value.projectId,
         workspaceRoot: threadRow.value.workspaceRoot,
         worktreePath: threadRow.value.worktreePath,
-        checkpoints: checkpointRows.map(
-          (row): OrchestrationCheckpointSummary => ({
-            turnId: row.turnId,
-            checkpointTurnCount: row.checkpointTurnCount,
-            checkpointRef: row.checkpointRef,
-            status: row.status,
-            files: row.files,
-            ...(row.memberStates === null ? {} : { memberStates: row.memberStates }),
-            assistantMessageId: row.assistantMessageId,
-            completedAt: row.completedAt,
-          }),
-        ),
+        checkpoints: checkpointRows.map(mapCheckpointRow),
       });
     });
 
@@ -2918,15 +2926,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           }
           return activity;
         }),
-        checkpoints: checkpointRows.map((row) => ({
-          turnId: row.turnId,
-          checkpointTurnCount: row.checkpointTurnCount,
-          checkpointRef: row.checkpointRef,
-          status: row.status,
-          files: row.files,
-          assistantMessageId: row.assistantMessageId,
-          completedAt: row.completedAt,
-        })),
+        checkpoints: checkpointRows.map(mapCheckpointRow),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
 
@@ -3115,15 +3115,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           return activity;
         }),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
-        checkpoints: checkpointRows.map((row) => ({
-          turnId: row.turnId,
-          checkpointTurnCount: row.checkpointTurnCount,
-          checkpointRef: row.checkpointRef,
-          status: row.status,
-          files: row.files,
-          assistantMessageId: row.assistantMessageId,
-          completedAt: row.completedAt,
-        })),
+        checkpoints: checkpointRows.map(mapCheckpointRow),
         oldestLoaded: {
           requestedAt: boundary.requestedAt,
           turnId: boundary.turnId,
