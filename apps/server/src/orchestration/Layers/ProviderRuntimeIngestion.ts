@@ -8,6 +8,7 @@ import {
   type OrchestrationMessage,
   type OrchestrationProposedPlanId,
   CheckpointRef,
+  classifyTaskAgentKind,
   isToolLifecycleItemType,
   ThreadId,
   type ThreadTokenUsageSnapshot,
@@ -18,6 +19,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
+  type RuntimeTaskStatus,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -37,6 +39,7 @@ import { RuntimeBootId } from "../../environment/Services/RuntimeBootId.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -48,6 +51,30 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
+
+/**
+ * A task.updated patch whose status means the task will not run again.
+ *
+ * Both callers below key off this: one clears the persisted
+ * pending-background-task row, the other decides whether the patch becomes a
+ * sidebar-visible activity. They are stated once because they must agree — a
+ * status that is terminal for the activity but not for the row deletion leaves
+ * the row behind, and a thread with a surviving row reads "Working" forever.
+ *
+ * Deliberately matched against the RuntimeTaskStatus vocabulary rather than a
+ * provider's raw wire words: adapters normalise before emitting (the Claude
+ * adapter maps "killed" → "cancelled"), so raw words never reach here.
+ */
+function isTerminalRuntimeTaskStatus(
+  status: RuntimeTaskStatus | undefined,
+): status is "completed" | "failed" | "cancelled" | "interrupted" {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "interrupted"
+  );
+}
 
 // Fallback when the in-memory description cache no longer has the task name
 // (server restart, session-exit sweep, TTL/capacity eviction): earlier
@@ -405,6 +432,52 @@ function requestKindFromCanonicalRequestType(
   }
 }
 
+/**
+ * Copies the optional TaskAgentLinkage bundle from a task.* runtime payload
+ * into the persisted activity payload. Identity fields ride on every row so
+ * client folds survive activity retention; absent fields stay absent.
+ */
+function taskLinkageActivityFields(payload: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    // Server-stamped classification: persisted rows are self-describing, so
+    // clients trust the stamp instead of re-deriving agent-vs-background
+    // from taskType denylists and marker heuristics (legacy rows without a
+    // stamp keep the client fallback).
+    agentKind: classifyTaskAgentKind({
+      taskType: typeof payload.taskType === "string" ? payload.taskType : undefined,
+      agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
+    }),
+  };
+  for (const key of [
+    "taskType",
+    "agentId",
+    "title",
+    "role",
+    "model",
+    "effort",
+    "toolUseId",
+    "parentAgentId",
+    "workflowName",
+    "agentIndex",
+    "phaseIndex",
+    "phaseTitle",
+    "phases",
+    "attempt",
+    "runHandles",
+    "outputFile",
+    "agentPath",
+    "timelineBypass",
+    "typedUsage",
+    "status",
+    "error",
+  ] as const) {
+    if (payload[key] !== undefined) {
+      fields[key] = payload[key];
+    }
+  }
+  return fields;
+}
+
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
@@ -647,6 +720,7 @@ export function runtimeEventToActivities(
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
+            ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -657,7 +731,16 @@ export function runtimeEventToActivities(
     case "task.progress": {
       return [
         {
-          id: event.eventId,
+          // Stable per-task id: progress is "latest state", not history, so
+          // each tick REPLACES the last via the activity upsert (PK + the
+          // replace-by-id apply in projector and client reducer). Keeps one
+          // progress row per task instead of thousands, so a large fleet's
+          // ticks can no longer evict its own start/terminal rows out of
+          // the 500-row retention window. Thread-scoped: activity_id is a
+          // GLOBAL primary key and Claude task ids are session-local, so a
+          // bare taskId could collide across threads and steal another
+          // thread's row (review finding).
+          id: EventId.make(`task-progress:${event.threadId}:${event.payload.taskId}`),
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
@@ -674,6 +757,85 @@ export function runtimeEventToActivities(
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "task.updated": {
+      // ONE case for this event. Both sides of the fork wrote their own and the
+      // file merged cleanly, leaving two `case "task.updated"` arms in this same
+      // switch — the first won and the second was unreachable, silently dropping
+      // the fork's non-terminal filter. Composed here instead: the fork's filter
+      // plus upstream's richer payload.
+      const status = event.payload.status;
+      // Non-terminal patches are ingestion-only (they touch the pending-task
+      // row); only terminal statuses become sidebar-visible activities.
+      // Matched against the RuntimeTaskStatus vocabulary — the adapter maps the
+      // provider's raw "killed" to "cancelled" before this ever sees it.
+      if (!isTerminalRuntimeTaskStatus(status)) {
+        return [];
+      }
+      const wasStopped = status === "cancelled" || status === "interrupted";
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: status === "failed" ? "error" : "info",
+          kind: "task.updated",
+          summary: status === "failed" ? "Task failed" : wasStopped ? "Task stopped" : "Task completed",
+          payload: {
+            taskId: event.payload.taskId,
+            ...(event.payload.description
+              ? { detail: truncateDetail(event.payload.description) }
+              : {}),
+            ...(event.payload.endedAt ? { endedAt: event.payload.endedAt } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
+            ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
+            // AFTER the linkage spread on purpose: that helper copies `status`
+            // straight off the payload, so placing this first let the raw
+            // "cancelled" overwrite the mapped value. Align with the
+            // task.completed wire shape (cancelled/interrupted ≈ stopped).
+            status: wasStopped ? "stopped" : status,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "tool.progress": {
+      // Only agent-owned heartbeats are persisted: they feed the owning
+      // agent's activity line. Parent-conversation tool progress stays
+      // ephemeral (item lifecycle already covers it).
+      if (event.payload.taskId === undefined) {
+        return [];
+      }
+      return [
+        {
+          // Same stable-id treatment as task.progress: a heartbeat is
+          // "what is this agent doing right now", so one row per task
+          // (thread-scoped for the same global-PK collision reason).
+          id: EventId.make(`tool-progress:${event.threadId}:${event.payload.taskId}`),
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "tool.progress",
+          summary: event.payload.toolName ?? "Tool progress",
+          payload: {
+            taskId: event.payload.taskId,
+            ...(event.payload.toolName ? { toolName: event.payload.toolName } : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.elapsedSeconds !== undefined
+              ? { elapsedSeconds: event.payload.elapsedSeconds }
+              : {}),
+            ...(event.payload.parentToolUseId
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -708,36 +870,7 @@ export function runtimeEventToActivities(
               : {}),
             ...(event.payload.outputFile ? { outputFile: event.payload.outputFile } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
-      ];
-    }
-
-    case "task.updated": {
-      const status = event.payload.status;
-      // Non-terminal patches are ingestion-only (pending-row touch); only
-      // terminal statuses become sidebar-visible activities.
-      if (status !== "completed" && status !== "failed" && status !== "killed") {
-        return [];
-      }
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: status === "failed" ? "error" : "info",
-          kind: "task.updated",
-          summary:
-            status === "failed"
-              ? "Task failed"
-              : status === "killed"
-                ? "Task stopped"
-                : "Task completed",
-          payload: {
-            taskId: event.payload.taskId,
-            // Align with task.completed wire shape (killed ≈ stopped).
-            status: status === "killed" ? "stopped" : status,
+            ...taskLinkageActivityFields(event.payload as Record<string, unknown>),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -803,6 +936,10 @@ export function runtimeEventToActivities(
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+            ...(event.payload.parentToolUseId
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -825,6 +962,10 @@ export function runtimeEventToActivities(
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+            ...(event.payload.parentToolUseId
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -846,6 +987,10 @@ export function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+            ...(event.payload.parentToolUseId
+              ? { parentToolUseId: event.payload.parentToolUseId }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -885,6 +1030,7 @@ export function runtimeEventToActivities(
 }
 
 const make = Effect.gen(function* () {
+  const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -1609,12 +1755,16 @@ const make = Effect.gen(function* () {
           // the pending record even if `task.completed` (task_notification) was
           // never delivered — closing the leak where a dropped completion would
           // otherwise let the row survive to a spurious stale-timeout recovery.
-          // Non-terminal patches (pending/running/paused) leave the row intact.
-          if (
-            event.payload.status === "completed" ||
-            event.payload.status === "failed" ||
-            event.payload.status === "killed"
-          ) {
+          // Non-terminal patches (pending/running/waiting/idle) leave the row intact.
+          //
+          // The terminal set is matched against the RuntimeTaskStatus vocabulary,
+          // NOT the provider's raw wire words. This used to test for "killed",
+          // which the adapter forwarded verbatim; upstream's task_updated case now
+          // maps the SDK patch through CLAUDE_TASK_PATCH_STATUS (killed →
+          // "cancelled"), so "killed" can no longer arrive. Left unfixed, a killed
+          // background task would never clear its persisted row and the thread
+          // would read "Working" forever.
+          if (isTerminalRuntimeTaskStatus(event.payload.status)) {
             yield* pendingBackgroundTaskRepository.deleteByTaskId({
               taskId: event.payload.taskId,
             });
@@ -2181,6 +2331,43 @@ const make = Effect.gen(function* () {
           yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
         }
       }
+      // Sidebar background liveness: fed from the same lifecycle stream,
+      // read by the shell query at mapping time (no persistence).
+      switch (event.type) {
+        case "task.started":
+        case "task.progress":
+        case "task.updated":
+        case "task.completed": {
+          const payload = event.payload as {
+            taskId: string;
+            taskType?: string;
+            status?: string;
+            agentId?: string;
+          };
+          threadBackgroundLiveness.recordTaskLiveness({
+            threadId: thread.id,
+            taskId: payload.taskId,
+            taskType: payload.taskType,
+            status: payload.status,
+            agentId: payload.agentId,
+            kind:
+              event.type === "task.started"
+                ? "started"
+                : event.type === "task.progress"
+                  ? "progress"
+                  : event.type === "task.updated"
+                    ? "updated"
+                    : "completed",
+          });
+          break;
+        }
+        case "session.exited":
+          threadBackgroundLiveness.clearThreadLiveness(thread.id);
+          break;
+        default:
+          break;
+      }
+
       let taskTitle: string | undefined;
       if (event.type === "task.completed") {
         taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);

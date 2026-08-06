@@ -6,6 +6,14 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  emptyAgentPanelModel,
+  formatSubagentTokenCount,
+} from "@t3tools/client-runtime/state/subagentRuntime";
+
+const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
+const NOOP_OPEN_AGENTS = () => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   createContext,
@@ -137,6 +145,8 @@ interface TimelineRowSharedState {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorElement?: HTMLElement) => void;
+  agentPanelModel: AgentPanelModel;
+  onOpenAgents: () => void;
 }
 
 interface TimelineRowActivityState {
@@ -210,6 +220,8 @@ const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "d
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  agentPanelModel?: AgentPanelModel;
+  onOpenAgents?: () => void;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
@@ -249,6 +261,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
+  onOpenAgents = NOOP_OPEN_AGENTS,
   listRef,
   timelineEntries,
   latestTurn,
@@ -486,6 +500,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenTurnDiff,
       onToggleTurnFold,
       onToggleWorkGroup,
+      agentPanelModel,
+      onOpenAgents,
     }),
     [
       timestampFormat,
@@ -500,6 +516,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenTurnDiff,
       onToggleTurnFold,
       onToggleWorkGroup,
+      agentPanelModel,
+      onOpenAgents,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1940,8 +1958,14 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
     case "mcp_tool_call":
       return "wrench";
     case "dynamic_tool_call":
-    case "collab_agent_tool_call":
       return "hammer";
+    case "collab_agent_tool_call":
+      return "bot";
+  }
+
+  // Subagent lifecycle rows (grouped by taskId) get agent identity chrome.
+  if (workEntry.taskId) {
+    return "bot";
   }
 
   return workToneIcon(workEntry.tone).iconName;
@@ -1962,7 +1986,129 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
+// Upstream's `stopRowToggle` was declared here. Not carried: its only use was
+// the inline expanded-body block on a work-entry row, and this fork opens that
+// detail in a modal (`onOpenDetail`) instead, so nothing here needs to stop the
+// row's toggle from firing. Carrying it would just be an unused symbol.
+
+/**
+ * A1 spawn CTA: one anchored row per workflow run (or per-turn direct-spawn
+ * batch). Live status is derived from the shared agent panel model at render
+ * time — the row itself never re-renders a roster; the Agents panel is the
+ * only roster. Freezes to past tense when every member settles. Static dot,
+ * no animation.
+ */
+const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
+  const { workEntry } = props;
+  const { agentPanelModel, onOpenAgents } = use(TimelineRowCtx);
+  const spawn = workEntry.agentSpawn;
+  if (!spawn) {
+    return null;
+  }
+
+  const memberIds = new Set(spawn.agentTaskIds);
+  const workflowGroup = spawn.workflowId
+    ? agentPanelModel.workflows.find((group) => group.workflow.id === spawn.workflowId)
+    : undefined;
+  const agents = workflowGroup
+    ? [...workflowGroup.phases.flatMap((phase) => phase.members), ...workflowGroup.unphasedMembers]
+    : agentPanelModel.directAgents.filter((agent) => memberIds.has(agent.id));
+  const agentCount = Math.max(
+    agents.length,
+    Math.max(memberIds.size - (spawn.workflowId ? 1 : 0), 0),
+  );
+
+  const running = agents.filter(
+    (agent) => agent.status === "running" || agent.status === "pending",
+  ).length;
+  const waiting = agents.filter((agent) => agent.status === "waiting").length;
+  const failed = agents.filter((agent) => agent.status === "failed").length;
+  // The coordinator's own status is authoritative for workflows: dynamic
+  // spawns mean the member list can be momentarily all-settled while the
+  // run is still mid-flight (the "completed" lie from live testing). A
+  // workflow is live until the coordinator itself reaches a terminal state.
+  const coordinatorStatus = workflowGroup?.workflow.status;
+  const coordinatorSettled =
+    coordinatorStatus === "completed" ||
+    coordinatorStatus === "failed" ||
+    coordinatorStatus === "cancelled" ||
+    coordinatorStatus === "interrupted";
+  const live = workflowGroup !== undefined ? !coordinatorSettled : running + waiting > 0;
+  // Same rule as the panel footer: providers may aggregate member usage into
+  // the coordinator, so count the coordinator only when no members exist.
+  const totalTokens = agents.reduce(
+    (sum, agent) => sum + (agent.usage?.totalTokens ?? 0),
+    spawn.workflowId && agents.length === 0 ? (workflowGroup?.workflow.usage?.totalTokens ?? 0) : 0,
+  );
+
+  const livePhase = workflowGroup?.phases.find((phase) => phase.state === "running");
+  const workflowName =
+    workflowGroup?.workflow.workflowName ?? workflowGroup?.workflow.title ?? null;
+
+  // One steady in-flight presentation (monitoring-pill rule): waiting and
+  // stalled agents read as working; only settled states differentiate.
+  const working = running + waiting;
+  const dotClass = live ? "bg-info" : failed > 0 ? "bg-destructive" : "bg-success";
+  const lead = live
+    ? `Kicked off ${agentCount} subagent${agentCount === 1 ? "" : "s"}`
+    : `Ran ${agentCount} subagent${agentCount === 1 ? "" : "s"}`;
+  const status = live
+    ? livePhase
+      ? `${livePhase.title} · ${livePhase.activeCount} working`
+      : working > 0
+        ? `${working} working`
+        : "working"
+    : failed > 0
+      ? `${failed} failed`
+      : "✓ completed";
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenAgents}
+      className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
+    >
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        {workflowName ? <span className="text-muted-foreground"> · {workflowName}</span> : null}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        <span>{status}</span>
+        {totalTokens > 0 ? (
+          <span className="tabular-nums">Σ {formatSubagentTokenCount(totalTokens)}</span>
+        ) : null}
+        <span className="text-info-foreground">{live ? "Open Agents ▸" : "View ▸"}</span>
+      </span>
+    </button>
+  );
+});
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
+  workEntry: TimelineWorkEntry;
+  workspaceRoot: string | undefined;
+  onOpenDetail: (entry: TimelineWorkEntry) => void;
+}) {
+  const { workEntry, workspaceRoot, onOpenDetail } = props;
+  // Before any hooks: spawn CTA rows render their own component.
+  if (workEntry.agentSpawn) {
+    return <AgentSpawnCtaRow workEntry={workEntry} />;
+  }
+  return (
+    <PlainWorkEntryRow
+      workEntry={workEntry}
+      workspaceRoot={workspaceRoot}
+      onOpenDetail={onOpenDetail}
+    />
+  );
+});
+
+// Upstream split the old SimpleWorkEntryRow body out to here so spawn CTA rows
+// could short-circuit before any hooks. The fork's work-log detail handler has
+// to travel with the body it belongs to, so `onOpenDetail` is threaded through
+// rather than stopping at the dispatcher.
+const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
   onOpenDetail: (entry: TimelineWorkEntry) => void;

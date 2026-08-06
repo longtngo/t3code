@@ -176,6 +176,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "user-input.resolved",
   "task.started",
   "task.progress",
+  "task.updated",
   "task.completed",
   "task.updated",
   "hook.started",
@@ -230,8 +231,8 @@ const UserInputRequestedType = Schema.Literal("user-input.requested");
 const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
-const TaskCompletedType = Schema.Literal("task.completed");
 const TaskUpdatedType = Schema.Literal("task.updated");
+const TaskCompletedType = Schema.Literal("task.completed");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
 const HookCompletedType = Schema.Literal("hook.completed");
@@ -415,6 +416,13 @@ export const ItemLifecyclePayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyStringSchema),
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
   data: Schema.optional(Schema.Unknown),
+  /**
+   * Owning agent when this item ran inside a subagent (resolved from the
+   * SDK's parent_tool_use_id). Clients re-home attributed items out of the
+   * main timeline and into the owning agent's Agents-surface row.
+   */
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  parentToolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
 
@@ -467,41 +475,198 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
+/**
+ * Typed per-task usage rollup. Field names match the orchestration-v2 subagent
+ * usage vocabulary (#4779) so the eventual migration is a rename, not a remap.
+ * Claude reports per-activation deltas; Codex reports cumulative totals — the
+ * merge strategy is provider-specific and lives in client-runtime.
+ */
+export const RuntimeTaskUsage = Schema.Struct({
+  totalTokens: NonNegativeInt,
+  inputTokens: Schema.optional(NonNegativeInt),
+  cachedInputTokens: Schema.optional(NonNegativeInt),
+  outputTokens: Schema.optional(NonNegativeInt),
+  reasoningOutputTokens: Schema.optional(NonNegativeInt),
+  toolUses: Schema.optional(NonNegativeInt),
+  durationMs: Schema.optional(NonNegativeInt),
+});
+export type RuntimeTaskUsage = typeof RuntimeTaskUsage.Type;
+
+export const TaskWorkflowPhase = Schema.Struct({
+  index: NonNegativeInt,
+  title: TrimmedNonEmptyStringSchema,
+});
+export type TaskWorkflowPhase = typeof TaskWorkflowPhase.Type;
+
+export const TaskRunHandles = Schema.Struct({
+  runId: Schema.optional(TrimmedNonEmptyStringSchema),
+  scriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  transcriptDir: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Only http/https URLs may be stored here — sanitized at the adapter. */
+  sessionUrl: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type TaskRunHandles = typeof TaskRunHandles.Type;
+
+/**
+ * Watch-loop task types: Monitor-tool tasks plus background shells (a shell
+ * that outlives its turn is in practice a watch loop). Canonical single copy —
+ * the server liveness registry, ingestion's agentKind stamp, and the client
+ * fold's legacy fallback all classify with these sets.
+ */
+export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
+  "monitor",
+  "monitor_mcp",
+  "local_bash",
+  "shell",
+]);
+/** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
+export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
+
+/**
+ * Agent-vs-background classification, stamped by ingestion as `agentKind` so
+ * persisted rows are self-describing. A deliberate denylist: the SDK's
+ * agent-flavored type names drift (subagent, local_agent, local_workflow, …)
+ * and an allowlist silently dropped real subagents when "local_agent"
+ * appeared. A task launched from inside a subagent (agentId set) is
+ * agent-internal background work UNLESS it is itself agent-flavored — a
+ * nested agent can outlive its parent and stays in the roster.
+ */
+export function classifyTaskAgentKind(input: {
+  readonly taskType?: string | undefined;
+  readonly agentId?: string | undefined;
+}): "agent" | "background" {
+  const { taskType, agentId } = input;
+  const nonAgentType =
+    taskType !== undefined && (MONITOR_TASK_TYPES.has(taskType) || INERT_TASK_TYPES.has(taskType));
+  if (agentId !== undefined && agentId.trim().length > 0) {
+    return taskType === undefined || nonAgentType ? "background" : "agent";
+  }
+  return nonAgentType ? "background" : "agent";
+}
+
+/**
+ * Optional agent-identity linkage carried on every task lifecycle payload.
+ * Repeated on progress and terminal rows (not just start) so client folds can
+ * reconstruct an agent even when its start row aged out of activity retention.
+ * All fields optional: old emitters and old rows decode unchanged.
+ */
+const taskAgentLinkageFields = {
+  /** SDK task_type (subagent/shell/monitor/local_workflow/…), repeated on
+   * every row so folds can classify without the start row. */
+  taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  /**
+   * Server-stamped classification (classifyTaskAgentKind at ingestion).
+   * Clients trust this stamp outright; rows without it (legacy, pre-stamp)
+   * fall back to client-side heuristics.
+   */
+  agentKind: Schema.optional(Schema.Literals(["agent", "background"])),
+  /**
+   * Owning agent when the task itself was launched from inside a subagent
+   * (e.g. a subagent's background shell). Clients treat such tasks as
+   * agent-internal and keep them out of the parent work log.
+   */
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  title: Schema.optional(TrimmedNonEmptyStringSchema),
+  role: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Reasoning effort when known (e.g. "high"). Open string: provider vocabularies differ. */
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  parentAgentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentIndex: Schema.optional(NonNegativeInt),
+  phaseIndex: Schema.optional(NonNegativeInt),
+  phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
+  phases: Schema.optional(Schema.Array(TaskWorkflowPhase)),
+  attempt: Schema.optional(NonNegativeInt),
+  runHandles: Schema.optional(TaskRunHandles),
+  outputFile: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Codex agent hierarchy path, e.g. "/root/marlow". */
+  agentPath: Schema.optional(TrimmedNonEmptyStringSchema),
+  /**
+   * Set on provider-synthesized child-agent events (Codex) whose activity
+   * belongs in the Agents surface, never the parent timeline.
+   */
+  timelineBypass: Schema.optional(Schema.Boolean),
+} as const;
+
+export const TaskAgentLinkage = Schema.Struct(taskAgentLinkageFields);
+export type TaskAgentLinkage = typeof TaskAgentLinkage.Type;
+
 const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
-  taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  ...taskAgentLinkageFields,
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
+
+export const RuntimeTaskStatus = Schema.Literals([
+  "pending",
+  "running",
+  "waiting",
+  "idle",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+export type RuntimeTaskStatus = typeof RuntimeTaskStatus.Type;
 
 const TaskProgressPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: TrimmedNonEmptyStringSchema,
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  typedUsage: Schema.optional(RuntimeTaskUsage),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Present on synthesized member/child progress rows that carry state. */
+  status: Schema.optional(RuntimeTaskStatus),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+  ...taskAgentLinkageFields,
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
+
+/**
+ * Non-terminal status patch (from the Claude SDK's task_updated, which main
+ * previously dropped). killed→cancelled and paused→idle are mapped at the
+ * adapter so the wire only carries the shared vocabulary.
+ */
+const TaskUpdatedPayload = Schema.Struct({
+  taskId: RuntimeTaskId,
+  status: Schema.optional(RuntimeTaskStatus),
+  description: Schema.optional(TrimmedNonEmptyStringSchema),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+  endedAt: Schema.optional(IsoDateTime),
+  isBackgrounded: Schema.optional(Schema.Boolean),
+  ...taskAgentLinkageFields,
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
-  outputFile: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  typedUsage: Schema.optional(RuntimeTaskUsage),
+  // `outputFile` is no longer declared here: upstream moved it into
+  // taskAgentLinkageFields, so the spread below supplies it. Same schema, so
+  // this is a de-duplication, not a change in the wire shape.
+  ...taskAgentLinkageFields,
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
-// A per-task lifecycle status patch (SDK `task_updated`). Used as a robust,
-// per-task terminal signal to clear a persisted pending-background-task row
-// independently of `task.completed` — it never wakes a thread.
-const TaskUpdatedPayload = Schema.Struct({
-  taskId: RuntimeTaskId,
-  status: Schema.optional(
-    Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
-  ),
-});
-export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
+// The fork's own TaskUpdatedPayload lived here — same wire event, but typed
+// with the provider's RAW status words ("killed"/"paused"). Removed as
+// SUPERSEDED by upstream's definition above, which types `status` as the shared
+// RuntimeTaskStatus and carries description/error/endedAt/isBackgrounded too.
+// Both sides added this independently and the file merged CLEANLY, so the
+// duplicate only surfaced as a redeclaration error at typecheck.
+//
+// The fork's use of this payload (clearing a persisted pending-background-task
+// row on a terminal status) still works, but its terminal-status test had to
+// move to the mapped vocabulary — see isTerminalRuntimeTaskStatus in
+// ProviderRuntimeIngestion.ts. Left unchanged it would have silently stopped
+// matching, because "killed" now arrives as "cancelled".
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
@@ -533,6 +698,9 @@ const ToolProgressPayload = Schema.Struct({
   toolName: Schema.optional(TrimmedNonEmptyStringSchema),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   elapsedSeconds: Schema.optional(Schema.Number),
+  /** Owning task/agent when the tool ran inside a subagent. */
+  taskId: Schema.optional(RuntimeTaskId),
+  parentToolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type ToolProgressPayload = typeof ToolProgressPayload.Type;
 
@@ -943,6 +1111,13 @@ const ProviderRuntimeTaskProgressEvent = Schema.Struct({
 });
 export type ProviderRuntimeTaskProgressEvent = typeof ProviderRuntimeTaskProgressEvent.Type;
 
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
+
 const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: TaskCompletedType,
@@ -950,12 +1125,8 @@ const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTaskCompletedEvent = typeof ProviderRuntimeTaskCompletedEvent.Type;
 
-const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
-  ...ProviderRuntimeEventBase.fields,
-  type: TaskUpdatedType,
-  payload: TaskUpdatedPayload,
-});
-export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
+// (The fork's duplicate ProviderRuntimeTaskUpdatedEvent was here — same event,
+// now declared once above. See the TaskUpdatedPayload note.)
 
 const ProviderRuntimeHookStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -1132,8 +1303,8 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeUserInputResolvedEvent,
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
-  ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeTaskUpdatedEvent,
+  ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,
   ProviderRuntimeHookCompletedEvent,

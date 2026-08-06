@@ -120,6 +120,7 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
+    | "Monitoring"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
@@ -130,12 +131,16 @@ export interface ThreadStatusPill {
   pulse: boolean;
 }
 
+// Rollup order mirrors the per-thread resolver exactly: attention states,
+// then active work, then the actionable plan prompt, then passive
+// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 5,
-  "Awaiting Input": 4,
-  Working: 3,
-  Connecting: 3,
-  "Plan Ready": 2,
+  "Pending Approval": 6,
+  "Awaiting Input": 5,
+  Working: 4,
+  Connecting: 4,
+  "Plan Ready": 3,
+  Monitoring: 2,
   Completed: 1,
 };
 
@@ -148,6 +153,7 @@ type ThreadStatusInput = Pick<
   | "interactionMode"
   | "latestTurn"
   | "session"
+  | "backgroundLiveness"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -425,11 +431,15 @@ export function resolveThreadRowClassName(input: {
 // whether it finished, asked a question, or proposed a plan.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type SidebarV2Status = "approval" | "input" | "working" | "monitoring" | "failed" | "ready";
 
 type SidebarV2StatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingBackgroundTask" | "hasPendingUserInput" | "session"
+  | "hasPendingApprovals"
+  | "hasPendingBackgroundTask"
+  | "hasPendingUserInput"
+  | "session"
+  | "backgroundLiveness"
 >;
 
 export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2Status {
@@ -442,8 +452,28 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
   if (thread.session?.status === "running" || thread.session?.status === "starting") {
     return "working";
   }
+  // A failed session outranks lingering background liveness: the user must
+  // see the failure, not a stale Working (review finding).
   if (thread.session?.status === "error") {
     return "failed";
+  }
+  // Two background-work signals reach here and they answer different questions,
+  // so both are consulted rather than one superseding the other:
+  //
+  //   backgroundLiveness      — upstream, in-memory: what is running RIGHT NOW.
+  //                             Richer (distinguishes watch loops), and empty
+  //                             after a restart by design.
+  //   hasPendingBackgroundTask — fork, persisted: work we still owe recovery
+  //                             for, which SURVIVES a restart so
+  //                             BackgroundTaskRecoveryWatchdog can pick it up.
+  //
+  // Live state is checked first because only it can say "monitoring"; the
+  // persisted flag then backstops the gap upstream's registry cannot cover.
+  if (thread.backgroundLiveness === "working") {
+    return "working";
+  }
+  if (thread.backgroundLiveness === "monitoring") {
+    return "monitoring";
   }
   // The top-level turn can settle while a background worker is still running;
   // keep the row in the working state during that gap (a real error still wins,
@@ -623,17 +653,13 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // A background worker still running after the top-level turn settled keeps the
-  // row "Working" (outranks Plan Ready / Completed — work is ongoing).
-  if (thread.hasPendingBackgroundTask) {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
+  // An actionable plan prompt outranks lingering background work: it needs
+  // the user's decision, while liveness merely reports (review finding).
+  //
+  // This deliberately DEMOTES the fork's own background check, which used to sit
+  // above Plan Ready. Upstream's ordering wins on the argument: the fork ranked
+  // it higher only because "work is ongoing", which reports rather than asks.
+  // The fork check now lives with upstream's liveness checks below.
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
@@ -645,6 +671,41 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
+    };
+  }
+
+  // The turn can settle while native background work runs on. Subagent and
+  // workflow fleets read as plain Working; Monitoring is reserved for watch
+  // loops (a parent agent babysitting a PR, tailing checks) with no other
+  // live work. Same recede treatment as Working per inbox-zero.
+  if (thread.backgroundLiveness === "working") {
+    return {
+      label: "Working",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+
+  if (thread.backgroundLiveness === "monitoring") {
+    return {
+      label: "Monitoring",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
+    };
+  }
+
+  // Fork backstop: persisted background work we still owe recovery for. Unlike
+  // the in-memory liveness above it survives a restart, so a thread whose
+  // completion notification was lost still reads Working until
+  // BackgroundTaskRecoveryWatchdog resolves it, instead of falsely going quiet.
+  if (thread.hasPendingBackgroundTask) {
+    return {
+      label: "Working",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
     };
   }
 

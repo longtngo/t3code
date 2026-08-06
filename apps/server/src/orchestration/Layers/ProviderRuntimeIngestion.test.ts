@@ -49,6 +49,7 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -276,6 +277,9 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(makeRuntimeBootIdLive("ingestion-test-boot")),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
+      // Single shared liveness instance across ingestion (writer), the
+      // engine, and the snapshot query (reader).
+      Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(settingsLayer),
@@ -509,20 +513,23 @@ describe("ProviderRuntimeIngestion", () => {
     expect(await harness.pendingTasks()).toHaveLength(1);
 
     // A terminal patch clears it (the second deletion path; no task.completed sent).
+    // "cancelled", not the provider's raw "killed": the Claude adapter maps the
+    // SDK patch through CLAUDE_TASK_PATCH_STATUS, so only the shared
+    // RuntimeTaskStatus vocabulary reaches ingestion.
     harness.emit({
       type: "task.updated",
-      eventId: asEventId("evt-task-updated-killed"),
+      eventId: asEventId("evt-task-updated-cancelled"),
       provider: ProviderDriverKind.make("codex"),
       threadId: asThreadId("thread-1"),
       createdAt: "2026-01-01T00:02:00.000Z",
-      payload: { taskId: RuntimeTaskId.make("task-bg-3"), status: "killed" },
+      payload: { taskId: RuntimeTaskId.make("task-bg-3"), status: "cancelled" },
     });
     await harness.drain();
     expect(await harness.pendingTasks()).toHaveLength(0);
 
     const thread = await waitForThread(harness.readModel, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-killed",
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-cancelled",
       ),
     );
     expect(
@@ -531,7 +538,7 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(false);
     const terminalActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-killed",
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-updated-cancelled",
     );
     expect(terminalActivity).toMatchObject({
       kind: "task.updated",
@@ -3720,7 +3727,8 @@ describe("ProviderRuntimeIngestion", () => {
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-started",
     );
     const progress = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-progress",
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.id === "task-progress:thread-1:turn-task-1",
     );
     const completed = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-task-completed",
@@ -3973,7 +3981,8 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     const progress = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-named-task-progress",
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.id === "task-progress:thread-1:named-task-1",
     );
     const completed = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-named-task-completed",
@@ -4064,7 +4073,8 @@ describe("ProviderRuntimeIngestion", () => {
 
     await waitForThread(harness.readModel, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-swept-task-progress",
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "task-progress:thread-1:swept-task-1",
       ),
     );
 
