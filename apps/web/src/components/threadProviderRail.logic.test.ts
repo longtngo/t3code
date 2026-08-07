@@ -126,6 +126,20 @@ describe("resolveThreadProviderPresentation", () => {
     expect(resolveThreadProviderPresentation(uniSub, clashing)?.initials).toBeUndefined();
   });
 
+  it("initials the raw name, not the driver-qualified one", () => {
+    // Regression: initialling the qualified "PersonalSub (Codex)" produced "P(" on a live row,
+    // because the parenthesised driver counts as a second word to the initialler.
+    const codexId = ProviderInstanceId.make("codex");
+    const bothNamedAlike: ReadonlyArray<ThreadProviderAccentSource> = [
+      { instanceId: personalSub, driver: claudeKind, displayName: "PersonalSub", accentColor: "#7c3aed" },
+      { instanceId: codexId, driver: codexKind, displayName: "PersonalSub", accentColor: "#7c3aed" },
+    ];
+    const codex = resolveThreadProviderPresentation(codexId, bothNamedAlike);
+    expect(codex?.displayName).toBe("PersonalSub (Codex)");
+    expect(codex?.initials).toBe("PE");
+    expect(codex?.initials).not.toContain("(");
+  });
+
   it("treats differently-cased spellings of one colour as the collision they look like", () => {
     const other = ProviderInstanceId.make("codex");
     const cased: ReadonlyArray<ThreadProviderAccentSource> = [
