@@ -108,6 +108,43 @@ describe("resolveThreadProviderPresentation", () => {
     expect(resolveThreadProviderPresentation(uniSub, providers)?.displayName).toBe("UniSub");
   });
 
+  it("omits the monogram when the accent is unique", () => {
+    expect(resolveThreadProviderPresentation(uniSub, providers)?.initials).toBeUndefined();
+  });
+
+  it("adds a monogram to every instance sharing an accent", () => {
+    const qwenId = ProviderInstanceId.make("claudeAgent_qwen");
+    const codexId = ProviderInstanceId.make("codex");
+    const clashing: ReadonlyArray<ThreadProviderAccentSource> = [
+      { instanceId: uniSub, driver: claudeKind, displayName: "UniSub", accentColor: "#ea580c" },
+      { instanceId: qwenId, driver: claudeKind, displayName: "Qwen", accentColor: "#7c3aed" },
+      { instanceId: codexId, driver: codexKind, displayName: "Gemma 4 26B", accentColor: "#7c3aed" },
+    ];
+    expect(resolveThreadProviderPresentation(qwenId, clashing)?.initials).toBe("QW");
+    expect(resolveThreadProviderPresentation(codexId, clashing)?.initials).toBe("G4");
+    // The instance whose accent is unique stays unadorned even though others collide.
+    expect(resolveThreadProviderPresentation(uniSub, clashing)?.initials).toBeUndefined();
+  });
+
+  it("treats differently-cased spellings of one colour as the collision they look like", () => {
+    const other = ProviderInstanceId.make("codex");
+    const cased: ReadonlyArray<ThreadProviderAccentSource> = [
+      { instanceId: uniSub, driver: claudeKind, displayName: "UniSub", accentColor: "#EA580C" },
+      { instanceId: other, driver: codexKind, displayName: "Twin", accentColor: "#ea580c" },
+    ];
+    expect(resolveThreadProviderPresentation(uniSub, cased)?.initials).toBe("UN");
+    expect(resolveThreadProviderPresentation(other, cased)?.initials).toBe("TW");
+  });
+
+  it("does not collide an instance with an unusable accent", () => {
+    const other = ProviderInstanceId.make("codex");
+    const withInvalid: ReadonlyArray<ThreadProviderAccentSource> = [
+      { instanceId: uniSub, driver: claudeKind, displayName: "UniSub", accentColor: "#ea580c" },
+      { instanceId: other, driver: codexKind, displayName: "Broken", accentColor: "not-a-colour" },
+    ];
+    expect(resolveThreadProviderPresentation(uniSub, withInvalid)?.initials).toBeUndefined();
+  });
+
   it("keeps instances that share an accent distinguishable by name", () => {
     const shared: ReadonlyArray<ThreadProviderAccentSource> = [
       { instanceId: ProviderInstanceId.make("claudeAgent_qwen"), driver: claudeKind, displayName: "Qwen", accentColor: "#7c3aed" },

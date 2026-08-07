@@ -2,6 +2,7 @@ import { PROVIDER_DISPLAY_NAMES, type ProviderDriverKind, type ProviderInstanceI
 
 import { normalizeProviderAccentColor } from "../providerInstances";
 import { formatProviderDriverKindLabel } from "../providerModels";
+import { providerInstanceInitials } from "./chat/ProviderInstanceIcon";
 
 /**
  * Resolution for the per-thread provider indicator: which provider instance a thread is on, and
@@ -34,6 +35,12 @@ export function resolveThreadProviderInstanceId(thread: ThreadProviderSource): P
 export interface ThreadProviderPresentation {
   readonly accentColor: string;
   readonly displayName: string;
+  /**
+   * Short monogram, present *only* when this instance's accent is shared with another configured
+   * instance. Colour is the primary channel; the monogram is the fallback for exactly the rows
+   * where colour cannot decide, so it stays absent on every unambiguous row.
+   */
+  readonly initials?: string;
 }
 
 /**
@@ -85,5 +92,28 @@ export function resolveThreadProviderPresentation(
   if (!provider) return undefined;
   const accentColor = normalizeProviderAccentColor(provider.accentColor);
   if (!accentColor) return undefined;
-  return { accentColor, displayName: qualifyDisplayName(provider, providers) };
+  const displayName = qualifyDisplayName(provider, providers);
+  const initials = accentIsShared(provider, accentColor, providers)
+    ? providerInstanceInitials(displayName)
+    : undefined;
+  return { accentColor, displayName, ...(initials ? { initials } : {}) };
+}
+
+/**
+ * Whether another configured instance draws in the same colour, making the rail alone ambiguous.
+ *
+ * Compared on the *normalized* accent so two spellings of one colour (`#EA580C` / `#ea580c`) count
+ * as the collision they visually are. Disabled instances are included deliberately: they still own
+ * existing threads, so their rows still render a rail the user has to tell apart.
+ */
+function accentIsShared(
+  provider: ThreadProviderAccentSource,
+  accentColor: string,
+  providers: ReadonlyArray<ThreadProviderAccentSource>,
+): boolean {
+  return providers.some(
+    (other) =>
+      other.instanceId !== provider.instanceId &&
+      normalizeProviderAccentColor(other.accentColor)?.toLowerCase() === accentColor.toLowerCase(),
+  );
 }
