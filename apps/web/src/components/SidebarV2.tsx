@@ -146,6 +146,7 @@ import {
   snoozeWakeLabel,
   type SnoozePreset,
 } from "./Sidebar.snooze";
+import { ThreadProviderRail } from "./ThreadProviderRail";
 import { ProjectFavicon } from "./ProjectFavicon";
 import WorkspaceMembersControl from "./WorkspaceMembersControl";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -870,6 +871,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             }
           >
+            <ThreadProviderRail thread={thread} />
             {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
             <span
@@ -1002,6 +1004,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             />
           }
         >
+          <ThreadProviderRail thread={thread} className="z-10" />
           <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               <ProjectFavicon
