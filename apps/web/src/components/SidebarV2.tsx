@@ -146,7 +146,7 @@ import {
   snoozeWakeLabel,
   type SnoozePreset,
 } from "./Sidebar.snooze";
-import { ThreadProviderRail } from "./ThreadProviderRail";
+import { ThreadProviderChip, ThreadProviderRail } from "./ThreadProviderRail";
 import { ProjectFavicon } from "./ProjectFavicon";
 import WorkspaceMembersControl from "./WorkspaceMembersControl";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -889,6 +889,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             </span>
             {title}
+            <ThreadProviderChip thread={thread} />
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -1024,6 +1025,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               ) : (
                 <span className="flex-1" />
               )}
+              {/* In the card's header line, beside the project name — where the eye already
+                  goes for context — so the title line below stays untouched. */}
+              <ThreadProviderChip thread={thread} />
               {props.isPinned ? (
                 props.pinningSupported ? (
                   <button

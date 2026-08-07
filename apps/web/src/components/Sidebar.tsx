@@ -21,7 +21,7 @@ import {
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
-import { ThreadProviderRail } from "./ThreadProviderRail";
+import { ThreadProviderChip, ThreadProviderRail } from "./ThreadProviderRail";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -734,6 +734,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* First in the trailing cluster: it annotates the title, so it stays adjacent to it
+              rather than drifting behind the port/worktree/terminal affordances. */}
+          <ThreadProviderChip thread={thread} />
           {discoveredPorts.length > 0 && (
             <Tooltip>
               <TooltipTrigger
