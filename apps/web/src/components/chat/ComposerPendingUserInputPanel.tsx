@@ -1,12 +1,16 @@
 import { type ApprovalRequestId } from "@t3tools/contracts";
-import { memo, useEffect, useEffectEvent, useRef, useState } from "react";
+import { memo, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import {
+  describePendingOptionsVisibility,
+  PENDING_OPTIONS_MAX_HEIGHT_CLASS,
+} from "./pendingUserInputPanelLayout";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
@@ -61,10 +65,22 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const activeQuestion = progress.activeQuestion;
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const onAdvanceRef = useRef(onAdvance);
+  const optionsListRef = useRef<HTMLDivElement | null>(null);
+  const optionsListId = useId();
+  // Collapsing hides the options so the conversation behind the panel can be
+  // read before answering. The panel is keyed by `requestId`, so it does NOT
+  // remount when `questionIndex` advances within a multi-question prompt —
+  // without the reset below a collapse would carry over and hide the next
+  // question's options.
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
     questionId: string;
     optionLabel: string;
   } | null>(null);
+
+  useEffect(() => {
+    setIsCollapsed(false);
+  }, [questionIndex]);
 
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
@@ -100,21 +116,34 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
   }, []);
 
-  const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
-    if (activeQuestion?.multiSelect) {
+  const handleOptionSelection = useEffectEvent(
+    (questionId: string, optionLabel: string, optionIndex: number) => {
+      // A number-key shortcut can target an option scrolled below the fold of
+      // the bounded list, or hidden outright by a collapse. Reveal it either
+      // way so a selection is never invisible. `scrollIntoView` runs after the
+      // expand has painted, and no-ops when the option is already in view.
+      setIsCollapsed(false);
+      window.requestAnimationFrame(() => {
+        optionsListRef.current
+          ?.querySelector(`[data-option-index="${optionIndex}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
+
+      if (activeQuestion?.multiSelect) {
+        onToggleOption(questionId, optionLabel);
+        return;
+      }
+      setOptimisticSingleSelect({ questionId, optionLabel });
       onToggleOption(questionId, optionLabel);
-      return;
-    }
-    setOptimisticSingleSelect({ questionId, optionLabel });
-    onToggleOption(questionId, optionLabel);
-    if (autoAdvanceTimerRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimerRef.current);
-    }
-    autoAdvanceTimerRef.current = window.setTimeout(() => {
-      autoAdvanceTimerRef.current = null;
-      onAdvanceRef.current();
-    }, 200);
-  });
+      if (autoAdvanceTimerRef.current !== null) {
+        window.clearTimeout(autoAdvanceTimerRef.current);
+      }
+      autoAdvanceTimerRef.current = window.setTimeout(() => {
+        autoAdvanceTimerRef.current = null;
+        onAdvanceRef.current();
+      }, 200);
+    },
+  );
 
   // Keyboard shortcut: number keys 1-9 select corresponding options when focus is
   // outside editable fields. Multi-select prompts toggle options in place; single-
@@ -140,7 +169,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const option = activeQuestion.options[optionIndex];
       if (!option) return;
       event.preventDefault();
-      handleOptionSelection(activeQuestion.id, option.label);
+      handleOptionSelection(activeQuestion.id, option.label, optionIndex);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -151,6 +180,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }
 
   const customAnswerActive = progress.customAnswer.trim().length > 0;
+  const visibility = describePendingOptionsVisibility({
+    optionCount: activeQuestion.options.length,
+    isCollapsed,
+  });
 
   return (
     <div className="px-4 py-3 sm:px-5">
@@ -163,12 +196,47 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             {questionIndex + 1}/{prompt.questions.length}
           </span>
         ) : null}
+        <button
+          type="button"
+          onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+          aria-expanded={!isCollapsed}
+          aria-controls={optionsListId}
+          aria-label={visibility.toggleLabel}
+          title={visibility.toggleTitle}
+          className="-my-1 ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25"
+        >
+          {isCollapsed ? (
+            <ChevronUpIcon className="size-4" />
+          ) : (
+            <ChevronDownIcon className="size-4" />
+          )}
+        </button>
       </div>
       <p className="text-sm text-foreground/90">{activeQuestion.question}</p>
       {activeQuestion.multiSelect ? (
         <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
       ) : null}
-      <div className="mt-3 space-y-1.5">
+      {isCollapsed ? (
+        <button
+          type="button"
+          onClick={() => setIsCollapsed(false)}
+          className="mt-2 cursor-pointer rounded-md text-secondary-label text-xs underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-1 focus-visible:ring-primary/25"
+        >
+          {visibility.hintLabel}
+        </button>
+      ) : null}
+      <div
+        ref={optionsListRef}
+        id={optionsListId}
+        // Kept mounted while collapsed (display:none, so it is out of the
+        // a11y tree and costs no height) so `aria-controls` always resolves
+        // and the list keeps its scroll position across a collapse.
+        className={cn(
+          "mt-3 space-y-1.5 overflow-y-auto overscroll-contain pr-1",
+          PENDING_OPTIONS_MAX_HEIGHT_CLASS,
+          isCollapsed && "hidden",
+        )}
+      >
         {activeQuestion.options.map((option, index) => {
           const isOptimisticallySelected =
             optimisticSingleSelect?.questionId === activeQuestion.id &&
@@ -211,9 +279,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             <button
               key={`${activeQuestion.id}:${option.label}`}
               type="button"
+              data-option-index={index}
               disabled={isResponding}
               onClick={() => {
-                handleOptionSelection(activeQuestion.id, option.label);
+                handleOptionSelection(activeQuestion.id, option.label, index);
               }}
               className={className}
             >
