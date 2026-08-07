@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   type ProviderInstanceConfig,
@@ -211,6 +211,40 @@ function LocalLlmPresetAction(props: {
   );
 }
 
+/**
+ * The environment these draft rows represent, or null while a row is still half-typed —
+ * an incomplete row is not publishable, and must not read as "the user cleared it".
+ */
+function rowsToEnvironment(
+  rows: ReadonlyArray<EnvironmentDraftRow>,
+): ProviderInstanceEnvironmentVariable[] | null {
+  const published: ProviderInstanceEnvironmentVariable[] = [];
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
+      if (
+        name.length > 0 ||
+        row.value.length > 0 ||
+        row.sensitive !== true ||
+        row.valueRedacted !== undefined
+      ) {
+        return null;
+      }
+      continue;
+    }
+    const { id: _id, ...rest } = row;
+    published.push({ ...rest, name });
+  }
+  return published;
+}
+
+/** Order-sensitive value identity, so an equal environment rebuilt as a new array compares equal. */
+function environmentKey(environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>): string {
+  return JSON.stringify(
+    environment.map((v) => [v.name, v.value, v.sensitive === true, v.valueRedacted === true]),
+  );
+}
+
 function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
@@ -219,25 +253,29 @@ function ProviderEnvironmentSection(props: {
     props.environment.map(makeEnvironmentDraftRow),
   );
 
-  const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
-    const published: ProviderInstanceEnvironmentVariable[] = [];
-    for (const row of nextRows) {
-      const name = row.name.trim();
-      if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
-        if (
-          name.length > 0 ||
-          row.value.length > 0 ||
-          row.sensitive !== true ||
-          row.valueRedacted !== undefined
-        ) {
-          return;
-        }
-        continue;
-      }
-      const { id: _id, ...rest } = row;
-      published.push({ ...rest, name });
+  // Re-seed when the instance's environment changes underneath us — "Apply a local-LLM
+  // preset" writes through `onApply`, and this card is keyed by instance id so it does not
+  // remount. Without this the table kept rendering the pre-preset rows, and the next edit
+  // republished that stale draft, deleting the variables the preset had just added.
+  //
+  // Compared by VALUE, not identity: our own publish round-trips through the parent and
+  // comes back as a fresh array, which would re-seed on every keystroke and discard a
+  // half-typed row. A row that is still incomplete is dropped from `publishRows` output, so
+  // it does not register as a difference either — only a genuine external write does.
+  const draftEnvironment = rowsToEnvironment(rows);
+  const incoming = environmentKey(props.environment);
+  const seededRef = useRef(incoming);
+  if (seededRef.current !== incoming) {
+    seededRef.current = incoming;
+    // A half-typed row (null) means the user is mid-edit; leave their draft alone.
+    if (draftEnvironment !== null && environmentKey(draftEnvironment) !== incoming) {
+      setRows(props.environment.map(makeEnvironmentDraftRow));
     }
-    props.onChange(published);
+  }
+
+  const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
+    const published = rowsToEnvironment(nextRows);
+    if (published) props.onChange(published);
   };
 
   const updateVariable = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {

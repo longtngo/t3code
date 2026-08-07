@@ -118,8 +118,11 @@ These rules override the ones above for this fork only.
   elsewhere in this file mean `personal` here.
 - **Run `pnpm verify` before merging to `personal`** — the full local gate (`typecheck` → `lint` →
   `test`). This is the one place the "do not run repo-wide checks, CI owns the full suite" rule
-  above does not apply: CI only triggers on `main`, so nothing runs the suite for a `personal`
-  merge except this gate.
+  above does not apply, and the reason is stronger than it used to say: **CI does not run on this
+  fork at all.** `ci.yml` does trigger on `personal`, but every job asks for `blacksmith-*`
+  runners that only exist in the upstream org, so jobs queue for 24h and are cancelled — 429 runs,
+  zero successes, zero failures. Local `pnpm verify` (and the pre-push hook that now runs it) is
+  the entire safety net.
 - `pnpm test` runs each package's `unit` project. The `*.browser.tsx` files under `apps/web` are
   **not** wired into any test project right now (`apps/web/vite.config.ts` registers only
   `unitTestProject`), so no command runs them — don't assume they are covered.
