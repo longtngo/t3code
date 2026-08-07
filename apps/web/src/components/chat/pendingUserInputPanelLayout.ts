@@ -4,8 +4,18 @@
 // the options is how the user gets that space back to read the conversation
 // behind the question.
 
-/** Options list bound while expanded. `dvh` so the mobile keyboard or a rotation re-clamps it. */
-export const PENDING_OPTIONS_MAX_HEIGHT_CLASS = "max-h-[40dvh] sm:max-h-[22rem]";
+/**
+ * Options list bound while expanded.
+ *
+ * Bounded against the viewport's HEIGHT, not a width breakpoint. A
+ * `sm:max-h-[22rem]` pair reads sensibly but keys the cap off viewport width
+ * while the thing being protected is vertical space: measured live on a
+ * 577px-tall window, `22rem` still left the composer overlay at 112% of the
+ * viewport, i.e. no conversation visible at all. `min()` takes whichever bound
+ * is tighter, so a tall display keeps the 22rem cap and a short one falls back
+ * to 40% of the viewport. `dvh` so the mobile keyboard or a rotation re-clamps.
+ */
+export const PENDING_OPTIONS_MAX_HEIGHT_CLASS = "max-h-[min(22rem,40dvh)]";
 
 export interface PendingOptionsVisibility {
   readonly toggleLabel: string;
