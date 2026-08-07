@@ -1,6 +1,7 @@
-import type { ProviderInstanceId } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
 
 import { normalizeProviderAccentColor } from "../providerInstances";
+import { formatProviderDriverKindLabel } from "../providerModels";
 
 /**
  * Resolution for the per-thread provider indicator: which provider instance a thread is on, and
@@ -42,8 +43,30 @@ export interface ThreadProviderPresentation {
  */
 export interface ThreadProviderAccentSource {
   readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
   readonly displayName?: string | undefined;
   readonly accentColor?: string | undefined;
+}
+
+/**
+ * Instance names are user-chosen and routinely NOT unique: naming the Claude and Codex instances
+ * of one subscription both "PersonalSub" is a reasonable thing to do, and it makes the bare name
+ * useless as an identifier. Qualify with the driver only when the name is actually shared, so the
+ * common case stays "UniSub" rather than the noisier "UniSub (Claude)" everywhere.
+ */
+function qualifyDisplayName(
+  provider: ThreadProviderAccentSource,
+  providers: ReadonlyArray<ThreadProviderAccentSource>,
+): string {
+  const name = provider.displayName;
+  if (!name) return provider.instanceId;
+  const isShared = providers.some(
+    (other) => other.instanceId !== provider.instanceId && other.displayName === name,
+  );
+  if (!isShared) return name;
+  const driverLabel =
+    PROVIDER_DISPLAY_NAMES[provider.driver] ?? formatProviderDriverKindLabel(provider.driver);
+  return `${name} (${driverLabel})`;
 }
 
 /**
@@ -62,5 +85,5 @@ export function resolveThreadProviderPresentation(
   if (!provider) return undefined;
   const accentColor = normalizeProviderAccentColor(provider.accentColor);
   if (!accentColor) return undefined;
-  return { accentColor, displayName: provider.displayName ?? instanceId };
+  return { accentColor, displayName: qualifyDisplayName(provider, providers) };
 }
