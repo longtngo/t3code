@@ -43,8 +43,12 @@ describe("ComposerPendingUserInputPanel", () => {
     // Written out rather than read from PENDING_OPTIONS_MAX_HEIGHT_CLASS: a
     // test that sources the value from the implementation cannot detect that
     // value being emptied or wrong.
-    expect(markup).toContain("max-h-[40dvh]");
-    expect(markup).toContain("sm:max-h-[22rem]");
+    //
+    // The bound must be against viewport HEIGHT. A width breakpoint
+    // (`sm:max-h-[22rem]`) leaves a short, wide window uncapped in the only
+    // dimension that matters — measured at 112% of the viewport before this.
+    expect(markup).toContain("max-h-[min(22rem,40dvh)]");
+    expect(markup).not.toContain("sm:max-h-");
     expect(markup).toContain("overflow-y-auto");
     // A flick past the end of the list must not scroll the timeline behind it.
     expect(markup).toContain("overscroll-contain");
