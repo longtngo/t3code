@@ -6,18 +6,13 @@ import { cn } from "../../lib/utils";
 import { useResourceQueue } from "../../hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { rowProgress, splitReason, type RowProgress } from "./sidebarResourceQueue.logic";
+import {
+  resourceAccent,
+  rowProgress,
+  splitReason,
+  type RowProgress,
+} from "./sidebarResourceQueue.logic";
 
-const RESOURCE_BADGE: Record<string, string> = {
-  gpu: "bg-violet-400/15 text-violet-300",
-  cpu: "bg-emerald-400/15 text-emerald-300",
-  machine: "bg-amber-400/15 text-amber-300",
-};
-const RESOURCE_BAR: Record<string, string> = {
-  gpu: "bg-violet-400",
-  cpu: "bg-emerald-400",
-  machine: "bg-amber-400",
-};
 const PRIORITY_BADGE: Record<string, string> = {
   interactive: "bg-rose-400/15 text-rose-300",
   normal: "bg-sky-400/15 text-sky-300",
@@ -159,7 +154,7 @@ function QueueRow({
           <span
             className={cn(
               "mr-1.5 inline-flex items-center rounded px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wide",
-              RESOURCE_BADGE[item.resource] ?? FALLBACK_BADGE,
+              resourceAccent(item.resource).badge,
             )}
           >
             {item.resource}
@@ -347,21 +342,26 @@ export function SidebarResourceQueue() {
           </div>
 
           {resources.length > 0 ? (
-            <div className="flex gap-1.5 px-0.5 pb-2">
+            /* The pool set grows and gets renamed by the broker (the cpu split, one pool per
+               configured device), so the strip wraps to as many rows as the sidebar needs
+               rather than assuming a fixed count fits on one line. */
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(84px,100%),1fr))] gap-x-2 gap-y-1.5 px-0.5 pb-2">
               {resources.map((r) => {
                 const pct =
                   r.capacity > 0 ? Math.min(100, Math.round((r.inUse / r.capacity) * 100)) : 0;
                 return (
-                  <div key={r.name} className="flex-1">
-                    <div className="mb-0.5 flex justify-between text-[10px] text-muted-foreground">
-                      <span className="uppercase">{r.name}</span>
-                      <span className="tabular-nums">
+                  <div key={r.name} className="min-w-0">
+                    <div className="mb-0.5 flex items-baseline justify-between gap-1 text-[10px] text-muted-foreground">
+                      <span className="truncate uppercase" title={r.name}>
+                        {r.name}
+                      </span>
+                      <span className="shrink-0 tabular-nums">
                         <span className="font-semibold text-foreground">{r.inUse}</span>/{r.capacity}
                       </span>
                     </div>
                     <div className="h-[3px] overflow-hidden rounded bg-accent">
                       <div
-                        className={cn("h-full rounded", RESOURCE_BAR[r.name] ?? "bg-foreground")}
+                        className={cn("h-full rounded", resourceAccent(r.name).bar)}
                         style={{ width: `${pct}%` }}
                       />
                     </div>

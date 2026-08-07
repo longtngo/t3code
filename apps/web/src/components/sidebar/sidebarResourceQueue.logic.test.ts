@@ -5,6 +5,7 @@ import {
   elapsedSeconds,
   estimatedTotalSeconds,
   parseEstimateSeconds,
+  resourceAccent,
   rowProgress,
   splitReason,
 } from "./sidebarResourceQueue.logic";
@@ -111,5 +112,39 @@ describe("rowProgress", () => {
 describe("elapsedSeconds", () => {
   it("never goes negative when the clock skews", () => {
     expect(elapsedSeconds(item({ sinceMs: 5000 }), 1000)).toBe(0);
+  });
+});
+
+describe("resourceAccent", () => {
+  it("accents an exactly-named pool", () => {
+    expect(resourceAccent("gpu")).toEqual({
+      badge: "bg-violet-400/15 text-violet-300",
+      bar: "bg-violet-400",
+    });
+  });
+  it("gives the split cpu pools the same accent as cpu itself", () => {
+    const base = resourceAccent("cpu");
+    expect(base.bar).toBe("bg-emerald-400");
+    expect(resourceAccent("cpu_perf")).toEqual(base);
+    expect(resourceAccent("cpu_eff")).toEqual(base);
+  });
+  it("accents every device pool alike", () => {
+    expect(resourceAccent("dev_pixel10")).toEqual({
+      badge: "bg-sky-400/15 text-sky-300",
+      bar: "bg-sky-400",
+    });
+    expect(resourceAccent("dev_tab_a9")).toEqual(resourceAccent("dev_pixel10"));
+  });
+  it("matches a prefix only on an underscore boundary", () => {
+    expect(resourceAccent("devops")).toEqual({
+      badge: "bg-muted text-muted-foreground",
+      bar: "bg-foreground",
+    });
+  });
+  it("falls back to a neutral accent for an unknown pool", () => {
+    expect(resourceAccent("quantum_annealer")).toEqual({
+      badge: "bg-muted text-muted-foreground",
+      bar: "bg-foreground",
+    });
   });
 });
