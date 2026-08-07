@@ -8,6 +8,39 @@ import type { ResourceQueueItem } from "@t3tools/contracts";
  * derivation is unit-tested in isolation.
  */
 
+/** The accent classes a pool is drawn with: its label badge and its capacity bar. */
+export interface ResourceAccent {
+  readonly badge: string;
+  readonly bar: string;
+}
+
+const FALLBACK_ACCENT: ResourceAccent = {
+  badge: "bg-muted text-muted-foreground",
+  bar: "bg-foreground",
+};
+
+// Matched by prefix, longest first, because the broker splits and adds pools over time — the
+// CPU pool became `cpu_perf` + `cpu_eff`, and each configured test device adds a `dev_*` pool.
+// Exact-name matching silently drops such a pool to the gray fallback the moment it is renamed.
+const RESOURCE_ACCENTS: ReadonlyArray<readonly [string, ResourceAccent]> = [
+  ["gpu", { badge: "bg-violet-400/15 text-violet-300", bar: "bg-violet-400" }],
+  ["cpu", { badge: "bg-emerald-400/15 text-emerald-300", bar: "bg-emerald-400" }],
+  ["dev", { badge: "bg-sky-400/15 text-sky-300", bar: "bg-sky-400" }],
+  ["machine", { badge: "bg-amber-400/15 text-amber-300", bar: "bg-amber-400" }],
+];
+
+/**
+ * Accent classes for a broker pool name. Unknown pools get a neutral fallback rather than no
+ * styling, so a pool this build has never heard of still renders legibly.
+ */
+export function resourceAccent(name: string): ResourceAccent {
+  const key = name.toLowerCase();
+  for (const [prefix, accent] of RESOURCE_ACCENTS) {
+    if (key === prefix || key.startsWith(`${prefix}_`)) return accent;
+  }
+  return FALLBACK_ACCENT;
+}
+
 /** A reason line split into a primary name and an optional secondary description. */
 export interface ReasonParts {
   readonly name: string;
