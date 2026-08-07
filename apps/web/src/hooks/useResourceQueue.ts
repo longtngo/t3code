@@ -1,23 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { useDocumentVisible } from "./useDocumentVisible";
 import type { EnvironmentId, ResourceQueueSnapshot } from "@t3tools/contracts";
 
 import { resourceQueueEnvironment } from "../state/resourceQueue";
 import { useEnvironmentQuery } from "../state/query";
-
-function subscribeVisibility(listener: () => void): () => void {
-  if (typeof document === "undefined") return () => {};
-  document.addEventListener("visibilitychange", listener);
-  return () => document.removeEventListener("visibilitychange", listener);
-}
-
-/** Pause polling while the tab is hidden so a backgrounded window costs nothing. */
-function useDocumentVisible(): boolean {
-  return useSyncExternalStore(
-    subscribeVisibility,
-    () => typeof document === "undefined" || !document.hidden,
-    () => true,
-  );
-}
 
 /** Background cadence: a glanceable count that does not need to be live. */
 const IDLE_INTERVAL_MS = 60_000;

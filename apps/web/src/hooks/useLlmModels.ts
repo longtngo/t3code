@@ -1,4 +1,6 @@
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useState } from "react";
+
+import { useDocumentVisible } from "./useDocumentVisible";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -8,21 +10,6 @@ import type { LlmModelsSample } from "~/lib/llmModels";
 import { llmModelsEnvironment } from "~/state/llmModels";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
-
-function subscribeVisibility(listener: () => void): () => void {
-  if (typeof document === "undefined") return () => {};
-  document.addEventListener("visibilitychange", listener);
-  return () => document.removeEventListener("visibilitychange", listener);
-}
-
-/** Pause streaming while the tab is hidden so a backgrounded window costs nothing. */
-function useDocumentVisible(): boolean {
-  return useSyncExternalStore(
-    subscribeVisibility,
-    () => typeof document === "undefined" || !document.hidden,
-    () => true,
-  );
-}
 
 export interface LlmModelsState {
   readonly sample: LlmModelsSample | null;
