@@ -3,18 +3,22 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as PlatformError from "effect/PlatformError";
 
-import { ServerConfig } from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
 
-function makeLayer(input: {
-  readonly workspaceRoot: string;
-  readonly baseDir: string;
-  readonly detectCalls?: Array<{ readonly cwd: string }>;
-}) {
+/**
+ * Deliberately does NOT provide `ServerConfig`.
+ *
+ * That omission is the regression guard. Review reads used to be refused unless
+ * the cwd sat under the server's own `config.cwd`, which is wherever the
+ * process happens to be launched — so every repository the user reviews was out
+ * of bounds. Re-introducing any config-derived bound makes `ReviewService.layer`
+ * require `ServerConfig` again and breaks this file at build time, before any
+ * assertion runs.
+ */
+function makeLayer(input: { readonly detectCalls: Array<{ readonly cwd: string }> }) {
   return ReviewService.layer.pipe(
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
@@ -22,54 +26,48 @@ function makeLayer(input: {
         resolve: () => Effect.die("unexpected VCS registry resolve"),
         detect: (request) =>
           Effect.sync(() => {
-            input.detectCalls?.push({ cwd: request.cwd });
+            input.detectCalls.push({ cwd: request.cwd });
             return null;
           }),
       }),
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-    Layer.provide(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
     Layer.provideMerge(NodeServices.layer),
   );
 }
 
 describe("ReviewService", () => {
-  it.effect("rejects diff preview cwd outside the configured workspace roots", () =>
+  // `detectCalls` is the assertion that carries the regression: it proves the
+  // caller's own cwd reached the VCS registry, rather than being turned away or
+  // quietly answered about some other directory.
+  it.effect("previews a diff at the caller's cwd, wherever it lives", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-elsewhere-" });
       const detectCalls: Array<{ readonly cwd: string }> = [];
 
-      const error = yield* Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: outsideRoot }).pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+        return yield* review.getDiffPreview({ cwd });
+      }).pipe(Effect.provide(makeLayer({ detectCalls })));
 
-      assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      assert.strictEqual(error.operation, "ReviewService.getDiffPreview");
-      assert.match(
-        "detail" in error ? error.detail : "",
-        /must stay within the configured workspace root/,
-      );
-      assert.deepStrictEqual(detectCalls, []);
+      assert.strictEqual(result.cwd, cwd);
+      assert.deepStrictEqual(result.sources, []);
+      assert.deepStrictEqual(detectCalls, [{ cwd }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("attributes file-content workspace violations to the file-content operation", () =>
+  it.effect("reads diff file contents at the caller's cwd, wherever it lives", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-elsewhere-" });
       const detectCalls: Array<{ readonly cwd: string }> = [];
 
       const error = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
         return yield* review
           .getDiffFileContents({
-            cwd: outsideRoot,
+            cwd,
             sourceKind: "working-tree",
             changeType: "change",
             baseRef: "HEAD",
@@ -78,56 +76,14 @@ describe("ReviewService", () => {
             newPath: "file.ts",
           })
           .pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+      }).pipe(Effect.provide(makeLayer({ detectCalls })));
 
-      assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
+      // The registry mock detects nothing, so this stops on "not a Git
+      // repository" — the honest answer for that directory, and reachable only
+      // because the cwd was no longer refused up front.
+      assert.strictEqual(error._tag, "VcsUnsupportedOperationError");
       assert.strictEqual(error.operation, "ReviewService.getDiffFileContents");
-      assert.match(
-        "detail" in error ? error.detail : "",
-        /must stay within the configured workspace root/,
-      );
-      assert.deepStrictEqual(detectCalls, []);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("allows diff preview cwd inside the configured workspace root", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const result = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: workspaceRoot });
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
-
-      assert.strictEqual(result.cwd, workspaceRoot);
-      assert.deepStrictEqual(result.sources, []);
-      assert.deepStrictEqual(detectCalls, [{ cwd: workspaceRoot }]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("preserves unexpected path-resolution failures", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const invalidCwd = `${workspaceRoot}\0invalid`;
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const error = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: invalidCwd }).pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
-
-      assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      if (error._tag !== "VcsRepositoryDetectionError") return;
-      assert.strictEqual(error.operation, "ReviewService.assertWorkspaceBoundCwd.canonicalizePath");
-      assert.strictEqual(error.cwd, invalidCwd);
-      assert.match(error.detail, /Failed to resolve a path/);
-      assert.instanceOf(error.cause, PlatformError.PlatformError);
-      assert.deepStrictEqual(detectCalls, []);
+      assert.deepStrictEqual(detectCalls, [{ cwd }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -474,7 +474,13 @@ export default function DiffPanel({
     },
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
-  const primaryBranchDiffPreview = useEnvironmentQuery(
+  // Always the selected repository's own working directory. There used to be a
+  // fallback that re-ran the diff at the server's own root whenever the server
+  // rejected `activeCwd` as outside its workspace — which rendered the server's
+  // repository under this project's name, contradicted by this panel's own
+  // changed-file badge. The server no longer bounds review reads to its cwd, so
+  // there is nothing to fall back from.
+  const branchDiffPreview = useEnvironmentQuery(
     selectedTurnId === null && activeThread && activeCwd
       ? reviewEnvironment.diffPreview({
           environmentId: activeThread.environmentId,
@@ -486,31 +492,6 @@ export default function DiffPanel({
         })
       : null,
   );
-  // The fallback re-runs the diff at the server's own root. That is a
-  // reasonable last resort for the project's repository, and a silent lie for a
-  // member: it would render some other repository's changes under the member's
-  // name. A member outside the server root shows its error instead.
-  const shouldRetryBranchDiffAtEnvironmentCwd =
-    isPrimaryRepo &&
-    selectedTurnId === null &&
-    primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
-    serverConfig?.cwd !== undefined &&
-    serverConfig.cwd !== activeCwd;
-  const fallbackBranchDiffPreview = useEnvironmentQuery(
-    shouldRetryBranchDiffAtEnvironmentCwd && activeThread && serverConfig
-      ? reviewEnvironment.diffPreview({
-          environmentId: activeThread.environmentId,
-          input: {
-            cwd: serverConfig.cwd,
-            ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
-            ignoreWhitespace: diffIgnoreWhitespace,
-          },
-        })
-      : null,
-  );
-  const branchDiffPreview = shouldRetryBranchDiffAtEnvironmentCwd
-    ? fallbackBranchDiffPreview
-    : primaryBranchDiffPreview;
   const refreshBranchDiffPreview = branchDiffPreview.refresh;
   const canRefreshGitDiff =
     isGitRepo && selectedTurnId === null && activeThread != null && activeCwd != null;
