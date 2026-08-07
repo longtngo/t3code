@@ -131,10 +131,6 @@ function awaitThreadState(
 
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationThread;
-  readonly cachedHistory?: {
-    readonly oldestLoaded: OrchestrationThreadDetailSnapshot["oldestLoaded"];
-    readonly hasMoreHistory: boolean;
-  };
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
 }) {
@@ -210,12 +206,6 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
           ? Option.some({
               snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
               thread: options.cached,
-              ...(options.cachedHistory === undefined
-                ? {}
-                : {
-                    oldestLoaded: options.cachedHistory.oldestLoaded,
-                    hasMoreHistory: options.cachedHistory.hasMoreHistory,
-                  }),
             })
           : Option.none(),
       ),
@@ -281,11 +271,7 @@ const snapshot = (thread: OrchestrationThread): OrchestrationThreadStreamItem =>
   },
 });
 
-const HISTORY_CURSOR = {
-  requestedAt: "2026-04-01T00:00:00.000Z",
-  turnId: "turn-10",
-  checkpointTurnCount: 10,
-} as const;
+const HISTORY_CURSOR = "cursor-turn-10";
 
 /** A snapshot that reached only part way back, with older turns still on the server. */
 const windowedSnapshot = (thread: OrchestrationThread): OrchestrationThreadStreamItem => ({
@@ -293,8 +279,7 @@ const windowedSnapshot = (thread: OrchestrationThread): OrchestrationThreadStrea
   snapshot: {
     snapshotSequence: 1,
     thread,
-    oldestLoaded: HISTORY_CURSOR,
-    hasMoreHistory: true,
+    page: { beforeCursor: HISTORY_CURSOR, hasMore: true, snapshotSequence: 1 },
   },
 });
 
@@ -352,25 +337,11 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("carries a windowed snapshot's history cursor into the thread state", () =>
+  it.effect("keeps the page cursor across live events that carry no window", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       yield* Queue.offer(harness.inputs, windowedSnapshot(BASE_THREAD));
-
-      const state = yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-
-      // Without the cursor there is nothing to page older turns from, so the
-      // windowed-away history would be permanently unreachable in the UI.
-      expect(state.oldestLoaded).toEqual(HISTORY_CURSOR);
-      expect(state.hasMoreHistory).toBe(true);
-    }),
-  );
-
-  it.effect("keeps the history cursor across live events that carry no window", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      yield* Queue.offer(harness.inputs, windowedSnapshot(BASE_THREAD));
-      yield* awaitThreadState(harness.observed, (value) => value.oldestLoaded !== undefined);
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.page));
       yield* Queue.offer(harness.inputs, titleUpdated("Live title"));
 
       const state = yield* awaitThreadState(
@@ -378,40 +349,26 @@ describe("EnvironmentThreads", () => {
         (value) => Option.isSome(value.data) && value.data.value.title === "Live title",
       );
 
-      expect(state.oldestLoaded).toEqual(HISTORY_CURSOR);
-      expect(state.hasMoreHistory).toBe(true);
+      // Incremental events carry no window. Clearing the cursor on the first one
+      // would hide history that is still there and is still reachable.
+      expect(Option.getOrThrow(state.page).beforeCursor).toEqual(HISTORY_CURSOR);
+      expect(Option.getOrThrow(state.page).hasMore).toBe(true);
     }),
   );
 
-  it.effect("persists the history cursor alongside the cached thread", () =>
+  it.effect("persists the page cursor alongside the cached thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       yield* Queue.offer(harness.inputs, windowedSnapshot(BASE_THREAD));
-      yield* awaitThreadState(harness.observed, (value) => value.oldestLoaded !== undefined);
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.page));
       yield* TestClock.adjust("1 second");
 
       const saved = yield* Ref.get(harness.savedThreads);
       const latest = saved.at(-1);
 
-      expect(latest?.oldestLoaded).toEqual(HISTORY_CURSOR);
-      expect(latest?.hasMoreHistory).toBe(true);
-    }),
-  );
-
-  it.effect("restores the history cursor from a warm cache", () =>
-    Effect.gen(function* () {
-      // A warm cache resumes via `afterSequence` and never receives a snapshot
-      // frame, so the cursor has to come back out of the cache or paging is dead
-      // after a reload.
-      const harness = yield* makeHarness({
-        cached: BASE_THREAD,
-        cachedHistory: { oldestLoaded: HISTORY_CURSOR, hasMoreHistory: true },
-      });
-
-      const state = yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
-
-      expect(state.oldestLoaded).toEqual(HISTORY_CURSOR);
-      expect(state.hasMoreHistory).toBe(true);
+      // A cache without the window boundary cannot keep paging after a reload.
+      expect(latest?.page?.beforeCursor).toEqual(HISTORY_CURSOR);
+      expect(latest?.page?.hasMore).toBe(true);
     }),
   );
 

@@ -501,6 +501,12 @@ export const ServerConfig = Schema.Struct({
    * `PushManager.subscribe` as `applicationServerKey`. Absent on older servers.
    */
   webPushVapidPublicKey: Schema.optional(Schema.String),
+  /**
+   * Whether thread detail reads accept a turn window (`turnLimit`/
+   * `beforeCursor`) and return `page` metadata. Clients must not send window
+   * fields to servers that don't advertise this.
+   */
+  threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

@@ -1,31 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 
 import {
-  deriveAgentItems,
   deriveBackgroundItems,
   isAutoCleared,
   sortSidebarItems,
-  summarizeTaskActivity,
   visibleSidebarItems,
   type SidebarItem,
 } from "./sidebarSections";
-
-function activity(partial: {
-  id: string;
-  kind: string;
-  createdAt: string;
-  payload: unknown;
-  summary?: string;
-}): OrchestrationThreadActivity {
-  return {
-    tone: "info",
-    summary: partial.summary ?? partial.kind,
-    turnId: null,
-    ...partial,
-  } as unknown as OrchestrationThreadActivity;
-}
 
 function terminal(
   terminalId: string,
@@ -44,104 +26,6 @@ function terminal(
     },
   };
 }
-
-describe("deriveAgentItems", () => {
-  it("folds task.* activities into one item per taskId with a progress log", () => {
-    const items = deriveAgentItems([
-      activity({
-        id: "a1",
-        kind: "task.started",
-        createdAt: "2026-06-13T00:00:00.000Z",
-        payload: { taskId: "t1", detail: "Explore auth code" },
-      }),
-      activity({
-        id: "a2",
-        kind: "task.progress",
-        createdAt: "2026-06-13T00:00:05.000Z",
-        payload: { taskId: "t1", summary: "Reading login.ts", lastToolName: "Read" },
-      }),
-      activity({
-        id: "a3",
-        kind: "task.completed",
-        createdAt: "2026-06-13T00:00:10.000Z",
-        payload: { taskId: "t1", status: "completed", detail: "Found 3 entrypoints", outputFile: "/tmp/out.md" },
-      }),
-    ]);
-
-    expect(items).toHaveLength(1);
-    const item = items[0]!;
-    expect(item).toMatchObject({
-      kind: "agent",
-      id: "t1",
-      label: "Explore auth code",
-      status: "completed",
-      startedAt: "2026-06-13T00:00:00.000Z",
-      completedAt: "2026-06-13T00:00:10.000Z",
-      finalSummary: "Found 3 entrypoints",
-      outputFile: "/tmp/out.md",
-    });
-    expect(item.log).toEqual([
-      { id: "a2", at: "2026-06-13T00:00:05.000Z", text: "Reading login.ts", lastToolName: "Read" },
-    ]);
-  });
-
-  it("maps completion status: failed→failed, stopped→completed, running stays running", () => {
-    const items = deriveAgentItems([
-      activity({ id: "s1", kind: "task.started", createdAt: "t0", payload: { taskId: "run" } }),
-      activity({ id: "f1", kind: "task.started", createdAt: "t0", payload: { taskId: "fail" } }),
-      activity({ id: "f2", kind: "task.completed", createdAt: "t1", payload: { taskId: "fail", status: "failed" } }),
-      activity({ id: "p1", kind: "task.started", createdAt: "t0", payload: { taskId: "stop" } }),
-      activity({ id: "p2", kind: "task.completed", createdAt: "t1", payload: { taskId: "stop", status: "stopped" } }),
-    ]);
-    const byId = new Map(items.map((i) => [i.id, i]));
-    expect(byId.get("run")?.status).toBe("running");
-    expect(byId.get("fail")?.status).toBe("failed");
-    expect(byId.get("stop")?.status).toBe("completed");
-  });
-
-  it("treats a terminal task.updated as completion when task.completed never arrives", () => {
-    const items = deriveAgentItems([
-      activity({
-        id: "a1",
-        kind: "task.started",
-        createdAt: "2026-06-13T00:00:00.000Z",
-        payload: { taskId: "t1", detail: "Run unit tests" },
-      }),
-      activity({
-        id: "a2",
-        kind: "task.updated",
-        createdAt: "2026-06-13T00:00:10.000Z",
-        payload: { taskId: "t1", status: "completed" },
-      }),
-    ]);
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      id: "t1",
-      status: "completed",
-      completedAt: "2026-06-13T00:00:10.000Z",
-    });
-  });
-
-  it("maps task.updated killed→completed and ignores non-terminal task.updated", () => {
-    const items = deriveAgentItems([
-      activity({ id: "k1", kind: "task.started", createdAt: "t0", payload: { taskId: "killed" } }),
-      activity({ id: "k2", kind: "task.updated", createdAt: "t1", payload: { taskId: "killed", status: "killed" } }),
-      activity({ id: "r1", kind: "task.started", createdAt: "t0", payload: { taskId: "still" } }),
-      activity({ id: "r2", kind: "task.updated", createdAt: "t1", payload: { taskId: "still", status: "running" } }),
-    ]);
-    const byId = new Map(items.map((i) => [i.id, i]));
-    expect(byId.get("killed")?.status).toBe("completed");
-    expect(byId.get("still")?.status).toBe("running");
-  });
-
-  it("ignores non-task activities and activities without a taskId", () => {
-    const items = deriveAgentItems([
-      activity({ id: "x1", kind: "tool.completed", createdAt: "t0", payload: { taskId: "t1" } }),
-      activity({ id: "x2", kind: "task.started", createdAt: "t0", payload: {} }),
-    ]);
-    expect(items).toHaveLength(0);
-  });
-});
 
 describe("deriveBackgroundItems", () => {
   it("maps terminal status to sidebar status", () => {
@@ -172,9 +56,9 @@ describe("deriveBackgroundItems", () => {
 describe("sortSidebarItems", () => {
   it("puts active before terminal, and sinks completed to the bottom", () => {
     const items: SidebarItem[] = [
-      { kind: "agent", id: "done-old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T00:00:01.000Z", log: [] },
-      { kind: "agent", id: "running", label: "", status: "running", startedAt: "2026-06-13T00:00:00.000Z", completedAt: null, log: [] },
-      { kind: "agent", id: "done-new", label: "", status: "failed", startedAt: null, completedAt: "2026-06-13T00:00:09.000Z", log: [] },
+      { kind: "background", id: "done-old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T00:00:01.000Z", exitCode: 0, buffer: "" },
+      { kind: "background", id: "running", label: "", status: "running", startedAt: "2026-06-13T00:00:00.000Z", completedAt: null, exitCode: null, buffer: "" },
+      { kind: "background", id: "done-new", label: "", status: "failed", startedAt: null, completedAt: "2026-06-13T00:00:09.000Z", exitCode: 1, buffer: "" },
     ];
     expect(sortSidebarItems(items).map((i) => i.id)).toEqual(["running", "done-new", "done-old"]);
   });
@@ -199,74 +83,12 @@ describe("isAutoCleared / visibleSidebarItems", () => {
 
   it("hides dismissed and auto-cleared items, keeps the rest sorted", () => {
     const items: SidebarItem[] = [
-      { kind: "agent", id: "keep", label: "", status: "running", startedAt: "2026-06-13T11:59:00.000Z", completedAt: null, log: [] },
-      { kind: "agent", id: "dismissed", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T11:59:00.000Z", log: [] },
-      { kind: "agent", id: "old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T01:00:00.000Z", log: [] },
+      { kind: "background", id: "keep", label: "", status: "running", startedAt: "2026-06-13T11:59:00.000Z", completedAt: null, exitCode: null, buffer: "" },
+      { kind: "background", id: "dismissed", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T11:59:00.000Z", exitCode: 0, buffer: "" },
+      { kind: "background", id: "old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T01:00:00.000Z", exitCode: 0, buffer: "" },
     ];
     const visible = visibleSidebarItems(items, new Set(["dismissed"]), now, 6);
     expect(visible.map((i) => i.id)).toEqual(["keep"]);
-  });
-});
-
-describe("summarizeTaskActivity", () => {
-  it("sums plan steps, agents, and background into completed/total counts", () => {
-    const summary = summarizeTaskActivity({
-      planStepsCompleted: 2,
-      planStepsActive: 1,
-      planStepsTotal: 4,
-      agents: [{ status: "running" }, { status: "completed" }],
-      background: [{ status: "running" }, { status: "completed" }, { status: "failed" }],
-    });
-    // completed: 2 plan + 1 agent + 1 background = 4
-    expect(summary.completedCount).toBe(4);
-    // total: 4 plan + 2 agents + 3 background = 9
-    expect(summary.totalCount).toBe(9);
-    expect(summary.hasActive).toBe(true);
-  });
-
-  it("excludes failed items from the completed count but keeps them in the total", () => {
-    const summary = summarizeTaskActivity({
-      planStepsCompleted: 0,
-      planStepsActive: 0,
-      planStepsTotal: 0,
-      agents: [{ status: "failed" }],
-      background: [{ status: "failed" }, { status: "completed" }],
-    });
-    expect(summary.completedCount).toBe(1);
-    expect(summary.totalCount).toBe(3);
-    expect(summary.hasActive).toBe(false);
-  });
-
-  it("flags activity from running background or agents even with no plan steps", () => {
-    expect(
-      summarizeTaskActivity({
-        planStepsCompleted: 0,
-        planStepsActive: 0,
-        planStepsTotal: 0,
-        agents: [],
-        background: [{ status: "running" }],
-      }).hasActive,
-    ).toBe(true);
-    expect(
-      summarizeTaskActivity({
-        planStepsCompleted: 0,
-        planStepsActive: 0,
-        planStepsTotal: 0,
-        agents: [{ status: "running" }],
-        background: [],
-      }).hasActive,
-    ).toBe(true);
-  });
-
-  it("is empty when there is no tracked activity at all", () => {
-    const summary = summarizeTaskActivity({
-      planStepsCompleted: 0,
-      planStepsActive: 0,
-      planStepsTotal: 0,
-      agents: [],
-      background: [],
-    });
-    expect(summary).toEqual({ completedCount: 0, totalCount: 0, hasActive: false });
   });
 });
 

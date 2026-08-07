@@ -12,14 +12,12 @@ import {
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
-  OrchestrationHistoryCursor,
   OrchestrationLatestTurn,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationSubscribeThreadInput,
-  OrchestrationThreadHistoryPageInput,
   OrchestrationThread,
   OrchestrationThreadShell,
   OrchestrationProject,
@@ -60,8 +58,6 @@ function getOptionValue(
 }
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeSubscribeThreadInput = Schema.decodeUnknownEffect(OrchestrationSubscribeThreadInput);
-const decodeHistoryCursor = Schema.decodeUnknownEffect(OrchestrationHistoryCursor);
-const decodeThreadHistoryPageInput = Schema.decodeUnknownEffect(OrchestrationThreadHistoryPageInput);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
@@ -101,41 +97,16 @@ it.effect("parses full thread diff input with whitespace ignoring enabled", () =
   }),
 );
 
-it.effect("subscribe input accepts window params and stays optional", () =>
+it.effect("subscribe input accepts a turn window and stays optional", () =>
   Effect.gen(function* () {
     const bare = yield* decodeSubscribeThreadInput({ threadId: "thread-1" });
-    assert.strictEqual(bare.windowTurns, undefined);
-    assert.strictEqual(bare.maxRows, undefined);
+    assert.strictEqual(bare.turnLimit, undefined);
 
     const windowed = yield* decodeSubscribeThreadInput({
       threadId: "thread-1",
-      windowTurns: 15,
-      maxRows: 2000,
+      turnLimit: 15,
     });
-    assert.strictEqual(windowed.windowTurns, 15);
-    assert.strictEqual(windowed.maxRows, 2000);
-  }),
-);
-
-it.effect("history cursor + page input round-trip", () =>
-  Effect.gen(function* () {
-    const cur = {
-      requestedAt: "2026-07-01T00:00:00.000Z",
-      turnId: "turn_9",
-      checkpointTurnCount: 12,
-    };
-    const decoded = yield* decodeHistoryCursor(cur);
-    assert.strictEqual(decoded.turnId, "turn_9");
-    assert.strictEqual(decoded.checkpointTurnCount, 12);
-
-    const page = yield* decodeThreadHistoryPageInput({
-      threadId: "thread-1",
-      beforeTurn: cur,
-      maxTurns: 25,
-      maxRows: 3000,
-    });
-    assert.strictEqual(page.maxTurns, 25);
-    assert.strictEqual(page.beforeTurn.turnId, "turn_9");
+    assert.strictEqual(windowed.turnLimit, 15);
   }),
 );
 

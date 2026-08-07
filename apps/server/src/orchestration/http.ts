@@ -18,11 +18,6 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import {
-  DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS,
-  DEFAULT_SUBSCRIBE_WINDOW_TURNS,
-  WINDOW_MAX_BYTES,
-} from "./threadWindowBounds.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -70,16 +65,18 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          // Always window the HTTP thread-snapshot (ITEM 2 — giant-frame OOM):
-          // this is the web client's primary snapshot-load path, so an un-windowed
-          // read of a long thread would serialize the whole thread into one HTTP
-          // response. Older history is paged via getThreadHistoryPage.
           const snapshot = yield* projectionSnapshotQuery
-            .getThreadDetailSnapshot(args.params.threadId, {
-              windowTurns: DEFAULT_SUBSCRIBE_WINDOW_TURNS,
-              maxRows: DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS,
-              maxBytes: WINDOW_MAX_BYTES,
-            })
+            .getThreadDetailSnapshot(
+              args.params.threadId,
+              args.payload.turnLimit === undefined
+                ? undefined
+                : {
+                    turnLimit: args.payload.turnLimit,
+                    ...(args.payload.beforeCursor !== undefined
+                      ? { beforeCursor: args.payload.beforeCursor }
+                      : {}),
+                  },
+            )
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),

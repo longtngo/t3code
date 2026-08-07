@@ -9,7 +9,6 @@
 import type {
   CheckpointRef,
   OrchestrationCheckpointSummary,
-  OrchestrationHistoryCursor,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -17,9 +16,8 @@ import type {
   OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
   OrchestrationThread,
-  OrchestrationThreadHistoryPageInput,
-  OrchestrationThreadHistoryPageResult,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
@@ -167,90 +165,27 @@ export interface ProjectionSnapshotQueryShape {
 
   /**
    * Read a single active thread detail snapshot by id.
-   *
-   * The resolved thread stays pure in `.value`; windowing metadata rides
-   * alongside it. With no `options` (or with both bounds absent) the full
-   * thread is loaded and the result carries `oldestLoaded: undefined,
-   * hasMoreHistory: false`. When `windowTurns`/`maxRows` are supplied the
-   * snapshot is capped to the most recent turns and reports how far back it
-   * reaches. `Option.none` means the thread was not found (unchanged).
    */
   readonly getThreadDetailById: (
     threadId: ThreadId,
-    options?: {
-      readonly windowTurns?: number | undefined;
-      readonly maxRows?: number | undefined;
-      /**
-       * Thread-load windowing: cap the initial snapshot to at most `maxBytes` of
-       * serialized per-turn content (message/activity/plan text), in addition to
-       * the turn/row bounds. Bounds the frame size for the "few turns, heavy
-       * payloads" case that escapes `windowTurns`/`maxRows`. Server-internal (no
-       * client sends it); always keeps at least the newest turn.
-       */
-      readonly maxBytes?: number | undefined;
-    },
-  ) => Effect.Effect<
-    Option.Option<OrchestrationThreadDetailResult>,
-    ProjectionRepositoryError
-  >;
-
-  /**
-   * Read the next OLDER page of a thread's history, paging strictly before the
-   * `beforeTurn` cursor. Symmetric to the windowed `getThreadDetailById`, but
-   * returns only the four per-turn collections (no thread head): the next
-   * `maxTurns` turns older than the cursor, capped by `maxRows`, plus the new
-   * `oldestLoaded` cursor and whether still-older turns remain.
-   */
-  readonly getThreadHistoryPage: (
-    input: OrchestrationThreadHistoryPageInput & {
-      /**
-       * Server-internal byte budget for a single page (see
-       * {@link getThreadDetailById} `maxBytes`). Not on the wire — the ws handler
-       * injects the default. Always keeps at least the next-older turn so paging
-       * advances even when one turn alone exceeds the budget.
-       */
-      readonly maxBytes?: number | undefined;
-    },
-  ) => Effect.Effect<OrchestrationThreadHistoryPageResult, ProjectionRepositoryError>;
+  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail together with the projection snapshot
    * sequence in one consistent transaction, so the returned `snapshotSequence`
    * exactly matches the state reflected in `thread` (no interleaving projector
    * update between the two reads).
+   *
+   * When `window` is provided, the thread's messages, activities, proposed
+   * plans, and checkpoints are bounded to a page of recent turns and the
+   * response carries `page` metadata (see `OrchestrationThreadDetailWindow`).
+   * Without a window the full thread is returned with no `page` field —
+   * pagination is strictly opt-in.
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
-    options?: {
-      readonly windowTurns?: number | undefined;
-      readonly maxRows?: number | undefined;
-      /**
-       * Server-internal serialized-byte budget (see {@link getThreadDetailById}
-       * `maxBytes`). Forwarded to the underlying windowed read so a huge thread
-       * returns a bounded recent window plus `oldestLoaded`/`hasMoreHistory` rather
-       * than one giant snapshot frame. Always keeps at least the newest turn.
-       */
-      readonly maxBytes?: number | undefined;
-    },
+    window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
-}
-
-/**
- * A resolved thread detail plus its thread-load windowing metadata.
- */
-export interface OrchestrationThreadDetailResult {
-  /** The resolved thread (full or windowed to the most recent turns). */
-  readonly value: OrchestrationThread;
-  /**
-   * Cursor identifying the oldest turn included in the snapshot, for paging
-   * further back. `undefined` when the full thread history was loaded.
-   */
-  readonly oldestLoaded: OrchestrationHistoryCursor | undefined;
-  /**
-   * Whether older turns exist beyond `oldestLoaded`. `false` for full
-   * (unwindowed) snapshots.
-   */
-  readonly hasMoreHistory: boolean;
 }
 
 /**

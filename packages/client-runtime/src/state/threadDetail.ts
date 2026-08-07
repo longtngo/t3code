@@ -6,7 +6,6 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
-  OrchestrationThreadHistoryPageResult,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -16,8 +15,6 @@ import type { EnvironmentThread, EnvironmentThreadShell } from "./models.ts";
 import { scopeThread } from "./models.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { threadHistoryBackfillAtom } from "./threadHistory.ts";
-import { prependThreadHistoryPage } from "./threadHistoryBackfill.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
@@ -91,27 +88,14 @@ export function createEnvironmentThreadDetailAtoms<E>(
   const threadDetailAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let previousSource: OrchestrationThread | null = null;
-    let previousBackfill: OrchestrationThreadHistoryPageResult | null = null;
     let previousValue: EnvironmentThread | null = null;
     return Atom.make((get) => {
       const source = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
-      // Older turns paged back through `getThreadHistoryPage` live outside the
-      // (windowed) thread snapshot. Folding them in HERE means every derived
-      // collection — messages, activities, plans, checkpoints — sees the combined
-      // history without each consumer having to merge it again.
-      const backfill = get(threadHistoryBackfillAtom(key)).pages;
-      if (source === previousSource && backfill === previousBackfill) {
+      if (source === previousSource) {
         return previousValue;
       }
       previousSource = source;
-      previousBackfill = backfill;
-      previousValue =
-        source === null
-          ? null
-          : scopeThread(
-              ref.environmentId,
-              backfill === null ? source : prependThreadHistoryPage(source, backfill),
-            );
+      previousValue = source === null ? null : scopeThread(ref.environmentId, source);
       return previousValue;
     }).pipe(
       Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),

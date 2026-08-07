@@ -517,7 +517,7 @@ const make = Effect.gen(function* () {
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
-      .pipe(Effect.map((detail) => Option.getOrUndefined(detail)?.value));
+      .pipe(Effect.map((detail) => Option.getOrNull(detail)));
   });
 
   const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {

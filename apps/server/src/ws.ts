@@ -27,7 +27,6 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
-  OrchestrationGetHistoryPageError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
@@ -79,11 +78,6 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
-import {
-  DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS,
-  DEFAULT_SUBSCRIBE_WINDOW_TURNS,
-  WINDOW_MAX_BYTES,
-} from "./orchestration/threadWindowBounds.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
@@ -309,7 +303,7 @@ function projectSetupScriptCompatibilityDetail(
   }
 }
 
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
+export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
     type:
@@ -355,15 +349,6 @@ const SHELL_RESUME_MAX_GAP = 1_000;
  * above any real burst yet caps the buffer's memory at a small, fixed size.
  */
 const WS_LIVE_BUFFER_CAPACITY = 4_096;
-
-/**
- * Server-side ceilings for a single `getThreadHistoryPage` response, so the "safe
- * paging path" that clients are pointed at cannot itself be turned into a
- * whole-thread load by a runaway/hostile request (`maxTurns`/`maxRows` = 1e9). Set
- * generously above any real backfill request; only a runaway request is capped.
- */
-const HISTORY_PAGE_MAX_TURNS = 100;
-const HISTORY_PAGE_MAX_ROWS = 5_000;
 
 // Same bound for thread resume. The replay reads the *global* event range and
 // filters per-thread afterwards, so a stale cursor far behind the head would
@@ -1013,7 +998,16 @@ const makeWsRpcLayer = (
 
             if (bootstrap?.prepareWorktree) {
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
-              if (bootstrap.prepareWorktree.startFromOrigin) {
+              // "Start from origin" is a stored default; repos without an
+              // origin remote fall back to the local base branch instead of
+              // failing the whole bootstrap on `git fetch origin`.
+              const startFromOrigin =
+                bootstrap.prepareWorktree.startFromOrigin === true &&
+                (yield* gitWorkflow.remoteExists({
+                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  remoteName: "origin",
+                }));
+              if (startFromOrigin) {
                 yield* gitWorkflow.fetchRemote({
                   cwd: bootstrap.prepareWorktree.projectCwd,
                   remoteName: "origin",
@@ -1116,6 +1110,7 @@ const makeWsRpcLayer = (
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
           webPushVapidPublicKey: webPushRelay.vapidPublicKey,
+          threadSnapshotPagination: true,
         };
       });
 
@@ -1469,29 +1464,15 @@ const makeWsRpcLayer = (
                 // through to the snapshot path so the client converges from a
                 // fresh thread detail instead of an unbounded replay.
               }
-
-              // Defense-in-depth against the "giant frame" OOM (ITEM 2): the
-              // snapshot is ALWAYS windowed. A missing/degenerate (<= 0) client
-              // bound applies the bounded default (windowTurns: 0 would resolve to
-              // a null boundary = whole thread downstream, so treat non-positive as
-              // unset); an explicit maxRows is clamped DOWN to the ceiling (a client
-              // may ask for fewer rows, never more). Older history is paged via
-              // getThreadHistoryPage; a client that does not page sees only the
-              // recent window (accepted regression vs. the previous full-load OOM).
-              const snapshotWindowTurns =
-                input.windowTurns !== undefined && input.windowTurns > 0
-                  ? input.windowTurns
-                  : DEFAULT_SUBSCRIBE_WINDOW_TURNS;
-              const snapshotMaxRows =
-                input.maxRows !== undefined && input.maxRows > 0
-                  ? Math.min(input.maxRows, DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS)
-                  : DEFAULT_SUBSCRIBE_WINDOW_MAX_ROWS;
               const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId, {
-                  windowTurns: snapshotWindowTurns,
-                  maxRows: snapshotMaxRows,
-                  maxBytes: WINDOW_MAX_BYTES,
-                })
+                .getThreadDetailSnapshot(
+                  input.threadId,
+                  // Windowing the fallback snapshot is opt-in per subscription:
+                  // clients that don't send turnLimit (including all
+                  // pre-pagination clients) get the full thread, since they
+                  // have no way to load older pages.
+                  input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+                )
                 .pipe(
                   Effect.mapError(
                     (cause) =>
@@ -1526,31 +1507,6 @@ const makeWsRpcLayer = (
                 afterSnapshot,
               );
             }),
-            { "rpc.aggregate": "orchestration" },
-          ),
-        [ORCHESTRATION_WS_METHODS.getThreadHistoryPage]: (input) =>
-          // Older-turn paging: the safe way to load history beyond the windowed
-          // subscribe snapshot (ITEM 2). A single response is bounded on all three
-          // axes so this path can't itself be turned into a whole-thread load by a
-          // runaway/hostile request — the same OOM the subscribe window prevents.
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getThreadHistoryPage,
-            projectionSnapshotQuery
-              .getThreadHistoryPage({
-                ...input,
-                maxTurns: Math.min(input.maxTurns, HISTORY_PAGE_MAX_TURNS),
-                maxRows: Math.min(input.maxRows, HISTORY_PAGE_MAX_ROWS),
-                maxBytes: WINDOW_MAX_BYTES,
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetHistoryPageError({
-                      message: `Failed to load history page for thread ${input.threadId}`,
-                      cause,
-                    }),
-                ),
-              ),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.serverProbe]: (_input) =>

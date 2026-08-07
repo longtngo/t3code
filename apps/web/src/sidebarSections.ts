@@ -1,17 +1,13 @@
 /**
- * Pure derivation for the task sidebar's "background processes" (terminal
- * sessions) and "agents/subagents" (task-stream) sections, plus the shared
- * status ordering and 6h auto-clear filter.
+ * Pure derivation for the Agents panel's "background processes" (terminal
+ * sessions) section, plus the shared status ordering and 6h auto-clear filter.
  *
- * All inputs come from data the web client already holds — the active thread's
- * `activities` (task.* lifecycle, including terminal `task.updated` patches)
- * and `useKnownTerminalSessions` — so derivation is client-side with no extra
- * RPC. Activity payloads are `Schema.Unknown`, so every field is narrowed
- * defensively.
+ * Input comes from data the web client already holds (`useKnownTerminalSessions`),
+ * so derivation is client-side with no extra RPC. Agents themselves are no longer
+ * derived here: they come from the server-backed subagent runtime model.
  *
  * @module sidebarSections
  */
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 
 export const AUTO_CLEAR_TTL_HOURS = 6;
@@ -21,26 +17,6 @@ export type SidebarItemStatus = "running" | "completed" | "failed";
 /** Statuses that represent finished work (eligible for auto-clear / sink-to-bottom). */
 export function isTerminalSidebarStatus(status: SidebarItemStatus): boolean {
   return status === "completed" || status === "failed";
-}
-
-interface AgentLogEntry {
-  /** Stable key from the source activity id. */
-  readonly id: string;
-  readonly at: string;
-  readonly text: string;
-  readonly lastToolName?: string;
-}
-
-export interface AgentSidebarItem {
-  readonly kind: "agent";
-  readonly id: string;
-  readonly label: string;
-  readonly status: SidebarItemStatus;
-  readonly startedAt: string | null;
-  readonly completedAt: string | null;
-  readonly finalSummary?: string;
-  readonly outputFile?: string;
-  readonly log: ReadonlyArray<AgentLogEntry>;
 }
 
 export interface BackgroundSidebarItem {
@@ -55,164 +31,17 @@ export interface BackgroundSidebarItem {
   readonly buffer: string;
 }
 
-export type SidebarItem = AgentSidebarItem | BackgroundSidebarItem;
-
-/** Aggregate activity counts for the tasks-panel toggle indicator. */
-export interface TaskActivitySummary {
-  /** Completed plan steps + completed agents + completed background processes. */
-  readonly completedCount: number;
-  /** All tracked plan steps + agents + background processes. */
-  readonly totalCount: number;
-  /** Whether any tracked item is currently running (drives the spinner). */
-  readonly hasActive: boolean;
-}
-
-/**
- * Combine the three activity sources backing the tasks panel — TodoWrite plan
- * steps, agents/subagents, and background processes (terminals) — into a single
- * completed/total summary for the permanent toggle on the composer's task bar.
- *
- * Pass the *visible* agent/background lists (post dismissal + auto-clear) so the
- * badge matches what the panel renders. Counts use the `completed` status only
- * (a `failed` item is tracked in the total but is not "completed"). Plan-step
- * counts are supplied pre-counted since plan steps use a different status
- * vocabulary (`completed` / `inProgress`).
- */
-export function summarizeTaskActivity(input: {
-  readonly planStepsCompleted: number;
-  readonly planStepsActive: number;
-  readonly planStepsTotal: number;
-  readonly agents: ReadonlyArray<Pick<AgentSidebarItem, "status">>;
-  readonly background: ReadonlyArray<Pick<BackgroundSidebarItem, "status">>;
-}): TaskActivitySummary {
-  const agentsCompleted = input.agents.filter((item) => item.status === "completed").length;
-  const backgroundCompleted = input.background.filter((item) => item.status === "completed").length;
-  const agentsActive = input.agents.filter((item) => item.status === "running").length;
-  const backgroundActive = input.background.filter((item) => item.status === "running").length;
-  const completedCount = input.planStepsCompleted + agentsCompleted + backgroundCompleted;
-  const totalCount = input.planStepsTotal + input.agents.length + input.background.length;
-  const hasActive = input.planStepsActive + agentsActive + backgroundActive > 0;
-  return { completedCount, totalCount, hasActive };
-}
+export type SidebarItem = BackgroundSidebarItem;
 
 /** Dismissal key for a TodoWrite plan step in the task sidebar. */
 export function planStepDismissKey(step: string): string {
   return `plan:${step}`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-interface MutableAgentItem {
-  id: string;
-  label: string;
-  status: SidebarItemStatus;
-  startedAt: string | null;
-  completedAt: string | null;
-  finalSummary?: string;
-  outputFile?: string;
-  log: AgentLogEntry[];
-}
-
-/** Map wire task status to a sidebar terminal status, or null when still active. */
-function taskTerminalSidebarStatus(raw: string | null): SidebarItemStatus | null {
-  if (!raw) return null;
-  if (raw === "failed") return "failed";
-  // completed / stopped / killed are all finished work (killed ≈ parent stop).
-  if (raw === "completed" || raw === "stopped" || raw === "killed") return "completed";
-  return null;
-}
-
-function ensureAgentItem(map: Map<string, MutableAgentItem>, taskId: string): MutableAgentItem {
-  const existing = map.get(taskId);
-  if (existing) return existing;
-  const created: MutableAgentItem = {
-    id: taskId,
-    label: "Agent task",
-    status: "running",
-    startedAt: null,
-    completedAt: null,
-    log: [],
-  };
-  map.set(taskId, created);
-  return created;
-}
-
-/**
- * Fold the thread's `task.*` activities into agent/subagent items, one per
- * taskId, preserving first-seen order. Agents are Claude-only today (only the
- * Claude adapter emits task.* events).
- */
-export function deriveAgentItems(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): AgentSidebarItem[] {
-  const byId = new Map<string, MutableAgentItem>();
-
-  for (const activity of activities) {
-    if (!activity.kind.startsWith("task.")) continue;
-    const payload = asRecord(activity.payload);
-    const taskId = asTrimmedString(payload?.taskId);
-    if (!taskId) continue;
-    const item = ensureAgentItem(byId, taskId);
-
-    if (activity.kind === "task.started") {
-      item.status = item.status === "running" ? "running" : item.status;
-      item.startedAt = item.startedAt ?? activity.createdAt;
-      const label = asTrimmedString(payload?.detail) ?? asTrimmedString(activity.summary);
-      if (label) item.label = label;
-      continue;
-    }
-
-    if (activity.kind === "task.progress") {
-      const text = asTrimmedString(payload?.summary) ?? asTrimmedString(payload?.detail);
-      const lastToolName = asTrimmedString(payload?.lastToolName);
-      if (text || lastToolName) {
-        item.log.push({
-          id: activity.id,
-          at: activity.createdAt,
-          text: text ?? "",
-          ...(lastToolName ? { lastToolName } : {}),
-        });
-      }
-      continue;
-    }
-
-    if (activity.kind === "task.completed" || activity.kind === "task.updated") {
-      // task.completed is the primary completion signal; task.updated is a
-      // secondary terminal patch when task_notification never arrives.
-      if (!payload) continue;
-      const terminalStatus =
-        activity.kind === "task.completed"
-          ? (taskTerminalSidebarStatus(asTrimmedString(payload.status)) ?? "completed")
-          : taskTerminalSidebarStatus(asTrimmedString(payload.status));
-      if (!terminalStatus) continue;
-      item.status = terminalStatus;
-      item.completedAt = activity.createdAt;
-      const finalSummary = asTrimmedString(payload.detail) ?? asTrimmedString(payload.summary);
-      if (finalSummary) item.finalSummary = finalSummary;
-      const outputFile = asTrimmedString(payload.outputFile);
-      if (outputFile) item.outputFile = outputFile;
-    }
-  }
-
-  return [...byId.values()].map((item) => ({
-    kind: "agent" as const,
-    id: item.id,
-    label: item.label,
-    status: item.status,
-    startedAt: item.startedAt,
-    completedAt: item.completedAt,
-    ...(item.finalSummary ? { finalSummary: item.finalSummary } : {}),
-    ...(item.outputFile ? { outputFile: item.outputFile } : {}),
-    log: item.log,
-  }));
 }
 
 function backgroundStatus(
