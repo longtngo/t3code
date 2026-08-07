@@ -93,8 +93,11 @@ export function resolveThreadProviderPresentation(
   const accentColor = normalizeProviderAccentColor(provider.accentColor);
   if (!accentColor) return undefined;
   const displayName = qualifyDisplayName(provider, providers);
+  // Initials come from the RAW name, never the driver-qualified one: initialling
+  // "PersonalSub (Codex)" yields "P(" — the parenthesis is a word to the initialler. The
+  // qualified form stays the human-readable label on the tooltip and the rail's aria-label.
   const initials = accentIsShared(provider, accentColor, providers)
-    ? providerInstanceInitials(displayName)
+    ? providerInstanceInitials(provider.displayName ?? provider.instanceId)
     : undefined;
   return { accentColor, displayName, ...(initials ? { initials } : {}) };
 }
