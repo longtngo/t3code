@@ -7,8 +7,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 
 import {
+  applicationActiveWakeups,
   canRetainCachedPlatformRegistrationAfterRefreshFailure,
   canReuseCachedPlatformRegistration,
   primaryRegistrationToRetainAfterTopologyRead,
@@ -222,4 +225,55 @@ describe("primary topology cache", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+describe("applicationActiveWakeups", () => {
+  it.effect("asks for the fast liveness deadline when the page becomes visible", () =>
+    Effect.gen(function* () {
+      const listeners = new Set<() => void>();
+      let visibilityState: "visible" | "hidden" = "hidden";
+      const originalDocument = Reflect.get(globalThis, "document");
+      Reflect.set(globalThis, "document", {
+        get visibilityState() {
+          return visibilityState;
+        },
+        addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+        removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+      });
+
+      const emitted: Array<string> = [];
+      const settle = Effect.gen(function* () {
+        for (let spin = 0; spin < 8; spin += 1) {
+          yield* Effect.yieldNow;
+        }
+      });
+      try {
+        const fiber = yield* applicationActiveWakeups.pipe(
+          Stream.runForEach((reason) =>
+            Effect.sync(() => {
+              emitted.push(reason);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* settle;
+
+        // Going hidden is not a wake; only the return to visible is.
+        for (const listener of listeners) listener();
+        yield* settle;
+        expect(emitted).toEqual([]);
+
+        visibilityState = "visible";
+        for (const listener of listeners) listener();
+        yield* settle;
+        // The 15s `application-active` deadline is what this replaced.
+        expect(emitted).toEqual(["application-active-probe"]);
+
+        yield* Fiber.interrupt(fiber);
+        expect(listeners.size).toBe(0);
+      } finally {
+        Reflect.set(globalThis, "document", originalDocument);
+      }
+    }),
+  );
 });

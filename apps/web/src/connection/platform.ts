@@ -88,25 +88,34 @@ const connectivityLayer = Connectivity.layer({
   ),
 });
 
+// `-probe` rather than a plain `application-active`: the supervisor picks the
+// wake liveness deadline from the reason alone, and the plain one spends 15s on
+// a socket that died while the phone was asleep, versus 3s here
+// (`connection/supervisor.ts`, CONNECTION_PROBE_TIMEOUT vs
+// MOBILE_CONNECTION_PROBE_TIMEOUT). Both reasons resubscribe and both reset the
+// backoff ladder, so the deadline is the only difference. The native client has
+// always used this one; the web was never wired to it.
+export const applicationActiveWakeups = Stream.callback<"application-active-probe">((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const listener = () => {
+        if (document.visibilityState === "visible") {
+          Queue.offerUnsafe(queue, "application-active-probe");
+        }
+      };
+      document.addEventListener("visibilitychange", listener);
+      return listener;
+    }),
+    (listener) =>
+      Effect.sync(() => {
+        document.removeEventListener("visibilitychange", listener);
+      }),
+  ).pipe(Effect.asVoid),
+);
+
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
-    Stream.callback<"application-active">((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          const listener = () => {
-            if (document.visibilityState === "visible") {
-              Queue.offerUnsafe(queue, "application-active");
-            }
-          };
-          document.addEventListener("visibilitychange", listener);
-          return listener;
-        }),
-        (listener) =>
-          Effect.sync(() => {
-            document.removeEventListener("visibilitychange", listener);
-          }),
-      ).pipe(Effect.asVoid),
-    ),
+    applicationActiveWakeups,
     managedRelayAccountChanges(appAtomRegistry).pipe(
       Stream.map(() => "credentials-changed" as const),
     ),
