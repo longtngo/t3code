@@ -2072,8 +2072,10 @@ const make = Effect.gen(function* () {
         }
 
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
+          // getRawSettings, not getSettings: this runs on the streaming hot
+          // path and the resolved view does secret-store IO.
           serverSettingsService.getRawSettings,
-          (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
+          (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
         );
         if (assistantDeliveryMode === "buffered") {
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
@@ -2108,8 +2110,10 @@ const make = Effect.gen(function* () {
       if (pauseForUserTurnId) {
         const detailedThread = yield* getLoadedThreadDetail();
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
+          // getRawSettings, not getSettings: this runs on the streaming hot
+          // path and the resolved view does secret-store IO.
           serverSettingsService.getRawSettings,
-          (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
+          (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
         );
         const flushedMessageIds =
           assistantDeliveryMode === "buffered"

@@ -140,7 +140,7 @@ export class ServerSettingsService extends Context.Service<
      *
      * This is a cheap O(1) Ref read — safe to call on every streaming event.
      * Use it whenever you only need plain, non-secret settings fields such as
-     * `enableAssistantStreaming`.
+     * `enableLegacyTokenStreaming`.
      */
     readonly getRawSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 

@@ -89,6 +89,24 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // The turn can settle while background work runs on (subagent
+        // fleets, workflow runs, Monitor watch loops). Those live inside the
+        // provider process, so stopping the session would kill them silently,
+        // and nothing bumps lastSeenAt between turns.
+        if (thread?.backgroundLiveness != null) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
+            threadId: binding.threadId,
+            backgroundLiveness: thread.backgroundLiveness,
+            idleDurationMs,
+          });
+          continue;
+        }
+
+        // The projection's `backgroundLiveness` above covers work the provider
+        // process reports; this covers the fork's own registered background
+        // tasks, which are tracked in SQLite and outlive a provider restart. The
+        // two signals are independent, so both guards stay.
+        //
         // A thread with an in-flight background task is not truly idle —
         // reaping its session would kill the live watcher. Leave it alone; the
         // BackgroundTaskRecoveryWatchdog owns recovery if the task is orphaned.

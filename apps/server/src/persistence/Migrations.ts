@@ -74,6 +74,10 @@ import Migration0041 from "./Migrations/036_ProjectionThreadsPinned.ts";
 // pagination) arrives after the fork already deployed ids 33-41, so it takes
 // the next free id (42) rather than its filename number.
 import Migration0042 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+// Upstream's 038 (manual pin ordering key) arrives after the fork already
+// deployed ids 33-42, so it takes the next free id (43) rather than its
+// filename number.
+import Migration0043 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -127,6 +131,7 @@ export const migrationEntries = [
   [40, "ProjectionCheckpointMemberStates", Migration0040],
   [41, "ProjectionThreadsPinned", Migration0041],
   [42, "ProjectionTurnsKeysetIndex", Migration0042],
+  [43, "ProjectionThreadsPinOrderKey", Migration0043],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

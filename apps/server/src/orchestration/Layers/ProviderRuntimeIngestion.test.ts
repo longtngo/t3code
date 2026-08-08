@@ -2765,7 +2765,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("starts a new streaming assistant message segment after approval", async () => {
-    const harness = await createHarness({ serverSettings: { enableAssistantStreaming: true } });
+    const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
     const startedAt = "2026-03-28T07:00:00.000Z";
     const pausedAt = "2026-03-28T07:00:01.000Z";
     const resumedAt = "2026-03-28T07:00:02.000Z";
@@ -2874,7 +2874,7 @@ describe("ProviderRuntimeIngestion", () => {
   itEffect.effect("streams assistant deltas when thread.turn.start requests streaming mode", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() =>
-        createHarness({ serverSettings: { enableAssistantStreaming: true } }),
+        createHarness({ serverSettings: { enableLegacyTokenStreaming: true } }),
       );
       const now = "2026-01-01T00:00:00.000Z";
 
@@ -4237,7 +4237,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("does not call the expensive getSettings on the content.delta hot path", async () => {
-    // This test guards the performance fix: reading `enableAssistantStreaming`
+    // This test guards the performance fix: reading `enableLegacyTokenStreaming`
     // during streaming must use getRawSettings (cheap O(1) Ref read), not
     // getSettings (which materializes secrets in production on every call).
     // We spy on getSettings at the service boundary.  After the fix the
