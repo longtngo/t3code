@@ -122,6 +122,10 @@ packageExtensions:
       vite: "catalog:"
 
 patchedDependencies:
+  # FORK-ONLY (see docs/fork/README.md). Upstream does not carry this patch, and the
+  # filename is version-pinned, so an effect bump rewrites this whole block and can
+  # drop the entry with nothing failing. Deleting it is correct ONLY on a release that
+  # contains Effect-TS/effect#6927 (landed in beta.104); on any other bump, re-pin it.
   "@effect/platform-node@4.0.0-beta.103": patches/@effect__platform-node@4.0.0-beta.103.patch
   "@effect/vitest@4.0.0-beta.103": patches/@effect__vitest@4.0.0-beta.103.patch
   "@expo/metro-config@56.0.14": patches/@expo%2Fmetro-config@56.0.14.patch
