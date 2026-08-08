@@ -23,7 +23,16 @@ export function visibleProviders(
   currentProviderId?: string,
 ): ProviderCatalogEntry[] {
   return LOCAL_LLM_PROVIDERS.filter(
-    (p) => providerVisible(settings, p.id) || p.id === currentProviderId,
+    (p) =>
+      // A provider the model catalog has nothing compatible for cannot produce a valid
+      // config: it yields `modelId: ""`, which `LocalLlmModelConfig` rejects. Because the
+      // panel saves `localLlm` as one whole object, that rejection discards the entire
+      // settings patch — every unrelated edit with it — and reports nothing. Several
+      // catalog providers (vllm, llamacpp, lmstudio, ollama) are in exactly that state.
+      // The current provider stays listed regardless, so an existing config never
+      // silently loses its own selection.
+      (compatibleModels(p.id).length > 0 && providerVisible(settings, p.id)) ||
+      p.id === currentProviderId,
   );
 }
 
@@ -79,10 +88,13 @@ export function onProviderChange(
   providerId: string,
 ): LocalLlmModelConfig {
   const model = compatibleModels(providerId)[0];
-  const modelId = model?.id ?? "";
-  const contextWindow = model
-    ? clampContext(config.contextWindow ?? model.maxContext, modelId)
-    : undefined;
+  // No compatible model means the only config we could build is invalid (`modelId: ""`),
+  // and saving it would discard the whole `localLlm` patch. Refuse the switch instead:
+  // `visibleProviders` already keeps such providers out of the picker, so this is the
+  // backstop for a caller that bypasses it.
+  if (!model) return config;
+  const modelId = model.id;
+  const contextWindow = clampContext(config.contextWindow ?? model.maxContext, modelId);
   return { ...config, providerId, modelId, contextWindow };
 }
 

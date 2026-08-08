@@ -911,7 +911,11 @@ export const ServerSettingsPatch = Schema.Struct({
   // fully-formed `localLlm` every edit, and replacement is required so removing a
   // provider override or model config actually persists.
   localLlm: Schema.optionalKey(LocalLlmSettings),
-  disableAuthentication: Schema.optionalKey(Schema.Boolean),
+  // `disableAuthentication` is deliberately NOT patchable. It is a startup-only switch
+  // (`--disable-auth` / `T3CODE_DISABLE_AUTH`), and boot falls back to the persisted value,
+  // so accepting it here let any client holding the ordinary settings-write scope turn all
+  // authentication off for the next restart — a standard-to-administrative escalation from
+  // a routine settings call. No UI ever sent it.
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

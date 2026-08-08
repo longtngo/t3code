@@ -630,24 +630,28 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("persists an explicit disableAuthentication and strips the default", () =>
+  it.effect("never lets a settings patch turn authentication off", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
 
-      const enabled = yield* serverSettings.updateSettings({ disableAuthentication: true });
-      assert.equal(enabled.disableAuthentication, true);
-      const rawEnabled = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.deepEqual(JSON.parse(rawEnabled), { disableAuthentication: true });
+      // `disableAuthentication` is startup-only (--disable-auth / T3CODE_DISABLE_AUTH), but
+      // boot falls back to the persisted settings file. While it was patchable, any client
+      // holding the ordinary settings-write scope could switch authentication off for the
+      // next restart. Decode first, exactly as the RPC does: `applyServerSettingsPatch`
+      // spreads the patch object blindly, so the schema boundary is what has to drop the
+      // field — asserting against the service directly would skip the only real guard.
+      const patch = yield* decodeSettingsPatch({ disableAuthentication: true });
+      assert.deepEqual(patch, {});
 
-      const disabled = yield* serverSettings.updateSettings({ disableAuthentication: false });
-      assert.equal(disabled.disableAuthentication, false);
-      const rawDisabled = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // The default (false) is stripped from disk entirely.
+      const updated = yield* serverSettings.updateSettings(patch);
+
+      assert.equal(updated.disableAuthentication, false);
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // Nothing reached disk, so the next boot still authenticates.
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.deepEqual(JSON.parse(rawDisabled), {});
+      assert.deepEqual(JSON.parse(raw), {});
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

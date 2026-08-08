@@ -3,9 +3,27 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
+/**
+ * A git revision supplied by a client.
+ *
+ * Refs reach `git diff` / `git show` positionally, with no `--` separator, so an
+ * option-shaped value is parsed as an option rather than a revision. That is not merely a
+ * bad diff: `git diff --output=<path>` creates and truncates `<path>` while parsing its
+ * arguments, before it ever fails — turning read-only-looking review RPCs into a file
+ * clobber primitive anywhere the server can write. A real ref can never begin with `-`
+ * (git refuses to create one), so rejecting the shape costs nothing legitimate.
+ */
+const GitRevision = TrimmedNonEmptyString.pipe(
+  Schema.check(
+    Schema.makeFilter(
+      (value: string) => !value.startsWith("-") || "a git revision cannot begin with '-'",
+    ),
+  ),
+);
+
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  baseRef: Schema.optional(TrimmedNonEmptyString),
+  baseRef: Schema.optional(GitRevision),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type ReviewDiffPreviewInput = typeof ReviewDiffPreviewInput.Type;
@@ -29,10 +47,11 @@ export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
   changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
-  oldPath: TrimmedNonEmptyString,
-  newPath: TrimmedNonEmptyString,
+  baseRef: Schema.NullOr(GitRevision),
+  headRef: Schema.NullOr(GitRevision),
+  // Paths are interpolated as `<revision>:<path>`, so a leading `-` is option-shaped there too.
+  oldPath: GitRevision,
+  newPath: GitRevision,
 });
 export type ReviewDiffFileContentsInput = typeof ReviewDiffFileContentsInput.Type;
 

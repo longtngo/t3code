@@ -789,8 +789,12 @@ const makeWsRpcLayer = (
         stream: Stream.Stream<OrchestrationEvent, E, R>,
       ): Stream.Stream<OrchestrationShellStreamEvent, E, R> =>
         stream.pipe(
-          // Stack-safe under the local effect@4.0.0-beta.78 patch (stepToBuffer rewritten to
-          // tail position); the no-unsafe-stream-aggregate guard still applies to new code.
+          // Stack-safe because effect >=4.0.0-beta.103 rewrote `stepToBuffer` into a loop
+          // (the fork's own beta.78 patch that used to carry this is gone, and no patch in
+          // `patches/` touches Stream any more). That makes the safety a property of the
+          // PINNED VERSION, not of this repo: re-measure with `scripts/idle-aggregate-probe.ts`
+          // on any effect bump before trusting these two call sites. The
+          // no-unsafe-stream-aggregate guard still applies to new code.
           // oxlint-disable-next-line t3code/no-unsafe-stream-aggregate
           Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
           Stream.mapEffect(coalesceShellEvents),
@@ -830,8 +834,12 @@ const makeWsRpcLayer = (
         stream: Stream.Stream<ShellLiveInput, E, R>,
       ): Stream.Stream<OrchestrationShellStreamItem, E, R> =>
         stream.pipe(
-          // Stack-safe under the local effect@4.0.0-beta.78 patch (stepToBuffer rewritten to
-          // tail position); the no-unsafe-stream-aggregate guard still applies to new code.
+          // Stack-safe because effect >=4.0.0-beta.103 rewrote `stepToBuffer` into a loop
+          // (the fork's own beta.78 patch that used to carry this is gone, and no patch in
+          // `patches/` touches Stream any more). That makes the safety a property of the
+          // PINNED VERSION, not of this repo: re-measure with `scripts/idle-aggregate-probe.ts`
+          // on any effect bump before trusting these two call sites. The
+          // no-unsafe-stream-aggregate guard still applies to new code.
           // oxlint-disable-next-line t3code/no-unsafe-stream-aggregate
           Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
           Stream.mapEffect(coalesceShellLiveInputs),
@@ -2487,6 +2495,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
      * readable right here, and that is the half that was unknown: the server's
      * own half is configuration we already control.
      */
+    const MAX_REPORTED_UPGRADE_SHAPES = 32;
     const reportedUpgradeShapes = yield* Ref.make(new Set<string>());
     return HttpRouter.add(
       "GET",
@@ -2553,6 +2562,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const upgradeShape = `${request.headers.host ?? "(no host)"} ${offeredExtensions}`;
         const alreadyReported = yield* Ref.modify(reportedUpgradeShapes, (seen) => {
           if (seen.has(upgradeShape)) return [true, seen] as const;
+          // The key is built from two client-controlled headers, so a peer reconnecting with
+          // varying `Host` values would grow this set — and its copy-on-write — without bound.
+          // A handful of shapes is all this diagnostic was ever meant to distinguish; past the
+          // cap, stop recording rather than let a log aid become the process's memory leak.
+          if (seen.size >= MAX_REPORTED_UPGRADE_SHAPES) return [true, seen] as const;
           const next = new Set(seen);
           next.add(upgradeShape);
           return [false, next] as const;

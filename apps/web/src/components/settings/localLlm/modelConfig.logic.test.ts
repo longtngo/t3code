@@ -1,5 +1,6 @@
 import type { LocalLlmSettings } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { LOCAL_LLM_PROVIDERS, compatibleModels } from "@t3tools/shared/localLlm";
 import {
   clampContext,
   newModelConfig,
@@ -63,5 +64,36 @@ describe("onProviderChange / onModelChange", () => {
     const start = { id: "c1", name: "C", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit", visible: true, contextWindow: 163840 } as never;
     const next = onModelChange(start, "gemma-4-12B-it-4bit");
     expect(next.contextWindow).toBe(131072);
+  });
+});
+
+describe("providers with no compatible model", () => {
+  const empty = settings();
+
+  it("keeps a provider the catalog has no model for out of the picker", () => {
+    // vllm is `format: "safetensors"` and the model catalog carries only mlx/gguf, so
+    // offering it can only produce `modelId: ""` — which the contract rejects, taking the
+    // entire localLlm patch down with it.
+    const ids = visibleProviders(empty).map((p) => p.id);
+    for (const id of ids) {
+      expect(compatibleModels(id).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("still lists the provider a config is already on", () => {
+    const withNone = LOCAL_LLM_PROVIDERS.find((p) => compatibleModels(p.id).length === 0);
+    if (!withNone) return;
+    expect(visibleProviders(empty, withNone.id).some((p) => p.id === withNone.id)).toBe(true);
+  });
+
+  it("refuses to switch to a provider that would produce an empty modelId", () => {
+    const withNone = LOCAL_LLM_PROVIDERS.find((p) => compatibleModels(p.id).length === 0);
+    if (!withNone) return;
+    const start = newModelConfig(empty);
+    expect(onProviderChange(start, withNone.id)).toEqual(start);
+  });
+
+  it("never builds a fresh config with an empty modelId", () => {
+    expect(newModelConfig(empty).modelId).not.toBe("");
   });
 });

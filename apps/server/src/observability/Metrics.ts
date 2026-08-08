@@ -74,13 +74,6 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
   description: "Total terminal restart requests handled.",
 });
 
-export const wsConnectionsTotal = Metric.counter("t3_ws_connections_total", {
-  description:
-    "Total websocket RPC connections accepted, tagged by negotiated wire format " +
-    "(json | msgpack-deflate). Data-gates any future decision to retire the JSON " +
-    "compatibility fallback: it can only be safe once this shows ~zero json connections.",
-});
-
 export const metricAttributes = (
   attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<[string, string]> => Object.entries(compactMetricAttributes(attributes));

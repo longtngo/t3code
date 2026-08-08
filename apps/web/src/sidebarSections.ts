@@ -33,11 +33,6 @@ export interface BackgroundSidebarItem {
 
 export type SidebarItem = BackgroundSidebarItem;
 
-/** Dismissal key for a TodoWrite plan step in the task sidebar. */
-export function planStepDismissKey(step: string): string {
-  return `plan:${step}`;
-}
-
 function asTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();

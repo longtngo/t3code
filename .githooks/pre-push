@@ -2,15 +2,21 @@
 # Pre-push gate. Activated via `git config core.hooksPath .githooks`, set by the
 # root package.json `prepare` script (no husky dependency).
 #
-# Runs the FAST static gate (typecheck + lint). Thanks to the contract-typed
-# wsApi mock, typecheck now catches RPC/mock desync — the class of bug that once
-# rode an unrelated feature onto the trunk and sat red undetected. The full
-# unit + browser suites run in CI on push to `main`/`personal`.
+# Runs the FULL gate (typecheck + lint + test), because on this fork it is the
+# only gate that runs at all. CI is configured correctly — `ci.yml` does list
+# `personal` — but every job requests `blacksmith-*` runners, which are
+# provisioned for the upstream org and do not exist here. Jobs therefore queue
+# until GitHub's 24h timeout and are cancelled: at the time of writing, 429 runs
+# on this fork with zero successes and zero failures. An earlier version of this
+# hook ran only typecheck + lint on the belief that "the full unit suite runs in
+# CI"; that belief was false, so nothing ever executed the ~7.4k-test suite
+# automatically.
 #
-# To run the complete gate locally instead, use `pnpm verify`.
+# If the fork's CI is ever pointed at runners that exist, this can go back to the
+# fast static gate.
+#
 # Bypass in a pinch with `git push --no-verify`.
 set -e
 
-echo "pre-push: typecheck + lint (full suite runs in CI)…"
-pnpm run typecheck
-pnpm run lint
+echo "pre-push: typecheck + lint + test (nothing else runs this suite)…"
+pnpm run verify

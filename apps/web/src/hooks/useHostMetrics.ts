@@ -1,4 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
+
+import { useDocumentVisible } from "./useDocumentVisible";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import { hostMetricsEnvironment } from "~/state/hostMetrics";
@@ -44,21 +46,6 @@ export function useHostMetricsEnabled(): readonly [boolean, (next: boolean) => v
     emitEnabledChange();
   }, []);
   return [enabled, setEnabled] as const;
-}
-
-function subscribeVisibility(listener: () => void): () => void {
-  if (typeof document === "undefined") return () => {};
-  document.addEventListener("visibilitychange", listener);
-  return () => document.removeEventListener("visibilitychange", listener);
-}
-
-/** Pause streaming while the tab is hidden so a backgrounded window costs nothing. */
-function useDocumentVisible(): boolean {
-  return useSyncExternalStore(
-    subscribeVisibility,
-    () => typeof document === "undefined" || !document.hidden,
-    () => true,
-  );
 }
 
 export interface HostMetricsState {

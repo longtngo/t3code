@@ -178,7 +178,6 @@ const ProviderRuntimeEventType = Schema.Literals([
   "task.progress",
   "task.updated",
   "task.completed",
-  "task.updated",
   "hook.started",
   "hook.progress",
   "hook.completed",

@@ -314,6 +314,15 @@ const TEXT_VIEWER_EXTENSIONS = new Set([
 // no access to this app's cookies/storage, matching the no-same-origin iframe the
 // in-app viewer uses.
 const VIEWER_CSP = "sandbox allow-scripts allow-popups";
+/**
+ * Markdown is rendered from a file the user did not write by hand — a cloned repo's README,
+ * an agent-written report — and the renderer passes raw HTML through on purpose. Serving
+ * that with `allow-scripts` executes markup from those sources as a top-level document.
+ * The in-app viewer already renders the same output under `sandbox=""` (scripts inert), so
+ * withholding scripts here costs nothing that path has; `.html` keeps them, because opening
+ * an interactive report is the reason that case exists.
+ */
+const VIEWER_MARKDOWN_CSP = "sandbox allow-popups";
 
 /**
  * Whether a request genuinely originates from a local process — the basis for
@@ -338,6 +347,42 @@ export function isLocalLoopbackRequest(request: HttpServerRequest.HttpServerRequ
   if (!rawPeer) return false;
   const peer = rawPeer.startsWith("::ffff:") ? rawPeer.slice("::ffff:".length) : rawPeer;
   return isLoopbackHostname(peer);
+}
+
+/**
+ * Whether an unauthenticated request may be waived on the strength of its loopback peer.
+ *
+ * The peer check alone is not enough once a *browser* is the local process. A page the user
+ * visits runs attacker-controlled code with a loopback TCP peer, so "local process" stops
+ * meaning "the user". Two browser-only escapes have to be closed:
+ *
+ * - **DNS rebinding.** `evil.example` re-resolved to 127.0.0.1 gives the attacker a
+ *   same-origin loopback connection. The peer is genuinely loopback, so only the `Host`
+ *   header distinguishes it — a rebound request still carries the attacker's hostname.
+ *   (Reading `Host` is safe *here*, as a narrowing check on top of the peer test; it was an
+ *   auth bypass only when it was the sole basis for trust.)
+ * - **Cross-origin reads.** A top-level navigation is the case this waiver exists for
+ *   ("Open in new tab" has no way to send a bearer token). A `fetch()` from another page is
+ *   not, and is the shape that turns this route into arbitrary file disclosure. Browsers
+ *   mark the difference: only a navigation carries `Sec-Fetch-Mode: navigate`. Non-browser
+ *   callers (curl, an editor) send no `Sec-Fetch-*` at all and keep the waiver — they can
+ *   already read the file directly with the user's own permissions, which is the whole
+ *   premise of the waiver.
+ */
+export function isWaivableLocalRequest(request: HttpServerRequest.HttpServerRequest): boolean {
+  if (!isLocalLoopbackRequest(request)) return false;
+  const host = request.headers["host"];
+  if (host !== undefined) {
+    const hostname = host.startsWith("[")
+      ? host.slice(1, host.indexOf("]"))
+      : (host.split(":")[0] ?? "");
+    if (!isLoopbackHostname(hostname)) return false;
+  }
+  const fetchMode = request.headers["sec-fetch-mode"];
+  if (fetchMode !== undefined && fetchMode !== "navigate") return false;
+  const fetchDest = request.headers["sec-fetch-dest"];
+  if (fetchDest !== undefined && fetchDest !== "document") return false;
+  return true;
 }
 
 /** How a `/viewer` request should be served. */
@@ -373,11 +418,15 @@ export function classifyViewerPath(
  * reloads from disk instead of showing a frozen snapshot. Markdown is rendered to
  * HTML; `.html` is served as-is; everything else is served as text/plain.
  *
- * `readTrustedFile` applies no path sandbox, so for a remote request the
- * `orchestration:read` scope below is the boundary. The loopback waiver is not a
- * hole it opens: a local process already reads the user's files directly with the
- * user's own permissions, and `classifyViewerPath` still limits this route to the
- * viewer's known text/markdown/html extensions.
+ * `readTrustedFile` applies no path sandbox, so the `orchestration:read` scope below is
+ * the boundary for anything that is not a genuine local navigation.
+ *
+ * The waiver is deliberately narrower than "the peer is loopback" — see
+ * `isWaivableLocalRequest`. The premise that makes it safe ("a local process already reads
+ * the user's files with the user's own permissions") holds for curl or an editor, but NOT
+ * for a browser: a page the user visits is attacker-controlled code running behind a
+ * loopback peer. Waiving on the peer alone let any website read any file on disk via a
+ * cross-origin `fetch`, because this server answers with `access-control-allow-origin: *`.
  */
 export const viewerRouteLayer = HttpRouter.add(
   "GET",
@@ -388,7 +437,7 @@ export const viewerRouteLayer = HttpRouter.add(
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
     }
-    if (!isLocalLoopbackRequest(request)) {
+    if (!isWaivableLocalRequest(request)) {
       yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     }
 
@@ -427,7 +476,7 @@ export const viewerRouteLayer = HttpRouter.add(
       return HttpServerResponse.text(html, {
         status: 200,
         contentType: "text/html; charset=utf-8",
-        headers,
+        headers: { ...headers, "Content-Security-Policy": VIEWER_MARKDOWN_CSP },
       });
     }
 

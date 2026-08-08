@@ -1334,7 +1334,11 @@ export default function GitActionsControl({
       // raised earlier — a toast's follow-up, a confirmation the user left open
       // — names the repository it belongs to, and is refused rather than
       // silently redirected if the picker has moved since.
-      if (repoId !== undefined && activeRepo !== null && repoId !== activeRepo.id) {
+      // `activeRepo` is null precisely while the repo list is empty — a thread switch,
+      // a reconnect, a project refetch. Skipping the check there let a toast's follow-up
+      // fall through to `primaryGitCwd` and act on the thread's own worktree instead of
+      // the repository it names, which is the redirection the comment above forbids.
+      if (repoId !== undefined && repoId !== activeRepo?.id) {
         const owner = workspaceRepos.find((repo) => repo.id === repoId);
         toastManager.add(
           stackedThreadToast({
@@ -2354,13 +2358,22 @@ export default function GitActionsControl({
             >
               {pendingDefaultBranchActionCopy?.continueLabel ?? "Continue"}
             </Button>
-            <Button
-              className="min-h-8 w-full max-w-full whitespace-normal py-1.5 leading-snug sm:min-h-7 sm:w-auto"
-              size="sm"
-              onClick={checkoutFeatureBranchAndContinuePendingAction}
-            >
-              Checkout feature branch & continue
-            </Button>
+            {/*
+              Offered only where it can be honoured. For an attached member repository
+              `runGitActionWithToast` force-clears `featureBranch` (members run on a branch
+              that already exists, cut inside `runStackedAction`), so this button would
+              suppress the prompt, drop the request, and commit to the shared checkout's
+              default branch anyway — silently doing the exact thing the user just declined.
+            */}
+            {activeMemberRepo === null ? (
+              <Button
+                className="min-h-8 w-full max-w-full whitespace-normal py-1.5 leading-snug sm:min-h-7 sm:w-auto"
+                size="sm"
+                onClick={checkoutFeatureBranchAndContinuePendingAction}
+              >
+                Checkout feature branch & continue
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogPopup>
       </Dialog>

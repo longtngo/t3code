@@ -698,14 +698,6 @@ export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShel
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
   /**
-   * Incremental-reconnect cursor. When present, the server resumes the thread
-   * stream from just after this global event sequence — streaming only the events
-   * the client missed instead of a full snapshot. Omit (or on a detected gap) for
-   * a fresh snapshot. The server falls back to a snapshot if it can't serve the
-   * cursor.
-   */
-  fromSequenceExclusive: Schema.optional(NonNegativeInt),
-  /**
    * When provided, the server skips the initial snapshot frame and instead
    * replays events after this sequence before streaming live events. Clients
    * that load the snapshot over HTTP pass the snapshot's sequence here so the

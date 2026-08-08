@@ -5,6 +5,7 @@ import {
   classifyViewerPath,
   isLocalLoopbackRequest,
   isLoopbackHostname,
+  isWaivableLocalRequest,
   resolveDevRedirectUrl,
 } from "./http.ts";
 import type { HttpServerRequest } from "effect/unstable/http";
@@ -123,5 +124,86 @@ describe("classifyViewerPath", () => {
     expect(classifyViewerPath("/Users/me/Makefile")).toBeNull();
     // A dot in a parent directory is not an extension of the final segment.
     expect(classifyViewerPath("/Users/me.dir/report")).toBeNull();
+  });
+});
+
+describe("isWaivableLocalRequest", () => {
+  const loopback = { remoteAddress: "127.0.0.1" } as const;
+
+  it("waives a genuine top-level navigation from a local browser", () => {
+    expect(
+      isWaivableLocalRequest(
+        fakeRequest({
+          ...loopback,
+          headers: {
+            host: "127.0.0.1:13773",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "document",
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("waives a non-browser caller, which sends no Sec-Fetch-* at all", () => {
+    // curl or an editor can already read the file directly with the user's own
+    // permissions, which is the premise the waiver rests on.
+    expect(isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost:13773" } })))
+      .toBe(true);
+  });
+
+  it("refuses a cross-origin fetch from a page the user is merely visiting", () => {
+    // The disclosure path: any site could read any file, because this server answers
+    // with `access-control-allow-origin: *`.
+    expect(
+      isWaivableLocalRequest(
+        fakeRequest({
+          ...loopback,
+          headers: {
+            host: "127.0.0.1:13773",
+            origin: "https://evil.example",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a no-cors fetch and a subresource load", () => {
+    for (const headers of [
+      { "sec-fetch-mode": "no-cors", "sec-fetch-dest": "empty" },
+      { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" },
+    ]) {
+      expect(
+        isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost", ...headers } })),
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a DNS-rebound request, whose peer is loopback but whose Host is not", () => {
+    expect(
+      isWaivableLocalRequest(
+        fakeRequest({
+          ...loopback,
+          headers: {
+            host: "evil.example",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "document",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still refuses anything that is not a loopback peer", () => {
+    expect(
+      isWaivableLocalRequest(
+        fakeRequest({
+          remoteAddress: "192.168.1.20",
+          headers: { host: "127.0.0.1", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+        }),
+      ),
+    ).toBe(false);
   });
 });

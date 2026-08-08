@@ -6,6 +6,14 @@ const makeTurns = (count: number) =>
   Array.from({ length: count }, (_unused, index) => ({ items: [`item-${index}`] as Array<unknown> }));
 
 describe("releaseOldTurnItems", () => {
+  it("retains 20 turns", () => {
+    // Every other case here is written as RETAINED_TURN_ITEMS ± n, which makes them all pass
+    // for *any* window — 5, 1000, 1 — and so leaves the one number this module exists to
+    // choose unasserted. The window trades replay fidelity against retained heap, so changing
+    // it should require changing a test on purpose rather than sliding through green.
+    expect(RETAINED_TURN_ITEMS).toBe(20);
+  });
+
   it("keeps every entry, so the resume cursor's count and a revert's splice still work", () => {
     // This is the constraint that rules out simply capping the array: the
     // adapter reports `turns.length` as its resume cursor and reverts by

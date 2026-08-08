@@ -36,3 +36,6 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Stray verification screenshots taken while driving the live UI.
+/*.png

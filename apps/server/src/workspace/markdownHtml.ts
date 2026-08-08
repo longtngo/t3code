@@ -72,9 +72,12 @@ const HTML_TAIL = "</article></body></html>";
 /**
  * Render markdown source to a complete standalone HTML document. Synchronous:
  * `marked` is configured without async extensions, so `parse` returns a string.
- * Raw HTML inside the markdown is passed through unchanged — the consumer renders
- * the result in a sandboxed (no-same-origin) iframe, which is the trust boundary,
- * matching how raw `.html` report files are already displayed.
+ * Raw HTML inside the markdown is passed through unchanged, so the sandbox around the
+ * output IS the trust boundary. Both consumers have to hold it up, and each does it
+ * differently — a change to either is a security change:
+ *  - the in-app viewer frames this in `sandbox=""` (`TrustedFileView.tsx`);
+ *  - the `/viewer` route serves it top-level under `VIEWER_MARKDOWN_CSP`, which omits
+ *    `allow-scripts` for exactly this reason (`http.ts`).
  */
 export function renderMarkdownDocument(markdown: string): string {
   const body = marked.parse(markdown, { async: false, gfm: true, breaks: false });

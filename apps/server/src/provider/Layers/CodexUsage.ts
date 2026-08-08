@@ -193,9 +193,3 @@ export const normalizeCodexRateLimitsNotification = (
     rateLimits: payload.rateLimits,
   });
 
-const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
-
-export const codexUsageFailureDetail = (error: unknown): string =>
-  isCodexAppServerSpawnError(error)
-    ? "Codex CLI is not installed or not on PATH."
-    : "Failed to fetch Codex rate limits snapshot";
