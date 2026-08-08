@@ -32,6 +32,20 @@ describe("ComposerBannerStack", () => {
     expect(markup).toContain("group-focus-within/banner-stack:visible");
   });
 
+  it("lets a wide control stack below the message on a phone without leaking the flag to the DOM", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack
+        items={[{ ...banner("front"), actions: <button type="button">Reconnect</button> }]}
+      />,
+    );
+
+    expect(markup).toContain("max-sm:flex-wrap");
+    expect(markup).toContain("max-sm:basis-48");
+    // React lowercases unknown props onto the element, so a prop that is not
+    // destructured out of Alert's `...props` ships as a DOM attribute.
+    expect(markup).not.toContain("stackcontrolonnarrow");
+  });
+
   it("colors the collapsed stack cap by the hidden banner's variant, not a fixed warning", () => {
     const neutralBehind = renderToStaticMarkup(
       <ComposerBannerStack items={[banner("front", "default"), banner("stacked", "default")]} />,

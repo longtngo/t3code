@@ -192,6 +192,10 @@ function ComposerBannerStackAlert({
       variant={item.variant}
       className={cn("alert-glass rounded-[22px]", item.className)}
       data-variant={item.variant}
+      // The stack spans the composer, so it is the full-viewport container this
+      // is safe in — and its widest banner (Reconnect + Connections) is exactly
+      // the one that squeezed its message to a ribbon on a phone.
+      stackControlOnNarrow
     >
       {item.icon}
       <AlertTitle>{item.title}</AlertTitle>
