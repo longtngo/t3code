@@ -1251,7 +1251,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // collapsed button is the only way to submit (Enter inserts a newline), so
   // disabling it while disconnected would leave no way to queue a message.
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
+    // `phase === "running"` deliberately absent: every adapter has a defined
+    // concurrent-send path (Claude queues FIFO, Cursor/Grok/OpenCode steer), and
+    // the collapsed row is the only composer a phone shows by default. Leaving
+    // it here made queueing a follow-up impossible on the surface where it is
+    // most useful, and left a permanently dead button beside Stop.
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
@@ -2908,7 +2912,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ) : null}
 
           {showCollapsedMobilePromptRow ? (
-            <div className="flex items-center justify-between gap-2 px-3 py-2">
+            // `data-chat-composer-collapsed-controls` is load-bearing, not
+            // decoration: the surface's `onFocusCapture` expands the composer for
+            // any focus landing outside a marked container. The two buttons below
+            // dodge that by suppressing focus in `onPointerDown`, but the vitals
+            // glyph renders its own popover trigger and takes no pointer handler —
+            // without this attribute, tapping it to read context usage would
+            // expand the composer and unmount this row mid-tap.
+            <div
+              className="flex items-center justify-between gap-2 px-3 py-2"
+              data-chat-composer-collapsed-controls="true"
+            >
               <button
                 type="button"
                 className={cn(
@@ -2927,27 +2941,60 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   : prompt.trim() ||
                     (noProviderAvailable ? "Enable a provider in Settings" : "Ask anything...")}
               </button>
-              <button
-                type="button"
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
-                disabled={collapsedComposerPrimaryActionDisabled}
-                aria-label={collapsedComposerPrimaryActionLabel}
-                onPointerDown={(event) => event.preventDefault()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  submitComposer();
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path
-                    d="M8 3L8 13M8 3L4 7M8 3L12 7"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <VitalsGaugeConnected
+                  environmentId={environmentId}
+                  context={activeContextWindow}
+                  accountUsage={activeAccountUsage}
+                  providerDisplayName={activeThreadProviderDisplayName}
+                />
+                {phase === "running" ? (
+                  // The composer footer is not rendered at all while collapsed,
+                  // and this is the app's only Stop control — without it there is
+                  // no way to stop a run from a phone without first expanding.
+                  <button
+                    type="button"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-destructive/90 text-white hover:bg-destructive"
+                    aria-label="Stop generation"
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleInterruptPrimaryAction();
+                    }}
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 12 12"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <rect x="2" y="2" width="8" height="8" rx="1.5" />
+                    </svg>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
+                  disabled={collapsedComposerPrimaryActionDisabled}
+                  aria-label={collapsedComposerPrimaryActionLabel}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    submitComposer();
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 3L8 13M8 3L4 7M8 3L12 7"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
             </div>
           ) : null}
 

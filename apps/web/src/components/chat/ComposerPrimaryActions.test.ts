@@ -40,7 +40,10 @@ function renderPendingActions(isRunning: boolean) {
   );
 }
 
-function renderStandaloneStop() {
+// `hasSendableContent` is parameterised deliberately. Send's `disabled` already
+// includes `!hasSendableContent`, so a fixture hardcoding `false` makes every
+// enabled/disabled assertion pass no matter what the running branch does.
+function renderRunning(options?: { hasSendableContent?: boolean }) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -54,12 +57,16 @@ function renderStandaloneStop() {
       isEnvironmentUnavailable: false,
       isSendBlocked: false,
       isPreparingWorktree: false,
-      hasSendableContent: false,
+      hasSendableContent: options?.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
     }),
   );
+}
+
+function renderStandaloneStop() {
+  return renderRunning();
 }
 
 describe("formatPendingPrimaryActionLabel", () => {
@@ -163,7 +170,26 @@ describe("ComposerPrimaryActions", () => {
 
   it("matches the small pending action size without changing the standalone size", () => {
     expect(renderPendingActions(true)).toContain("size-8 sm:size-7");
-    expect(renderStandaloneStop()).toContain("size-8 sm:h-8 sm:w-8");
+    // Standalone Stop now matches Send's footprint so the pair is even; it was
+    // `size-8` (32px) against Send's 36px below `sm`.
+    expect(renderStandaloneStop()).toContain("h-9 w-9 sm:h-8 sm:w-8");
     expect(renderStandaloneStop()).not.toContain("sm:size-7");
+  });
+
+  it("keeps Send mounted beside Stop while a turn is running", () => {
+    const markup = renderRunning();
+    expect(markup).toContain('aria-label="Stop generation"');
+    expect(markup).toContain('aria-label="Send message"');
+  });
+
+  it("leaves Send usable while running so a follow-up can be queued", () => {
+    // Must match the ATTRIBUTE, not the substring: the class list carries
+    // `disabled:opacity-30` and friends, so `toContain("disabled")` is true of
+    // every render and asserts nothing.
+    //
+    // Not vacuous in the other direction either — flipping `hasSendableContent`
+    // flips the outcome, which is exactly what the second assertion pins.
+    expect(renderRunning({ hasSendableContent: true })).not.toContain('disabled=""');
+    expect(renderRunning({ hasSendableContent: false })).toContain('disabled=""');
   });
 });

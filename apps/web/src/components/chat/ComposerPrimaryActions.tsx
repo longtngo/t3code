@@ -86,7 +86,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       type="button"
       className={cn(
         "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
-        insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+        // Standalone Stop sits beside Send while running, so it must match Send's
+        // footprint exactly (`h-9 w-9 sm:h-8 sm:w-8`). Sizing it `size-8` made it
+        // 32px against Send's 36px below `sm` — a visible mismatch on a phone, on
+        // the very change whose point is that the row stops moving.
+        insidePendingAction ? "size-8 sm:size-7" : "h-9 w-9 sm:h-8 sm:w-8",
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
@@ -95,6 +99,48 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
         <rect x="2" y="2" width="8" height="8" rx="1.5" />
       </svg>
+    </button>
+  );
+
+  const sendButton = (
+    <button
+      type="submit"
+      className={cn(
+        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
+        "bg-message-action enabled:shadow-message-action/24 hover:bg-message-action-hover",
+      )}
+      {...pointerFocusProps}
+      // Note this checks `isSendBlocked`, NOT `isEnvironmentUnavailable`: a
+      // disconnected environment leaves the button live so the message can be
+      // queued for reconnect instead of being swallowed by a dead button.
+      disabled={isSendBusy || isSendDisabled || isConnecting || isSendBlocked || !hasSendableContent}
+      aria-label={
+        isEnvironmentUnavailable
+          ? "Queue message to send on reconnect"
+          : sendDisabledReason
+            ? sendDisabledReason
+            : isConnecting
+              ? "Connecting"
+              : isPreparingWorktree
+                ? "Preparing worktree"
+                : isSendBusy
+                  ? "Sending"
+                  : "Send message"
+      }
+    >
+      {isConnecting || isSendBusy ? (
+        <Spinner className="size-3.5" aria-hidden="true" />
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path
+            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
     </button>
   );
 
@@ -155,7 +201,22 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
-    return renderStopGenerationButton(false);
+    // Send stays mounted beside Stop rather than being replaced by it, so the
+    // control never moves between idle and running. Every adapter has a defined
+    // concurrent-send path — Claude queues the follow-up FIFO
+    // (`ClaudeAdapter.ts:4637`), Cursor/Grok/OpenCode steer it into the running
+    // turn — so this is not gated on the provider.
+    //
+    // Do NOT "simplify" this by deleting the branch and falling through to the
+    // default Send: `showPlanFollowUpPrompt` is only unreachable while running
+    // because this branch returns first, and falling through would start
+    // rendering Refine/Implement mid-run.
+    return (
+      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+        {renderStopGenerationButton(false)}
+        {sendButton}
+      </div>
+    );
   }
 
   if (showPlanFollowUpPrompt) {
@@ -231,45 +292,5 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  return (
-    <button
-      type="submit"
-      className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
-        "bg-message-action enabled:shadow-message-action/24 hover:bg-message-action-hover",
-      )}
-      {...pointerFocusProps}
-      // Note this checks `isSendBlocked`, NOT `isEnvironmentUnavailable`: a
-      // disconnected environment leaves the button live so the message can be
-      // queued for reconnect instead of being swallowed by a dead button.
-      disabled={isSendBusy || isSendDisabled || isConnecting || isSendBlocked || !hasSendableContent}
-      aria-label={
-        isEnvironmentUnavailable
-          ? "Queue message to send on reconnect"
-          : sendDisabledReason
-            ? sendDisabledReason
-            : isConnecting
-              ? "Connecting"
-              : isPreparingWorktree
-                ? "Preparing worktree"
-                : isSendBusy
-                  ? "Sending"
-                  : "Send message"
-      }
-    >
-      {isConnecting || isSendBusy ? (
-        <Spinner className="size-3.5" aria-hidden="true" />
-      ) : (
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path
-            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      )}
-    </button>
-  );
+  return sendButton;
 });
