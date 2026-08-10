@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-08, against `origin/main`: **270 files added, 204 modified, 1 deleted.**
-Concentrated in `apps/server` (177) and `apps/web` (134).
+As of 2026-08-10, against `origin/main`: **271 files added, 207 modified, 1 deleted.**
+Concentrated in `apps/server` (179) and `apps/web` (134).
 
 ## Invariants a merge must not break
 
@@ -81,6 +81,41 @@ reading the content, not by trusting the conflict markers.**
 The fork removes upstream lines on purpose (e.g. the offline-outbox send-gate). A later merge
 that "restores" them looks clean and reverts the fix. After any reconcile, sweep the merged
 files for fork-deleted lines that came back.
+
+The sweep is mechanical — for every file both sides touched, the set of lines present at the
+merge-base and absent in `personal` must stay absent in the merge result:
+
+```sh
+MB=$(git merge-base personal origin/main)
+comm -23 <(git show "$MB:$f" | sort -u) <(git show "personal:$f" | sort -u) \
+  | comm -12 - <(sort -u "$f")
+```
+
+This is what caught the ClaudeAdapter steering test below, which the conflict presented as an
+ordinary upstream addition.
+
+### 5. A mid-turn send queues; it does not steer
+
+Upstream's Claude adapter treats a second `sendTurn` while a turn is running as a **steer** — the
+message joins the live agent loop and the turn id does not change. The fork replaced that with
+**FIFO queued follow-ups**: the message waits and then opens its **own** turn. That is what backs
+the composer's Send-beside-Stop button ("Queue message"), and the fork carries its own tests for
+the queue (drain order, interrupt discards the queue, model re-set on drain).
+
+So upstream's `ClaudeAdapter.test.ts` test *"steers a running turn instead of opening a new one on
+mid-turn sendTurn"* asserts a behaviour this adapter no longer has, and fails against it
+(`steeredTurn.turnId !== turn.turnId`). It is deliberately absent, with a comment where it used to
+sit. A reconcile that "restores" it — it reads exactly like an upstream addition inside a
+conflict — reintroduces a guaranteed red test.
+
+### 6. Two project entry points in the sidebar, on purpose
+
+Upstream `#5923`/`#5768` moved project settings to a `/projects/$projectKey` route and repurposed
+the sidebar's per-project button to navigate there. The fork's own project-actions **dialog**
+covers ground that route does not (per-project grouping overrides, removing a grouped project's
+member repositories), so the project row carries **both** buttons: an ellipsis opening the fork
+dialog and a gear navigating to upstream's page. Collapsing them to one drops the fork-only half.
+Consolidating the two is real work, not merge work.
 
 ## CI does not run here — the pre-push hook is the gate
 

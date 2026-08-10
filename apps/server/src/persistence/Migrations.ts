@@ -78,6 +78,15 @@ import Migration0042 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 // deployed ids 33-42, so it takes the next free id (43) rather than its
 // filename number.
 import Migration0043 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
+// Upstream's 039 (projection_projects.default_thread_env_mode) arrives after the
+// fork already deployed ids 33-43, so it takes the next free id (44) rather than
+// its filename number. Its 039 filename collides with the fork's own
+// 039_ProjectionCheckpointMemberStates (id 40); filenames are free to repeat,
+// applied ids are not.
+import Migration0044 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
+// Upstream's 040 (projection_projects.favicon_path) likewise takes the next free
+// id (45) rather than its filename number.
+import Migration0045 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -132,6 +141,8 @@ export const migrationEntries = [
   [41, "ProjectionThreadsPinned", Migration0041],
   [42, "ProjectionTurnsKeysetIndex", Migration0042],
   [43, "ProjectionThreadsPinOrderKey", Migration0043],
+  [44, "ProjectionProjectsDefaultThreadEnvMode", Migration0044],
+  [45, "ProjectionProjectFaviconPath", Migration0045],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
