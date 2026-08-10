@@ -2790,12 +2790,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           )}
           onFocusCapture={(event) => {
             const activeElement = event.target;
-            if (
-              isComposerCollapsedMobile &&
-              activeElement instanceof HTMLElement &&
-              activeElement.closest('[data-chat-composer-collapsed-controls="true"]')
-            ) {
-              return;
+            if (isComposerCollapsedMobile && activeElement instanceof HTMLElement) {
+              // Two distinct cases must not expand the composer:
+              //
+              // 1. Focus landing on a marked collapsed control (the row itself).
+              // 2. Focus landing in a PORTAL owned by one of those controls.
+              //    React propagates synthetic focus through the REACT tree, so a
+              //    popover panel whose DOM node lives under <body> still reaches
+              //    this handler — while `closest()` walks the DOM tree and finds
+              //    no marker. Measured live: tapping the vitals glyph fires focus
+              //    twice, once on the trigger (marked, contained) and once on the
+              //    panel's "Pause host metrics" button (unmarked, NOT contained).
+              //    Only the second one got here, expanded the composer, unmounted
+              //    the row mid-tap and killed the popover it had just opened.
+              //
+              // Containment is the discriminator: anything genuinely focusable
+              // inside the collapsed composer is in this DOM subtree; portal
+              // content never is.
+              if (
+                activeElement.closest('[data-chat-composer-collapsed-controls="true"]') ||
+                !composerSurfaceRef.current?.contains(activeElement)
+              ) {
+                return;
+              }
             }
             if (composerBlurFrameRef.current !== null) {
               window.cancelAnimationFrame(composerBlurFrameRef.current);
