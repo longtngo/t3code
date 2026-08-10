@@ -106,27 +106,45 @@ const makeBackgroundTaskRecoveryWatchdog = (
     );
 
     const dispatchRecovery = (input: {
-      readonly taskId: RuntimeTaskId;
+      // Every orphaned task on this thread, recovered by ONE turn. Recovering
+      // them one per sweep instead would re-open the race this watchdog caused:
+      // a second dispatch can slip out while the first turn is still starting
+      // (the reactor writes `status:"starting"` with `activeTurnId:null`), and
+      // it would also cost the user N turns and N prompts for one interruption.
+      readonly tasks: ReadonlyArray<{
+        readonly taskId: RuntimeTaskId;
+        readonly reason: RecoveryReason;
+      }>;
       readonly threadId: ThreadId;
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
-      readonly reason: RecoveryReason;
       readonly attempt: number;
       readonly createdAt: string;
     }) => {
+      // Identity comes from the first task; the set is stably ordered by the
+      // repository, so a retry after a failed dispatch reuses it at a bumped
+      // attempt rather than colliding with the previous command id.
+      const primary = input.tasks[0]!;
       const text = [
-        `Background task ${input.taskId} was interrupted before it reported completion (${reasonText[input.reason]}).`,
+        ...(input.tasks.length === 1
+          ? [
+              `Background task ${primary.taskId} was interrupted before it reported completion (${reasonText[primary.reason]}).`,
+            ]
+          : [
+              `${input.tasks.length} background tasks were interrupted before they reported completion:`,
+              ...input.tasks.map((t) => `- ${t.taskId} (${reasonText[t.reason]})`),
+            ]),
         "Re-check whether the work it was waiting on actually finished, then continue.",
       ].join("\n");
 
       return orchestrationEngine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make(
-          `provider:bg-task-recovery:${input.taskId}:${input.attempt}`,
+          `provider:bg-task-recovery:${primary.taskId}:${input.attempt}`,
         ),
         threadId: input.threadId,
         message: {
-          messageId: MessageId.make(`user:bg-task-recovery:${input.taskId}:${input.attempt}`),
+          messageId: MessageId.make(`user:bg-task-recovery:${primary.taskId}:${input.attempt}`),
           role: "user",
           text,
           attachments: [],
@@ -137,93 +155,156 @@ const makeBackgroundTaskRecoveryWatchdog = (
       });
     };
 
-    const processTask = Effect.fn("backgroundTaskRecovery.processTask")(function* (
-      task: {
+    // Processes EVERY pending row for one thread together.
+    //
+    // This used to be per-row, which is what caused the incident this watchdog
+    // is now shaped around. The idle guard below reads `activeTurnId` from the
+    // projection, but `orchestrationEngine.dispatch` returns as soon as the
+    // command is accepted, and the reactor's first write is
+    // `status:"starting"` with `activeTurnId:null`
+    // (`ProviderCommandReactor.ts:635-648`) — the non-null id only lands when
+    // the provider emits its turn-started event. So a second row reads "idle"
+    // for the whole dispatch → subprocess-spawn window and starts its own turn.
+    //
+    // On 2026-08-08 boot reconciliation cleared a latched session at
+    // 14:18:44.842Z; three pending rows on one thread then dispatched three
+    // turn-starts within 86ms (event sequences 1539224 / 1539226 / 1539228),
+    // all landing BEFORE the first session-set (1539229). Those concurrent
+    // starts raced in the Claude adapter, orphaned a turn, and re-latched the
+    // session the reconciler had just cleaned — which is why the thread stayed
+    // pinned to `running` across two boots with no in-flight turn for Stop to
+    // interrupt.
+    //
+    // Recovering the whole group in one turn closes that window by
+    // construction: there are no sibling rows left to dispatch on a later
+    // sweep. Rate-limiting to one row per sweep would NOT have — it only moves
+    // the second dispatch 60s later, still inside the window whenever a start
+    // is slow, which at boot is exactly when it is slowest.
+    const processThread = Effect.fn("backgroundTaskRecovery.processThread")(function* (
+      threadId: ThreadId,
+      tasks: ReadonlyArray<{
         readonly taskId: RuntimeTaskId;
         readonly threadId: ThreadId;
         readonly bootId: string;
         readonly lastSeenAt: string;
         readonly recoveryAttempts: number;
-      },
+      }>,
       nowMs: number,
     ) {
       const thread = yield* projectionSnapshotQuery
-        .getThreadShellById(task.threadId)
+        .getThreadShellById(threadId)
         .pipe(Effect.map(Option.getOrUndefined));
 
-      // Orphaned record: the thread is gone or archived. Drop the row.
+      // Orphaned records: the thread is gone or archived. Drop them all.
       if (!thread || thread.archivedAt !== null) {
-        yield* repository.deleteByTaskId({ taskId: task.taskId });
+        yield* repository.deleteByThreadId({ threadId });
         return;
       }
 
       // Never interrupt real work. Re-evaluate on a later sweep.
+      //
+      // `starting` counts as busy even though `activeTurnId` is still null:
+      // that is precisely the window described above, and treating it as idle
+      // is what let a second turn start. A prior-boot `starting` row cannot
+      // wedge here — `BootTurnReconciler` settles every live session to
+      // `stopped` before the reactors run.
+      const sessionStatus = thread.session?.status ?? null;
       const activeTurnId = thread.session?.activeTurnId ?? null;
-      if (activeTurnId !== null || thread.hasPendingApprovals || thread.hasPendingUserInput) {
+      if (
+        activeTurnId !== null ||
+        sessionStatus === "starting" ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput
+      ) {
         return;
       }
 
-      // Silence since the task was last seen (null when the timestamp is
-      // unparseable). Carried into trip telemetry so the stale threshold can be
-      // tuned from real recoveries.
-      const lastSeenMs = Date.parse(task.lastSeenAt);
-      const silentMs = Number.isNaN(lastSeenMs) ? null : nowMs - lastSeenMs;
-
-      const sessionStatus = thread.session?.status ?? null;
       const sessionLive = sessionStatus !== null && LIVE_SESSION_STATUSES.has(sessionStatus);
 
-      let reason: RecoveryReason | null = null;
-      if (task.bootId !== bootId) {
-        reason = "prior-boot";
-      } else if (!sessionLive) {
-        reason = "dead-session";
-      } else {
-        if (silentMs === null) {
-          yield* Effect.logWarning("background-task-recovery.invalid-last-seen", {
+      // Partition the thread's rows: which are recoverable, and which have
+      // exhausted their attempts. Give-up runs regardless of whether anything
+      // else on this thread recovers, so a dead row's lifetime stays bounded by
+      // the attempt cap alone.
+      const recoverable: Array<{
+        readonly taskId: RuntimeTaskId;
+        readonly reason: RecoveryReason;
+        readonly recoveryAttempts: number;
+        readonly silentMs: number | null;
+      }> = [];
+
+      for (const task of tasks) {
+        // Silence since the task was last seen (null when the timestamp is
+        // unparseable). Carried into trip telemetry so the stale threshold can
+        // be tuned from real recoveries.
+        const lastSeenMs = Date.parse(task.lastSeenAt);
+        const silentMs = Number.isNaN(lastSeenMs) ? null : nowMs - lastSeenMs;
+
+        let reason: RecoveryReason | null = null;
+        if (task.bootId !== bootId) {
+          reason = "prior-boot";
+        } else if (!sessionLive) {
+          reason = "dead-session";
+        } else {
+          if (silentMs === null) {
+            yield* Effect.logWarning("background-task-recovery.invalid-last-seen", {
+              taskId: task.taskId,
+              threadId,
+              lastSeenAt: task.lastSeenAt,
+            });
+            continue;
+          }
+          if (silentMs >= staleThresholdMs) {
+            reason = "stale";
+          }
+        }
+
+        // Healthy / fresh: leave it alone.
+        if (reason === null) {
+          continue;
+        }
+
+        if (task.recoveryAttempts >= maxRecoveryAttempts) {
+          yield* Effect.logWarning("background-task-recovery.gave-up", {
             taskId: task.taskId,
-            threadId: task.threadId,
-            lastSeenAt: task.lastSeenAt,
+            threadId,
+            reason,
+            recoveryAttempts: task.recoveryAttempts,
+            ...(silentMs !== null ? { silentMs } : {}),
           });
-          return;
+          // Anonymous trip telemetry (no thread/task identifiers).
+          yield* analytics.record("provider.background_task.recovery_gave_up", {
+            reason,
+            recoveryAttempts: task.recoveryAttempts,
+            ...(silentMs !== null ? { silentMs } : {}),
+          });
+          yield* repository.deleteByTaskId({ taskId: task.taskId });
+          continue;
         }
-        if (silentMs >= staleThresholdMs) {
-          reason = "stale";
-        }
-      }
 
-      // Healthy / fresh: leave it alone.
-      if (reason === null) {
-        return;
-      }
-
-      if (task.recoveryAttempts >= maxRecoveryAttempts) {
-        yield* Effect.logWarning("background-task-recovery.gave-up", {
+        recoverable.push({
           taskId: task.taskId,
-          threadId: task.threadId,
           reason,
           recoveryAttempts: task.recoveryAttempts,
-          ...(silentMs !== null ? { silentMs } : {}),
+          silentMs,
         });
-        // Anonymous trip telemetry (no thread/task identifiers).
-        yield* analytics.record("provider.background_task.recovery_gave_up", {
-          reason,
-          recoveryAttempts: task.recoveryAttempts,
-          ...(silentMs !== null ? { silentMs } : {}),
-        });
-        yield* repository.deleteByTaskId({ taskId: task.taskId });
+      }
+
+      if (recoverable.length === 0) {
         return;
       }
 
-      const attempt = task.recoveryAttempts + 1;
-      yield* repository.incrementAttempts({ taskId: task.taskId });
+      const primary = recoverable[0]!;
+      const attempt = primary.recoveryAttempts + 1;
+      for (const task of recoverable) {
+        yield* repository.incrementAttempts({ taskId: task.taskId });
+      }
 
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       const dispatched = yield* dispatchRecovery({
-        taskId: task.taskId,
-        threadId: task.threadId,
+        tasks: recoverable.map((t) => ({ taskId: t.taskId, reason: t.reason })),
+        threadId,
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
-        reason,
         attempt,
         createdAt,
       }).pipe(
@@ -231,9 +312,10 @@ const makeBackgroundTaskRecoveryWatchdog = (
         Effect.as(true),
         Effect.catchCause((cause) =>
           Effect.logWarning("background-task-recovery.dispatch-failed", {
-            taskId: task.taskId,
-            threadId: task.threadId,
-            reason,
+            taskId: primary.taskId,
+            threadId,
+            taskCount: recoverable.length,
+            reason: primary.reason,
             attempt,
             cause,
           }).pipe(Effect.as(false)),
@@ -242,33 +324,36 @@ const makeBackgroundTaskRecoveryWatchdog = (
 
       if (dispatched) {
         yield* Effect.logInfo("background-task-recovery.resumed", {
-          taskId: task.taskId,
-          threadId: task.threadId,
-          reason,
+          taskId: primary.taskId,
+          threadId,
+          taskCount: recoverable.length,
+          reason: primary.reason,
           attempt,
-          ...(silentMs !== null ? { silentMs } : {}),
+          ...(primary.silentMs !== null ? { silentMs: primary.silentMs } : {}),
         });
         // Anonymous trip telemetry (no thread/task identifiers) — lets the stale
         // threshold be tuned from real recoveries.
         yield* analytics.record("provider.background_task.recovered", {
-          reason,
+          reason: primary.reason,
           attempt,
-          ...(silentMs !== null ? { silentMs } : {}),
+          ...(primary.silentMs !== null ? { silentMs: primary.silentMs } : {}),
         });
-        // Success: drop the row so a successful recovery never accumulates
+        // Success: drop the rows so a successful recovery never accumulates
         // attempts across reboots (the resumed turn re-registers fresh rows).
-        yield* repository
-          .deleteByTaskId({ taskId: task.taskId })
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("background-task-recovery.delete-after-resume-failed", {
-                taskId: task.taskId,
-                cause,
-              }),
-            ),
-          );
+        for (const task of recoverable) {
+          yield* repository
+            .deleteByTaskId({ taskId: task.taskId })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("background-task-recovery.delete-after-resume-failed", {
+                  taskId: task.taskId,
+                  cause,
+                }),
+              ),
+            );
+        }
       }
-      // On dispatch failure the row remains (attempts already bumped); the next
+      // On dispatch failure the rows remain (attempts already bumped); the next
       // sweep retries until the attempt cap, then gives up.
     });
 
@@ -278,17 +363,31 @@ const makeBackgroundTaskRecoveryWatchdog = (
         return;
       }
       const nowMs = yield* Clock.currentTimeMillis;
+      // Group by thread so each thread is decided once, from one read of its
+      // shell, and recovers in one turn. Iterating rows individually is what
+      // produced the concurrent turn-starts described on `processThread`.
+      // `Map` preserves insertion order, so the repository's stable ordering
+      // carries through to which task becomes the group's primary.
+      const byThread = new Map<ThreadId, Array<(typeof tasks)[number]>>();
       for (const task of tasks) {
-        yield* processTask(task, nowMs).pipe(
+        const existing = byThread.get(task.threadId);
+        if (existing) {
+          existing.push(task);
+        } else {
+          byThread.set(task.threadId, [task]);
+        }
+      }
+      for (const [threadId, threadTasks] of byThread) {
+        yield* processThread(threadId, threadTasks, nowMs).pipe(
           Effect.catch((error: unknown) =>
             Effect.logWarning("background-task-recovery.process-failed", {
-              taskId: task.taskId,
+              threadId,
               error,
             }),
           ),
           Effect.catchDefect((defect: unknown) =>
             Effect.logWarning("background-task-recovery.process-defect", {
-              taskId: task.taskId,
+              threadId,
               defect,
             }),
           ),

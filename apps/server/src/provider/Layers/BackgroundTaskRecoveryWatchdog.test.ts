@@ -114,6 +114,10 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
     readonly rows: ReadonlyArray<PendingBackgroundTask>;
     readonly shells: Map<ThreadId, ReturnType<typeof makeShell>>;
     readonly options?: BackgroundTaskRecoveryWatchdogLiveOptions;
+    // When set, `dispatch` records the attempt and then fails. Without this the
+    // fake engine can never fail, which makes every assertion about the
+    // dispatch-failure path vacuous.
+    readonly dispatchFails?: boolean;
   }) {
     const store = new Map<string, PendingBackgroundTask>();
     for (const r of input.rows) {
@@ -162,13 +166,15 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
       readEvents: () => Stream.empty,
       streamDomainEvents: Stream.empty,
       dispatch: (command: { type: string; threadId: ThreadId; message?: { text?: string } }) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           dispatched.push({
             type: command.type,
             threadId: command.threadId,
             ...(command.message?.text ? { text: command.message.text } : {}),
           });
-          return { sequence: dispatched.length };
+          return input.dispatchFails
+            ? Effect.die(new Error("dispatch failed"))
+            : Effect.succeed({ sequence: dispatched.length });
         }),
     };
 
@@ -385,6 +391,142 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
       yield* waitFor(() =>
         analyticsEvents.some((e) => e.event === "provider.background_task.recovery_gave_up"),
       );
+    }).pipe(Effect.provide(layer));
+  });
+
+  // Regression for the 2026-08-08 incident: three orphaned tasks on ONE thread
+  // must produce exactly ONE turn-start. The harness reproduces the condition
+  // that caused it — `getThreadShellById` keeps returning `activeTurnId: null`
+  // after a dispatch, exactly as the real projection does until the provider
+  // emits its turn-started event.
+  //
+  // `sweepIntervalMs` is past the test's lifetime so the sweep runs once: what
+  // is measured is one sweep's behaviour, not a race against the next one.
+  it.live("recovers every orphaned task on a thread with a single turn", () => {
+    const threadId = thread("multi-task");
+    const { store, dispatched, layer } = createHarness({
+      rows: [
+        row({ taskId: "task-a", threadId, bootId: "OLD-BOOT" }),
+        row({ taskId: "task-b", threadId, bootId: "OLD-BOOT" }),
+        row({ taskId: "task-c", threadId, bootId: "OLD-BOOT" }),
+      ],
+      shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
+      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000 },
+    });
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => dispatched.length > 0);
+      // Settle before asserting. Asserting on `store.size` alone would be a coin
+      // flip: the buggy version passes through intermediate sizes on its way to
+      // 0, so a well-timed poll could see a "correct" value and pass against the
+      // very bug this test exists to catch. The buggy sweep issues all three
+      // dispatches within a few ms, so a settle window makes it deterministic.
+      yield* Effect.sleep("250 millis");
+      expect(dispatched.length).toBe(1);
+      expect(dispatched[0]?.threadId).toBe(threadId);
+      // No row may be left behind: a single turn must account for all three, or
+      // the leftovers come back on a later sweep and re-open the race.
+      expect(store.size).toBe(0);
+      for (const taskId of ["task-a", "task-b", "task-c"]) {
+        expect(dispatched[0]?.text).toContain(taskId);
+      }
+    }).pipe(Effect.provide(layer));
+  });
+
+  // Guards against a one-recovery-per-SWEEP fix: independent threads share no
+  // turn state and must still recover in the same pass.
+  it.live("still recovers separate threads in the same sweep", () => {
+    const first = thread("independent-a");
+    const second = thread("independent-b");
+    const { store, dispatched, layer } = createHarness({
+      rows: [
+        row({ taskId: "task-first", threadId: first, bootId: "OLD-BOOT" }),
+        row({ taskId: "task-second", threadId: second, bootId: "OLD-BOOT" }),
+      ],
+      shells: new Map([
+        [first, makeShell(first, { status: "ready" })],
+        [second, makeShell(second, { status: "ready" })],
+      ]),
+      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000 },
+    });
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => store.size === 0);
+      expect(dispatched.length).toBe(2);
+      expect(dispatched.map((d) => d.threadId).sort()).toEqual([first, second].sort());
+    }).pipe(Effect.provide(layer));
+  });
+
+  // `starting` is the window the incident actually exploited: the reactor's
+  // first write after a turn-start is `status:"starting"` with
+  // `activeTurnId:null`, so a guard keyed only on `activeTurnId` reads it as
+  // idle and starts a second turn. Prior-boot rows make this sharpest, since
+  // their reason short-circuits before session status is consulted at all.
+  it.live("treats a starting session as busy, not idle", () => {
+    const threadId = thread("starting");
+    const { store, dispatched, layer } = createHarness({
+      rows: [row({ taskId: "task-starting", threadId, bootId: "OLD-BOOT" })],
+      shells: new Map([[threadId, makeShell(threadId, { status: "starting" })]]),
+      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000 },
+    });
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* Effect.sleep("250 millis");
+      expect(dispatched.length).toBe(0);
+      // The row survives for a later sweep rather than being dropped.
+      expect(store.size).toBe(1);
+      expect(store.get("task-starting")?.recoveryAttempts).toBe(0);
+    }).pipe(Effect.provide(layer));
+  });
+
+  // A dispatch that fails may still have landed server-side, so the rows must
+  // survive with their attempts bumped — and the sweep must not retry them
+  // immediately, which would be the concurrent-turn bug all over again.
+  it.live("keeps rows, bumps attempts, and does not re-dispatch when dispatch fails", () => {
+    const threadId = thread("dispatch-fails");
+    const { store, dispatched, layer } = createHarness({
+      rows: [
+        row({ taskId: "task-x", threadId, bootId: "OLD-BOOT" }),
+        row({ taskId: "task-y", threadId, bootId: "OLD-BOOT" }),
+      ],
+      shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
+      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000 },
+      dispatchFails: true,
+    });
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => dispatched.length > 0);
+      yield* Effect.sleep("250 millis");
+      expect(dispatched.length).toBe(1);
+      expect(store.size).toBe(2);
+      for (const remaining of store.values()) {
+        expect(remaining.recoveryAttempts).toBe(1);
+      }
+    }).pipe(Effect.provide(layer));
+  });
+
+  // Give-up must not be blocked by a sibling recovering on the same thread,
+  // or a dead row's lifetime would stop being bounded by the attempt cap.
+  it.live("gives up on a capped row while recovering its sibling in the same sweep", () => {
+    const threadId = thread("mixed-cap");
+    const { store, dispatched, analyticsEvents, layer } = createHarness({
+      rows: [
+        row({ taskId: "task-capped", threadId, bootId: "OLD-BOOT", recoveryAttempts: 3 }),
+        row({ taskId: "task-fresh", threadId, bootId: "OLD-BOOT" }),
+      ],
+      shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
+      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000, maxRecoveryAttempts: 3 },
+    });
+    return Effect.gen(function* () {
+      yield* startWatchdog;
+      yield* waitFor(() => store.size === 0);
+      expect(dispatched.length).toBe(1);
+      // Only the recoverable row is named; the capped one was dropped, not resumed.
+      expect(dispatched[0]?.text).toContain("task-fresh");
+      expect(dispatched[0]?.text).not.toContain("task-capped");
+      expect(
+        analyticsEvents.some((e) => e.event === "provider.background_task.recovery_gave_up"),
+      ).toBe(true);
     }).pipe(Effect.provide(layer));
   });
 });
