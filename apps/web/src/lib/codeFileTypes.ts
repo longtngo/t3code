@@ -1,11 +1,12 @@
 import { getFiletypeFromFileName } from "@pierre/diffs";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 
 /**
  * How the viewer should render a file. Previously lived in the fork's
  * `fileViewerStore`; that store was replaced by the right-panel surface model,
  * so the type lives with the classifier that produces it.
  */
-export type FileViewerKind = "html" | "markdown" | "code";
+export type FileViewerKind = "html" | "markdown" | "code" | "image";
 
 /**
  * Curated allow-list of text/code file extensions that get the clickable-chip +
@@ -58,13 +59,21 @@ function extensionOf(path: string): string {
 /**
  * Single source of truth mapping a file path to how the viewer should render it,
  * or null when the path is not an openable document. Shared by the in-message chip
- * detector ({@link classifyInlineCodePath}) and the viewer's link/address-bar
- * inference ({@link inferFileViewerKind}).
+ * detector ({@link classifyInlineCodePath}) and the viewer.
+ *
+ * A null result is NOT "unviewable" — the viewer falls back to its code view, which
+ * is how extension-less files (`Makefile`, `Dockerfile`) opened via the address bar
+ * still render. Null only means "do not turn this token into a chip", which is the
+ * conservative half of the contract described on {@link TEXT_FILE_EXTENSIONS}.
  */
 export function classifyFileViewerKind(path: string): FileViewerKind | null {
   const ext = extensionOf(path);
   if (ext === "html" || ext === "htm") return "html";
   if (ext === "md" || ext === "markdown") return "markdown";
+  // Delegates to the shared predicate the workspace image preview and the server's
+  // asset + viewer routes already share, so an extension can never be viewable on
+  // one surface and a failed text read on another.
+  if (isWorkspaceImagePreviewPath(path)) return "image";
   if (TEXT_FILE_EXTENSIONS.has(ext)) return "code";
   return null;
 }

@@ -9,7 +9,9 @@ import {
   resolveViewerNavigation,
 } from "~/components/files/viewerPath";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 /**
  * Editable, URI-like path field for the viewer header. Shows the full resolved
@@ -100,7 +102,16 @@ function ViewerRouteView() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        {/* The inset matters most here: this route now opens with the sidebar
+            collapsed, and the floating sidebar control is positioned over the
+            top-left corner — without it, the control sits on the file icon and the
+            start of the path field and steals clicks there. */}
+        <header
+          className={cn(
+            "flex items-center gap-2 border-b border-border/60 px-3 py-2",
+            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+          )}
+        >
           <FileTextIcon className="size-4 shrink-0 text-muted-foreground/70" />
           <AddressBar value={absolutePath ?? ""} onSubmit={navigateTo} />
         </header>

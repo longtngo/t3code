@@ -5,6 +5,7 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
+import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -391,17 +392,53 @@ export function isWaivableLocalRequest(request: HttpServerRequest.HttpServerRequ
   if (fetchMode !== undefined && fetchMode !== "navigate") return false;
   const fetchDest = request.headers["sec-fetch-dest"];
   if (fetchDest !== undefined && fetchDest !== "document") return false;
+  // A cross-site top-level navigation (`evil.example` calling window.open on this
+  // origin) is still a navigation, so the two checks above admit it. Harmless while
+  // the opener cannot read the response, but it is free to deny here and it keeps
+  // the waiver to what it claims to cover: the user's own local navigation.
+  const fetchSite = request.headers["sec-fetch-site"];
+  if (fetchSite !== undefined && fetchSite !== "same-origin" && fetchSite !== "none") return false;
   return true;
 }
 
 /** How a `/viewer` request should be served. */
-export type ViewerPathKind = "markdown" | "html" | "text";
+export type ViewerPathKind = "markdown" | "html" | "text" | "image";
 
 /**
- * Decode a `/viewer` URL suffix and classify it as a markdown, html, or raw-text
- * document at an absolute path, or null when the suffix is malformed, relative, or
- * an unsupported type. Pure posix string logic so it is unit-testable without the
- * filesystem (and keeps the decode try/catch out of the Effect handler).
+ * Images are served as bytes, so they never reach the text reader — its NUL-byte
+ * guard is what made `.png` fail with "Failed to read '<path>'". Reuses the shared
+ * list the workspace image preview and the asset route already agree on, rather
+ * than starting a third copy that can drift.
+ */
+const IMAGE_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_IMAGE_PREVIEW_EXTENSIONS);
+/**
+ * Bound the byte path the way the text path is bounded by
+ * `PROJECT_READ_FILE_MAX_BYTES`. `HttpServerResponse.file` streams (so this is not
+ * a heap risk), but an unbounded stream over Tailscale is an unexplained stall.
+ */
+const VIEWER_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+/**
+ * `HttpServerResponse.file` silently DROPS its `contentType` option — the platform
+ * derives the type from the path via `Mime` — so the type is pinned through
+ * `headers` instead. Keyed off this map so the served type can only be one of the
+ * extensions the allow-list admits.
+ */
+const IMAGE_CONTENT_TYPES: Record<string, string> = {
+  ".avif": "image/avif",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+};
+
+/**
+ * Decode a `/viewer` URL suffix and classify it as a markdown, html, raw-text, or
+ * image document at an absolute path, or null when the suffix is malformed,
+ * relative, or an unsupported type. Pure posix string logic so it is unit-testable
+ * without the filesystem (and keeps the decode try/catch out of the Effect handler).
  */
 export function classifyViewerPath(
   encodedSuffix: string,
@@ -413,11 +450,16 @@ export function classifyViewerPath(
     return null;
   }
   if (!absolutePath.startsWith("/")) return null;
+  // Same guard the static route applies: a NUL byte makes Node's path APIs throw
+  // rather than fail, and the text path only absorbed it by accident (its realpath
+  // rejection became a 404). The byte path below has no such accident to rely on.
+  if (absolutePath.includes("\0")) return null;
   const lastSlash = absolutePath.lastIndexOf("/");
   const lastDot = absolutePath.lastIndexOf(".");
   const extension = lastDot > lastSlash ? absolutePath.slice(lastDot).toLowerCase() : "";
   if (MARKDOWN_EXTENSIONS.has(extension)) return { absolutePath, kind: "markdown" };
   if (HTML_EXTENSIONS.has(extension)) return { absolutePath, kind: "html" };
+  if (IMAGE_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "image" };
   if (TEXT_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "text" };
   return null;
 }
@@ -446,16 +488,26 @@ export const viewerRouteLayer = HttpRouter.add(
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
     }
-    if (!isWaivableLocalRequest(request)) {
-      yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    }
 
     // The matched suffix is an absolute filesystem path (leading "/" preserved).
+    // Classified BEFORE the waiver, because the waiver does not extend to images.
     const target = classifyViewerPath(url.value.pathname.slice(VIEWER_ROUTE_PREFIX.length));
     if (!target) {
       return HttpServerResponse.text("Invalid or unsupported file path", { status: 400 });
     }
     const { absolutePath, kind } = target;
+
+    // Images are never waived, unlike the text kinds. An unauthenticated response a
+    // browser can DECODE is an oracle the text kinds do not offer: `onload` vs
+    // `onerror` reveals whether an arbitrary absolute path exists, and
+    // naturalWidth/naturalHeight leak its dimensions. Two ways an <img> reaches here
+    // without the waiver's intended user: a browser that sends no `Sec-Fetch-*`
+    // (the checks above are `!== undefined` guarded, so absence keeps the waiver),
+    // and any other 127.0.0.1 port, which is the SAME SITE for a `SameSite=Lax`
+    // cookie. Requiring the scope closes both without touching the text paths.
+    if (kind === "image" || !isWaivableLocalRequest(request)) {
+      yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    }
 
     // `nosniff` makes the text/plain guarantee robust: a code file whose bytes
     // happen to look like HTML must never be content-sniffed and rendered as a
@@ -465,6 +517,45 @@ export const viewerRouteLayer = HttpRouter.add(
       "Content-Security-Policy": VIEWER_CSP,
       "X-Content-Type-Options": "nosniff",
     };
+
+    // Images bypass the text reader entirely and stream from disk, so the NUL-byte
+    // guard that rejects them as "binary" is never consulted. `HttpServerResponse.file`
+    // does NOT re-apply the reader's guards, so the two that matter are re-added here:
+    // a regular-file check (a DIRECTORY named `foo.png` otherwise stats fine, emits a
+    // 200 with a bogus content-length, then errors EISDIR after the headers are
+    // already flushed) and a size bound.
+    if (kind === "image") {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const info = yield* fileSystem.stat(absolutePath).pipe(Effect.option);
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+      if (Number(info.value.size) > VIEWER_MAX_IMAGE_BYTES) {
+        return HttpServerResponse.text("Image too large to preview", { status: 413 });
+      }
+      const extension = absolutePath.slice(absolutePath.lastIndexOf(".")).toLowerCase();
+      return yield* HttpServerResponse.file(absolutePath, {
+        status: 200,
+        headers: {
+          ...headers,
+          // `assetResponseHeaders` supplies the strict `default-src 'none'; …; sandbox`
+          // policy for SVG, which the asset route already serves images under. It
+          // matters only for a top-level navigation to an .svg (same-origin with the
+          // app, so unsandboxed it would be XSS against the app); an <img> embed never
+          // runs script regardless.
+          ...assetResponseHeaders(absolutePath),
+          "Cache-Control": "no-store",
+          ...(IMAGE_CONTENT_TYPES[extension]
+            ? { "Content-Type": IMAGE_CONTENT_TYPES[extension] }
+            : {}),
+        },
+      }).pipe(
+        // The route's only other error funnel is `catchTags` for the two auth errors,
+        // so a PlatformError from a file that vanished between stat and open would
+        // otherwise escape as an unhandled failure.
+        Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })),
+      );
+    }
 
     const workspaceFileSystem = yield* WorkspaceFileSystem;
     const file = yield* workspaceFileSystem

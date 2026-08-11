@@ -80,16 +80,28 @@ describe("resolveChatFilePathMention", () => {
   });
 
   it("only links file kinds the viewer can render", () => {
-    // Extension-less paths and secrets are deliberately excluded, as are media
-    // files — the curated allow-list in lib/codeFileTypes.ts is the gate.
+    // Extension-less paths and secrets are deliberately excluded — the curated
+    // allow-list in lib/codeFileTypes.ts is the gate.
     expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBeNull();
     expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBeNull();
-    expect(resolveChatFilePathMention("/Users/dev/project/logo.png", { cwd: CWD })).toBeNull();
+    // Non-image media stays excluded; the viewer has nothing to show for it.
+    expect(resolveChatFilePathMention("/Users/dev/project/clip.mp4", { cwd: CWD })).toBeNull();
     expect(resolveChatFilePathMention("/Users/dev/project/notes.md", { cwd: CWD })).toBe(
       "/Users/dev/project/notes.md",
     );
     expect(resolveChatFilePathMention("/Users/dev/project/main.py", { cwd: CWD })).toBe(
       "/Users/dev/project/main.py",
+    );
+  });
+
+  it("links images, which the viewer now renders instead of failing to read", () => {
+    // Previously excluded as "media". Chipping them is what makes an image
+    // clickable in chat at all; before this the path was inert prose.
+    expect(resolveChatFilePathMention("/Users/dev/project/logo.png", { cwd: CWD })).toBe(
+      "/Users/dev/project/logo.png",
+    );
+    expect(resolveChatFilePathMention("/Users/dev/project/shot.jpeg", { cwd: CWD })).toBe(
+      "/Users/dev/project/shot.jpeg",
     );
   });
 

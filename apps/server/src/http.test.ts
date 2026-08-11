@@ -119,12 +119,34 @@ describe("classifyViewerPath", () => {
     expect(classifyViewerPath("/Users/me/%E0%A4%A.md")).toBeNull();
   });
 
+  it("classifies image extensions, which are served as bytes", () => {
+    // Previously null, which is why opening one failed with "Failed to read '<path>'":
+    // the route rejected it, and the RPC fell into the text reader's binary guard.
+    expect(classifyViewerPath("/Users/me/photo.png")).toEqual({
+      absolutePath: "/Users/me/photo.png",
+      kind: "image",
+    });
+    for (const path of ["/a/b.jpg", "/a/b.JPEG", "/a/b.gif", "/a/b.webp", "/a/b.avif", "/a/b.ico"]) {
+      expect(classifyViewerPath(path)?.kind).toBe("image");
+    }
+    // SVG is an image here, but the route serves it under the strict asset CSP
+    // rather than the html one, since a top-level .svg navigation can run script.
+    expect(classifyViewerPath("/a/logo.svg")?.kind).toBe("image");
+  });
+
   it("rejects unsupported, secret, and extension-less files", () => {
-    expect(classifyViewerPath("/Users/me/photo.png")).toBeNull();
+    expect(classifyViewerPath("/Users/me/video.mp4")).toBeNull();
     expect(classifyViewerPath("/Users/me/secret.env")).toBeNull();
     expect(classifyViewerPath("/Users/me/Makefile")).toBeNull();
     // A dot in a parent directory is not an extension of the final segment.
     expect(classifyViewerPath("/Users/me.dir/report")).toBeNull();
+  });
+
+  it("rejects a NUL byte, which makes Node's path APIs throw rather than fail", () => {
+    // The text path only absorbed this by accident (realpath rejected it into a
+    // 404); the byte path has no such accident to rely on.
+    expect(classifyViewerPath("/Users/me/report%00.md")).toBeNull();
+    expect(classifyViewerPath("/Users/me/photo%00.png")).toBeNull();
   });
 });
 
@@ -195,6 +217,42 @@ describe("isWaivableLocalRequest", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("refuses a cross-site top-level navigation, which is still a navigation", () => {
+    // `evil.example` calling window.open on this origin satisfies both the mode and
+    // dest checks; only Sec-Fetch-Site distinguishes it from the user's own tab.
+    expect(
+      isWaivableLocalRequest(
+        fakeRequest({
+          ...loopback,
+          headers: {
+            host: "127.0.0.1:13773",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "document",
+            "sec-fetch-site": "cross-site",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("waives a navigation the browser marks same-origin or none", () => {
+    for (const site of ["same-origin", "none"]) {
+      expect(
+        isWaivableLocalRequest(
+          fakeRequest({
+            ...loopback,
+            headers: {
+              host: "127.0.0.1:13773",
+              "sec-fetch-mode": "navigate",
+              "sec-fetch-dest": "document",
+              "sec-fetch-site": site,
+            },
+          }),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("still refuses anything that is not a loopback peer", () => {

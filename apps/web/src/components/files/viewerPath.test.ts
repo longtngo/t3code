@@ -2,10 +2,61 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   absolutePathFromViewerSplat,
+  isViewerRoutePath,
   resolveAddressBarCommit,
   resolveViewerNavigation,
+  viewerHttpUrl,
   viewerSplatFromPath,
 } from "./viewerPath";
+
+describe("isViewerRoutePath", () => {
+  it("matches the viewer route and its splat form", () => {
+    expect(isViewerRoutePath("/viewer")).toBe(true);
+    expect(isViewerRoutePath("/viewer/Users/me/report.html")).toBe(true);
+  });
+
+  it("does not match a route that merely starts with the same characters", () => {
+    expect(isViewerRoutePath("/viewerish")).toBe(false);
+    expect(isViewerRoutePath("/settings/general")).toBe(false);
+    expect(isViewerRoutePath("/")).toBe(false);
+  });
+});
+
+describe("viewerHttpUrl", () => {
+  it("builds the raw byte url against the environment base, not the page origin", () => {
+    // Origin-relative would target whichever server served the app, which for a
+    // remote environment is the wrong machine.
+    expect(viewerHttpUrl("http://100.64.0.5:13773", "/Users/me/a.png")).toBe(
+      "http://100.64.0.5:13773/viewer/Users/me/a.png?raw=1",
+    );
+  });
+
+  it("encodes each segment separately, keeping separators real", () => {
+    expect(viewerHttpUrl("http://x", "/Users/me/my report #2.png")).toBe(
+      "http://x/viewer/Users/me/my%20report%20%232.png?raw=1",
+    );
+  });
+
+  it("tolerates a trailing slash on the base url", () => {
+    expect(viewerHttpUrl("http://x/", "/a.png")).toBe("http://x/viewer/a.png?raw=1");
+  });
+
+  it("carries the raw marker the service worker denylist keys on", () => {
+    // An <iframe src> is a mode:"navigate" request, so without this marker the
+    // worker's navigateFallback answers the frame with index.html and the app
+    // renders inside the viewer. Keep in step with navigateFallbackDenylist in
+    // apps/web/vite.config.ts, which matches pathname + search.
+    const url = viewerHttpUrl("http://x", "/a.html");
+    expect(url).not.toBeNull();
+    expect(/[?&]raw=1(?:&|$)/.test(url ?? "")).toBe(true);
+  });
+
+  it("is null until there is both a connection and an absolute path", () => {
+    expect(viewerHttpUrl(null, "/a.png")).toBeNull();
+    expect(viewerHttpUrl("http://x", null)).toBeNull();
+    expect(viewerHttpUrl("http://x", "relative/a.png")).toBeNull();
+  });
+});
 
 
 describe("absolutePathFromViewerSplat", () => {

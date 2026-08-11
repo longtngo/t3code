@@ -25,7 +25,7 @@ describe("classifyFileViewerKind", () => {
   });
 
   it("returns null for unsupported, binary, secret, and extension-less files", () => {
-    expect(classifyFileViewerKind("photo.png")).toBeNull();
+    // photo.png used to belong here; images are now a viewable kind of their own.
     expect(classifyFileViewerKind("archive.zip")).toBeNull();
     expect(classifyFileViewerKind("video.mp4")).toBeNull();
     expect(classifyFileViewerKind(".env")).toBeNull(); // dotfile / secret
@@ -63,5 +63,28 @@ describe("languageForPath", () => {
 
   it("resolves from the basename, not parent directories", () => {
     expect(languageForPath("/a.py/b/c.unknownxyz")).toBe("text");
+  });
+});
+
+describe("classifyFileViewerKind — images", () => {
+  it("classifies image extensions so they become openable, not failed text reads", () => {
+    for (const path of [
+      "/Users/me/shot.png",
+      "/Users/me/shot.PNG",
+      "a.jpg",
+      "a.jpeg",
+      "a.gif",
+      "a.webp",
+      "a.avif",
+      "a.ico",
+      "a.svg",
+    ]) {
+      expect(classifyFileViewerKind(path)).toBe("image");
+    }
+  });
+
+  it("leaves non-image binaries unclassified", () => {
+    expect(classifyFileViewerKind("a.mp4")).toBeNull();
+    expect(classifyFileViewerKind("a.zip")).toBeNull();
   });
 });

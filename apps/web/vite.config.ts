@@ -198,7 +198,11 @@ export default defineConfig(() => {
           // server-rendered response. `/pair` and `/viewer` are CLIENT routes, so
           // they are intentionally absent (they need the shell). `/ws` is a
           // WebSocket upgrade the service worker never sees.
-          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/],
+          // `raw=1` marks a viewer read that must reach the network: the rendered
+          // -HTML `<iframe src>` is a navigation request too, so without it the
+          // worker would answer the frame with the shell and render the app inside
+          // the viewer. Matched against pathname + search by workbox.
+          navigateFallbackDenylist: [/^\/api/, /^\/attachments/, /^\/\.well-known/, /[?&]raw=1(?:&|$)/],
           runtimeCaching: [
             {
               // Content-hashed build assets (JS/CSS) — deliberately NOT precached (the
