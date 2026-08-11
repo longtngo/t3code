@@ -112,9 +112,11 @@ conflict — reintroduces a guaranteed red test.
 
 Upstream `#5923`/`#5768` moved project settings to a `/projects/$projectKey` route and repurposed
 the sidebar's per-project button to navigate there. The fork's own project-actions **dialog**
-covers ground that route does not (per-project grouping overrides, removing a grouped project's
-member repositories), so the project row carries **both** buttons: an ellipsis opening the fork
-dialog and a gear navigating to upstream's page. Collapsing them to one drops the fork-only half.
+covers ground that route does not: **workspace member repositories** — attaching one, choosing
+its integration branch, removing it. (Both surfaces carry a grouping-rule control, so grouping is
+*not* the fork-only part; verified against the running app on 2026-08-11.) The project row
+therefore carries **both** buttons: an ellipsis opening the fork dialog and a gear navigating to
+upstream's page. Collapsing them to one drops multi-repo workspace management entirely.
 Consolidating the two is real work, not merge work.
 
 ## CI does not run here — the pre-push hook is the gate
