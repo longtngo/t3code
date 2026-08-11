@@ -25,7 +25,7 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-10, against `origin/main`: **271 files added, 207 modified, 1 deleted.**
+As of 2026-08-11, against `origin/main`: **271 files added, 207 modified, 1 deleted.**
 Concentrated in `apps/server` (179) and `apps/web` (134).
 
 ## Invariants a merge must not break
