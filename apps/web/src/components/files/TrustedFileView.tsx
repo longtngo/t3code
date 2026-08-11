@@ -154,6 +154,11 @@ function TrustedFileViewContents({
         <iframe
           title="Rendered document"
           src={rawUrlWithReload}
+          // Belt and braces: the server already serves this document under a CSP
+          // `sandbox` directive, so it has an opaque origin either way. Declaring it
+          // here too means the frame stays sandboxed even if that header is ever
+          // lost, and it matches the CSP's capabilities exactly.
+          sandbox="allow-scripts allow-popups"
           className="min-h-0 flex-1 border-0 bg-white"
         />
       );

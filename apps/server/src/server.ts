@@ -15,6 +15,7 @@ import {
   assetRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
+  viewerAssetRouteLayer,
   viewerRouteLayer,
   browserApiCorsLayer,
   httpCompressionLayer,
@@ -518,6 +519,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     // Before the static catch-all, which would otherwise swallow /viewer/*.
     viewerRouteLayer,
+    viewerAssetRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

@@ -7,6 +7,7 @@ import {
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,6 +33,12 @@ import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { WorkspaceFileSystem } from "./workspace/WorkspaceFileSystem.ts";
+import {
+  isWithinGrantedDirectory,
+  mintViewerAssetToken,
+  parseViewerAssetSuffix,
+  resolveViewerAssetGrant,
+} from "./workspace/viewerAssetTokens.ts";
 import { MarkdownHtmlRenderer, MarkdownHtmlRendererLive } from "./workspace/markdownHtmlRenderer.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
@@ -304,6 +311,12 @@ export const assetRouteLayer = HttpRouter.add(
 );
 
 const VIEWER_ROUTE_PREFIX = "/viewer";
+/**
+ * Where a sandboxed viewer document and its relative assets are served from. A
+ * separate prefix from `/viewer` because the authorization model is different:
+ * this one is token-only, with no auth waiver and no cookie.
+ */
+const VIEWER_ASSET_ROUTE_PREFIX = "/viewer-asset";
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
 // Text/code files served raw (as text/plain) so the viewer's "Open in new tab"
@@ -423,6 +436,30 @@ const VIEWER_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
  * `headers` instead. Keyed off this map so the served type can only be one of the
  * extensions the allow-list admits.
  */
+/**
+ * Content types for a document's own relative assets.
+ *
+ * `.js` and `.css` MUST get their real types here: the main `/viewer` route serves
+ * every text kind as `text/plain` with `nosniff` on purpose, and a browser refuses
+ * to execute a script or apply a stylesheet served that way — which is the second
+ * reason a multi-file prototype rendered blank. Giving these two their real types
+ * is safe in a way `text/html` would not be: neither can be rendered as a document,
+ * so the "untrusted bytes must never be parsed as HTML" rule still holds. Anything
+ * not listed falls back to `text/plain`.
+ */
+const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".cjs": "text/javascript; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+};
+
 const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".avif": "image/avif",
   ".gif": "image/gif",
@@ -580,12 +617,41 @@ export const viewerRouteLayer = HttpRouter.add(
       });
     }
 
-    // `.html` reports are served as-is as a sandboxed page (CSP above); every other
-    // text/code file is served raw as text/plain so untrusted bytes are never
-    // parsed as HTML.
+    if (kind === "html") {
+      // Redirect the document to a token-scoped URL so its RELATIVE assets work.
+      // The sandbox CSP below gives it an opaque origin, whose subresource requests
+      // carry no session cookie — see viewerAssetTokens for the full mechanism.
+      // Minting here rather than in the client keeps the whole fix server-side: the
+      // document's own navigation is still cookie-authenticated (it inherits the
+      // top-level site), so by the time we get here the caller is already allowed
+      // to read this file.
+      // Realpath-resolved, because the asset route's containment check compares
+      // against a realpath too — comparing unresolved paths would let a symlink
+      // inside the directory point anywhere on disk.
+      const documentFileSystem = yield* FileSystem.FileSystem;
+      const documentPath = yield* Path.Path;
+      const parentDirectory = documentPath.dirname(absolutePath);
+      const directory = yield* documentFileSystem
+        .realPath(parentDirectory)
+        .pipe(Effect.orElseSucceed(() => parentDirectory));
+      const token = mintViewerAssetToken(directory, yield* Clock.currentTimeMillis);
+      const encoded = absolutePath.split("/").map(encodeURIComponent).join("/");
+      return HttpServerResponse.empty({
+        status: 302,
+        headers: {
+          // `raw=1` is preserved so the PWA's navigateFallbackDenylist still keeps
+          // the service worker from answering this frame with the app shell.
+          Location: `${VIEWER_ASSET_ROUTE_PREFIX}/${token}${encoded}?raw=1`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    // Every other text/code file is served raw as text/plain so untrusted bytes are
+    // never parsed as HTML.
     return HttpServerResponse.text(file.value.contents, {
       status: 200,
-      contentType: kind === "html" ? "text/html; charset=utf-8" : "text/plain; charset=utf-8",
+      contentType: "text/plain; charset=utf-8",
       headers,
     });
   }).pipe(
@@ -594,6 +660,81 @@ export const viewerRouteLayer = HttpRouter.add(
       EnvironmentInternalError: HttpServerRespondable.toResponse,
     }),
   ),
+);
+
+/**
+ * Serve a sandboxed viewer document and the assets it references, authorized by a
+ * path-embedded capability token rather than the session cookie the document's
+ * opaque origin cannot send.
+ *
+ * The token is the ONLY credential here — there is deliberately no auth waiver and
+ * no cookie check, because neither can work from an opaque origin. What bounds it:
+ * a token authorizes one realpath-resolved directory subtree, expires in minutes,
+ * and is minted only for a caller who was already allowed to read the document.
+ * Files are served with `nosniff` and, apart from the document itself, never as
+ * `text/html`, so nothing under the token can be turned into a second document.
+ */
+export const viewerAssetRouteLayer = HttpRouter.add(
+  "GET",
+  `${VIEWER_ASSET_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    const parsed = parseViewerAssetSuffix(
+      url.value.pathname.slice(VIEWER_ASSET_ROUTE_PREFIX.length),
+    );
+    if (!parsed) {
+      return HttpServerResponse.text("Invalid asset path", { status: 400 });
+    }
+    const directory = resolveViewerAssetGrant(parsed.token, yield* Clock.currentTimeMillis);
+    if (directory === null) {
+      // Expired or unknown. 404 rather than 401: there is no credential the caller
+      // could add, and the document simply needs reloading to mint a fresh token.
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    // Realpath BEFORE the containment check, so a symlink planted inside the
+    // granted directory cannot be used to read outside it.
+    const resolvedPath = yield* fileSystem.realPath(parsed.absolutePath).pipe(Effect.option);
+    if (Option.isNone(resolvedPath) || !isWithinGrantedDirectory(directory, resolvedPath.value)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const info = yield* fileSystem.stat(resolvedPath.value).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    if (Number(info.value.size) > VIEWER_MAX_IMAGE_BYTES) {
+      return HttpServerResponse.text("Asset too large", { status: 413 });
+    }
+
+    const extension = resolvedPath.value.slice(resolvedPath.value.lastIndexOf(".")).toLowerCase();
+    const isDocument = HTML_EXTENSIONS.has(extension);
+    const contentType =
+      IMAGE_CONTENT_TYPES[extension] ??
+      VIEWER_ASSET_CONTENT_TYPES[extension] ??
+      (isDocument ? "text/html; charset=utf-8" : "text/plain; charset=utf-8");
+
+    return yield* HttpServerResponse.file(resolvedPath.value, {
+      status: 200,
+      headers: {
+        // The document keeps the sandbox that made this route necessary. Assets get
+        // the strict asset policy for SVG and nothing else needs one. Spread first
+        // so the explicit headers below win — `assetResponseHeaders` carries its own
+        // Cache-Control, and a token-scoped read must not be cached past the grant.
+        ...(isDocument
+          ? { "Content-Security-Policy": VIEWER_CSP }
+          : assetResponseHeaders(resolvedPath.value)),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Type": contentType,
+      },
+    }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })));
+  }),
 );
 
 export const staticAndDevRouteLayer = HttpRouter.add(
