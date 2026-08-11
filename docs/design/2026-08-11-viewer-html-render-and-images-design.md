@@ -206,6 +206,46 @@ found defects that changed the approach; the sections above are the **revised** 
 Tests alongside each: classifier tables, `classifyViewerPath` image cases, the route's
 content-type/CSP behaviour, and the pathname helper.
 
+## Follow-up shipped: relative assets in a rendered document (`a4fd5e120`)
+
+The `<iframe src>` decision above made *relative* assets resolve correctly for the first time —
+and immediately exposed that they could not be **fetched**. A multi-file prototype
+(`index.html` + sibling `.js`/`.css`/images) rendered blank.
+
+**Root cause: credentials, not MIME.** Serving `.html` under a CSP `sandbox` gives the document
+an opaque origin, whose "site for cookies" is null — so the `SameSite=Lax` session cookie is not
+sent on any subresource, and every relative script, stylesheet and image 401s. The document's own
+navigation still authenticates because it inherits the top-level site, which is exactly why an
+inline script ran and a `--self-contained` report rendered while an external script did not.
+
+The discriminating probe: adding an `<img>` alongside the failing `<script>`. **The image failed
+too** — and images are served with a correct content type, so MIME could not be the cause. `.js`
+being served as `text/plain` + `nosniff` *was* a real second bug (a browser refuses to execute it),
+but fixing it alone would have changed nothing.
+
+**Fix: a capability URL in the path.** Cookies cannot reach an opaque origin, and un-sandboxing
+means untrusted HTML runs at the app's origin where it can read the session and act as the user.
+So the credential moves into the URL path: the document's own (already authenticated) navigation
+mints a short-lived, directory-scoped token and 302s to `/viewer-asset/<token>/<path>`. A relative
+`app.js` then resolves to `/viewer-asset/<token>/<dir>/app.js`, carrying the token with no
+cooperation from the document. **A query string would not survive relative resolution; a path
+segment does** — which is why the token is a path segment.
+
+Deliberately *not* the session token: the sandboxed document can read this one out of
+`document.location`, so it grants read-only access to one directory subtree for ten minutes and
+nothing else. The document could already read its own directory by fetching those files itself, so
+the token mainly bounds what leaks if the document is hostile and exfiltrates it.
+
+Bounds on the asset route (token-only — no waiver, no cookie, since neither can work from an
+opaque origin): realpath is resolved **before** the containment check, so a symlink planted inside
+the granted directory cannot read outside it; the prefix test requires a trailing separator, so
+`/a/proto-secrets` is not inside `/a/proto`; the token must be hex before any filesystem work; NUL
+bytes rejected; size capped; and only the document itself is ever served as `text/html`.
+
+`.js`/`.css`/fonts/json get their real content types on this route. Safe in a way `text/html`
+would not be: none can be rendered as a document, so "untrusted bytes are never parsed as HTML"
+still holds, and anything unrecognized still falls back to `text/plain`.
+
 ## Follow-ups deferred
 
 - Relative/external assets inside a rendered `.html` do not load under `sandbox=""`.
