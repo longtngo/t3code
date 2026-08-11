@@ -1,4 +1,4 @@
-import { formatWorkspaceRelativePath } from "./filePathDisplay";
+import { basenamePathSegment, formatWorkspaceRelativePath } from "./filePathDisplay";
 import { resolvePathLinkTarget, splitPathAndPosition } from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -112,6 +112,10 @@ function looksLikePosixFilesystemPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
   if (POSIX_FILE_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
   if (POSITION_SUFFIX_PATTERN.test(path)) return true;
+  // Deliberately NOT the directory-aware `basenamePathSegment`: this asks "does the
+  // path end in a filename", so `/data/notes.txt/` should keep reading as a directory
+  // outside the known roots rather than becoming a link on the strength of a trailing
+  // `.txt` segment.
   const basename = path.slice(path.lastIndexOf("/") + 1);
   return /\.[A-Za-z0-9_-]+$/.test(basename);
 }
@@ -337,7 +341,7 @@ export function resolveInlineCodeFileLinkMeta(
     const withoutPosition = candidate.replace(POSITION_SUFFIX_PATTERN, "");
     const firstSegment = withoutPosition.split("/")[0] ?? withoutPosition;
     if (looksLikeHostname(firstSegment, hasPosition)) return null;
-    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basenameOfPath(withoutPosition))) {
+    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basenamePathSegment(withoutPosition))) {
       return null;
     }
   }
@@ -356,11 +360,6 @@ export function resolveInlineCodeFileLinkMeta(
     return buildFileLinkMetaFromTarget(resolvePathLinkTarget(candidate, cwd), cwd);
   }
   return null;
-}
-
-function basenameOfPath(path: string): string {
-  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
 }
 
 function workspaceRelativePath(path: string, workspaceRoot: string | undefined): string | null {
@@ -397,7 +396,7 @@ function buildFileLinkMetaFromTarget(targetPath: string, cwd?: string): Markdown
     targetPath,
     displayPath: formatWorkspaceRelativePath(targetPath, cwd),
     workspaceRelativePath: workspaceRelativePath(path, cwd),
-    basename: basenameOfPath(path),
+    basename: basenamePathSegment(path),
     ...(lineNumber !== undefined ? { line: lineNumber } : {}),
     ...(columnNumber !== undefined ? { column: columnNumber } : {}),
   };

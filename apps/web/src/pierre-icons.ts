@@ -4,6 +4,8 @@ import {
   type FileTreeIcons,
 } from "@pierre/trees";
 
+import { basenamePathSegment } from "./filePathDisplay";
+
 export interface PierreIconResolution {
   name: string;
   token?: string;
@@ -74,13 +76,11 @@ const LANGUAGE_EXTENSION_ALIASES: Record<string, string> = {
   yaml: "yml",
 };
 
-export function basenameOfPath(pathValue: string): string {
-  const slashIndex = pathValue.lastIndexOf("/");
-  return slashIndex === -1 ? pathValue : pathValue.slice(slashIndex + 1);
-}
-
 export function inferEntryKindFromPath(pathValue: string): "file" | "directory" {
-  const base = basenameOfPath(pathValue);
+  // A trailing separator is the author stating the kind outright, so it outranks
+  // the guess below — which would otherwise read `config.d/` as a file.
+  if (/[\\/]$/.test(pathValue)) return "directory";
+  const base = basenamePathSegment(pathValue);
   if (base.startsWith(".") && !base.slice(1).includes(".")) return "directory";
   return base.includes(".") ? "file" : "directory";
 }

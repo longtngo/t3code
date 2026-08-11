@@ -2,6 +2,7 @@ import { assert, describe, it } from "vite-plus/test";
 
 import {
   hasSpecificPierreIconForFileName,
+  inferEntryKindFromPath,
   resolvePierreIconForEntry,
   syntheticFileNameForLanguageId,
   T3_PIERRE_ICONS,
@@ -47,6 +48,14 @@ describe("Pierre file icons", () => {
 
   it("leaves directory rendering to the shared folder fallback", () => {
     assert.isNull(resolvePierreIconForEntry("packages/client-runtime", "directory"));
+  });
+
+  it("reads a trailing separator as directory evidence over the dotted-name guess", () => {
+    assert.equal(inferEntryKindFromPath("/Users/julius/reports/2026-08/"), "directory");
+    assert.equal(inferEntryKindFromPath("/Users/julius/project/config.d/"), "directory");
+    assert.equal(inferEntryKindFromPath("C:\\Users\\mike\\project\\src\\"), "directory");
+    assert.equal(inferEntryKindFromPath("/Users/julius/project/main.ts"), "file");
+    assert.equal(inferEntryKindFromPath("/Users/julius/project/src"), "directory");
   });
 
   it("normalizes common markdown fence language aliases", () => {

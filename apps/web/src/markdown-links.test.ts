@@ -204,6 +204,28 @@ describe("resolveInlineCodeFileLinkMeta", () => {
     });
   });
 
+  it("names the folder when a path is written as a directory", () => {
+    expect(
+      resolveInlineCodeFileLinkMeta("/Users/julius/reports/2026-08/engine-prototype/"),
+    ).toMatchObject({
+      targetPath: "/Users/julius/reports/2026-08/engine-prototype/",
+      basename: "engine-prototype",
+    });
+    expect(
+      resolveInlineCodeFileLinkMeta("./scripts/deploy/", "/Users/julius/project"),
+    ).toMatchObject({
+      basename: "deploy",
+    });
+    expect(resolveInlineCodeFileLinkMeta("C:\\Users\\mike\\project\\src\\")).toMatchObject({
+      basename: "src",
+    });
+  });
+
+  it("keeps a root path addressable rather than labelling it with nothing", () => {
+    expect(resolveInlineCodeFileLinkMeta("/Users/")).toMatchObject({ basename: "Users" });
+    expect(resolveMarkdownFileLinkMeta("/")).toBeNull();
+  });
+
   it("links relative windows-style paths by normalizing backslashes", () => {
     expect(resolveInlineCodeFileLinkMeta("src\\main.ts", "/Users/julius/project")).toMatchObject({
       targetPath: "/Users/julius/project/src/main.ts",

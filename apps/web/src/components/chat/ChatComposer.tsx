@@ -106,7 +106,7 @@ import {
 } from "./composerProviderState";
 import { VitalsGaugeConnected } from "./VitalsGauge";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
-import { basenameOfPath } from "../../pierre-icons";
+import { basenamePathSegment } from "../../filePathDisplay";
 import { ATTACHMENT_UPLOAD_MAX_BYTES } from "@t3tools/contracts";
 import { projectEnvironment } from "~/state/projects";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -1048,7 +1048,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         type: "path",
         path: entry.path,
         pathKind: entry.kind,
-        label: basenameOfPath(entry.path),
+        label: basenamePathSegment(entry.path),
         description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
       }));
     }

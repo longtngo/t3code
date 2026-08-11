@@ -17,6 +17,24 @@ function basenameOfPath(path: string): string {
   return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
 }
 
+/**
+ * Final segment of a path, reading a trailing separator as "this names a
+ * directory" rather than as an empty filename.
+ *
+ * The naive "text after the last separator" returns `""` for `…/reports/2026-08/`,
+ * which is how a folder reference ended up rendering as a chip with an icon and
+ * no label at all. Every surface that puts a path segment in front of a user —
+ * the markdown file chip, the composer chip, the chip's menu label — needs the
+ * directory-aware answer.
+ *
+ * A separator-only path (`/`) has no segment to name, so it stays itself: a short
+ * literal label beats an empty one.
+ */
+export function basenamePathSegment(path: string): string {
+  const trimmed = trimTrailingPathSeparators(path);
+  return trimmed.length === 0 ? path : basenameOfPath(trimmed);
+}
+
 function stripRelativePrefixes(path: string): string {
   return path.replace(/^\.\/+/, "").replace(/^\/+/, "");
 }

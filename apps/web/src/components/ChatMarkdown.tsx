@@ -71,6 +71,7 @@ import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
+import { basenamePathSegment } from "../filePathDisplay";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
@@ -1316,7 +1317,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
   );
 
-  const basename = targetPath.slice(targetPath.lastIndexOf("/") + 1);
+  const basename = basenamePathSegment(targetPath);
 
   /**
    * Open the file through the server's `/viewer` route — a real, refreshable URL,

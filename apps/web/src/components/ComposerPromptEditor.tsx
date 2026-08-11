@@ -69,7 +69,7 @@ import {
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
 import { cn, isMacPlatform } from "~/lib/utils";
-import { basenameOfPath } from "~/pierre-icons";
+import { basenamePathSegment } from "~/filePathDisplay";
 import {
   COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
@@ -143,7 +143,7 @@ function ComposerMentionDecorator(props: { path: string }) {
       spellCheck={false}
       data-composer-mention-chip="true"
     >
-      <FileTagChipContent path={props.path} label={basenameOfPath(props.path)} theme={theme} />
+      <FileTagChipContent path={props.path} label={basenamePathSegment(props.path)} theme={theme} />
     </span>
   );
 

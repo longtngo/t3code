@@ -21,6 +21,7 @@ import {
 } from "react";
 
 import { isElectron } from "~/env";
+import { basenamePathSegment } from "~/filePathDisplay";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -267,9 +268,9 @@ function surfaceTitle(
     case "files":
       return "Files";
     case "file":
-      return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
+      return basenamePathSegment(surface.relativePath);
     case "trustedFile":
-      return surface.absolutePath.slice(surface.absolutePath.lastIndexOf("/") + 1);
+      return basenamePathSegment(surface.absolutePath);
     case "terminal":
       return (
         terminalLabelsById.get(surface.activeTerminalId) ??
