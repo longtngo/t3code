@@ -118,6 +118,39 @@ describe("WorkspaceMemberBranches", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  // Checkpoint states are read concurrently, so the answer must still line up
+  // with the members that were asked for — and a member that cannot be read
+  // must drop out rather than shift every later member's state onto the wrong id.
+  it.effect("reads checkpoint states in member order and skips unreadable members", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const first = yield* makeMemberRepo();
+      const notARepo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "not-a-repo-" });
+      const second = yield* makeMemberRepo();
+      const third = yield* makeMemberRepo();
+      yield* writeFile(third.cwd, "effort.md", "# effort, edited by a turn\n");
+
+      const states = yield* service.readCheckpointStates([
+        { id: "member-first", path: first.cwd },
+        { id: "member-missing", path: notARepo },
+        { id: "member-second", path: second.cwd },
+        { id: "member-third", path: third.cwd },
+      ]);
+
+      assert.deepEqual(
+        states.map((state) => state.memberId),
+        ["member-first", "member-second", "member-third"],
+      );
+      assert.deepEqual(
+        states.map((state) => state.isDirty),
+        [false, false, true],
+      );
+      assert.strictEqual(states[0]?.headSha, yield* git(first.cwd, ["rev-parse", "HEAD"]));
+      assert.strictEqual(states[2]?.headSha, yield* git(third.cwd, ["rev-parse", "HEAD"]));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   // The design's first load-bearing case: T3 Code cut the branch, so both keys
   // must be written and the base must resolve to the integration branch.
   it.effect("cuts a feature branch and records the base and the owner", () =>

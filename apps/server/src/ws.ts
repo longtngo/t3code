@@ -2109,14 +2109,20 @@ const makeWsRpcLayer = (
                 .getProjectShellById(input.projectId)
                 .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
               const members = project?.members ?? [];
-              const reports = yield* Effect.forEach(members, (member) =>
-                workspaceMemberBranches
-                  .inspect({
-                    cwd: member.path,
-                    integrationBranch: member.integrationBranch,
-                    threadId: input.threadId,
-                  })
-                  .pipe(Effect.map((report) => ({ ...report, memberId: member.id }))),
+              // Inspecting a member is read-only and costs several git
+              // subprocesses, so the members overlap rather than adding up into
+              // one long request. `Effect.forEach` still answers in member order.
+              const reports = yield* Effect.forEach(
+                members,
+                (member) =>
+                  workspaceMemberBranches
+                    .inspect({
+                      cwd: member.path,
+                      integrationBranch: member.integrationBranch,
+                      threadId: input.threadId,
+                    })
+                    .pipe(Effect.map((report) => ({ ...report, memberId: member.id }))),
+                { concurrency: WorkspaceMemberBranches.MEMBER_READ_CONCURRENCY },
               );
               return { reports };
             }),

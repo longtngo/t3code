@@ -8201,6 +8201,62 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     };
   };
 
+  it.effect("inspects workspace members concurrently and answers in member order", () =>
+    Effect.gen(function* () {
+      const members = ["api", "web", "worker", "docs"].map((name) => ({
+        id: `member-${name}`,
+        path: `/tmp/members/${name}`,
+        title: name,
+        integrationBranch: "main",
+      }));
+      let inFlight = 0;
+      let peakInFlight = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeMemberProjectShell(members))),
+          },
+          workspaceMemberBranches: {
+            inspect: (input) =>
+              Effect.gen(function* () {
+                inFlight += 1;
+                peakInFlight = Math.max(peakInFlight, inFlight);
+                // Give the other members a chance to start. A sequential
+                // fan-out can never have a second one in flight here, which is
+                // what turned this request into a 25-second one.
+                yield* Effect.yieldNow;
+                yield* Effect.yieldNow;
+                inFlight -= 1;
+                return { state: "idle" as const, branch: input.cwd, ownerThreadId: null };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceMemberBranches]({
+            projectId: memberProjectId,
+            threadId: memberThreadId,
+          }),
+        ),
+      );
+
+      assert.isAbove(peakInFlight, 1);
+      // Concurrency must not reorder the answer: the reports still line up with
+      // the project's member list.
+      assert.deepEqual(
+        result.reports.map((report) => report.memberId),
+        members.map((member) => member.id),
+      );
+      assert.deepEqual(
+        result.reports.map((report) => report.branch),
+        members.map((member) => member.path),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("prepares a member action and reports the branch it cut", () =>
     Effect.gen(function* () {
       const ensureCalls: Array<{ readonly cwd: string; readonly cutOn: string | undefined }> = [];

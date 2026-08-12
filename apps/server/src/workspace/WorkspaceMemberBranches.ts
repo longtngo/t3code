@@ -103,6 +103,21 @@ export class WorkspaceMemberBranches extends Context.Service<
 
 const MAX_BRANCH_NAME_ATTEMPTS = 5;
 
+/**
+ * How many member repositories a read-only fan-out inspects at once.
+ *
+ * Reading a member costs several git subprocesses, so inspecting a six-member
+ * workspace one repository at a time takes as long as the six repositories
+ * added together — long enough for the client to raise its slow-request
+ * warning. The members are independent checkouts and the reads take no locks,
+ * so they overlap safely. The cap keeps a large workspace from spawning one git
+ * process per member all at once.
+ *
+ * Only the read-only paths fan out. `sweepWorkspaceMembers` writes to the
+ * user's own checkouts and stays deliberately sequential.
+ */
+export const MEMBER_READ_CONCURRENCY = 8;
+
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
@@ -283,15 +298,23 @@ export const make = Effect.gen(function* () {
 
   const readCheckpointStates: WorkspaceMemberBranches["Service"]["readCheckpointStates"] =
     Effect.fn("WorkspaceMemberBranches.readCheckpointStates")(function* (members) {
-      const states: Array<MemberCheckpointState> = [];
-      for (const member of members) {
-        const local = yield* readLocalState(member.path);
-        if (local === null) continue;
-        const headSha = yield* git.readHeadSha(member.path).pipe(Effect.orElseSucceed(() => null));
-        if (headSha === null) continue;
-        states.push({ memberId: member.id, headSha, isDirty: local.isDirty });
-      }
-      return states;
+      // Read-only, so the members overlap. `Effect.forEach` keeps the results in
+      // member order regardless of which repository answers first.
+      const states = yield* Effect.forEach(
+        members,
+        (member) =>
+          Effect.gen(function* () {
+            const local = yield* readLocalState(member.path);
+            if (local === null) return null;
+            const headSha = yield* git
+              .readHeadSha(member.path)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (headSha === null) return null;
+            return { memberId: member.id, headSha, isDirty: local.isDirty };
+          }),
+        { concurrency: MEMBER_READ_CONCURRENCY },
+      );
+      return states.filter((state): state is MemberCheckpointState => state !== null);
     });
 
   const writePrBase: WorkspaceMemberBranches["Service"]["writePrBase"] = (input) =>
