@@ -997,8 +997,8 @@ export const make = Effect.gen(function* () {
    * is news.
    */
   const lastLoggedPrLookupFailureByBranchKey = new Map<string, string>();
-  const shouldLogPrLookupFailure = (branchKey: string, errorTag: string): boolean => {
-    if (lastLoggedPrLookupFailureByBranchKey.get(branchKey) === errorTag) {
+  const shouldLogPrLookupFailure = (branchKey: string, failureKey: string): boolean => {
+    if (lastLoggedPrLookupFailureByBranchKey.get(branchKey) === failureKey) {
       return false;
     }
     if (
@@ -1010,7 +1010,7 @@ export const make = Effect.gen(function* () {
         lastLoggedPrLookupFailureByBranchKey.delete(oldestKey);
       }
     }
-    lastLoggedPrLookupFailureByBranchKey.set(branchKey, errorTag);
+    lastLoggedPrLookupFailureByBranchKey.set(branchKey, failureKey);
     return true;
   };
   /** A branch that answered again is allowed to report its next failure. */
