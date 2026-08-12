@@ -137,6 +137,13 @@ function isNotGitRepositoryError(error: GitCommandError): boolean {
   return error.message.toLowerCase().includes("not a git repository");
 }
 
+/** The error's tag when it carries one, and its type when it does not. */
+function tagOf(error: unknown): string {
+  return typeof error === "object" && error !== null && "_tag" in error
+    ? String((error as { readonly _tag: unknown })._tag)
+    : typeof error;
+}
+
 interface OpenPrInfo {
   number: number;
   title: string;
@@ -976,6 +983,40 @@ export const make = Effect.gen(function* () {
     }
     lastKnownPrByBranchKey.set(branchKey, entry);
   };
+  /**
+   * The failure each branch last complained about, so a lookup that keeps
+   * failing the same way says so once instead of once per status poll.
+   *
+   * The failure itself is already cached and backed off, but the poller asks on
+   * its own cadence and every ask re-enters the failure path — including the
+   * asks answered from the cache without running the CLI at all. A repository
+   * the CLI can never resolve (one owned by an account the CLI is not signed in
+   * as, say) therefore wrote the same warning for as long as the server ran:
+   * 37,944 lines in one 22-hour session, which is enough to bury every other
+   * warning in the log. Only a *change* — a different failure, or a recovery —
+   * is news.
+   */
+  const lastLoggedPrLookupFailureByBranchKey = new Map<string, string>();
+  const shouldLogPrLookupFailure = (branchKey: string, errorTag: string): boolean => {
+    if (lastLoggedPrLookupFailureByBranchKey.get(branchKey) === errorTag) {
+      return false;
+    }
+    if (
+      !lastLoggedPrLookupFailureByBranchKey.has(branchKey) &&
+      lastLoggedPrLookupFailureByBranchKey.size >= PR_LOOKUP_CACHE_CAPACITY
+    ) {
+      const oldestKey = lastLoggedPrLookupFailureByBranchKey.keys().next().value;
+      if (oldestKey !== undefined) {
+        lastLoggedPrLookupFailureByBranchKey.delete(oldestKey);
+      }
+    }
+    lastLoggedPrLookupFailureByBranchKey.set(branchKey, errorTag);
+    return true;
+  };
+  /** A branch that answered again is allowed to report its next failure. */
+  const forgetPrLookupFailureLog = (branchKey: string) => {
+    lastLoggedPrLookupFailureByBranchKey.delete(branchKey);
+  };
   const resolveLastKnownPr = (
     branchKey: string,
     current: Pick<LastKnownPr, "upstreamRef" | "headBranch" | "remoteName" | "headRemoteUrlKey">,
@@ -1028,27 +1069,41 @@ export const make = Effect.gen(function* () {
         return { pr: toStatusPr(latest), headContext };
       }),
       Effect.tap(({ pr, headContext }) =>
-        Effect.sync(() =>
+        Effect.sync(() => {
           rememberLastKnownPr(branchKey, {
             pr,
             upstreamRef: details.upstreamRef,
             headBranch: headContext.headBranch,
             remoteName: headContext.remoteName,
             headRemoteUrlKey: headContext.headRemoteUrlKey,
-          }),
-        ),
+          });
+          forgetPrLookupFailureLog(branchKey);
+        }),
       ),
       Effect.map(({ pr }) => pr),
-      Effect.catch((error) =>
-        Effect.logWarning("PR lookup failed; keeping last known PR state.").pipe(
-          Effect.annotateLogs({
-            operation: "lookupStatusPr",
-            branch: details.branch,
-            errorTag:
-              typeof error === "object" && error !== null && "_tag" in error
-                ? String(error._tag)
-                : typeof error,
-          }),
+      Effect.catch((error) => {
+        const errorTag = tagOf(error);
+        // Every provider failure arrives wrapped in the same outer tag, so the
+        // wrapper alone cannot tell "rate limited" from "this account cannot
+        // see the repository". The cause carries that, and it is what decides
+        // whether a failure is the same news as the last one.
+        const causeTag =
+          typeof error === "object" && error !== null && "cause" in error
+            ? tagOf(error.cause)
+            : null;
+        const report = shouldLogPrLookupFailure(branchKey, `${errorTag}/${causeTag ?? ""}`)
+          ? Effect.logWarning(
+              "PR lookup failed; keeping last known PR state. The same failure on this branch stays silent until it changes.",
+            ).pipe(
+              Effect.annotateLogs({
+                operation: "lookupStatusPr",
+                branch: details.branch,
+                errorTag,
+                ...(causeTag === null ? {} : { causeTag }),
+              }),
+            )
+          : Effect.void;
+        return report.pipe(
           Effect.andThen(resolveBranchHeadContext(cwd, details)),
           Effect.map((headContext) =>
             resolveLastKnownPr(branchKey, {
@@ -1058,8 +1113,8 @@ export const make = Effect.gen(function* () {
               headRemoteUrlKey: headContext.headRemoteUrlKey,
             }),
           ),
-        ),
-      ),
+        );
+      }),
     );
   });
   const readRemoteStatus = Effect.fn("readRemoteStatus")(function* (

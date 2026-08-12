@@ -9,6 +9,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
@@ -60,6 +61,12 @@ interface FakeGhScenario {
   failWith?: GitHubCli.GitHubCliError;
   /** Let this many gh calls succeed before failWith kicks in (default 0 = fail immediately). */
   failAfterCalls?: number;
+  /**
+   * Decides per call whether gh fails, for tests that need the outcome to
+   * change mid-test (a branch that fails, recovers, then fails again) without
+   * depending on how many calls one status makes.
+   */
+  failWhen?: () => GitHubCli.GitHubCliError | null;
 }
 
 function fakeGhOutput(stdout: string): VcsProcess.VcsProcessOutput {
@@ -360,6 +367,11 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   const execute: GitHubCli.GitHubCli["Service"]["execute"] = (input) => {
     const args = [...input.args];
     ghCalls.push(args.join(" "));
+
+    const decidedFailure = scenario.failWhen?.() ?? null;
+    if (decidedFailure) {
+      return Effect.fail(decidedFailure);
+    }
 
     if (scenario.failWith && ghCalls.length > (scenario.failAfterCalls ?? 0)) {
       return Effect.fail(scenario.failWith);
@@ -1426,6 +1438,105 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(second.pr?.number).toBe(214);
     }),
   );
+
+  // A repository the CLI can never resolve fails every single status poll. It
+  // used to say so every time — 37,944 identical warnings in one 22-hour
+  // session, which buries every other warning in the log.
+  it.effect("status reports an unchanged PR lookup failure once, not once per poll", () => {
+    const warnings: Array<string> = [];
+    const logger = Logger.make<unknown, void>(({ logLevel, message }) => {
+      const text = Array.isArray(message) ? message.join(" ") : String(message);
+      if (logLevel === "Warn" && text.includes("PR lookup failed")) {
+        warnings.push(text);
+      }
+    });
+
+    return Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-log-storm"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-log-storm"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          failWith: new GitHubCli.GitHubCliCommandError({
+            command: "gh",
+            cwd: repoDir,
+            cause: new Error("Could not resolve to a Repository"),
+          }),
+        },
+      });
+
+      for (let poll = 0; poll < 4; poll += 1) {
+        // Every poll takes the failure path: the invalidation is what a user
+        // refresh or a git action does, and it bypasses the PR cache.
+        yield* manager.invalidateStatus(repoDir);
+        const status = yield* manager.status({ cwd: repoDir });
+        expect(status.pr).toBeNull();
+      }
+
+      expect(warnings.length).toBe(1);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
+
+  // The other half of staying quiet: silence must not outlive the failure.
+  it.effect("status reports a PR lookup failure again after the branch recovers", () => {
+    const warnings: Array<string> = [];
+    const logger = Logger.make<unknown, void>(({ logLevel, message }) => {
+      const text = Array.isArray(message) ? message.join(" ") : String(message);
+      if (logLevel === "Warn" && text.includes("PR lookup failed")) {
+        warnings.push(text);
+      }
+    });
+
+    return Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-log-recovery"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-log-recovery"]);
+
+      // The test drives the outcome directly, so recovery does not depend on
+      // how many CLI calls one status happens to make.
+      let failure: GitHubCli.GitHubCliError | null = new GitHubCli.GitHubCliCommandError({
+        command: "gh",
+        cwd: repoDir,
+        cause: new Error("Could not resolve to a Repository"),
+      });
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          prListSequence: [JSON.stringify([]), JSON.stringify([]), JSON.stringify([])],
+          failWhen: () => failure,
+        },
+      });
+
+      const poll = Effect.gen(function* () {
+        yield* manager.invalidateStatus(repoDir);
+        yield* manager.status({ cwd: repoDir });
+      });
+
+      yield* poll;
+      yield* poll;
+      expect(warnings.length).toBe(1);
+
+      failure = null;
+      yield* poll;
+      expect(warnings.length).toBe(1);
+
+      // The branch answered, so its next failure is news again.
+      failure = new GitHubCli.GitHubCliCommandError({
+        command: "gh",
+        cwd: repoDir,
+        cause: new Error("Could not resolve to a Repository"),
+      });
+      yield* poll;
+      expect(warnings.length).toBe(2);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 
   it.effect(
     "status does not reuse a stale PR after the branch is retargeted to a different upstream",
