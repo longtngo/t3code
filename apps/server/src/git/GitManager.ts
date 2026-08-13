@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import {
   GitActionProgressEvent,
   GitActionProgressPhase,
@@ -28,6 +29,7 @@ import {
   type VcsStatusRemoteResult,
   VcsStatusResult,
   ModelSelection,
+  SourceControlProviderError,
   type SourceControlWritingStyleSettings,
 } from "@t3tools/contracts";
 import {
@@ -113,6 +115,7 @@ const PR_LOOKUP_CACHE_TTL = Duration.minutes(2);
 const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
+const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
 /**
  * How long a failed PR lookup is cached, given the number of consecutive
@@ -1086,7 +1089,10 @@ export const make = Effect.gen(function* () {
         // Every provider failure arrives wrapped in the same outer tag, so the
         // wrapper alone cannot tell "rate limited" from "this account cannot
         // see the repository". The cause carries that, and it is what decides
-        // whether a failure is the same news as the last one.
+        // whether a failure is the same news as the last one. The provider
+        // fields below describe the failure but do not key it: `detail` carries
+        // raw command output, which can differ run to run for one standing
+        // condition and would defeat the dedupe.
         const causeTag =
           typeof error === "object" && error !== null && "cause" in error
             ? tagOf(error.cause)
@@ -1100,6 +1106,14 @@ export const make = Effect.gen(function* () {
                 branch: details.branch,
                 errorTag,
                 ...(causeTag === null ? {} : { causeTag }),
+                ...(isSourceControlProviderError(error)
+                  ? {
+                      provider: error.provider,
+                      providerOperation: error.operation,
+                      providerCommand: error.command ?? "unknown",
+                      errorDetail: error.detail,
+                    }
+                  : {}),
               }),
             )
           : Effect.void;
