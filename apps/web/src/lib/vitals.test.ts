@@ -7,6 +7,7 @@ import {
   computeWindowPace,
   deriveLatestAccountUsage,
   FIVE_HOUR_MS,
+  formatWindowReset,
   paceDiffLabel,
   paceLevel,
   rightHalfArc,
@@ -393,5 +394,63 @@ describe("deriveLatestAccountUsage balances", () => {
     );
 
     expect(view?.balances).toEqual([]);
+  });
+});
+
+// Local-time constructor so reset formatting is timezone-stable in tests
+// (Intl renders in local time; fixed ISO inputs would assert differently per TZ).
+function localDate(year: number, month: number, day: number, hour: number, minute = 0): Date {
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+describe("formatWindowReset", () => {
+  const now = localDate(2026, 8, 14, 12, 0).getTime();
+
+  it("has nothing to say when the provider exposes no reset instant", () => {
+    expect(formatWindowReset(null, now, "24-hour")).toBeNull();
+  });
+
+  it("has nothing to say when the reset instant is unparseable", () => {
+    // formatShortTimestamp returns "" rather than null for a bad date, so an
+    // unguarded delegate would render a bare "resets" with no time after it.
+    expect(formatWindowReset("not-a-date", now, "24-hour")).toBeNull();
+  });
+
+  it("reads 'now' once the reset moment has passed", () => {
+    // Providers refresh lazily, so an elapsed timestamp lingers briefly.
+    const past = localDate(2026, 8, 14, 11, 30).toISOString();
+    expect(formatWindowReset(past, now, "24-hour")).toBe("now");
+  });
+
+  it("reads 'now' at the exact reset instant", () => {
+    expect(formatWindowReset(new Date(now).toISOString(), now, "24-hour")).toBe("now");
+  });
+
+  it("shows the time alone for a reset inside 24 hours", () => {
+    const soon = localDate(2026, 8, 14, 14, 20).toISOString();
+    const label = formatWindowReset(soon, now, "24-hour");
+    expect(label).toBe("14:20");
+  });
+
+  it("adds the date for a reset beyond 24 hours", () => {
+    const later = localDate(2026, 8, 21, 14, 20).toISOString();
+    const label = formatWindowReset(later, now, "24-hour") ?? "";
+    // Asserted structurally, not as a literal: the date half follows the system
+    // locale, so day/month ORDER and separator vary. What must hold everywhere
+    // is that both parts appear and the time still trails the date.
+    expect(label).toMatch(/\b8\b/);
+    expect(label).toMatch(/\b21\b/);
+    expect(label.endsWith("14:20")).toBe(true);
+    expect(label).not.toBe("14:20");
+  });
+
+  it("honours the 12-hour preference", () => {
+    const soon = localDate(2026, 8, 14, 14, 20).toISOString();
+    expect(formatWindowReset(soon, now, "12-hour")).toMatch(/2:20\s?PM/i);
+  });
+
+  it("honours the 12-hour preference on the dated form too", () => {
+    const later = localDate(2026, 8, 21, 14, 20).toISOString();
+    expect(formatWindowReset(later, now, "12-hour")).toMatch(/2:20\s?PM$/i);
   });
 });

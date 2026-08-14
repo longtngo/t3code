@@ -1,4 +1,7 @@
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
+
+import { formatShortTimestamp } from "../timestampFormat";
 
 /**
  * Vitals gauge logic — the pure (testable) core behind the header's combined
@@ -327,6 +330,44 @@ export function computeWindowPace(
 /** Severity for a window row: by pace when a projection exists, else by fullness. */
 export function windowSeverity(pace: WindowPace): Severity {
   return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff);
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Date half of a distant reset. System locale, matching `formatShortTimestamp`. */
+const resetDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "numeric",
+  day: "numeric",
+});
+
+/**
+ * When a window resets: `14:20` inside 24 hours, `8/21 14:20` beyond, and `now`
+ * once the instant has passed — providers refresh lazily, so an elapsed reset
+ * timestamp lingers briefly and would otherwise render as a time in the past.
+ * Null when there is no reset clock to show, in which case the row omits it.
+ *
+ * Pace answers "am I burning this too fast?"; this answers "when do I get it
+ * back?". The gauge showed only the former (see `computeWindowPace`), so both
+ * are rendered now rather than one replacing the other.
+ *
+ * The time half delegates to `formatShortTimestamp` so the user's 12/24-hour
+ * preference is honoured. The predecessor helper this revives hardcoded
+ * `hourCycle: "h23"`, which is the bug class upstream fixed in #4438.
+ */
+export function formatWindowReset(
+  resetsAt: string | null,
+  nowMs: number,
+  timestampFormat: TimestampFormat,
+): string | null {
+  if (resetsAt === null) return null;
+  const at = Date.parse(resetsAt);
+  // Guarded here rather than left to the delegate: formatShortTimestamp answers
+  // "" for an unparseable date, which would render a bare "resets" with no time.
+  if (!Number.isFinite(at)) return null;
+  if (at <= nowMs) return "now";
+  const time = formatShortTimestamp(resetsAt, timestampFormat);
+  if (time === "") return null;
+  return at - nowMs < ONE_DAY_MS ? time : `${resetDateFormatter.format(at)} ${time}`;
 }
 
 /**

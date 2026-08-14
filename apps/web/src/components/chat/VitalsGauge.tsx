@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
+import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
@@ -12,6 +14,7 @@ import {
   type UsageWindowView,
   clampPct,
   computeWindowPace,
+  formatWindowReset,
   fullnessArc,
   readingPct,
   windowArc,
@@ -171,9 +174,11 @@ function WindowRow(props: {
   window: UsageWindowView;
   windowMs: number | null;
   now: number;
+  timestampFormat: TimestampFormat;
 }) {
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
   const level = windowSeverity(pace);
+  const resetAt = formatWindowReset(props.window.resetsAt, props.now, props.timestampFormat);
   return (
     <div className="border-t border-dashed border-border py-2.5 first:border-t-0">
       <div className="flex items-baseline gap-2">
@@ -197,28 +202,67 @@ function WindowRow(props: {
           />
         ) : null}
       </div>
-      <div className="font-mono text-[11px] text-muted-foreground/70">
-        <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
-        {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
+      {/*
+        Flex, not a bare block: the reset text is pushed to the opposite edge, and
+        `justify-between` is what actually does that — the same utility on a
+        non-flex container is silently inert.
+
+        `whitespace-nowrap` per half with no fixed column widths is the lesson of
+        the predecessor panel, whose fixed widths broke words mid-string. But the
+        two halves do not always fit one line: the worst case (7-day, a dated
+        reset, 12-hour clock — "30% used · pace 37%" + "resets 8/21 12:20 PM") is
+        ~265px against ~256px usable inside this w-72 popover. `flex-wrap` lets
+        that rare case fall to a second line, still right-aligned, instead of
+        overflowing the panel. Each half stays intact either way.
+      */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 font-mono text-[11px] text-muted-foreground/70">
+        <span className="whitespace-nowrap">
+          <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
+          {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
+        </span>
+        {resetAt !== null ? (
+          <span className="whitespace-nowrap">resets {resetAt}</span>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function LimitsBlock(props: { usage: AccountUsageView; now: number }) {
-  const { usage, now } = props;
+function LimitsBlock(props: {
+  usage: AccountUsageView;
+  now: number;
+  timestampFormat: TimestampFormat;
+}) {
+  const { usage, now, timestampFormat } = props;
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Usage limits</span>
+        {/*
+          Legend for the pace diff on each row's header line — deliberately not
+          extended to cover the reset text, which sits on the footer line and is
+          self-labelling ("resets 14:20").
+        */}
         <span className="font-mono text-[11px] text-muted-foreground/60">pace</span>
       </div>
       <div className="mt-1">
         {usage.fiveHour ? (
-          <WindowRow label="5-hour" window={usage.fiveHour} windowMs={FIVE_HOUR_MS} now={now} />
+          <WindowRow
+            label="5-hour"
+            window={usage.fiveHour}
+            windowMs={FIVE_HOUR_MS}
+            now={now}
+            timestampFormat={timestampFormat}
+          />
         ) : null}
         {usage.sevenDay ? (
-          <WindowRow label="7-day" window={usage.sevenDay} windowMs={SEVEN_DAY_MS} now={now} />
+          <WindowRow
+            label="7-day"
+            window={usage.sevenDay}
+            windowMs={SEVEN_DAY_MS}
+            now={now}
+            timestampFormat={timestampFormat}
+          />
         ) : null}
         {usage.extraWindows.map((window) => (
           <WindowRow
@@ -227,6 +271,7 @@ function LimitsBlock(props: { usage: AccountUsageView; now: number }) {
             window={window}
             windowMs={window.windowMs}
             now={now}
+            timestampFormat={timestampFormat}
           />
         ))}
         {usage.balances.map((balance) => (
@@ -451,9 +496,16 @@ export function VitalsDetail(props: {
   accountUsage: AccountUsageView | null;
   host: VitalsHost;
   now: number;
+  /**
+   * Passed in rather than read from the settings store here so the detail stays
+   * pure and renderable without a provider — its tests use renderToStaticMarkup,
+   * where a store hook would silently serve the default and leave the 12/24-hour
+   * behaviour unasserted.
+   */
+  timestampFormat: TimestampFormat;
   providerDisplayName?: string | null | undefined;
 }) {
-  const { context, accountUsage, host, now } = props;
+  const { context, accountUsage, host, now, timestampFormat } = props;
   const hasWindows = Boolean(
     accountUsage?.fiveHour ||
     accountUsage?.sevenDay ||
@@ -465,7 +517,9 @@ export function VitalsDetail(props: {
       {context ? (
         <ContextBlock usage={context} providerDisplayName={props.providerDisplayName} />
       ) : null}
-      {hasWindows && accountUsage ? <LimitsBlock usage={accountUsage} now={now} /> : null}
+      {hasWindows && accountUsage ? (
+        <LimitsBlock usage={accountUsage} now={now} timestampFormat={timestampFormat} />
+      ) : null}
       <MachineBlock
         sample={host.sample}
         streaming={host.streaming}
@@ -484,6 +538,7 @@ export function VitalsGauge(props: {
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   // The pace clock has to run even while the detail is closed: the icon colours
   // its two window arcs by pace, and pace is a function of how much of the
   // window's clock has elapsed. Leaving it frozen would let the glyph keep
@@ -534,6 +589,7 @@ export function VitalsGauge(props: {
           accountUsage={accountUsage}
           host={host}
           now={now}
+          timestampFormat={timestampFormat}
           providerDisplayName={props.providerDisplayName}
         />
       </PopoverPopup>

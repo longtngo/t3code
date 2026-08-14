@@ -140,7 +140,7 @@ describe("VitalsGauge detail", () => {
       balances: [],
     };
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} />,
+      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} timestampFormat="24-hour" />,
     );
     expect(markup).toContain("Context");
     expect(markup).toContain("92k / 200k");
@@ -164,6 +164,7 @@ describe("VitalsGauge detail", () => {
         accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
         host={host}
         now={0}
+        timestampFormat="24-hour"
       />,
     );
     expect(markup).not.toContain("Usage limits");
@@ -186,7 +187,7 @@ describe("VitalsGauge detail", () => {
       balances: [],
     };
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} />,
+      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} timestampFormat="24-hour" />,
     );
     expect(markup).toContain("Usage limits");
     expect(markup).toContain("Codex 5h");
@@ -204,6 +205,7 @@ describe("VitalsGauge detail", () => {
         accountUsage={null}
         host={{ sample: null, streaming: false, enabled: true, onToggle: () => {} }}
         now={0}
+        timestampFormat="24-hour"
       />,
     );
     expect(markup).toContain("Connecting to host");
@@ -216,6 +218,7 @@ describe("VitalsGauge detail", () => {
         accountUsage={null}
         host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
         now={0}
+        timestampFormat="24-hour"
       />,
     );
     expect(markup).toContain("Metrics paused");
@@ -259,7 +262,7 @@ describe("machine details", () => {
 
   it("keeps the detail collapsed so the summary bars stay the answer", () => {
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} />,
+      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} timestampFormat="24-hour" />,
     );
 
     expect(markup).toContain("details");
@@ -270,7 +273,7 @@ describe("machine details", () => {
 
   it("still renders the three summary bars alongside the toggle", () => {
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} />,
+      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} timestampFormat="24-hour" />,
     );
 
     expect(markup).toContain("CPU");
@@ -285,6 +288,7 @@ describe("machine details", () => {
         accountUsage={null}
         host={{ sample: null, streaming: false, enabled: true, onToggle: () => {} }}
         now={0}
+        timestampFormat="24-hour"
       />,
     );
 
@@ -336,5 +340,132 @@ describe("MachineDetailList", () => {
     expect(markup).not.toContain("Host");
     // Memory always reports, so it is always shown.
     expect(markup).toContain("Memory");
+  });
+});
+
+describe("VitalsGauge window reset time", () => {
+  const host = { sample, streaming: true, enabled: true, onToggle: () => {} };
+  // Local-time constructor so the rendered clock is timezone-stable.
+  const at = (h: number, m = 0) => new Date(2026, 7, 14, h, m, 0, 0);
+  const now = at(12).getTime();
+
+  it("shows when each window resets alongside the pace figures", () => {
+    const accountUsage: AccountUsageView = {
+      fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
+      sevenDay: { utilization: 30, resetsAt: null },
+      extraWindows: [],
+      balances: [],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={now}
+        timestampFormat="24-hour"
+      />,
+    );
+    expect(markup).toContain("resets 14:20");
+    // Pace is not replaced by the reset time — both are shown.
+    expect(markup).toContain("% used");
+    expect(markup).toContain("pace");
+  });
+
+  it("omits the reset text for a window with no reset clock", () => {
+    const accountUsage: AccountUsageView = {
+      fiveHour: null,
+      sevenDay: { utilization: 30, resetsAt: null },
+      extraWindows: [],
+      balances: [],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={now}
+        timestampFormat="24-hour"
+      />,
+    );
+    expect(markup).toContain("7-day");
+    expect(markup).not.toContain("resets");
+  });
+
+  it("honours the 12-hour preference", () => {
+    const accountUsage: AccountUsageView = {
+      fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
+      sevenDay: null,
+      extraWindows: [],
+      balances: [],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={now}
+        timestampFormat="12-hour"
+      />,
+    );
+    expect(markup).toMatch(/resets 2:20\s?PM/i);
+    expect(markup).not.toContain("14:20");
+  });
+
+  it("keeps the footer a flex row so the reset text is pushed to the far edge", () => {
+    // Guards the review finding: `justify-between` is silently inert on a
+    // non-flex container, which would drop the reset text inline instead and
+    // re-create the wrapping the predecessor panel was fixed for.
+    const accountUsage: AccountUsageView = {
+      fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
+      sevenDay: null,
+      extraWindows: [],
+      balances: [],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={now}
+        timestampFormat="24-hour"
+      />,
+    );
+    const footer = markup.slice(markup.indexOf("% used") - 400, markup.indexOf("% used"));
+    expect(footer).toContain("justify-between");
+    expect(footer).toContain("flex");
+    // flex-wrap is what keeps the worst-case width (dated reset + 12-hour clock,
+    // ~265px against ~256px usable) falling to a second line rather than
+    // overflowing the popover.
+    expect(footer).toContain("flex-wrap");
+    expect(markup).toContain("whitespace-nowrap");
+  });
+
+  it("shows a reset time for provider windows that have no pace at all", () => {
+    // extraWindows carry windowMs: null, so they render no pace — the reset
+    // time is the only timing signal they can show.
+    const accountUsage: AccountUsageView = {
+      fiveHour: null,
+      sevenDay: null,
+      extraWindows: [
+        {
+          label: "weekly",
+          utilization: 42,
+          resetsAt: at(14, 20).toISOString(),
+          windowMs: null,
+        },
+      ],
+      balances: [],
+    };
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={now}
+        timestampFormat="24-hour"
+      />,
+    );
+    expect(markup).toContain("weekly");
+    expect(markup).toContain("resets 14:20");
   });
 });
