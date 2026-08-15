@@ -105,6 +105,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
+import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { VitalsGaugeConnected } from "./VitalsGauge";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenamePathSegment } from "../../filePathDisplay";
@@ -407,6 +408,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeAccountUsage: AccountUsageView | null;
   activeThreadProviderDisplayName: string | null;
+  activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -436,6 +438,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         context={props.activeContextWindow}
         accountUsage={props.activeAccountUsage}
         providerDisplayName={props.activeThreadProviderDisplayName}
+        modelDisplayName={props.activeThreadModelDisplayName}
       />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
@@ -954,6 +957,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     return formatProviderDisplayName(activeThreadModelSelection.instanceId);
   }, [providerStatuses, activeThreadModelSelection]);
+  // Names the model the context window belongs to. Reproduces upstream #4772's
+  // resolution (look the selected slug up in that instance's option list, fall
+  // back to the raw slug for a custom or since-removed model) using the helper
+  // that survived — #4772's own module was deleted with ContextWindowMeter,
+  // which the Vitals gauge replaced.
+  const activeThreadModelDisplayName = useMemo(() => {
+    if (!activeThreadModelSelection) return null;
+    const selected = modelOptionsByInstance
+      .get(activeThreadModelSelection.instanceId)
+      ?.find((model) => model.slug === activeThreadModelSelection.model);
+    return selected ? getTriggerDisplayModelName(selected) : activeThreadModelSelection.model;
+  }, [activeThreadModelSelection, modelOptionsByInstance]);
 
   // ------------------------------------------------------------------
   // Composer-local state
@@ -3002,6 +3017,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   context={activeContextWindow}
                   accountUsage={activeAccountUsage}
                   providerDisplayName={activeThreadProviderDisplayName}
+                  modelDisplayName={activeThreadModelDisplayName}
                 />
                 {phase === "running" ? (
                   // The composer footer is not rendered at all while collapsed,
@@ -3405,6 +3421,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeContextWindow={activeContextWindow}
                   activeAccountUsage={activeAccountUsage}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
+                  activeThreadModelDisplayName={activeThreadModelDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}

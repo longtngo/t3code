@@ -469,3 +469,51 @@ describe("VitalsGauge window reset time", () => {
     expect(markup).toContain("resets 14:20");
   });
 });
+
+describe("VitalsGauge context model name", () => {
+  const host = { sample, streaming: true, enabled: true, onToggle: () => {} };
+
+  function render(options: { modelDisplayName?: string | null; maxTokens?: number | null }) {
+    const context: ContextWindowSnapshot = {
+      ...emptyContext,
+      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    };
+    return renderToStaticMarkup(
+      <VitalsDetail
+        context={context}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+        modelDisplayName={options.modelDisplayName ?? null}
+      />,
+    );
+  }
+
+  it("names the model the context window belongs to", () => {
+    const markup = render({ modelDisplayName: "Opus 5" });
+    expect(markup).toContain("Opus 5");
+    expect(markup).toContain("200k window");
+  });
+
+  it("still names the model when the provider reports no window size", () => {
+    // The case the model name matters MOST in, and the one a naive `hasMax`
+    // gate silently drops: no window size to show, so the header would be empty.
+    const markup = render({ modelDisplayName: "Opus 5", maxTokens: null });
+    expect(markup).toContain("Opus 5");
+    expect(markup).not.toContain("window");
+  });
+
+  it("degrades to the window size alone when the model is unknown", () => {
+    const markup = render({ modelDisplayName: null });
+    expect(markup).toContain("200k window");
+    // No dangling separator when only one half is present.
+    expect(markup).not.toContain("· 200k window");
+  });
+
+  it("shows neither half when there is no model and no window size", () => {
+    const markup = render({ modelDisplayName: null, maxTokens: null });
+    expect(markup).not.toContain("window");
+    expect(markup).toContain("Context");
+  });
+});

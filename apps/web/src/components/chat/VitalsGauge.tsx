@@ -120,19 +120,27 @@ const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
 function ContextBlock(props: {
   usage: ContextWindowSnapshot;
   providerDisplayName?: string | null | undefined;
+  modelDisplayName?: string | null | undefined;
 }) {
-  const { usage } = props;
+  const { usage, modelDisplayName } = props;
   const pct = readingPct(usage.usedPercentage ?? 0);
   const level: Severity = vitalsLevel(pct);
   const hasMax = usage.maxTokens !== null;
+  // Gated on EITHER half, not on hasMax: a provider that reports no window size
+  // is exactly the case where naming the model matters most, and hanging the
+  // name off the size's gate would drop it there.
+  const caption = [
+    modelDisplayName ?? null,
+    hasMax ? `${formatContextWindowTokens(usage.maxTokens ?? null)} window` : null,
+  ]
+    .filter((part): part is string => part !== null && part.length > 0)
+    .join(" · ");
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Context</span>
-        {hasMax ? (
-          <span className="font-mono text-[11px] text-muted-foreground/60">
-            {formatContextWindowTokens(usage.maxTokens ?? null)} window
-          </span>
+        {caption ? (
+          <span className="truncate font-mono text-[11px] text-muted-foreground/60">{caption}</span>
         ) : null}
       </div>
       {hasMax ? (
@@ -504,6 +512,8 @@ export function VitalsDetail(props: {
    */
   timestampFormat: TimestampFormat;
   providerDisplayName?: string | null | undefined;
+  /** Selected model for this thread, named beside the window size. */
+  modelDisplayName?: string | null | undefined;
 }) {
   const { context, accountUsage, host, now, timestampFormat } = props;
   const hasWindows = Boolean(
@@ -515,7 +525,11 @@ export function VitalsDetail(props: {
   return (
     <div className="flex flex-col">
       {context ? (
-        <ContextBlock usage={context} providerDisplayName={props.providerDisplayName} />
+        <ContextBlock
+          usage={context}
+          providerDisplayName={props.providerDisplayName}
+          modelDisplayName={props.modelDisplayName}
+        />
       ) : null}
       {hasWindows && accountUsage ? (
         <LimitsBlock usage={accountUsage} now={now} timestampFormat={timestampFormat} />
@@ -535,6 +549,7 @@ export function VitalsGauge(props: {
   accountUsage: AccountUsageView | null;
   host: VitalsHost;
   providerDisplayName?: string | null | undefined;
+  modelDisplayName?: string | null | undefined;
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
@@ -591,6 +606,7 @@ export function VitalsGauge(props: {
           now={now}
           timestampFormat={timestampFormat}
           providerDisplayName={props.providerDisplayName}
+          modelDisplayName={props.modelDisplayName}
         />
       </PopoverPopup>
     </Popover>
@@ -622,6 +638,7 @@ export function VitalsGaugeConnected(props: {
   context: ContextWindowSnapshot | null;
   accountUsage: AccountUsageView | null;
   providerDisplayName?: string | null | undefined;
+  modelDisplayName?: string | null | undefined;
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
@@ -631,6 +648,7 @@ export function VitalsGaugeConnected(props: {
       accountUsage={props.accountUsage}
       host={{ sample, streaming, enabled, onToggle: setEnabled }}
       providerDisplayName={props.providerDisplayName}
+      modelDisplayName={props.modelDisplayName}
     />
   );
 }
