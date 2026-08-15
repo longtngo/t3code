@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ChevronRightIcon, CpuIcon, Loader2Icon } from "lucide-react";
+import { CpuIcon, Loader2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatBytes } from "~/lib/hostMetrics";
 import { formatContext, type ModelStatus } from "~/lib/llmModels";
@@ -23,7 +23,8 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 function rowMeta(row: SidebarRow): string {
   const parts = [row.providerName];
@@ -41,7 +42,10 @@ function ModelRow(props: {
   const { row, busy } = props;
   const status = row.status;
   const transitional = status === "loading" || status === "stopping" || busy;
-  const clickable = row.loadable && !transitional && (status === "online" || status === "offline" || status === "error");
+  const clickable =
+    row.loadable &&
+    !transitional &&
+    (status === "online" || status === "offline" || status === "error");
 
   const onClick = () => {
     if (!clickable) return;
@@ -75,10 +79,15 @@ function ModelRow(props: {
       {transitional ? (
         <Loader2Icon className="size-3 shrink-0 animate-spin text-amber-500" />
       ) : (
-        <span className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])} aria-hidden />
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])}
+          aria-hidden
+        />
       )}
       <span className="min-w-0 flex-1">
-        <span className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}>
+        <span
+          className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}
+        >
           {row.name}
         </span>
         <span className="block truncate text-[10px] text-muted-foreground/60">{rowMeta(row)}</span>
@@ -106,51 +115,68 @@ export function SidebarLocalModels() {
   const headerStatus: ModelStatus = online > 0 ? "online" : busy > 0 ? "loading" : "offline";
 
   return (
-    <>
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-          >
-            <CpuIcon className="size-3.5" />
-            <span className="text-xs">Local models</span>
-            <span className={cn("size-1.5 rounded-full", MODEL_DOT_CLASS[headerStatus])} aria-hidden />
-            {online > 0 ? (
-              <span className="text-[10px] tabular-nums text-muted-foreground/60">{online}</span>
-            ) : null}
-            <ChevronRightIcon
-              className={cn("ml-auto size-3.5 transition-transform", expanded && "rotate-90")}
-            />
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      </SidebarMenu>
+    /*
+     * `static` is load-bearing, not cosmetic. `SidebarMenuItem` bakes in
+     * `relative`; leaving it would anchor the panel below to this ~40px
+     * trigger. Opting out lets the panel resolve against the footer row's
+     * `relative` wrapper instead, so it draws at exactly footer width on both
+     * the 16rem desktop sidebar and the wider mobile drawer, with no width
+     * arithmetic to drift.
+     */
+    <SidebarMenuItem className="static shrink-0">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarMenuButton
+              size="sm"
+              className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-label="Local models"
+            >
+              <CpuIcon className="size-3.5" />
+              <span
+                className={cn("size-1.5 rounded-full", MODEL_DOT_CLASS[headerStatus])}
+                aria-hidden
+              />
+              {online > 0 ? (
+                <span className="text-[10px] tabular-nums text-muted-foreground/60">{online}</span>
+              ) : null}
+            </SidebarMenuButton>
+          }
+        />
+        <TooltipPopup side="top">Local models</TooltipPopup>
+      </Tooltip>
 
       {expanded ? (
-        <div className="max-h-64 overflow-y-auto px-1 pb-1">
-          {rows.length === 0 ? (
-            <div className="px-2 py-1.5 text-[11px] text-muted-foreground/60">
-              No model configs yet. Add one in Settings → Local LLM.
-            </div>
-          ) : (
-            rows.map((row) => (
-              <ModelRow
-                key={row.configId}
-                row={row}
-                busy={
-                  actions.pending.has(`load:${row.configId}`) ||
-                  actions.pending.has(`unload:${row.configId}`)
-                }
-                onLoad={() => {
-                  setActionError(null);
-                  void actions.load(row.configId);
-                }}
-                onUnload={() => setConfirm(row)}
-              />
-            ))
-          )}
+        <div className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg">
+          {/* The row shows only an icon and a dot, so the panel carries the name. */}
+          <div className="px-0.5 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Local models
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {rows.length === 0 ? (
+              <div className="px-2 py-1.5 text-[11px] text-muted-foreground/60">
+                No model configs yet. Add one in Settings → Local LLM.
+              </div>
+            ) : (
+              rows.map((row) => (
+                <ModelRow
+                  key={row.configId}
+                  row={row}
+                  busy={
+                    actions.pending.has(`load:${row.configId}`) ||
+                    actions.pending.has(`unload:${row.configId}`)
+                  }
+                  onLoad={() => {
+                    setActionError(null);
+                    void actions.load(row.configId);
+                  }}
+                  onUnload={() => setConfirm(row)}
+                />
+              ))
+            )}
+          </div>
           {actionError ? (
             <div className="px-2 pt-1 text-[10px] text-red-500">{actionError}</div>
           ) : null}
@@ -186,6 +212,6 @@ export function SidebarLocalModels() {
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
-    </>
+    </SidebarMenuItem>
   );
 }

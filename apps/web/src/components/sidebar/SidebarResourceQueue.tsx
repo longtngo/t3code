@@ -5,7 +5,7 @@ import type { ResourceQueueItem } from "@t3tools/contracts";
 import { cn } from "../../lib/utils";
 import { useResourceQueue } from "../../hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
   resourceAccent,
   rowProgress,
@@ -47,13 +47,17 @@ function Tag({ label, className }: { label: string; className: string }) {
   );
 }
 
+/**
+ * Sized for the footer row, which is a ~240px strip shared with four other
+ * controls — every pixel here is one the row does not have to wrap over.
+ */
 function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
   const zero = n === 0;
   return (
     <span
       title={kind === "run" ? "running (holding a lease)" : "waiting (queued)"}
       className={cn(
-        "min-w-[18px] rounded-full px-1.5 py-px text-center text-[11px] tabular-nums",
+        "min-w-[15px] rounded-full px-1 py-px text-center text-[10px] tabular-nums",
         zero
           ? "bg-accent font-medium text-muted-foreground"
           : kind === "run"
@@ -101,7 +105,14 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
       title={`${pct}% of estimated time`}
     >
       <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 -rotate-90">
-        <circle cx="7" cy="7" r={r} fill="none" strokeWidth="2" className="stroke-muted-foreground/25" />
+        <circle
+          cx="7"
+          cy="7"
+          r={r}
+          fill="none"
+          strokeWidth="2"
+          className="stroke-muted-foreground/25"
+        />
         <circle
           cx="7"
           cy="7"
@@ -191,9 +202,8 @@ function QueueRow({
             expanded ? "mt-1 max-h-16 opacity-100" : "max-h-0 opacity-0",
           )}
         >
-          pid {item.pid ?? "—"} · {where} ·{" "}
-          {item.state === "running" ? "started" : "enqueued"} {clockOf(item.sinceMs)} · eta{" "}
-          {item.etaSec != null ? humanizeSec(item.etaSec) : "—"}
+          pid {item.pid ?? "—"} · {where} · {item.state === "running" ? "started" : "enqueued"}{" "}
+          {clockOf(item.sinceMs)} · eta {item.etaSec != null ? humanizeSec(item.etaSec) : "—"}
         </div>
       </div>
       <svg
@@ -214,10 +224,11 @@ function QueueRow({
 }
 
 /**
- * Sidebar quick-glance for the local resource broker (`resctl`). Shows two badges —
- * running (green) and waiting (yellow) — and, on hover or click, a popover with the live
- * queue. Polls at 60s in the background and 5s while the popover is open. The advisory RAM
- * pool is intentionally omitted (it is tracked but never reserved).
+ * Sidebar quick-glance for the local resource broker (`resctl`). Renders as one control in the
+ * sidebar footer row: a gauge icon plus two badges — running (green) and waiting (yellow) — and,
+ * on hover or click, a popover with the live queue drawn above the row. Polls at 60s in the
+ * background and 5s while the popover is open. The advisory RAM pool is intentionally omitted
+ * (it is tracked but never reserved).
  */
 export function SidebarResourceQueue() {
   const environmentId = usePrimaryEnvironmentId();
@@ -226,7 +237,7 @@ export function SidebarResourceQueue() {
   const open = pinned || hovering;
   const { snapshot } = useResourceQueue(environmentId, open);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLLIElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, tick] = useReducer((n: number) => n + 1, 0);
 
@@ -293,33 +304,41 @@ export function SidebarResourceQueue() {
     });
 
   return (
-    <div ref={wrapRef} className="relative" onMouseEnter={onEnter} onMouseLeave={onLeave}>
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={togglePin}
-            aria-haspopup="dialog"
-            aria-expanded={open}
+    /*
+     * `static` opts out of `SidebarMenuItem`'s baked-in `relative` so the
+     * popover below anchors to the footer row's wrapper rather than to this
+     * ~70px trigger — footer-width on every sidebar size, no width arithmetic.
+     *
+     * No Tooltip on this one, unlike its neighbours in the row: hovering it
+     * already opens the panel, which names itself and says strictly more than a
+     * tooltip could. The `aria-label` carries the name for screen readers.
+     */
+    <SidebarMenuItem
+      ref={wrapRef}
+      className="static shrink-0"
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+    >
+      <SidebarMenuButton
+        size="sm"
+        className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+        onClick={togglePin}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label="Resource Queue"
+      >
+        <GaugeIcon className="size-3.5" />
+        {snapshot?.maintenance ? (
+          <span
+            title="broker in maintenance (draining)"
+            className="rounded-full bg-red-500 px-1 py-px text-[9px] font-semibold text-white"
           >
-            <GaugeIcon className="size-3.5" />
-            <span className="text-xs">Resource Queue</span>
-            <span className="ml-auto inline-flex items-center gap-1">
-              {snapshot?.maintenance ? (
-                <span
-                  title="broker in maintenance (draining)"
-                  className="rounded-full bg-red-500 px-1.5 py-px text-[10px] font-semibold text-white"
-                >
-                  maint
-                </span>
-              ) : null}
-              <CountBadge n={running.length} kind="run" />
-              <CountBadge n={waiting.length} kind="wait" />
-            </span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      </SidebarMenu>
+            maint
+          </span>
+        ) : null}
+        <CountBadge n={running.length} kind="run" />
+        <CountBadge n={waiting.length} kind="wait" />
+      </SidebarMenuButton>
 
       {open ? (
         <div
@@ -356,7 +375,8 @@ export function SidebarResourceQueue() {
                         {r.name}
                       </span>
                       <span className="shrink-0 tabular-nums">
-                        <span className="font-semibold text-foreground">{r.inUse}</span>/{r.capacity}
+                        <span className="font-semibold text-foreground">{r.inUse}</span>/
+                        {r.capacity}
                       </span>
                     </div>
                     <div className="h-[3px] overflow-hidden rounded bg-accent">
@@ -375,7 +395,9 @@ export function SidebarResourceQueue() {
 
           <div className="mt-1.5 max-h-[262px] overflow-y-auto pr-0.5">
             {snapshot == null ? (
-              <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">Connecting…</div>
+              <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">
+                Connecting…
+              </div>
             ) : !snapshot.available ? (
               <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">
                 Resource broker not running.
@@ -404,6 +426,6 @@ export function SidebarResourceQueue() {
           </div>
         </div>
       ) : null}
-    </div>
+    </SidebarMenuItem>
   );
 }

@@ -166,71 +166,85 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      {/* Fork-only footer panels. They stay stacked above the menu rather than
-          joining it: upstream's row is a compact strip of icon buttons, and
-          these two are full-width readouts. */}
-      <SidebarLocalModels />
-      <SidebarResourceQueue />
-      <SidebarMenu className="flex-row items-center">
-        {currentFooterPage ? (
-          <SidebarMenuItem className="min-w-0 flex-1">
-            <SidebarMenuButton onClick={handleBackClick}>
-              <ArrowLeftIcon />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ) : (
-          <>
-            <SidebarMenuItem className="shrink-0">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <SidebarMenuButton
-                      aria-label="Settings"
-                      onClick={handleSettingsClick}
-                      size="icon"
-                    >
-                      <SettingsIcon />
-                    </SidebarMenuButton>
-                  }
-                />
-                <TooltipPopup side="top">Settings</TooltipPopup>
-              </Tooltip>
+      {/* This wrapper is the positioning context for the two fork-only panels
+          in the row below. Their trigger items opt out of `relative`, so each
+          panel draws at exactly footer width above the whole row instead of
+          against its own ~40px button — correct on the 16rem desktop sidebar
+          and the wider mobile drawer alike, with no width arithmetic.
+
+          The row wraps: five controls plus the Electron update pill do not
+          always fit 240px, and wrapping to a second line beats overflowing or
+          shrinking the badges past legibility. */}
+      <div className="relative">
+        <SidebarMenu className="flex-row flex-wrap items-center">
+          {currentFooterPage ? (
+            <SidebarMenuItem className="min-w-0 flex-1">
+              <SidebarMenuButton onClick={handleBackClick}>
+                <ArrowLeftIcon />
+                <span>Back</span>
+              </SidebarMenuButton>
             </SidebarMenuItem>
-            {pullRequestsSupported ? (
+          ) : (
+            <>
               <SidebarMenuItem className="shrink-0">
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <SidebarMenuButton
-                        aria-label="Pull Requests"
-                        onClick={handlePullRequestsClick}
+                        aria-label="Settings"
+                        onClick={handleSettingsClick}
                         size="icon"
                       >
-                        <GitPullRequestIcon />
+                        <SettingsIcon />
                       </SidebarMenuButton>
                     }
                   />
-                  <TooltipPopup side="top">Pull Requests</TooltipPopup>
+                  <TooltipPopup side="top">Settings</TooltipPopup>
                 </Tooltip>
               </SidebarMenuItem>
-            ) : null}
-            <SidebarMenuItem className="shrink-0">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
-                      <ChartNoAxesColumnIcon />
-                    </SidebarMenuButton>
-                  }
-                />
-                <TooltipPopup side="top">Usage</TooltipPopup>
-              </Tooltip>
-            </SidebarMenuItem>
-          </>
-        )}
-        <SidebarUpdatePill />
-      </SidebarMenu>
+              {pullRequestsSupported ? (
+                <SidebarMenuItem className="shrink-0">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <SidebarMenuButton
+                          aria-label="Pull Requests"
+                          onClick={handlePullRequestsClick}
+                          size="icon"
+                        >
+                          <GitPullRequestIcon />
+                        </SidebarMenuButton>
+                      }
+                    />
+                    <TooltipPopup side="top">Pull Requests</TooltipPopup>
+                  </Tooltip>
+                </SidebarMenuItem>
+              ) : null}
+              <SidebarMenuItem className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                        <ChartNoAxesColumnIcon />
+                      </SidebarMenuButton>
+                    }
+                  />
+                  <TooltipPopup side="top">Usage</TooltipPopup>
+                </Tooltip>
+              </SidebarMenuItem>
+            </>
+          )}
+          {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull
+              Requests and Usage are navigation, so "Back" rightly replaces them
+              once you are on one of those pages. These two are live status
+              readouts — hiding them there would be a silent capability loss for
+              no gain. `SidebarUpdatePill` below sits outside for the same
+              reason. */}
+          <SidebarLocalModels />
+          <SidebarResourceQueue />
+          <SidebarUpdatePill />
+        </SidebarMenu>
+      </div>
     </SidebarFooter>
   );
 });
