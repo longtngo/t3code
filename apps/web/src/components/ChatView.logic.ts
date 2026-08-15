@@ -250,6 +250,46 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * Decide what a Stop-button press should dispatch. The first press for a thread sends a
+ * cooperative `thread.turn.interrupt`; a deliberate second press (while that interrupt is still
+ * pending escalation) goes straight to a hard `thread.session.stop`, which force-kills a turn
+ * wedged inside a tool — the case the server's stall watchdog is structurally blind to, because
+ * it abstains whenever the open-tool set is non-empty.
+ */
+export type StopAction = "interrupt" | "hardStop";
+
+export function nextStopAction(input: {
+  readonly threadId: string;
+  readonly alreadyEscalatedThreadId: string | null;
+}): StopAction {
+  return input.alreadyEscalatedThreadId === input.threadId ? "hardStop" : "interrupt";
+}
+
+/**
+ * After the cooperative-interrupt grace elapses, escalate to a hard stop only when the escalation
+ * still belongs to this thread AND its turn is still running (an honoured interrupt would have
+ * settled it).
+ *
+ * A turn parked on a pending user-input/approval request is waiting on the human, NOT wedged —
+ * never auto-escalate it into a session-killing hard stop (that stranded the answer with "No
+ * active provider session…"). This mirrors the server stall watchdog, which already abstains on
+ * these flags. A deliberate second Stop press still force-stops (see `nextStopAction`), so a
+ * genuinely wedged turn whose flag is stuck true remains killable.
+ *
+ * This timed path is the CONSERVATIVE half of the ladder: unlike the explicit second press, it
+ * never asks the watchdog to resume afterwards.
+ */
+export function shouldHardStopAfterGrace(input: {
+  readonly threadId: string;
+  readonly escalatedThreadId: string | null;
+  readonly latestTurnSettled: boolean;
+  readonly hasPendingInput?: boolean;
+}): boolean {
+  if (input.hasPendingInput === true) return false;
+  return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
+}
+
 export function resolveSendEnvMode(input: {
   requestedEnvMode: DraftThreadEnvMode;
   isGitRepo: boolean;

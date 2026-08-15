@@ -80,6 +80,7 @@ import {
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderTurnStallWatchdog } from "./provider/Services/ProviderTurnStallWatchdog.ts";
 import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -409,6 +410,11 @@ const makeWsRpcLayer = (
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      // Optional on purpose: adoption is best-effort recovery, and the routes
+      // layer is transport — it must not REQUIRE a provider-recovery service to
+      // build. Absent (router-seam tests, trimmed layers) the force-stop still
+      // stops; only the follow-up resume is skipped.
+      const providerTurnStallWatchdogOption = yield* Effect.serviceOption(ProviderTurnStallWatchdog);
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
@@ -1067,6 +1073,34 @@ const makeWsRpcLayer = (
           );
         });
 
+      /**
+       * A user's deliberate force-stop asks the stall watchdog to ADOPT the stop
+       * and drive its stop->resume recovery, so the thread does not simply sit
+       * dead. Resolved server-side rather than trusting a turnId from the
+       * client: the client's view of the active turn can be stale, and adopting
+       * the wrong turn would arm recovery against work that is not wedged.
+       *
+       * Best-effort by design — if the thread has no active turn there is
+       * nothing to recover, and the stop still happens either way.
+       */
+      const adoptForceStopForRecovery = (command: OrchestrationCommand) =>
+        Effect.gen(function* () {
+          if (command.type !== "thread.session.stop" || command.recoverAfterStop !== true) {
+            return;
+          }
+          const shell = yield* projectionSnapshotQuery
+            .getThreadShellById(command.threadId)
+            .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+          const activeTurnId = shell?.session?.activeTurnId ?? null;
+          if (activeTurnId === null) return;
+          const watchdog = Option.getOrUndefined(providerTurnStallWatchdogOption);
+          if (!watchdog) return;
+          yield* watchdog.adoptExternalStop({
+            threadId: command.threadId,
+            turnId: activeTurnId,
+          });
+        });
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
@@ -1087,6 +1121,10 @@ const makeWsRpcLayer = (
             Effect.mapError((cause) =>
               toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
             ),
+            // Arm recovery only AFTER the stop is accepted: adopting a stop that
+            // never dispatched would leave the watchdog waiting for a session
+            // teardown that is not coming.
+            Effect.tap(() => adoptForceStopForRecovery(normalizedCommand)),
           );
       };
 

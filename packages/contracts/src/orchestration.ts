@@ -1092,6 +1092,17 @@ const ThreadSessionStopCommand = Schema.Struct({
   // closes the race a post-settle snapshot read cannot: commands are decided
   // serially against the authoritative read model.
   onlyIfSettled: Schema.optional(Schema.Boolean),
+  /**
+   * Set only by a user's deliberate force-stop (the second Stop press). Asks the
+   * turn-stall watchdog to ADOPT this stop and drive its normal stop->resume
+   * recovery, rather than leaving the thread dead.
+   *
+   * Deliberately opt-in: settle, archive and reaper stops are terminal by
+   * intent, and resuming them would resurrect a thread the system just parked.
+   * A human pressing Stop twice has judged the turn wedged — which the watchdog
+   * itself cannot detect, since it abstains whenever a tool is still open.
+   */
+  recoverAfterStop: Schema.optional(Schema.Boolean),
 });
 
 const DispatchableClientOrchestrationCommand = Schema.Union([

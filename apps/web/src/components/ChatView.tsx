@@ -318,6 +318,7 @@ import {
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  nextStopAction,
   canQueueOfflineTurn,
   offlineQueueRefusalReason,
   collectUserMessageBlobPreviewUrls,
@@ -1255,6 +1256,9 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const stopThreadSessionCommand = useAtomCommand(threadEnvironment.stopSession, {
+    reportFailure: false,
+  });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1301,6 +1305,17 @@ function ChatViewContent(props: ChatViewProps) {
     routeKind === "server" ? routeThreadRef.environmentId : null,
     routeKind === "server" ? routeThreadRef.threadId : null,
   );
+  /**
+   * Which thread has an unhonoured cooperative interrupt outstanding — i.e.
+   * whose NEXT Stop press should force-stop. A ref, not state: nothing renders
+   * from it, and re-rendering the whole chat on a Stop press is not worth it.
+   *
+   * Cleared when the turn settles or the route thread changes, so escalation is
+   * scoped to one wedge. Without that, a Stop pressed once today would make
+   * tomorrow's first press destructive.
+   */
+  const escalatedStopThreadIdRef = useRef<string | null>(null);
+
   const loadEarlierTurns = useMemo(() => {
     if (routeKind !== "server" || !threadHasOlderTurns(routeThreadState)) {
       return null;
@@ -1312,6 +1327,8 @@ function ChatViewContent(props: ChatViewProps) {
       },
     };
   }, [routeKind, routeThreadRef, routeThreadState]);
+
+
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const settings = useEnvironmentSettings(environmentId);
   // New-thread defaults live in the primary environment's settings.json (the
@@ -1549,6 +1566,15 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
+  const activeSessionStatus = activeThread?.session?.status ?? null;
+  useEffect(() => {
+    // Settled turn or a different thread ⇒ the wedge this escalation belonged
+    // to is over. Re-arm from scratch.
+    if (activeSessionStatus !== "running") {
+      escalatedStopThreadIdRef.current = null;
+    }
+  }, [activeSessionStatus, routeThreadRef.threadId]);
+
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
@@ -5712,7 +5738,66 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  /**
+   * Stop is a two-press ladder. The first press sends the cooperative
+   * `thread.turn.interrupt`; a deliberate SECOND press force-stops the session,
+   * which is the only way to kill a turn wedged inside a tool — the server's
+   * stall watchdog abstains whenever the open-tool set is non-empty, so it
+   * never trips on exactly that case.
+   *
+   * The force-stop carries `recoverAfterStop`, asking the watchdog to adopt it
+   * and drive its stop->resume recovery so the thread does not sit dead.
+   *
+   * NOTE for the Cancel control: escalation is armed HERE and nowhere else.
+   * Cancel dispatches the plain cooperative interrupt and neither reads nor
+   * advances this ledger, so cancelling a question can never turn a later first
+   * Stop press into a force-stop.
+   */
   const onInterrupt = async () => {
+    if (!activeThread) return;
+    const threadId = activeThread.id;
+    const action = nextStopAction({
+      threadId,
+      alreadyEscalatedThreadId: escalatedStopThreadIdRef.current,
+    });
+
+    if (action === "hardStop") {
+      escalatedStopThreadIdRef.current = null;
+      const stopResult = await stopThreadSessionCommand({
+        environmentId,
+        input: { threadId, recoverAfterStop: true },
+      });
+      if (stopResult._tag === "Failure" && !isAtomCommandInterrupted(stopResult)) {
+        const error = squashAtomCommandFailure(stopResult);
+        setThreadError(
+          threadId,
+          error instanceof Error ? error.message : "Failed to force-stop the session.",
+        );
+      }
+      return;
+    }
+
+    escalatedStopThreadIdRef.current = threadId;
+    const result = await interruptThreadTurn({
+      environmentId,
+      input: buildThreadTurnInterruptInput(activeThread),
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      escalatedStopThreadIdRef.current = null;
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        threadId,
+        error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+      );
+    }
+  };
+
+  /**
+   * Declining a pending question is a cooperative interrupt that must NEVER arm
+   * the Stop escalation ladder — sharing `onInterrupt` would make the next Stop
+   * press force-stop the session, which is the bug f4af9398e fixed.
+   */
+  const onCancelQuestion = async () => {
     if (!activeThread) return;
     const result = await interruptThreadTurn({
       environmentId,
@@ -5722,7 +5807,7 @@ function ChatViewContent(props: ChatViewProps) {
       const error = squashAtomCommandFailure(result);
       setThreadError(
         activeThread.id,
-        error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+        error instanceof Error ? error.message : "Failed to cancel the question.",
       );
     }
   };
@@ -6819,6 +6904,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
                             onInterrupt={onInterrupt}
+                onCancelQuestion={onCancelQuestion}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={

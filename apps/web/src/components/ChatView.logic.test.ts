@@ -34,6 +34,8 @@ import {
   shouldAbortSendBeforeOfflineQueue,
   shouldShowComposerIntentBanner,
   shouldWriteThreadErrorToCurrentServerThread,
+  nextStopAction,
+  shouldHardStopAfterGrace,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -821,5 +823,49 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isConnecting: true })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, sendInFlight: true })).toBe(true);
+  });
+});
+
+describe("nextStopAction", () => {
+  it("sends a cooperative interrupt on the first press", () => {
+    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: null })).toBe("interrupt");
+  });
+
+  it("force-stops on a second press for the same thread", () => {
+    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: "t1" })).toBe("hardStop");
+  });
+
+  it("does not carry escalation across threads", () => {
+    // Escalation is a judgement about ONE wedged turn. Pressing Stop on thread
+    // A must not make the first press on thread B destructive.
+    expect(nextStopAction({ threadId: "t2", alreadyEscalatedThreadId: "t1" })).toBe("interrupt");
+  });
+});
+
+describe("shouldHardStopAfterGrace", () => {
+  const base = { threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false };
+
+  it("escalates when the interrupt went unhonoured and the turn is still running", () => {
+    expect(shouldHardStopAfterGrace(base)).toBe(true);
+  });
+
+  it("does not escalate once the turn has settled", () => {
+    // An honoured interrupt settles the turn; escalating then would kill a
+    // session that already did what was asked.
+    expect(shouldHardStopAfterGrace({ ...base, latestTurnSettled: true })).toBe(false);
+  });
+
+  it("does not escalate a turn parked on a pending question", () => {
+    // The carve-out that matters: a turn waiting on a HUMAN is not wedged.
+    // Auto-escalating one stranded the answer with "No active provider session".
+    expect(shouldHardStopAfterGrace({ ...base, hasPendingInput: true })).toBe(false);
+  });
+
+  it("does not escalate a thread that never armed escalation", () => {
+    expect(shouldHardStopAfterGrace({ ...base, escalatedThreadId: null })).toBe(false);
+  });
+
+  it("does not escalate a different thread", () => {
+    expect(shouldHardStopAfterGrace({ ...base, escalatedThreadId: "other" })).toBe(false);
   });
 });

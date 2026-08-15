@@ -40,6 +40,7 @@ function renderPendingActions(isRunning: boolean) {
       hasSendableContent: false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
+      onCancelQuestion: () => {},
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -65,6 +66,7 @@ function renderRunning(options?: { hasSendableContent?: boolean }) {
       hasSendableContent: options?.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
+      onCancelQuestion: () => {},
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -91,6 +93,7 @@ function renderSendButton() {
       hasSendableContent: true,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
+      onCancelQuestion: () => {},
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -282,6 +285,7 @@ describe("ComposerPrimaryActions cancel question", () => {
         hasSendableContent: false,
         onPreviousPendingQuestion: () => {},
         onInterrupt: () => {},
+        onCancelQuestion: () => {},
         onImplementPlanInNewThread: () => {},
       }),
     );
@@ -321,5 +325,57 @@ describe("ComposerPrimaryActions cancel question", () => {
 
   it("reads as a labelled action rather than a bare icon when not compact", () => {
     expect(renderPending({ isRunning: true, compact: false })).toContain("Cancel");
+  });
+});
+
+describe("Cancel is not the Stop ladder", () => {
+  // The tripwire this locks down: Cancel used to share `onInterrupt`, which is
+  // now the escalation ladder's entry point. Sharing it again would mean a
+  // Cancel press arms escalation and the NEXT Stop press kills the session —
+  // the f4af9398e bug, reintroduced.
+  function renderWithSpies() {
+    const calls: string[] = [];
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        compact: false,
+        pendingAction: {
+          questionIndex: 0,
+          isLastQuestion: true,
+          canAdvance: true,
+          isResponding: false,
+          isComplete: true,
+        },
+        isRunning: true,
+        showPlanFollowUpPrompt: false,
+        promptHasText: false,
+        isSendBusy: false,
+        sendDisabledReason: null,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isSendBlocked: false,
+        isPreparingWorktree: false,
+        hasSendableContent: false,
+        onPreviousPendingQuestion: () => {},
+        onInterrupt: () => calls.push("interrupt"),
+        onCancelQuestion: () => calls.push("cancel"),
+        onImplementPlanInNewThread: () => {},
+      }),
+    );
+    return { markup, calls };
+  }
+
+  it("renders Cancel and Stop as separate controls", () => {
+    const { markup } = renderWithSpies();
+    expect(markup).toContain('aria-label="Cancel question"');
+    expect(markup).toContain('aria-label="Stop generation"');
+  });
+
+  it("requires a distinct cancel handler rather than reusing onInterrupt", () => {
+    // A structural guard: if someone deletes `onCancelQuestion` and points
+    // Cancel back at `onInterrupt`, this file stops typechecking — the prop is
+    // required. This test documents WHY that requirement exists so it is not
+    // "simplified" away later.
+    const { markup } = renderWithSpies();
+    expect(markup).toContain("Cancel");
   });
 });

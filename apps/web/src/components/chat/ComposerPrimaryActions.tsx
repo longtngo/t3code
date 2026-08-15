@@ -35,6 +35,12 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /**
+   * Dedicated cooperative decline for a pending question — never arms the Stop
+   * escalation ladder. Distinct from `onInterrupt`, which is the ladder's entry
+   * point and whose second press force-stops the session.
+   */
+  onCancelQuestion: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -76,6 +82,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
+  onCancelQuestion,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -192,18 +199,16 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           this the pending row can offer no exit at all: Stop only renders while
           a turn is running, and Previous only past the first question.
 
-          Wired to the same cooperative `onInterrupt` as Stop, which the adapter
-          turns into a clean settle of the pending request (it registers an
-          `abort` listener on the AskUserQuestion the moment it is created), and
-          which does NOT kill the provider session — session teardown is a
-          separate `thread.session.stop` command.
+          Wired to the same `onInterrupt` as Stop, which the adapter turns into a
+          clean settle of the pending request (it registers an `abort` listener
+          on the AskUserQuestion the moment it is created).
 
-          TRIPWIRE: an earlier version of this button had its own
-          `onCancelQuestion` prop for exactly one reason — never arming the
-          hard-stop escalation, after cancelling was found to kill the provider
-          session (fixed in f4af9398e). That escalation no longer exists on this
-          path, which is why the prop is gone. If Stop ever regains escalating
-          behaviour, this MUST split back onto its own non-escalating path.
+          The tripwire that used to sit here has FIRED. Stop regained its
+          escalation ladder, so sharing `onInterrupt` would have meant a Cancel
+          press arming the ladder and turning the NEXT Stop press into a session
+          kill — the bug fixed in f4af9398e, reintroduced. `onCancelQuestion` is
+          therefore back, exactly as it was, and dispatches the cooperative
+          interrupt without touching the ledger.
         */}
         {compact ? (
           <Button
@@ -211,7 +216,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             variant="ghost"
             className="rounded-full"
             {...pointerFocusProps}
-            onClick={onInterrupt}
+            onClick={onCancelQuestion}
             disabled={pendingAction.isResponding}
             aria-label="Cancel question"
           >
@@ -223,7 +228,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             variant="ghost"
             className="rounded-full"
             {...pointerFocusProps}
-            onClick={onInterrupt}
+            onClick={onCancelQuestion}
             disabled={pendingAction.isResponding}
             aria-label="Cancel question"
           >

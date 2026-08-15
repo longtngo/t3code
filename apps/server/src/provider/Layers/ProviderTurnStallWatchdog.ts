@@ -407,7 +407,67 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
         });
       });
 
-    return { start } satisfies ProviderTurnStallWatchdogShape;
+    /**
+     * Adopt a stop issued elsewhere (a user's deliberate force-stop) so the
+     * existing stop->resume recovery drives it. Only the ENTRY POINT is new:
+     * recording `awaitingStopForTurnId` is exactly what a self-trip does, and
+     * the next sweep handles the rest.
+     *
+     * Deliberately does NOT consult `shouldTrip`. Those guards decide whether
+     * the MACHINE should suspect a stall; a human pressing Stop twice has
+     * already made that call, and the open-tool guard would veto the very case
+     * they are reporting. What adoption does respect is the attempt cap and
+     * `gaveUp`, so it cannot re-arm a loop against a hopeless provider.
+     */
+    const adoptExternalStop = (input: { threadId: ThreadId; turnId: TurnId }) =>
+      Effect.gen(function* () {
+        const { threadId, turnId } = input;
+        const record = (yield* Ref.get(recoveryByThread)).get(threadId) ?? EMPTY_RECORD;
+
+        if (record.gaveUp && sameTurn(record.lastStalledTurnId, turnId)) {
+          return;
+        }
+        const attempts = (record.gaveUp ? 0 : record.attempts) + 1;
+        if (attempts > maxRecoveryAttempts) {
+          yield* setRecord(threadId, {
+            ...EMPTY_RECORD,
+            attempts,
+            gaveUp: true,
+            lastStalledTurnId: turnId,
+          });
+          return;
+        }
+
+        yield* appendActivity({
+          threadId,
+          tone: "info",
+          summary: "Force-stopped — recovering",
+          message:
+            "Stopped at your request and resuming the session, so the thread does not stay wedged.",
+          turnId,
+        });
+        // Tagged apart from a self-trip: an adopted stop says a HUMAN detected
+        // the wedge, which is the signal that the automatic guards missed it.
+        yield* analytics.record("provider.turn_stall.recovered", {
+          silentMs: 0,
+          attempt: attempts,
+          adopted: true,
+        });
+        yield* setRecord(threadId, {
+          ...EMPTY_RECORD,
+          attempts,
+          lastStalledTurnId: turnId,
+          awaitingStopForTurnId: turnId,
+          stopIssuedAtMs: yield* Clock.currentTimeMillis,
+          lastSilentMs: 0,
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.turn.stall-watchdog.adopt-failed", { threadId: input.threadId, cause }),
+        ),
+      );
+
+    return { start, adoptExternalStop } satisfies ProviderTurnStallWatchdogShape;
   });
 
 export const makeProviderTurnStallWatchdogLive = (options?: ProviderTurnStallWatchdogLiveOptions) =>
