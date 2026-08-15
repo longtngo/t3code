@@ -1,5 +1,5 @@
 import { type ApprovalRequestId } from "@t3tools/contracts";
-import { memo, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
@@ -116,7 +116,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
   }, []);
 
-  const handleOptionSelection = useEffectEvent(
+  // useCallback rather than useEffectEvent, taking upstream's #6646 fix ("keep
+  // multi-select questions open after the first click"). Both forms already had
+  // the multi-select early return, so the bug was in the effect-event semantics
+  // themselves, not the branch — and this fork used the same pattern, so it
+  // carried the same defect. The fork's extra `optionIndex` and its reveal
+  // behaviour ride on top of the fix rather than replacing it.
+  const handleOptionSelection = useCallback(
     (questionId: string, optionLabel: string, optionIndex: number) => {
       // A number-key shortcut can target an option scrolled below the fold of
       // the bounded list, or hidden outright by a collapse. Reveal it either
@@ -143,6 +149,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         onAdvanceRef.current();
       }, 200);
     },
+    [activeQuestion, onToggleOption],
   );
 
   // Keyboard shortcut: number keys 1-9 select corresponding options when focus is
@@ -173,7 +180,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, isResponding]);
+    // handleOptionSelection is a dependency now that it is a useCallback: its
+    // identity changes with the active question, and the listener must close
+    // over the current one (upstream #6646).
+  }, [activeQuestion, handleOptionSelection, isResponding]);
 
   if (!activeQuestion) {
     return null;

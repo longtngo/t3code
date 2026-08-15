@@ -244,4 +244,14 @@ describe("ComposerPrimaryActions", () => {
     expect(markup).not.toContain("stage-nightly");
     expect(markup).toContain("bg-message-action text-message-action-foreground");
   });
+
+  // FORK: upstream's three "showSendWhileRunning" tests sat here (#4781). They
+  // assert that Stop is the ONLY action while a turn runs unless a mobile-only
+  // opt-in prop is set. This fork keeps Send mounted beside Stop on every
+  // viewport — the control must not move between idle and running, and every
+  // adapter has a defined concurrent-send path — so that prop does not exist
+  // here and those tests assert behaviour this composer no longer has.
+  // The two tests above ("keeps Send mounted beside Stop while a turn is
+  // running", "leaves Send usable while running so a follow-up can be queued")
+  // are the fork's coverage of the same ground.
 });

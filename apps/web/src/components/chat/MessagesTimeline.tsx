@@ -85,6 +85,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -107,7 +108,7 @@ import {
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
-import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 
 import {
   buildInlineTerminalContextText,
@@ -593,7 +594,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             onScroll={handleScroll}
             className={cn(
               "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "chat-timeline-scroll-fade",
+              topFadeEnabled && "topbar-scroll-fade",
             )}
             ListHeaderComponent={
               loadEarlier !== null ? (
@@ -1040,7 +1041,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-              {formatShortTimestamp(row.message.createdAt, ctx.timestampFormat)}
+              {formatDayAwareTimestamp(row.message.createdAt, ctx.timestampFormat)}
             </TooltipTrigger>
             <TooltipPopup>
               {formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}
@@ -1115,6 +1116,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
           isStreaming={Boolean(row.message.streaming)}
+          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
           skills={ctx.skills}
         />
         <AssistantChangedFilesSection
@@ -1131,7 +1133,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                 <TooltipTrigger
                   render={<p className="text-muted-foreground text-xs tabular-nums" />}
                 >
-                  {formatShortTimestamp(row.message.updatedAt, ctx.timestampFormat)}
+                  {formatDayAwareTimestamp(row.message.updatedAt, ctx.timestampFormat)}
                 </TooltipTrigger>
                 <TooltipPopup>
                   {formatChatTimestampTooltip(row.message.updatedAt, ctx.timestampFormat)}
@@ -1702,6 +1704,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             skills={props.skills}
             className="text-message-foreground"
             lineBreaks
+            parseRawHtml={false}
           />
         ) : null}
         {trailingWhitespace ? <span aria-hidden="true">{trailingWhitespace}</span> : null}
@@ -1724,6 +1727,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                   skills={props.skills}
                   className="text-message-foreground"
                   lineBreaks
+                  parseRawHtml={false}
                 />
               </div>
             ) : null
@@ -1812,6 +1816,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           skills={props.skills}
           className="text-message-foreground"
           lineBreaks
+          parseRawHtml={false}
         />,
       );
     } else if (inlinePrefix.length === 0) {
@@ -1837,6 +1842,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       skills={props.skills}
       className="text-message-foreground"
       lineBreaks
+      parseRawHtml={false}
     />
   );
 });
@@ -2030,6 +2036,14 @@ function workEntryPreview(
     ? displayPath
     : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
 }
+
+// Upstream #4083 also added `workEntryRawCommand` / `buildToolCallExpandedBody`
+// here to build an inline expanded body for a work-entry row. Not carried,
+// for the same reason `stopRowToggle` is not: this fork opens that detail in
+// a modal instead, so both helpers would be unused. The class below is kept
+// because it is upstream's code-font sizing (#6510) and its tests import it.
+export const toolCallExpandedBodyClassName =
+  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (

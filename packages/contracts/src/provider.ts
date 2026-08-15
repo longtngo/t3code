@@ -71,6 +71,7 @@ export const ProviderSessionStartInput = Schema.Struct({
    * sibling repositories without a per-directory approval prompt.
    */
   workspaceMemberPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   // Fork directive: start this session by forking another thread's agent
