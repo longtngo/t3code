@@ -251,43 +251,64 @@ export function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 /**
+ * Ignore a second press landing this soon after the first. At this range it is a reflexive
+ * double-click on a button that appeared to do nothing, not a decision to force-kill a session —
+ * and the armed styling has not been on screen long enough for anyone to have read it.
+ */
+export const STOP_ESCALATION_MIN_MS = 500;
+
+/**
+ * How long the arming survives. Past this the wedge the escalation belonged to is stale: a press
+ * now and a press ten minutes from now must not be the same gesture.
+ */
+export const STOP_ESCALATION_WINDOW_MS = 10_000;
+
+/**
  * Decide what a Stop-button press should dispatch. The first press for a thread sends a
  * cooperative `thread.turn.interrupt`; a deliberate second press (while that interrupt is still
  * pending escalation) goes straight to a hard `thread.session.stop`, which force-kills a turn
  * wedged inside a tool — the case the server's stall watchdog is structurally blind to, because
  * it abstains whenever the open-tool set is non-empty.
+ *
+ * Escalation is valid only inside a BAND, not merely "second press ever":
+ *
+ *   |<- ignore ->|<---------- hardStop ----------->|<- interrupt (stale, re-arms) ->
+ *   0          500ms                              10s
+ *
+ * The ceiling alone would be a downgrade. Expiring the arming after a few seconds makes two
+ * presses in quick succession the *only* way to reach the force-stop — which is precisely the
+ * reflexive double-click that fires it by accident. The floor is what keeps the destructive rung
+ * behind a deliberate act; the ceiling is what stops it going stale. Neither works alone.
+ *
+ * Deciding from a TIMESTAMP rather than a countdown is what makes this correct without depending
+ * on a timer having fired: a backgrounded tab throttles timers, and the arming must still have
+ * expired when the user comes back. The timer in the component only reverts the button's
+ * appearance.
  */
-export type StopAction = "interrupt" | "hardStop";
+export type StopAction = "interrupt" | "hardStop" | "ignore";
+
+export interface ArmedStopEscalation {
+  readonly threadId: string;
+  readonly atMs: number;
+}
 
 export function nextStopAction(input: {
   readonly threadId: string;
-  readonly alreadyEscalatedThreadId: string | null;
+  readonly armed: ArmedStopEscalation | null;
+  readonly nowMs: number;
 }): StopAction {
-  return input.alreadyEscalatedThreadId === input.threadId ? "hardStop" : "interrupt";
-}
-
-/**
- * After the cooperative-interrupt grace elapses, escalate to a hard stop only when the escalation
- * still belongs to this thread AND its turn is still running (an honoured interrupt would have
- * settled it).
- *
- * A turn parked on a pending user-input/approval request is waiting on the human, NOT wedged —
- * never auto-escalate it into a session-killing hard stop (that stranded the answer with "No
- * active provider session…"). This mirrors the server stall watchdog, which already abstains on
- * these flags. A deliberate second Stop press still force-stops (see `nextStopAction`), so a
- * genuinely wedged turn whose flag is stuck true remains killable.
- *
- * This timed path is the CONSERVATIVE half of the ladder: unlike the explicit second press, it
- * never asks the watchdog to resume afterwards.
- */
-export function shouldHardStopAfterGrace(input: {
-  readonly threadId: string;
-  readonly escalatedThreadId: string | null;
-  readonly latestTurnSettled: boolean;
-  readonly hasPendingInput?: boolean;
-}): boolean {
-  if (input.hasPendingInput === true) return false;
-  return input.escalatedThreadId === input.threadId && !input.latestTurnSettled;
+  const armed = input.armed;
+  if (armed === null || armed.threadId !== input.threadId) {
+    return "interrupt";
+  }
+  const elapsedMs = input.nowMs - armed.atMs;
+  // A backwards clock jump makes the arming untrustworthy. Fall back to the cooperative press,
+  // which both fails safe and keeps the button working — treating it as "ignore" would wedge
+  // Stop entirely until the clock caught up.
+  if (elapsedMs < 0 || elapsedMs > STOP_ESCALATION_WINDOW_MS) {
+    return "interrupt";
+  }
+  return elapsedMs < STOP_ESCALATION_MIN_MS ? "ignore" : "hardStop";
 }
 
 export function resolveSendEnvMode(input: {

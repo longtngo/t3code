@@ -35,7 +35,8 @@ import {
   shouldShowComposerIntentBanner,
   shouldWriteThreadErrorToCurrentServerThread,
   nextStopAction,
-  shouldHardStopAfterGrace,
+  STOP_ESCALATION_MIN_MS,
+  STOP_ESCALATION_WINDOW_MS,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -821,51 +822,103 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, hasActiveThread: false })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isSendBusy: true })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isConnecting: true })).toBe(true);
-    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(
+      true,
+    );
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, sendInFlight: true })).toBe(true);
   });
 });
 
 describe("nextStopAction", () => {
+  const ARMED_AT = 1_000_000;
+
   it("sends a cooperative interrupt on the first press", () => {
-    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: null })).toBe("interrupt");
+    expect(nextStopAction({ threadId: "t1", armed: null, nowMs: ARMED_AT })).toBe("interrupt");
   });
 
-  it("force-stops on a second press for the same thread", () => {
-    expect(nextStopAction({ threadId: "t1", alreadyEscalatedThreadId: "t1" })).toBe("hardStop");
+  it("force-stops on a deliberate second press inside the band", () => {
+    expect(
+      nextStopAction({
+        threadId: "t1",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT + 2_000,
+      }),
+    ).toBe("hardStop");
   });
 
   it("does not carry escalation across threads", () => {
     // Escalation is a judgement about ONE wedged turn. Pressing Stop on thread
     // A must not make the first press on thread B destructive.
-    expect(nextStopAction({ threadId: "t2", alreadyEscalatedThreadId: "t1" })).toBe("interrupt");
+    expect(
+      nextStopAction({
+        threadId: "t2",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT + 2_000,
+      }),
+    ).toBe("interrupt");
+  });
+
+  it("ignores a reflexive double-click rather than force-stopping on it", () => {
+    // The floor's whole purpose. At this range the user is hammering a button
+    // that appeared to do nothing; the armed styling has not even been on
+    // screen long enough to read.
+    expect(
+      nextStopAction({
+        threadId: "t1",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT + 120,
+      }),
+    ).toBe("ignore");
+  });
+
+  it("expires the arming, so a much later press is cooperative again", () => {
+    // Without the ceiling, a Stop pressed once and left alone makes an
+    // unrelated press ten minutes later destructive.
+    expect(
+      nextStopAction({
+        threadId: "t1",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT + 600_000,
+      }),
+    ).toBe("interrupt");
+  });
+
+  it("holds the band exactly at both edges", () => {
+    // Pinning the boundaries, because an off-by-one here either resurrects the
+    // reflex case or clips the deliberate one.
+    const at = (offset: number) =>
+      nextStopAction({
+        threadId: "t1",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT + offset,
+      });
+    expect(at(STOP_ESCALATION_MIN_MS - 1)).toBe("ignore");
+    expect(at(STOP_ESCALATION_MIN_MS)).toBe("hardStop");
+    expect(at(STOP_ESCALATION_WINDOW_MS)).toBe("hardStop");
+    expect(at(STOP_ESCALATION_WINDOW_MS + 1)).toBe("interrupt");
+  });
+
+  it("falls back to the cooperative press when the clock jumps backwards", () => {
+    // Fail safe, but still USABLE: treating a negative elapsed as "ignore" would
+    // wedge Stop entirely until the clock caught up.
+    expect(
+      nextStopAction({
+        threadId: "t1",
+        armed: { threadId: "t1", atMs: ARMED_AT },
+        nowMs: ARMED_AT - 60_000,
+      }),
+    ).toBe("interrupt");
   });
 });
 
-describe("shouldHardStopAfterGrace", () => {
-  const base = { threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false };
-
-  it("escalates when the interrupt went unhonoured and the turn is still running", () => {
-    expect(shouldHardStopAfterGrace(base)).toBe(true);
-  });
-
-  it("does not escalate once the turn has settled", () => {
-    // An honoured interrupt settles the turn; escalating then would kill a
-    // session that already did what was asked.
-    expect(shouldHardStopAfterGrace({ ...base, latestTurnSettled: true })).toBe(false);
-  });
-
-  it("does not escalate a turn parked on a pending question", () => {
-    // The carve-out that matters: a turn waiting on a HUMAN is not wedged.
-    // Auto-escalating one stranded the answer with "No active provider session".
-    expect(shouldHardStopAfterGrace({ ...base, hasPendingInput: true })).toBe(false);
-  });
-
-  it("does not escalate a thread that never armed escalation", () => {
-    expect(shouldHardStopAfterGrace({ ...base, escalatedThreadId: null })).toBe(false);
-  });
-
-  it("does not escalate a different thread", () => {
-    expect(shouldHardStopAfterGrace({ ...base, escalatedThreadId: "other" })).toBe(false);
-  });
-});
+/*
+ * `shouldHardStopAfterGrace` and its five tests were DELETED here, not lost.
+ *
+ * It said the arming RIPENS into an automatic hard stop once a grace period
+ * elapses. `nextStopAction` now says the arming EXPIRES after one. Those are
+ * opposite semantics over the same state, and it had no production caller — it
+ * was tested, dormant code that would have misled whoever wired it next.
+ *
+ * If timed auto-escalation is ever wanted again it has to be redesigned against
+ * the decay band above, not restored from git.
+ */

@@ -319,6 +319,8 @@ import {
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
   nextStopAction,
+  type ArmedStopEscalation,
+  STOP_ESCALATION_WINDOW_MS,
   canQueueOfflineTurn,
   offlineQueueRefusalReason,
   collectUserMessageBlobPreviewUrls,
@@ -1320,13 +1322,41 @@ function ChatViewContent(props: ChatViewProps) {
    * Cleared when the turn settles or the route thread changes, so escalation is
    * scoped to one wedge. Without that, a Stop pressed once today would make
    * tomorrow's first press destructive.
+   *
+   * It also carries WHEN it was armed, because `nextStopAction` decides from
+   * that timestamp rather than from a countdown. The timer below is only there
+   * to revert the button's appearance; correctness must not depend on it having
+   * fired, since a backgrounded tab throttles timers and the arming still has to
+   * be expired when the user comes back to it.
    */
-  const escalatedStopThreadIdRef = useRef<string | null>(null);
+  const escalatedStopThreadIdRef = useRef<ArmedStopEscalation | null>(null);
   const [escalatedStopThreadId, setEscalatedStopThreadId] = useState<string | null>(null);
+  const stopEscalationDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const armStopEscalation = useCallback((threadId: string | null) => {
-    escalatedStopThreadIdRef.current = threadId;
+    if (stopEscalationDecayRef.current !== null) {
+      clearTimeout(stopEscalationDecayRef.current);
+      stopEscalationDecayRef.current = null;
+    }
+    escalatedStopThreadIdRef.current = threadId === null ? null : { threadId, atMs: Date.now() };
     setEscalatedStopThreadId(threadId);
+    if (threadId !== null) {
+      // Presentation only: drop the armed styling once the window lapses, so the
+      // button stops advertising a rung the next press would no longer take.
+      stopEscalationDecayRef.current = setTimeout(() => {
+        stopEscalationDecayRef.current = null;
+        escalatedStopThreadIdRef.current = null;
+        setEscalatedStopThreadId(null);
+      }, STOP_ESCALATION_WINDOW_MS);
+    }
   }, []);
+  useEffect(
+    () => () => {
+      if (stopEscalationDecayRef.current !== null) {
+        clearTimeout(stopEscalationDecayRef.current);
+      }
+    },
+    [],
+  );
 
   const loadEarlierTurns = useMemo(() => {
     if (routeKind !== "server" || !threadHasOlderTurns(routeThreadState)) {
@@ -1339,7 +1369,6 @@ function ChatViewContent(props: ChatViewProps) {
       },
     };
   }, [routeKind, routeThreadRef, routeThreadState]);
-
 
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const settings = useEnvironmentSettings(environmentId);
@@ -5770,8 +5799,15 @@ function ChatViewContent(props: ChatViewProps) {
     const threadId = activeThread.id;
     const action = nextStopAction({
       threadId,
-      alreadyEscalatedThreadId: escalatedStopThreadIdRef.current,
+      armed: escalatedStopThreadIdRef.current,
+      nowMs: Date.now(),
     });
+
+    if (action === "ignore") {
+      // Too soon after the first press to be a decision. Leave the arming alone
+      // so the deliberate press a moment later still escalates.
+      return;
+    }
 
     if (action === "hardStop") {
       armStopEscalation(null);
@@ -5809,7 +5845,8 @@ function ChatViewContent(props: ChatViewProps) {
    * render rather than stored so a thread switch cannot carry an armed state
    * across — the same thread-keying `nextStopAction` relies on.
    */
-  const isStopEscalated = escalatedStopThreadId !== null && escalatedStopThreadId === activeThread?.id;
+  const isStopEscalated =
+    escalatedStopThreadId !== null && escalatedStopThreadId === activeThread?.id;
 
   /**
    * Declining a pending question is a cooperative interrupt that must NEVER arm
@@ -6924,7 +6961,7 @@ function ChatViewContent(props: ChatViewProps) {
                             onSend={onSend}
                             onInterrupt={onInterrupt}
                             isStopEscalated={isStopEscalated}
-                onCancelQuestion={onCancelQuestion}
+                            onCancelQuestion={onCancelQuestion}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={
