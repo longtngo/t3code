@@ -1,5 +1,5 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, XIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -187,6 +187,49 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </Button>
           )
         ) : null}
+        {/*
+          Decline the question instead of being forced to answer it. Without
+          this the pending row can offer no exit at all: Stop only renders while
+          a turn is running, and Previous only past the first question.
+
+          Wired to the same cooperative `onInterrupt` as Stop, which the adapter
+          turns into a clean settle of the pending request (it registers an
+          `abort` listener on the AskUserQuestion the moment it is created), and
+          which does NOT kill the provider session — session teardown is a
+          separate `thread.session.stop` command.
+
+          TRIPWIRE: an earlier version of this button had its own
+          `onCancelQuestion` prop for exactly one reason — never arming the
+          hard-stop escalation, after cancelling was found to kill the provider
+          session (fixed in f4af9398e). That escalation no longer exists on this
+          path, which is why the prop is gone. If Stop ever regains escalating
+          behaviour, this MUST split back onto its own non-escalating path.
+        */}
+        {compact ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="rounded-full"
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            disabled={pendingAction.isResponding}
+            aria-label="Cancel question"
+          >
+            <XIcon className="size-3.5" />
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="rounded-full"
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            disabled={pendingAction.isResponding}
+            aria-label="Cancel question"
+          >
+            Cancel
+          </Button>
+        )}
         <Button
           type="submit"
           size="sm"

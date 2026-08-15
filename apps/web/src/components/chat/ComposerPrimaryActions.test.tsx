@@ -255,3 +255,71 @@ describe("ComposerPrimaryActions", () => {
   // running", "leaves Send usable while running so a follow-up can be queued")
   // are the fork's coverage of the same ground.
 });
+
+describe("ComposerPrimaryActions cancel question", () => {
+  // Parameterised so a fixture cannot accidentally hide the control behind the
+  // same flag that hides Stop.
+  function renderPending(options: { isRunning: boolean; isResponding?: boolean; compact?: boolean }) {
+    return renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        compact: options.compact ?? true,
+        pendingAction: {
+          questionIndex: 0,
+          isLastQuestion: true,
+          canAdvance: true,
+          isResponding: options.isResponding ?? false,
+          isComplete: true,
+        },
+        isRunning: options.isRunning,
+        showPlanFollowUpPrompt: false,
+        promptHasText: false,
+        isSendBusy: false,
+        sendDisabledReason: null,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isSendBlocked: false,
+        isPreparingWorktree: false,
+        hasSendableContent: false,
+        onPreviousPendingQuestion: () => {},
+        onInterrupt: () => {},
+        onImplementPlanInNewThread: () => {},
+      }),
+    );
+  }
+
+  it("offers a way to decline a pending question", () => {
+    expect(renderPending({ isRunning: true })).toContain('aria-label="Cancel question"');
+  });
+
+  it("offers it even when no turn is running, where Stop is absent", () => {
+    // The regression this restores left a pending question with NO exit in this
+    // state: Stop only renders while running, Previous only past question one.
+    const markup = renderPending({ isRunning: false });
+    expect(markup).toContain('aria-label="Cancel question"');
+    expect(markup).not.toContain('aria-label="Stop generation"');
+  });
+
+  it("disables it while an answer is being submitted", () => {
+    // Matches Previous/Submit: a decline racing an in-flight submit is the one
+    // way this button could do something the user did not intend.
+    const openingTag = (markup: string) => {
+      const upToLabel = markup.slice(0, markup.indexOf('aria-label="Cancel question"'));
+      return upToLabel.slice(upToLabel.lastIndexOf("<button"));
+    };
+    // `disabled=""` (the rendered ATTRIBUTE), not the substring "disabled":
+    // the Button's class list carries Tailwind variants like
+    // `disabled:opacity-64`, so a substring check matches unconditionally and
+    // passes whatever the component does. Both halves of this test did exactly
+    // that before the negative case exposed it.
+    expect(openingTag(renderPending({ isRunning: true, isResponding: true }))).toContain(
+      'disabled=""',
+    );
+    expect(openingTag(renderPending({ isRunning: true, isResponding: false }))).not.toContain(
+      'disabled=""',
+    );
+  });
+
+  it("reads as a labelled action rather than a bare icon when not compact", () => {
+    expect(renderPending({ isRunning: true, compact: false })).toContain("Cancel");
+  });
+});
