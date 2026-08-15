@@ -429,6 +429,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  isStopEscalated: boolean;
   onCancelQuestion: () => void;
   onImplementPlanInNewThread: () => void;
 }) {
@@ -460,6 +461,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
+        isStopEscalated={props.isStopEscalated}
         onCancelQuestion={props.onCancelQuestion}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
@@ -592,6 +594,12 @@ export interface ChatComposerProps {
   composerElementContextsRef: React.RefObject<ElementContextDraft[]>;
   composerRef: React.RefObject<ChatComposerHandle | null>;
 
+  /**
+   * The Stop control's ladder is armed for this thread: its next press is a
+   * force-stop, so it renders as a visibly different, destructive action.
+   */
+  isStopEscalated: boolean;
+
   // Callbacks
   onSend: (e?: { preventDefault: () => void }) => void;
   onInterrupt: () => void;
@@ -676,6 +684,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerImagesRef,
     composerTerminalContextsRef,
     composerElementContextsRef,
+    isStopEscalated,
     onSend,
     onInterrupt,
     onCancelQuestion,
@@ -2980,6 +2989,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       preserveComposerFocusOnPointerDown
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                       onInterrupt={handleInterruptPrimaryAction}
+                      isStopEscalated={isStopEscalated}
                   onCancelQuestion={handleCancelQuestionPrimaryAction}
                       onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     />
@@ -3316,6 +3326,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     preserveComposerFocusOnPointerDown
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
+                    isStopEscalated={isStopEscalated}
                   onCancelQuestion={handleCancelQuestionPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                   />
@@ -3445,6 +3456,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}
+                  isStopEscalated={isStopEscalated}
                   onCancelQuestion={handleCancelQuestionPrimaryAction}
                   onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                 />

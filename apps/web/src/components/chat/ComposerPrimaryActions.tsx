@@ -1,5 +1,5 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, OctagonXIcon, XIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -35,6 +35,14 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /**
+   * The ladder is armed: `onInterrupt`'s next call force-stops the session and
+   * asks the watchdog to resume the thread. Renders the second rung as a
+   * visibly different, destructive control so the escalation is neither
+   * undiscoverable nor triggerable by an impatient double-click that the user
+   * thinks is just "stop again".
+   */
+  isStopEscalated: boolean;
   /**
    * Dedicated cooperative decline for a pending question — never arms the Stop
    * escalation ladder. Distinct from `onInterrupt`, which is the ladder's entry
@@ -82,6 +90,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
+  isStopEscalated,
   onCancelQuestion,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
@@ -94,24 +103,48 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     environmentIdentificationMode === "artwork",
   );
 
+  /**
+   * Both rungs of the Stop ladder render from here, so the armed styling cannot
+   * be applied to one entry point and forgotten on the other — the pending
+   * question row has its own Stop.
+   *
+   * The armed rung is distinguished by SHAPE (a stop-sign octagon) rather than
+   * colour alone: at 32px a fill-opacity shift does not read, and the button is
+   * already destructive-red at rest, so there is no colour headroom. The ring
+   * carries it at a glance. Deliberately static — a pulsing "armed" indicator
+   * is exactly the continuously repainting animation this repo bans.
+   */
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <button
       type="button"
       className={cn(
-        "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
+        "flex cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
         // Standalone Stop sits beside Send while running, so it must match Send's
         // footprint exactly (`h-9 w-9 sm:h-8 sm:w-8`). Sizing it `size-8` made it
         // 32px against Send's 36px below `sm` — a visible mismatch on a phone, on
         // the very change whose point is that the row stops moving.
         insidePendingAction ? "size-8 sm:size-7" : "h-9 w-9 sm:h-8 sm:w-8",
+        isStopEscalated
+          ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
+          : "bg-destructive/90",
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
-      aria-label="Stop generation"
+      data-stop-escalated={isStopEscalated ? "true" : "false"}
+      aria-label={isStopEscalated ? "Force stop the session" : "Stop generation"}
+      title={
+        isStopEscalated
+          ? "The cooperative stop was not honoured — this press force-stops the session and recovers the thread"
+          : undefined
+      }
     >
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-        <rect x="2" y="2" width="8" height="8" rx="1.5" />
-      </svg>
+      {isStopEscalated ? (
+        <OctagonXIcon className="size-4" aria-hidden="true" />
+      ) : (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="2" width="8" height="8" rx="1.5" />
+        </svg>
+      )}
     </button>
   );
 

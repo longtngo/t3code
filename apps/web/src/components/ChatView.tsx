@@ -1307,14 +1307,26 @@ function ChatViewContent(props: ChatViewProps) {
   );
   /**
    * Which thread has an unhonoured cooperative interrupt outstanding — i.e.
-   * whose NEXT Stop press should force-stop. A ref, not state: nothing renders
-   * from it, and re-rendering the whole chat on a Stop press is not worth it.
+   * whose NEXT Stop press should force-stop.
+   *
+   * Held twice on purpose. The ref is what `onInterrupt` READS, because the
+   * gesture this ladder serves is an impatient double-click and a ref is
+   * current within the first click's handler; a state read would only see the
+   * arming if React happened to re-render between the two clicks. The state is
+   * write-only here, existing so the Stop button can render the armed rung
+   * differently. Write both through `armStopEscalation` and nowhere else — two
+   * writers is how a mirror drifts out of step.
    *
    * Cleared when the turn settles or the route thread changes, so escalation is
    * scoped to one wedge. Without that, a Stop pressed once today would make
    * tomorrow's first press destructive.
    */
   const escalatedStopThreadIdRef = useRef<string | null>(null);
+  const [escalatedStopThreadId, setEscalatedStopThreadId] = useState<string | null>(null);
+  const armStopEscalation = useCallback((threadId: string | null) => {
+    escalatedStopThreadIdRef.current = threadId;
+    setEscalatedStopThreadId(threadId);
+  }, []);
 
   const loadEarlierTurns = useMemo(() => {
     if (routeKind !== "server" || !threadHasOlderTurns(routeThreadState)) {
@@ -1571,9 +1583,9 @@ function ChatViewContent(props: ChatViewProps) {
     // Settled turn or a different thread ⇒ the wedge this escalation belonged
     // to is over. Re-arm from scratch.
     if (activeSessionStatus !== "running") {
-      escalatedStopThreadIdRef.current = null;
+      armStopEscalation(null);
     }
-  }, [activeSessionStatus, routeThreadRef.threadId]);
+  }, [activeSessionStatus, armStopEscalation, routeThreadRef.threadId]);
 
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
@@ -5762,7 +5774,7 @@ function ChatViewContent(props: ChatViewProps) {
     });
 
     if (action === "hardStop") {
-      escalatedStopThreadIdRef.current = null;
+      armStopEscalation(null);
       const stopResult = await stopThreadSessionCommand({
         environmentId,
         input: { threadId, recoverAfterStop: true },
@@ -5777,13 +5789,13 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
-    escalatedStopThreadIdRef.current = threadId;
+    armStopEscalation(threadId);
     const result = await interruptThreadTurn({
       environmentId,
       input: buildThreadTurnInterruptInput(activeThread),
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      escalatedStopThreadIdRef.current = null;
+      armStopEscalation(null);
       const error = squashAtomCommandFailure(result);
       setThreadError(
         threadId,
@@ -5791,6 +5803,13 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   };
+
+  /**
+   * Whether the Stop button is currently showing its SECOND rung. Derived per
+   * render rather than stored so a thread switch cannot carry an armed state
+   * across — the same thread-keying `nextStopAction` relies on.
+   */
+  const isStopEscalated = escalatedStopThreadId !== null && escalatedStopThreadId === activeThread?.id;
 
   /**
    * Declining a pending question is a cooperative interrupt that must NEVER arm
@@ -6904,6 +6923,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
                             onInterrupt={onInterrupt}
+                            isStopEscalated={isStopEscalated}
                 onCancelQuestion={onCancelQuestion}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}

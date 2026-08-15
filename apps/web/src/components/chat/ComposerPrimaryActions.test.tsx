@@ -17,7 +17,7 @@ vi.mock("../SidebarStageBackdrop", () => ({
 
 import { ComposerPrimaryActions, formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
 
-function renderPendingActions(isRunning: boolean) {
+function renderPendingActions(isRunning: boolean, isStopEscalated = false) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -38,6 +38,7 @@ function renderPendingActions(isRunning: boolean) {
       isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: false,
+      isStopEscalated,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onCancelQuestion: () => {},
@@ -49,7 +50,7 @@ function renderPendingActions(isRunning: boolean) {
 // `hasSendableContent` is parameterised deliberately. Send's `disabled` already
 // includes `!hasSendableContent`, so a fixture hardcoding `false` makes every
 // enabled/disabled assertion pass no matter what the running branch does.
-function renderRunning(options?: { hasSendableContent?: boolean }) {
+function renderRunning(options?: { hasSendableContent?: boolean; isStopEscalated?: boolean }) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -64,6 +65,7 @@ function renderRunning(options?: { hasSendableContent?: boolean }) {
       isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: options?.hasSendableContent ?? false,
+      isStopEscalated: options?.isStopEscalated ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onCancelQuestion: () => {},
@@ -91,6 +93,7 @@ function renderSendButton() {
       isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: true,
+      isStopEscalated: false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onCancelQuestion: () => {},
@@ -283,6 +286,7 @@ describe("ComposerPrimaryActions cancel question", () => {
         isSendBlocked: false,
         isPreparingWorktree: false,
         hasSendableContent: false,
+        isStopEscalated: false,
         onPreviousPendingQuestion: () => {},
         onInterrupt: () => {},
         onCancelQuestion: () => {},
@@ -328,6 +332,51 @@ describe("ComposerPrimaryActions cancel question", () => {
   });
 });
 
+describe("the escalated Stop rung is visually distinct", () => {
+  // Asserted on `data-stop-escalated`, never on a class substring. The class
+  // list is full of Tailwind variant prefixes, and a `toContain("destructive")`
+  // matches the UNARMED button too (it is destructive-red at rest) — the same
+  // shape of false pass that `toContain("disabled")` produced above.
+
+  it("marks the armed rung and leaves the first press unmarked", () => {
+    expect(renderRunning({ isStopEscalated: true })).toContain('data-stop-escalated="true"');
+    expect(renderRunning({ isStopEscalated: false })).toContain('data-stop-escalated="false"');
+  });
+
+  it("renames the action so a screen reader hears a different button", () => {
+    // The label is the accessible half of the distinction: the ring and the
+    // octagon are invisible to anyone not looking at the pixels.
+    const armed = renderRunning({ isStopEscalated: true });
+    expect(armed).toContain('aria-label="Force stop the session"');
+    expect(armed).not.toContain('aria-label="Stop generation"');
+  });
+
+  it("gives the armed rung a halo the unarmed one does not have", () => {
+    expect(renderRunning({ isStopEscalated: true })).toContain("ring-2 ring-destructive/40");
+    expect(renderRunning({ isStopEscalated: false })).not.toContain("ring-2 ring-destructive/40");
+  });
+
+  it("explains what the press will do on hover", () => {
+    expect(renderRunning({ isStopEscalated: true })).toContain("force-stops the session");
+    expect(renderRunning({ isStopEscalated: false })).not.toContain("force-stops the session");
+  });
+
+  it("marks the pending-question row's Stop too, which is a second entry to the same ladder", () => {
+    // Both rungs render from `renderStopGenerationButton`, so this is the test
+    // that fails if someone re-inlines one of the two call sites.
+    expect(renderPendingActions(true, true)).toContain('data-stop-escalated="true"');
+    expect(renderPendingActions(true, false)).toContain('data-stop-escalated="false"');
+  });
+
+  it("does not mark Cancel, which never arms the ladder", () => {
+    // Cancel is a Button, not the Stop button — it must carry no escalation
+    // marking however the ladder is armed.
+    const markup = renderPendingActions(true, true);
+    const cancelTag = markup.slice(0, markup.indexOf('aria-label="Cancel question"'));
+    expect(cancelTag.slice(cancelTag.lastIndexOf("<button"))).not.toContain("data-stop-escalated");
+  });
+});
+
 describe("Cancel is not the Stop ladder", () => {
   // The tripwire this locks down: Cancel used to share `onInterrupt`, which is
   // now the escalation ladder's entry point. Sharing it again would mean a
@@ -355,6 +404,7 @@ describe("Cancel is not the Stop ladder", () => {
         isSendBlocked: false,
         isPreparingWorktree: false,
         hasSendableContent: false,
+        isStopEscalated: false,
         onPreviousPendingQuestion: () => {},
         onInterrupt: () => calls.push("interrupt"),
         onCancelQuestion: () => calls.push("cancel"),
