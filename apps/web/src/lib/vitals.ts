@@ -307,8 +307,11 @@ export interface WindowPace {
 /**
  * Projection = the share of the window's clock that has already elapsed
  * (`1 − timeUntilReset / windowMs`), which is where usage *would* sit if spent
- * evenly. The signed `diff` against actual usage is what the detail window shows
- * in place of a reset time.
+ * evenly. The signed `diff` against actual usage is the row's headline figure.
+ *
+ * This once replaced the reset time outright; the row now shows both, since pace
+ * ("am I burning this too fast?") and {@link formatWindowReset} ("when do I get
+ * it back?") answer different questions.
  */
 export function computeWindowPace(
   window: UsageWindowView,
