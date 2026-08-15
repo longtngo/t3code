@@ -242,6 +242,65 @@ export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
+/** The fields of a work-log entry that affect how its row renders. Structural
+ *  rather than the timeline's own entry type, which is derived in the component
+ *  module — this keeps the logic importable and unit-testable on its own. */
+interface CoalescibleWorkEntry {
+  readonly label: string;
+  readonly toolTitle?: string | null | undefined;
+  readonly tone?: string | null | undefined;
+  readonly itemType?: string | null | undefined;
+  readonly requestKind?: string | null | undefined;
+  readonly detail?: string | null | undefined;
+  readonly command?: string | null | undefined;
+  readonly rawCommand?: string | null | undefined;
+  readonly changedFiles?: readonly string[] | null | undefined;
+}
+
+/** A work-log row paired with how many consecutive identical entries it stands in for. */
+export interface CoalescedWorkLogRow<E extends CoalescibleWorkEntry> {
+  entry: E;
+  count: number;
+}
+
+/** Signature capturing everything that affects how a work-log row renders.
+ *  Two entries with the same signature are visually indistinguishable, so they
+ *  can be collapsed into one row with a count without hiding any information. */
+function workLogEntryRenderSignature(entry: CoalescibleWorkEntry): string {
+  return [
+    normalizeCompactToolLabel(entry.toolTitle ?? entry.label),
+    entry.tone ?? "",
+    entry.itemType ?? "",
+    entry.requestKind ?? "",
+    entry.detail ?? "",
+    entry.command ?? "",
+    entry.rawCommand ?? "",
+    (entry.changedFiles ?? []).join(""),
+  ].join(" ");
+}
+
+/** Collapse runs of consecutive, visually-identical work-log entries (e.g. a
+ *  burst of "Runtime warning" or "Account usage updated") into a single row
+ *  carrying a count. Non-adjacent or differing entries are left untouched, so
+ *  the collapse never hides an occurrence the timeline would otherwise show. */
+export function coalesceRepeatedWorkLogEntries<E extends CoalescibleWorkEntry>(
+  entries: ReadonlyArray<E>,
+): CoalescedWorkLogRow<E>[] {
+  const rows: CoalescedWorkLogRow<E>[] = [];
+  let lastSignature: string | undefined;
+  for (const entry of entries) {
+    const signature = workLogEntryRenderSignature(entry);
+    const last = rows.at(-1);
+    if (last && lastSignature === signature) {
+      last.count += 1;
+      continue;
+    }
+    rows.push({ entry, count: 1 });
+    lastSignature = signature;
+  }
+  return rows;
+}
+
 export function resolveAssistantMessageCopyState({
   text,
   showCopyButton,

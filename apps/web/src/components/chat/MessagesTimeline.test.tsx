@@ -888,3 +888,44 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Tool call failed"');
   });
 });
+
+describe("work log coalescing (rendered)", () => {
+  // `tone: "info"` because the tone union is info/tool/approval/error — there is
+  // no "warn". Inlined shape (no helper indirection) so the literals are
+  // contextually typed by the prop, matching the rest of this file.
+  const warning = (n: string) => ({
+    id: `entry-${n}`,
+    kind: "work" as const,
+    createdAt: "2026-03-17T19:12:28.000Z",
+    entry: {
+      id: `work-${n}`,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "Runtime warning",
+      tone: "info" as const,
+    },
+  });
+
+  it("collapses a burst behind the group toggle before coalescing is visible", () => {
+    // Documents the reachability boundary honestly. MAX_VISIBLE_WORK_LOG_ENTRIES
+    // is 1, so a burst first collapses to a tail row plus a "+N previous log
+    // entries" toggle; the ×N badge only appears once the user EXPANDS that
+    // group, and expansion is internal component state a static render cannot
+    // set. The count arithmetic itself is covered in MessagesTimeline.logic.test.ts.
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[warning("1"), warning("2"), warning("3")]}
+      />,
+    );
+    expect(markup).toContain("previous log entries");
+    expect(markup.split("Runtime warning").length - 1).toBeLessThan(3);
+  });
+
+  it("shows no count for a single occurrence", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[warning("1")]} />,
+    );
+    expect(markup).toContain("Runtime warning");
+    expect(markup).not.toContain("×1");
+  });
+});

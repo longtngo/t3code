@@ -90,6 +90,7 @@ import {
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestTurn,
+  coalesceRepeatedWorkLogEntries,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1370,10 +1371,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
         <p className="px-0.5 pb-0.5 font-medium text-secondary-label text-[11px]">{groupLabel}</p>
       )}
       <div className="space-y-px">
-        {nonEmptyEntries.map((workEntry) => (
+        {coalesceRepeatedWorkLogEntries(nonEmptyEntries).map(({ entry: workEntry, count }) => (
           <SimpleWorkEntryRow
             key={workEntry.id}
             workEntry={workEntry}
+            count={count}
             workspaceRoot={workspaceRoot}
             onOpenDetail={setDetailEntry}
           />
@@ -2198,10 +2200,12 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
 
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  /** How many consecutive identical entries this row stands in for. */
+  count: number;
   workspaceRoot: string | undefined;
   onOpenDetail: (entry: TimelineWorkEntry) => void;
 }) {
-  const { workEntry, workspaceRoot, onOpenDetail } = props;
+  const { workEntry, count, workspaceRoot, onOpenDetail } = props;
   // Before any hooks: spawn CTA rows render their own component.
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
@@ -2209,6 +2213,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   return (
     <PlainWorkEntryRow
       workEntry={workEntry}
+      count={count}
       workspaceRoot={workspaceRoot}
       onOpenDetail={onOpenDetail}
     />
@@ -2221,10 +2226,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
 // rather than stopping at the dispatcher.
 const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  count: number;
   workspaceRoot: string | undefined;
   onOpenDetail: (entry: TimelineWorkEntry) => void;
 }) {
-  const { workEntry, workspaceRoot, onOpenDetail } = props;
+  const { workEntry, count, workspaceRoot, onOpenDetail } = props;
   const activity = use(TimelineRowActivityCtx);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
@@ -2237,7 +2243,10 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       normalizeCompactToolLabel(heading).toLowerCase()
       ? null
       : rawPreview;
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  // The count rides on the heading, so it reaches the accessible name too: a
+  // row that stands for five occurrences must not announce as one.
+  const headingWithCount = count > 1 ? `${heading} \u00d7${count}` : heading;
+  const displayText = preview ? `${headingWithCount} - ${preview}` : headingWithCount;
   // A row is clickable when its detail modal would have something to show. `detailPayload` is set
   // for every tool activity, so most rows open a purpose-built (or JSON) detail view.
   const canOpenDetail = formatWorkEntryDetail(workEntry).kind !== "empty";

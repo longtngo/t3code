@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  coalesceRepeatedWorkLogEntries,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
@@ -1181,5 +1182,81 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("coalesceRepeatedWorkLogEntries", () => {
+  const entry = (over: Record<string, unknown> = {}) => ({
+    id: String(Math.random()),
+    label: "Runtime warning",
+    tone: "info",
+    ...over,
+  });
+
+  it("collapses a run of identical entries into one row with a count", () => {
+    const rows = coalesceRepeatedWorkLogEntries([entry(), entry(), entry()]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.count).toBe(3);
+  });
+
+  it("leaves a single entry with a count of 1", () => {
+    const rows = coalesceRepeatedWorkLogEntries([entry()]);
+    expect(rows.map((r) => r.count)).toEqual([1]);
+  });
+
+  it("does not collapse entries that render differently", () => {
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Runtime warning" }),
+      entry({ label: "Account usage updated" }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([1, 1]);
+  });
+
+  it("only collapses ADJACENT runs, so an interruption starts a new row", () => {
+    // The point of the feature: it hides no information. A repeat that is not
+    // consecutive is a genuinely separate occurrence in the timeline.
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "A" }),
+      entry({ label: "A" }),
+      entry({ label: "B" }),
+      entry({ label: "A" }),
+    ]);
+    expect(rows.map((r) => [r.entry.label, r.count])).toEqual([
+      ["A", 2],
+      ["B", 1],
+      ["A", 1],
+    ]);
+  });
+
+  it("keeps entries apart when only a detail differs", () => {
+    // Signature covers everything that affects rendering, so two rows that LOOK
+    // different must never be merged behind a count.
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Ran", detail: "one" }),
+      entry({ label: "Ran", detail: "two" }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([1, 1]);
+  });
+
+  it("keeps entries apart when their changed files differ", () => {
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Edit", changedFiles: ["a.ts"] }),
+      entry({ label: "Edit", changedFiles: ["b.ts"] }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([1, 1]);
+  });
+
+  it("treats a trailing 'complete' suffix as the same row", () => {
+    // normalizeCompactToolLabel strips it, so "Reading" and "Reading complete"
+    // render identically and would otherwise show as two rows.
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Reading" }),
+      entry({ label: "Reading complete" }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([2]);
+  });
+
+  it("returns nothing for no entries", () => {
+    expect(coalesceRepeatedWorkLogEntries([])).toEqual([]);
   });
 });
