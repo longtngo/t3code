@@ -248,10 +248,6 @@ export function SidebarResourceQueue({
   const wrapRef = useRef<HTMLLIElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, tick] = useReducer((n: number) => n + 1, 0);
-  // The leave timer fires long after the render that scheduled it, so it must read `pinned`
-  // through a ref rather than the value its closure captured.
-  const pinnedRef = useRef(pinned);
-  pinnedRef.current = pinned;
 
   // Un-pin whenever the panel closes, including when the footer closed it because the sibling
   // opened. Left latched, the next hover-leave would refuse to close a panel nobody pinned.
@@ -313,12 +309,18 @@ export function SidebarResourceQueue({
     onOpenChange(true);
   };
   const onLeave = () => {
-    closeTimer.current = setTimeout(() => {
-      // A pinned panel survives the pointer leaving; only a hover-opened one closes.
-      if (!pinnedRef.current) onOpenChange(false);
-    }, 160);
+    // A pinned panel survives the pointer leaving; only a hover-opened one closes.
+    // Read at the moment of leaving rather than when the timer fires: pinning
+    // requires activating the trigger, and both paths that can do so cancel a
+    // pending close first, so the value cannot go stale in between.
+    if (pinned) return;
+    closeTimer.current = setTimeout(() => onOpenChange(false), 160);
   };
   const togglePin = () => {
+    // Keyboard activation reaches this without a preceding mouseenter, so a
+    // close timer left over from an earlier mouseleave has to be cancelled here
+    // too — otherwise pinning by keyboard is undone 160ms later.
+    if (closeTimer.current) clearTimeout(closeTimer.current);
     const next = !pinned;
     setPinned(next);
     onOpenChange(next);
