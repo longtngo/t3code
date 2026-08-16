@@ -4,7 +4,7 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -167,6 +167,31 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const setFooterPanelOpen = useCallback((panel: SidebarFooterPanel, open: boolean) => {
     setOpenFooterPanel((current) => nextOpenFooterPanel({ current, panel, open }));
   }, []);
+  const footerRowRef = useRef<HTMLDivElement | null>(null);
+
+  // Escape and outside-click dismissal for whichever panel is open. This lives here rather than in
+  // each panel because the footer already owns which one is open, and both draw into the same row
+  // wrapper — so one listener and one containment test cover both, and a panel cannot ship as an
+  // overlay that has no way out. (Local models did exactly that when it stopped being an inline
+  // expansion.)
+  useEffect(() => {
+    if (openFooterPanel === null) return;
+    const dismiss = () => setOpenFooterPanel(null);
+    const onPointerDown = (event: MouseEvent) => {
+      if (footerRowRef.current && !footerRowRef.current.contains(event.target as Node)) {
+        dismiss();
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openFooterPanel]);
 
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
@@ -181,7 +206,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
           The row wraps: five controls plus the Electron update pill do not
           always fit 240px, and wrapping to a second line beats overflowing or
           shrinking the badges past legibility. */}
-      <div className="relative">
+      <div className="relative" ref={footerRowRef}>
         <SidebarMenu className="flex-row flex-wrap items-center">
           {currentFooterPage ? (
             <SidebarMenuItem className="min-w-0 flex-1">

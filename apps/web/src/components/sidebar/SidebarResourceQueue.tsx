@@ -245,7 +245,6 @@ export function SidebarResourceQueue({
   const open = isOpen;
   const { snapshot } = useResourceQueue(environmentId, open);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const wrapRef = useRef<HTMLLIElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, tick] = useReducer((n: number) => n + 1, 0);
 
@@ -268,29 +267,6 @@ export function SidebarResourceQueue({
     if (!open) return;
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [open]);
-
-  // Close on outside click / Escape while open.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
-        setPinned(false);
-        onOpenChange(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setPinned(false);
-        onOpenChange(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
   }, [open]);
 
   if (environmentId == null) return null;
@@ -343,12 +319,7 @@ export function SidebarResourceQueue({
      * already opens the panel, which names itself and says strictly more than a
      * tooltip could. The `aria-label` carries the name for screen readers.
      */
-    <SidebarMenuItem
-      ref={wrapRef}
-      className="static shrink-0"
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-    >
+    <SidebarMenuItem className="static shrink-0" onMouseEnter={onEnter} onMouseLeave={onLeave}>
       <SidebarMenuButton
         size="sm"
         className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
