@@ -148,12 +148,21 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
 
+/**
+ * Decides what the drain pass does with the next queued message.
+ *
+ * Deliberately blind to whether the thread is mid-turn. A send that lands while
+ * a turn is running is queued by the *server* — `sendTurn` pushes it onto
+ * `pendingTurns` and `drainNextPendingTurn` starts it once the active turn
+ * completes, one at a time in FIFO order. Holding the message on the device
+ * instead would only delay it and risk losing it if the app is closed before
+ * the turn ends, so connectivity and thread existence are the whole decision.
+ */
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly threadBusy: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
