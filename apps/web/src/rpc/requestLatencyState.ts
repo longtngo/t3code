@@ -34,6 +34,24 @@ const longRunningRpcAckMethods = new Set<string>([
   WS_METHODS.serverRefreshProviders,
   WS_METHODS.serverUpdateServer,
 ]);
+/**
+ * Pull request calls fan out across every configured server and shell out to
+ * the provider CLI, so 15s is a normal reading for them and warning about it is
+ * the noise this leash exists to remove.
+ *
+ * They belong here rather than in {@link untrackedRpcAckMethods} because "slow
+ * by design" and "unobservable" are different claims. Dropping the namespace
+ * from tracking altogether also hides a fetch that has genuinely wedged, which
+ * is the only case a user wants to be told about.
+ */
+const longRunningRpcAckPrefixes = ["pullRequests."];
+
+function isLongRunningRpcAck(method: string): boolean {
+  return (
+    longRunningRpcAckMethods.has(method) ||
+    longRunningRpcAckPrefixes.some((prefix) => method.startsWith(prefix))
+  );
+}
 
 const slowRpcAckRequestsAtom = Atom.make<ReadonlyArray<SlowRpcAckRequest>>([]).pipe(
   Atom.keepAlive,
@@ -49,15 +67,11 @@ function getSlowRpcAckRequestsValue(): ReadonlyArray<SlowRpcAckRequest> {
 }
 
 function shouldTrackRpcAck(method: string): boolean {
-  return (
-    !method.includes("subscribe") &&
-    !method.startsWith("pullRequests.") &&
-    !untrackedRpcAckMethods.has(method)
-  );
+  return !method.includes("subscribe") && !untrackedRpcAckMethods.has(method);
 }
 
 function rpcAckThresholdMs(method: string): number {
-  return longRunningRpcAckMethods.has(method)
+  return isLongRunningRpcAck(method)
     ? Math.max(slowRpcAckThresholdMs, LONG_RUNNING_RPC_ACK_THRESHOLD_MS)
     : slowRpcAckThresholdMs;
 }
