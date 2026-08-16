@@ -1332,7 +1332,7 @@ function ChatViewContent(props: ChatViewProps) {
   const escalatedStopThreadIdRef = useRef<ArmedStopEscalation | null>(null);
   const [escalatedStopThreadId, setEscalatedStopThreadId] = useState<string | null>(null);
   const stopEscalationDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const armStopEscalation = useCallback((threadId: string | null) => {
+  const armStopEscalation = useCallback(function arm(threadId: string | null) {
     if (stopEscalationDecayRef.current !== null) {
       clearTimeout(stopEscalationDecayRef.current);
       stopEscalationDecayRef.current = null;
@@ -1342,11 +1342,9 @@ function ChatViewContent(props: ChatViewProps) {
     if (threadId !== null) {
       // Presentation only: drop the armed styling once the window lapses, so the
       // button stops advertising a rung the next press would no longer take.
-      stopEscalationDecayRef.current = setTimeout(() => {
-        stopEscalationDecayRef.current = null;
-        escalatedStopThreadIdRef.current = null;
-        setEscalatedStopThreadId(null);
-      }, STOP_ESCALATION_WINDOW_MS);
+      // Recurses through `arm` rather than clearing the ref and state inline —
+      // the invariant above says one writer, and a timer is still a writer.
+      stopEscalationDecayRef.current = setTimeout(() => arm(null), STOP_ESCALATION_WINDOW_MS);
     }
   }, []);
   useEffect(
