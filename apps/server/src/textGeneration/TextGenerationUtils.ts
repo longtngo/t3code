@@ -70,6 +70,28 @@ function cliLabel(cliName: string): string {
 }
 
 /**
+ * Detail line for a provider CLI that exited non-zero, preferring whatever the
+ * CLI said for itself.
+ *
+ * The silent case is called out on purpose. A CLI that writes to neither stream
+ * usually died before it ran its task — its own runtime rejected the process,
+ * for instance over an inherited flag it does not implement — rather than
+ * failing at the work. A bare exit code leaves whoever reads the log nothing to
+ * search for, which is what made that failure mode expensive to diagnose.
+ */
+export function cliFailureDetail(
+  cliDisplayName: string,
+  exitCode: number,
+  stdout: string,
+  stderr: string,
+): string {
+  const detail = stderr.trim() || stdout.trim();
+  return detail.length > 0
+    ? `${cliDisplayName} CLI command failed: ${detail}`
+    : `${cliDisplayName} CLI command failed with code ${exitCode} and produced no output.`;
+}
+
+/**
  * Normalize an unknown error from a CLI text generation process into a
  * typed `TextGenerationError`. Parameterized by CLI name so both Codex
  * and Claude (and future providers) can share the same logic.
