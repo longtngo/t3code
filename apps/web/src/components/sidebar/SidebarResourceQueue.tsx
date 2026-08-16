@@ -13,6 +13,15 @@ import {
   type RowProgress,
 } from "./sidebarResourceQueue.logic";
 
+/**
+ * Links the trigger to the panel it expands. This is a disclosure, not a
+ * dialog: it opens on hover and closes on a mouse-leave timer, so the focus
+ * move, focus trap and restore-on-close that `role="dialog"` promises a screen
+ * reader would all be wrong here — you cannot trap focus in something that
+ * vanishes when the pointer drifts one button to the left.
+ */
+const RESOURCE_QUEUE_PANEL_ID = "sidebar-resource-queue-panel";
+
 const PRIORITY_BADGE: Record<string, string> = {
   interactive: "bg-rose-400/15 text-rose-300",
   normal: "bg-sky-400/15 text-sky-300",
@@ -324,8 +333,8 @@ export function SidebarResourceQueue({
         size="sm"
         className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
         onClick={togglePin}
-        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? RESOURCE_QUEUE_PANEL_ID : undefined}
         aria-label="Resource Queue"
       >
         <GaugeIcon className="size-3.5" />
@@ -343,8 +352,7 @@ export function SidebarResourceQueue({
 
       {open ? (
         <div
-          role="dialog"
-          aria-label="Resource queue"
+          id={RESOURCE_QUEUE_PANEL_ID}
           className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg"
         >
           <div className="flex items-center justify-between px-0.5 pb-2">

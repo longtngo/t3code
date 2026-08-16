@@ -111,12 +111,15 @@ describe("only one footer panel may be open", () => {
   });
 
   it("draws the Resource Queue panel only when the footer says it is open", () => {
+    // Keyed on the panel's id, not its label: the trigger's own label is
+    // "Resource Queue" and the panel's was "Resource queue", which differ by
+    // one character and would have let this pass on the wrong element.
     const open = { isOpen: true, onOpenChange: () => {} };
     expect(renderInRow(createElement(SidebarResourceQueue, open))).toContain(
-      'aria-label="Resource queue"',
+      'id="sidebar-resource-queue-panel"',
     );
     expect(renderInRow(createElement(SidebarResourceQueue, closedPanel))).not.toContain(
-      'aria-label="Resource queue"',
+      'id="sidebar-resource-queue-panel"',
     );
   });
 
@@ -163,5 +166,47 @@ describe("Resource Queue in the footer row", () => {
     const markup = renderInRow(createElement(SidebarResourceQueue, closedPanel));
     expect(markup).not.toContain('<span class="text-xs">Resource Queue</span>');
     expect(markup).toContain('aria-label="Resource Queue"');
+  });
+});
+
+describe("both footer panels are disclosures, not dialogs", () => {
+  // Each opens on hover or click and closes on a mouse-leave timer. `dialog`
+  // promises a screen reader a focus move, a focus trap and a restore on close,
+  // none of which a panel that vanishes when the pointer drifts can honour —
+  // and the honest reading of "it has no focus management" is that the role is
+  // wrong, not that a trap is missing.
+  const open = { isOpen: true, onOpenChange: () => {} };
+
+  it("does not claim a dialog role it cannot honour", () => {
+    const markup = renderInRow(createElement(SidebarResourceQueue, open));
+
+    // Paired with the positive so the absence cannot pass by the panel simply
+    // not rendering — which is exactly how this assertion would go vacuous.
+    expect(markup).toContain('id="sidebar-resource-queue-panel"');
+    expect(markup).not.toContain('role="dialog"');
+    expect(markup).not.toContain("aria-haspopup");
+  });
+
+  it.each([
+    ["Resource Queue", SidebarResourceQueue, "sidebar-resource-queue-panel"],
+    ["Local models", SidebarLocalModels, "sidebar-local-models-panel"],
+  ] as const)("points %s's trigger at the panel it expands", (_label, Component, panelId) => {
+    const markup = renderInRow(createElement(Component, open));
+
+    expect(markup).toContain(`aria-controls="${panelId}"`);
+    expect(markup).toContain(`id="${panelId}"`);
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
+  it.each([
+    ["Resource Queue", SidebarResourceQueue],
+    ["Local models", SidebarLocalModels],
+  ] as const)("drops %s's aria-controls while the panel is gone", (_label, Component) => {
+    // A reference to an id that is not in the document is invalid ARIA, and the
+    // panel only exists while open.
+    const markup = renderInRow(createElement(Component, closedPanel));
+
+    expect(markup).not.toContain("aria-controls");
+    expect(markup).toContain('aria-expanded="false"');
   });
 });

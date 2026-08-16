@@ -26,6 +26,9 @@ import { Button } from "../ui/button";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+/** Links the trigger to the panel it expands, matching its neighbour in the footer row. */
+const LOCAL_MODELS_PANEL_ID = "sidebar-local-models-panel";
+
 function rowMeta(row: SidebarRow): string {
   const parts = [row.providerName];
   if (row.contextWindow) parts.push(formatContext(row.contextWindow));
@@ -142,6 +145,7 @@ export function SidebarLocalModels({
               className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
               onClick={() => onOpenChange(!isOpen)}
               aria-expanded={isOpen}
+              aria-controls={isOpen ? LOCAL_MODELS_PANEL_ID : undefined}
               aria-label="Local models"
             >
               <CpuIcon className="size-3.5" />
@@ -159,7 +163,10 @@ export function SidebarLocalModels({
       </Tooltip>
 
       {isOpen ? (
-        <div className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg">
+        <div
+          id={LOCAL_MODELS_PANEL_ID}
+          className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg"
+        >
           {/* The row shows only an icon and a dot, so the panel carries the name. */}
           <div className="px-0.5 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Local models
