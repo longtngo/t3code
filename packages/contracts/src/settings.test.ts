@@ -67,6 +67,24 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings composer context strip", () => {
+  // Existing installs have no such key, and the strip has always been visible.
+  // Anything but `false` here would collapse it for every user on upgrade.
+  it("leaves the strip expanded for anyone who has never touched the toggle", () => {
+    expect(decodeClientSettings({}).composerContextStripCollapsed).toBe(false);
+  });
+
+  it("preserves an explicit collapse through both the settings and patch schemas", () => {
+    expect(
+      decodeClientSettings({ composerContextStripCollapsed: true }).composerContextStripCollapsed,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ composerContextStripCollapsed: true })
+        .composerContextStripCollapsed,
+    ).toBe(true);
+  });
+});
+
 describe("ClientSettings sidebar", () => {
   it("defaults to the current sidebar with automatic merge and inactivity settling", () => {
     const settings = decodeClientSettings({});

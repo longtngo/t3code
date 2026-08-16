@@ -18,6 +18,7 @@ import {
   resolvePreviousWorktreeSeed,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
+  shouldRenderComposerContextStrip,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
@@ -452,6 +453,28 @@ describe("shouldShowComposerContextStrip", () => {
         showEnvironmentIndicator: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldRenderComposerContextStrip", () => {
+  it("renders an available strip that has not been collapsed", () => {
+    expect(shouldRenderComposerContextStrip({ stripAvailable: true, collapsed: false })).toBe(true);
+  });
+
+  it("withholds the strip once it is collapsed", () => {
+    expect(shouldRenderComposerContextStrip({ stripAvailable: true, collapsed: true })).toBe(false);
+  });
+
+  // The composer shell reserves the strip's dock extension off this answer, so
+  // an expanded-but-unavailable strip would clip a notch out of the composer
+  // with nothing docked into it.
+  it("stays hidden for a thread with no strip, however the toggle is set", () => {
+    expect(shouldRenderComposerContextStrip({ stripAvailable: false, collapsed: false })).toBe(
+      false,
+    );
+    expect(shouldRenderComposerContextStrip({ stripAvailable: false, collapsed: true })).toBe(
+      false,
+    );
   });
 });
 

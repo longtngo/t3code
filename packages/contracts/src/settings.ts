@@ -187,6 +187,14 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Collapses the composer's workspace/branch context strip behind a toggle in
+  // the composer footer. Client-only on purpose: these settings live in
+  // localStorage, so the preference is already per-device and a phone can stay
+  // collapsed while a desktop stays expanded, without a viewport-dependent
+  // default or a second key.
+  composerContextStripCollapsed: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -967,6 +975,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  composerContextStripCollapsed: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),

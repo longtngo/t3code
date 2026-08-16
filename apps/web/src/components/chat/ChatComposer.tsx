@@ -92,6 +92,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
+import { ComposerContextStripToggle } from "./ComposerContextStripToggle";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -535,6 +536,13 @@ export interface ChatComposerProps {
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
+  // Context strip. `available` is whether this thread has a strip at all, not
+  // whether it is open: the toggle stays put as the strip opens and closes.
+  contextStripAvailable: boolean;
+  contextStripCollapsed: boolean;
+  contextStripWorktreeActive: boolean;
+  onToggleContextStrip: () => void;
+
   // Session phase
   phase: SessionPhase;
   isConnecting: boolean;
@@ -650,6 +658,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
+    contextStripAvailable,
+    contextStripCollapsed,
+    contextStripWorktreeActive,
+    onToggleContextStrip,
     phase,
     isConnecting,
     isSendBusy,
@@ -3425,6 +3437,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   </>
                 )}
+
+                {/* Last in the scrolling group, not in the right-hand group: that
+                    one is Stop and Send, and a secondary control sitting against
+                    Send is a mis-tap on a phone. The model picker shrinks before
+                    this does, so the toggle cannot scroll out of reach. */}
+                {contextStripAvailable ? (
+                  <ComposerContextStripToggle
+                    collapsed={contextStripCollapsed}
+                    worktreeActive={contextStripWorktreeActive}
+                    onToggle={onToggleContextStrip}
+                  />
+                ) : null}
               </div>
 
               {/* Right side: send / stop button */}

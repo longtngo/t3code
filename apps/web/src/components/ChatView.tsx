@@ -198,7 +198,9 @@ import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import {
   useClientSettings,
   useClientSettingsHydrated,
+  useComposerContextStripCollapsed,
   useEnvironmentSettings,
+  useUpdateClientSettings,
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -267,11 +269,13 @@ import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
+import { COMPOSER_CONTEXT_STRIP_ID } from "./chat/ComposerContextStripToggle";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
+  shouldRenderComposerContextStrip,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
@@ -4277,6 +4281,20 @@ function ChatViewContent(props: ChatViewProps) {
     requestedEnvMode: envMode,
     isGitRepo,
   });
+  const contextStripCollapsed = useComposerContextStripCollapsed();
+  const updateClientSettings = useUpdateClientSettings();
+  const toggleComposerContextStrip = useCallback(() => {
+    updateClientSettings({ composerContextStripCollapsed: !contextStripCollapsed });
+  }, [contextStripCollapsed, updateClientSettings]);
+  // The strip's dock extension is reserved by a class on the composer shell, so
+  // both it and the strip follow whether the strip is *rendered*. The footer
+  // toggle follows whether the strip is *available*, so it does not disappear
+  // the moment you use it.
+  const renderComposerContextStrip = shouldRenderComposerContextStrip({
+    stripAvailable: showComposerContextStrip,
+    collapsed: contextStripCollapsed,
+  });
+  const contextStripWorktreeActive = envMode === "worktree" || activeWorktreePath !== null;
   const localCheckoutBranchMismatch = useMemo(
     () =>
       isServerThread
@@ -6902,7 +6920,7 @@ function ChatViewContent(props: ChatViewProps) {
                     <div
                       className={cn(
                         "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
-                        showComposerContextStrip && "chat-composer-glass-shell-with-context",
+                        renderComposerContextStrip && "chat-composer-glass-shell-with-context",
                       )}
                     >
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
@@ -6921,6 +6939,10 @@ function ChatViewContent(props: ChatViewProps) {
                             isLocalDraftThread={isLocalDraftThread}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
+                            contextStripAvailable={showComposerContextStrip}
+                            contextStripCollapsed={contextStripCollapsed}
+                            contextStripWorktreeActive={contextStripWorktreeActive}
+                            onToggleContextStrip={toggleComposerContextStrip}
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
@@ -6989,8 +7011,13 @@ function ChatViewContent(props: ChatViewProps) {
                           data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
                           className="relative z-0"
                         >
-                          {showComposerContextStrip && (
-                            <div className="pointer-events-auto">
+                          {/* The wrapper is unconditional so the footer toggle's
+                              `aria-controls` always resolves to a real element;
+                              pointing it at an id that disappears when the strip
+                              collapses is exactly the state screen readers are
+                              being told about. */}
+                          <div className="pointer-events-auto" id={COMPOSER_CONTEXT_STRIP_ID}>
+                            {renderComposerContextStrip && (
                               <BranchToolbar
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}
@@ -7017,8 +7044,8 @@ function ChatViewContent(props: ChatViewProps) {
                                 {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                                 availableEnvironments={logicalProjectEnvironments}
                               />
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>

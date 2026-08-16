@@ -278,6 +278,22 @@ export function useLegacySidebarEnabled(): boolean {
   return settingsHydrated && legacySidebarEnabled;
 }
 
+/**
+ * Whether the composer's workspace/branch context strip is collapsed behind its
+ * footer toggle.
+ *
+ * Held expanded until client settings hydrate, for the same reason as the
+ * sidebar above: the pre-hydration snapshot is only the schema defaults, so
+ * resolving against it would collapse the strip for everyone and then reopen it
+ * a moment later. Reading it this way means the default (expanded) never
+ * shifts, and only users who opted into collapsed see the strip resolve once.
+ */
+export function useComposerContextStripCollapsed(): boolean {
+  const settingsHydrated = useClientSettingsHydrated();
+  const collapsed = useClientSettingsValue().composerContextStripCollapsed;
+  return settingsHydrated && collapsed;
+}
+
 /** Read current settings for one environment, merged with client-local preferences. */
 export function useEnvironmentSettings<T = UnifiedSettings>(
   environmentId: EnvironmentId,
