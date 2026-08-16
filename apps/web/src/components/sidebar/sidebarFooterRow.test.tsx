@@ -53,6 +53,9 @@ function renderInRow(child: ReactNode) {
   );
 }
 
+/** Both panels are controlled by the footer now; closed is the default fixture. */
+const closedPanel = { isOpen: false, onOpenChange: () => {} };
+
 /** The opening tag of the control's own list item. */
 function itemTag(markup: string) {
   const start = markup.indexOf("<li");
@@ -66,20 +69,20 @@ beforeEach(() => {
 
 describe("Local models in the footer row", () => {
   it("is a list item, so it is valid inside the row's <ul>", () => {
-    expect(itemTag(renderInRow(createElement(SidebarLocalModels)))).toContain("<li");
+    expect(itemTag(renderInRow(createElement(SidebarLocalModels, closedPanel)))).toContain("<li");
   });
 
   it("opts out of item-relative positioning so its panel spans the footer", () => {
     // `static` is what redirects the panel's anchor to the row wrapper. Asserted
     // on the class the component actually sets, and paired with the negative so
     // a stray `relative` cannot creep back in.
-    const tag = itemTag(renderInRow(createElement(SidebarLocalModels)));
+    const tag = itemTag(renderInRow(createElement(SidebarLocalModels, closedPanel)));
     expect(tag).toContain("static");
     expect(tag).not.toMatch(/\brelative\b/);
   });
 
   it("keeps its icon and status tag in the row", () => {
-    const markup = renderInRow(createElement(SidebarLocalModels));
+    const markup = renderInRow(createElement(SidebarLocalModels, closedPanel));
     expect(markup).toContain('aria-label="Local models"');
     // The status dot — the tag that makes the control worth glancing at.
     expect(markup).toContain("size-1.5 rounded-full");
@@ -88,18 +91,52 @@ describe("Local models in the footer row", () => {
   it("does not carry its old full-width text label into the row", () => {
     // The label moved to the tooltip and the panel heading. A visible inline
     // "Local models" span in the row would mean the trigger never shrank.
-    const markup = renderInRow(createElement(SidebarLocalModels));
+    const markup = renderInRow(createElement(SidebarLocalModels, closedPanel));
     expect(markup).not.toContain('<span class="text-xs">Local models</span>');
+  });
+});
+
+describe("only one footer panel may be open", () => {
+  // The two panels anchor to the SAME row wrapper with identical absolute insets
+  // (`absolute right-0 bottom-full left-0 z-50`), so two open panels sit in one
+  // box and one paints over the other. `SidebarChromeFooter` arbitrates via
+  // `nextOpenFooterPanel`; these pin that each panel actually honours the prop.
+
+  it("draws the Local models panel only when the footer says it is open", () => {
+    const open = { isOpen: true, onOpenChange: () => {} };
+    expect(renderInRow(createElement(SidebarLocalModels, open))).toContain("No model configs yet");
+    expect(renderInRow(createElement(SidebarLocalModels, closedPanel))).not.toContain(
+      "No model configs yet",
+    );
+  });
+
+  it("draws the Resource Queue panel only when the footer says it is open", () => {
+    const open = { isOpen: true, onOpenChange: () => {} };
+    expect(renderInRow(createElement(SidebarResourceQueue, open))).toContain(
+      'aria-label="Resource queue"',
+    );
+    expect(renderInRow(createElement(SidebarResourceQueue, closedPanel))).not.toContain(
+      'aria-label="Resource queue"',
+    );
+  });
+
+  it("keeps both triggers visible while one panel is open", () => {
+    // Exclusivity is about the PANELS, not the controls. Closing the other
+    // panel must never take its trigger out of the row.
+    const markup = renderInRow(
+      createElement(SidebarResourceQueue, { isOpen: true, onOpenChange: () => {} }),
+    );
+    expect(markup).toContain('aria-label="Resource Queue"');
   });
 });
 
 describe("Resource Queue in the footer row", () => {
   it("is a list item, so it is valid inside the row's <ul>", () => {
-    expect(itemTag(renderInRow(createElement(SidebarResourceQueue)))).toContain("<li");
+    expect(itemTag(renderInRow(createElement(SidebarResourceQueue, closedPanel)))).toContain("<li");
   });
 
   it("opts out of item-relative positioning so its popover spans the footer", () => {
-    const tag = itemTag(renderInRow(createElement(SidebarResourceQueue)));
+    const tag = itemTag(renderInRow(createElement(SidebarResourceQueue, closedPanel)));
     expect(tag).toContain("static");
     expect(tag).not.toMatch(/\brelative\b/);
   });
@@ -107,23 +144,23 @@ describe("Resource Queue in the footer row", () => {
   it("shows both count tags in the row even when the broker is silent", () => {
     // Zeroes are the common case and must still render — an icon with no counts
     // says nothing, which is the whole reason these are tags and not a bare icon.
-    const markup = renderInRow(createElement(SidebarResourceQueue));
+    const markup = renderInRow(createElement(SidebarResourceQueue, closedPanel));
     expect(markup).toContain('title="running (holding a lease)"');
     expect(markup).toContain('title="waiting (queued)"');
   });
 
   it("surfaces the maintenance tag when the broker is draining", () => {
     queueState.snapshot = { maintenance: true, running: [], waiting: [], resources: [] };
-    const withMaintenance = renderInRow(createElement(SidebarResourceQueue));
+    const withMaintenance = renderInRow(createElement(SidebarResourceQueue, closedPanel));
     queueState.snapshot = { maintenance: false, running: [], waiting: [], resources: [] };
-    const without = renderInRow(createElement(SidebarResourceQueue));
+    const without = renderInRow(createElement(SidebarResourceQueue, closedPanel));
 
     expect(withMaintenance).toContain('title="broker in maintenance (draining)"');
     expect(without).not.toContain('title="broker in maintenance (draining)"');
   });
 
   it("does not carry its old full-width text label into the row", () => {
-    const markup = renderInRow(createElement(SidebarResourceQueue));
+    const markup = renderInRow(createElement(SidebarResourceQueue, closedPanel));
     expect(markup).not.toContain('<span class="text-xs">Resource Queue</span>');
     expect(markup).toContain('aria-label="Resource Queue"');
   });

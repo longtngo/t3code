@@ -4,7 +4,7 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -28,6 +28,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { nextOpenFooterPanel, type SidebarFooterPanel } from "./sidebarChrome.logic";
 import { SidebarLocalModels } from "./SidebarLocalModels";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
@@ -162,6 +163,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/" });
   }, [closeMobileSidebar, navigate]);
 
+  const [openFooterPanel, setOpenFooterPanel] = useState<SidebarFooterPanel | null>(null);
+  const setFooterPanelOpen = useCallback((panel: SidebarFooterPanel, open: boolean) => {
+    setOpenFooterPanel((current) => nextOpenFooterPanel({ current, panel, open }));
+  }, []);
+
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
@@ -239,9 +245,19 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
               once you are on one of those pages. These two are live status
               readouts — hiding them there would be a silent capability loss for
               no gain. `SidebarUpdatePill` below sits outside for the same
-              reason. */}
-          <SidebarLocalModels />
-          <SidebarResourceQueue />
+              reason.
+
+              Their open state lives here rather than in each component: both
+              panels anchor to the wrapper above with identical insets, so two
+              open panels would occupy the same box. */}
+          <SidebarLocalModels
+            isOpen={openFooterPanel === "models"}
+            onOpenChange={(open) => setFooterPanelOpen("models", open)}
+          />
+          <SidebarResourceQueue
+            isOpen={openFooterPanel === "queue"}
+            onOpenChange={(open) => setFooterPanelOpen("queue", open)}
+          />
           <SidebarUpdatePill />
         </SidebarMenu>
       </div>

@@ -96,9 +96,19 @@ function ModelRow(props: {
   );
 }
 
-export function SidebarLocalModels() {
+/**
+ * Open state is controlled by `SidebarChromeFooter` rather than held here: this panel and the
+ * Resource Queue one share a positioning context, so only one may be open at a time and the
+ * footer is what arbitrates.
+ */
+export function SidebarLocalModels({
+  isOpen,
+  onOpenChange,
+}: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const environmentId = usePrimaryEnvironmentId();
-  const [expanded, setExpanded] = useState(false);
   const [confirm, setConfirm] = useState<SidebarRow | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -130,8 +140,8 @@ export function SidebarLocalModels() {
             <SidebarMenuButton
               size="sm"
               className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-              onClick={() => setExpanded((v) => !v)}
-              aria-expanded={expanded}
+              onClick={() => onOpenChange(!isOpen)}
+              aria-expanded={isOpen}
               aria-label="Local models"
             >
               <CpuIcon className="size-3.5" />
@@ -148,7 +158,7 @@ export function SidebarLocalModels() {
         <TooltipPopup side="top">Local models</TooltipPopup>
       </Tooltip>
 
-      {expanded ? (
+      {isOpen ? (
         <div className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg">
           {/* The row shows only an icon and a dot, so the panel carries the name. */}
           <div className="px-0.5 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">

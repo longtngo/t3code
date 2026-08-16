@@ -230,16 +230,42 @@ function QueueRow({
  * background and 5s while the popover is open. The advisory RAM pool is intentionally omitted
  * (it is tracked but never reserved).
  */
-export function SidebarResourceQueue() {
+export function SidebarResourceQueue({
+  isOpen,
+  onOpenChange,
+}: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const environmentId = usePrimaryEnvironmentId();
+  // `pinned` stays local because it records WHY the panel is open — a click rather than a hover —
+  // which is the only thing that decides whether a mouse-leave should close it. Whether it is open
+  // at all is the footer's call, since the sibling panel shares this positioning context.
   const [pinned, setPinned] = useState(false);
-  const [hovering, setHovering] = useState(false);
-  const open = pinned || hovering;
+  const open = isOpen;
   const { snapshot } = useResourceQueue(environmentId, open);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const wrapRef = useRef<HTMLLIElement | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, tick] = useReducer((n: number) => n + 1, 0);
+  // The leave timer fires long after the render that scheduled it, so it must read `pinned`
+  // through a ref rather than the value its closure captured.
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+
+  // Un-pin whenever the panel closes, including when the footer closed it because the sibling
+  // opened. Left latched, the next hover-leave would refuse to close a panel nobody pinned.
+  useEffect(() => {
+    if (!open) setPinned(false);
+  }, [open]);
+
+  // Drop any in-flight close timer on unmount so it cannot fire against a dead component.
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
 
   // Re-render every second while open so the "elapsed" durations tick live between polls.
   useEffect(() => {
@@ -254,13 +280,13 @@ export function SidebarResourceQueue() {
     const onPointerDown = (event: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
         setPinned(false);
-        setHovering(false);
+        onOpenChange(false);
       }
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setPinned(false);
-        setHovering(false);
+        onOpenChange(false);
       }
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -284,16 +310,18 @@ export function SidebarResourceQueue() {
   // short close delay bridges the small gap above the trigger. Click pins it open.
   const onEnter = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    setHovering(true);
+    onOpenChange(true);
   };
   const onLeave = () => {
-    closeTimer.current = setTimeout(() => setHovering(false), 160);
+    closeTimer.current = setTimeout(() => {
+      // A pinned panel survives the pointer leaving; only a hover-opened one closes.
+      if (!pinnedRef.current) onOpenChange(false);
+    }, 160);
   };
   const togglePin = () => {
-    setPinned((prev) => {
-      if (prev) setHovering(false);
-      return !prev;
-    });
+    const next = !pinned;
+    setPinned(next);
+    onOpenChange(next);
   };
   const toggleExpand = (key: string) =>
     setExpanded((prev) => {
