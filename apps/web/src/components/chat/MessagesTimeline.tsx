@@ -2043,8 +2043,10 @@ function workEntryPreview(
 // here to build an inline expanded body for a work-entry row. Not carried,
 // for the same reason `stopRowToggle` is not: this fork opens that detail in
 // a modal instead, so both helpers would be unused. The class below is kept
-// because it is upstream's code-font sizing (#6510) and its tests import it.
-export const toolCallExpandedBodyClassName =
+// because it is upstream's code-font sizing (#6510). It used to be exported
+// for a test; upstream #7157 deleted that test as an implementation-detail
+// assertion, so it is module-local again and nothing imports it.
+const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
