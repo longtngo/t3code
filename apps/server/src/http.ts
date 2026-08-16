@@ -5,7 +5,10 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
-import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
+import {
+  WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
+  WORKSPACE_TEXT_VIEWER_EXTENSIONS,
+} from "@t3tools/shared/filePreview";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -320,19 +323,9 @@ const VIEWER_ASSET_ROUTE_PREFIX = "/viewer-asset";
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 const HTML_EXTENSIONS = new Set([".html", ".htm"]);
 // Text/code files served raw (as text/plain) so the viewer's "Open in new tab"
-// works for them too. Mirrors the client allow-list in
-// apps/web/src/lib/codeFileTypes.ts (TEXT_FILE_EXTENSIONS) — keep the two in sync.
-// Excludes .md/.html (handled above), binary/media, and .env / extension-less files.
-const TEXT_VIEWER_EXTENSIONS = new Set([
-  ".txt", ".log", ".csv", ".tsv", ".json", ".json5", ".jsonc", ".yaml", ".yml",
-  ".toml", ".ini", ".conf", ".cfg", ".properties", ".xml", ".sql", ".py", ".rb",
-  ".go", ".rs", ".java", ".kt", ".kts", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
-  ".hh", ".cs", ".php", ".swift", ".scala", ".sh", ".bash", ".zsh", ".fish", ".ps1",
-  ".lua", ".pl", ".pm", ".r", ".dart", ".ex", ".exs", ".erl", ".hs", ".clj", ".cljs",
-  ".cljc", ".edn", ".js", ".cjs", ".mjs", ".jsx", ".ts", ".cts", ".mts", ".tsx",
-  ".vue", ".svelte", ".astro", ".css", ".scss", ".sass", ".less", ".graphql", ".gql",
-  ".proto", ".gradle", ".groovy", ".tf", ".hcl", ".vim", ".diff", ".patch",
-]);
+// works for them too. Shared with the client's chip allow-list rather than
+// mirrored, so the two surfaces cannot disagree about what is openable.
+const TEXT_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_TEXT_VIEWER_EXTENSIONS);
 // Treat a rendered document as a sandboxed top-level page: an opaque origin with
 // no access to this app's cookies/storage, matching the no-same-origin iframe the
 // in-app viewer uses.

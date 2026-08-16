@@ -1,5 +1,8 @@
 import { getFiletypeFromFileName } from "@pierre/diffs";
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  isWorkspaceImagePreviewPath,
+  WORKSPACE_TEXT_VIEWER_EXTENSIONS,
+} from "@t3tools/shared/filePreview";
 
 /**
  * How the viewer should render a file. Previously lived in the fork's
@@ -19,23 +22,13 @@ export type FileViewerKind = "html" | "markdown" | "code" | "image";
  * unit test valid), and the ambiguous single-letter `.m`/`.mm` (Objective-C vs
  * MATLAB — high prose-false-positive risk).
  *
- * The server keeps a parallel `TEXT_VIEWER_EXTENSIONS` set in `apps/server/src/http.ts`
- * (the `/viewer` "open in new tab" route); keep the two roughly in sync.
+ * Derived from the shared list the server's `/viewer` route reads too, so the two
+ * cannot drift; this side drops the leading dot because it matches on the bare
+ * extension {@link extensionOf} produces.
  */
-export const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
-  // Plain text / data / config
-  "txt", "log", "csv", "tsv", "json", "json5", "jsonc", "yaml", "yml", "toml", "ini",
-  "conf", "cfg", "properties", "xml", "sql",
-  // Scripting / systems languages
-  "py", "rb", "go", "rs", "java", "kt", "kts", "c", "h", "cpp", "cc", "cxx", "hpp",
-  "hh", "cs", "php", "swift", "scala", "sh", "bash", "zsh", "fish", "ps1", "lua",
-  "pl", "pm", "r", "dart", "ex", "exs", "erl", "hs", "clj", "cljs", "cljc", "edn",
-  // JS/TS + web frameworks
-  "js", "cjs", "mjs", "jsx", "ts", "cts", "mts", "tsx", "vue", "svelte", "astro",
-  "css", "scss", "sass", "less",
-  // Schemas / build / infra / misc
-  "graphql", "gql", "proto", "gradle", "groovy", "tf", "hcl", "vim", "diff", "patch",
-]);
+export const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set(
+  WORKSPACE_TEXT_VIEWER_EXTENSIONS.map((extension) => extension.slice(1)),
+);
 
 /** Strip query/hash and trailing separators, returning the final path segment. */
 function basenameOf(path: string): string {
