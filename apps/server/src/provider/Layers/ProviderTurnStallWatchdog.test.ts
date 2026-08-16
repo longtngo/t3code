@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -448,6 +449,192 @@ describe("ProviderTurnStallWatchdog", () => {
       // The watchdog un-mutes and protects the new turn (a second stop).
       yield* waitFor(
         () => harness.dispatched.filter((c) => c.type === "thread.session.stop").length >= 2,
+      );
+    }),
+  );
+});
+
+/**
+ * The adopted force-stop path: a user presses Stop twice, the server force-stops
+ * the session with `recoverAfterStop`, and the watchdog ADOPTS that stop so its
+ * ordinary stop->resume recovery drives it.
+ *
+ * Shipped in 6dae9acb6 reasoned about but untested end to end. The premise the
+ * whole feature rests on is that the watchdog is structurally BLIND to a turn
+ * wedged inside a tool — `shouldTrip` abstains whenever the open-tool set is
+ * non-empty — so a human is the only sensor for exactly this case. The first
+ * test pins that blindness, then the adoption, in one flow; asserting the resume
+ * without first proving the watchdog would not have got there on its own would
+ * be asserting nothing.
+ */
+describe("ProviderTurnStallWatchdog adopted force-stop", () => {
+  // Long silent, but a tool is still open: the wedged-inside-a-tool case.
+  function wedgedInToolEntry(threadId: ThreadId, turnId: TurnId, nowMs: number) {
+    return staleEntry(threadId, turnId, nowMs, {
+      openToolItemIds: new Set<string>(["tool-item-1"]),
+    });
+  }
+
+  /** What the stop reactor does, mirroring the harness's own `thread.session.stop` branch. */
+  function applyForceStop(
+    shells: Map<ThreadId, ReturnType<typeof makeShell>>,
+    activity: Map<ThreadId, TurnActivitySnapshot>,
+    threadId: ThreadId,
+  ) {
+    const shell = shells.get(threadId);
+    if (shell) {
+      shells.set(threadId, {
+        ...shell,
+        session: { ...shell.session, status: "stopped", activeTurnId: null },
+      });
+    }
+    activity.delete(threadId);
+  }
+
+  it.live("resumes a tool-wedged turn it would never have tripped on itself", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-adopt-happy");
+      const turnId = TurnId.make("turn-adopt-happy");
+      const nowMs = yield* nowMillis;
+      const activity = new Map([[threadId, wedgedInToolEntry(threadId, turnId, nowMs)]]);
+      const shells = new Map([
+        [threadId, makeShell(threadId, { status: "running", activeTurnId: turnId })],
+      ]);
+      const harness = createHarness({ activity, shells });
+
+      const watchdog = yield* ProviderTurnStallWatchdog.pipe(Effect.provide(harness.layer));
+      yield* watchdog.start();
+
+      // Several sweeps pass with an open tool: the watchdog must stay out of it,
+      // however long the turn has been silent. This is the blindness the adopted
+      // stop exists to cover, and the reason the resume below is not redundant.
+      yield* Effect.sleep(Duration.millis(120));
+      expect(harness.dispatched).toEqual([]);
+
+      // The user's deliberate second Stop press. ws.ts dispatches the stop first
+      // and adopts only once it succeeds, so the same order holds here.
+      applyForceStop(shells, activity, threadId);
+      yield* watchdog.adoptExternalStop({ threadId, turnId });
+
+      yield* waitFor(() => harness.dispatched.some((c) => c.type === "thread.turn.start"));
+
+      const types = harness.dispatched.map((c) => c.type);
+      expect(types).toContain("thread.activity.append");
+      expect(types).toContain("thread.turn.start");
+      // The watchdog never issues its own stop here — the user already did.
+      expect(types).not.toContain("thread.session.stop");
+    }),
+  );
+
+  it.live("records the recovery as adopted so it is distinguishable from a self-trip", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-adopt-analytics");
+      const turnId = TurnId.make("turn-adopt-analytics");
+      const nowMs = yield* nowMillis;
+      const activity = new Map([[threadId, wedgedInToolEntry(threadId, turnId, nowMs)]]);
+      const shells = new Map([
+        [threadId, makeShell(threadId, { status: "running", activeTurnId: turnId })],
+      ]);
+      const harness = createHarness({ activity, shells });
+
+      const watchdog = yield* ProviderTurnStallWatchdog.pipe(Effect.provide(harness.layer));
+      yield* watchdog.start();
+
+      applyForceStop(shells, activity, threadId);
+      yield* watchdog.adoptExternalStop({ threadId, turnId });
+
+      yield* waitFor(() =>
+        harness.analyticsEvents.some((e) => e.event === "provider.turn_stall.recovered"),
+      );
+      const recovered = harness.analyticsEvents.find(
+        (e) => e.event === "provider.turn_stall.recovered",
+      );
+      // An adopted stop means the automatic guards MISSED a wedge — worth telling
+      // apart from a self-trip in the numbers.
+      expect(recovered?.properties?.adopted).toBe(true);
+    }),
+  );
+
+  it.live("stays quiet on a thread it has already given up on", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-adopt-gaveup");
+      const firstTurn = TurnId.make("turn-adopt-gaveup-1");
+      const nowMs = yield* nowMillis;
+      // No open tool, so the watchdog trips on its own. `maxRecoveryAttempts: 1`
+      // is the minimum the layer honours (it clamps to 1, so recovery can never
+      // be configured off), which means give-up needs a SECOND stall: attempt 1
+      // recovers, the resumed turn re-stalls, and the cap is exceeded.
+      const activity = new Map([[threadId, staleEntry(threadId, firstTurn, nowMs)]]);
+      const shells = new Map([
+        [threadId, makeShell(threadId, { status: "running", activeTurnId: firstTurn })],
+      ]);
+      let resumeCount = 0;
+      const harness = createHarness({
+        activity,
+        shells,
+        options: { maxRecoveryAttempts: 1 },
+        onTurnStart: (resumedThreadId) => {
+          resumeCount += 1;
+          const resumedTurn = TurnId.make(`turn-adopt-gaveup-resumed-${resumeCount}`);
+          shells.set(
+            resumedThreadId,
+            makeShell(resumedThreadId, { status: "running", activeTurnId: resumedTurn }),
+          );
+          activity.set(resumedThreadId, staleEntry(resumedThreadId, resumedTurn, nowMs));
+        },
+      });
+
+      const watchdog = yield* ProviderTurnStallWatchdog.pipe(Effect.provide(harness.layer));
+      yield* watchdog.start();
+
+      yield* waitFor(() => harness.dispatched.some((c) => c.tone === "error"));
+      const gaveUpTurn = TurnId.make(`turn-adopt-gaveup-resumed-${resumeCount}`);
+      const afterGiveUp = harness.dispatched.length;
+
+      // Adoption must not re-arm a loop against a provider already declared
+      // hopeless. The caps protect the system from itself, and a human pressing
+      // Stop is not evidence the provider recovered.
+      applyForceStop(shells, activity, threadId);
+      yield* watchdog.adoptExternalStop({ threadId, turnId: gaveUpTurn });
+      yield* Effect.sleep(Duration.millis(120));
+
+      expect(harness.dispatched.length).toBe(afterGiveUp);
+    }),
+  );
+
+  it.live("gives up rather than resuming once adoption exceeds the attempt cap", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-adopt-cap");
+      const firstTurn = TurnId.make("turn-adopt-cap-1");
+      const secondTurn = TurnId.make("turn-adopt-cap-2");
+      const nowMs = yield* nowMillis;
+      const activity = new Map([[threadId, wedgedInToolEntry(threadId, firstTurn, nowMs)]]);
+      const shells = new Map([
+        [threadId, makeShell(threadId, { status: "running", activeTurnId: firstTurn })],
+      ]);
+      const harness = createHarness({ activity, shells, options: { maxRecoveryAttempts: 1 } });
+
+      const watchdog = yield* ProviderTurnStallWatchdog.pipe(Effect.provide(harness.layer));
+      yield* watchdog.start();
+
+      // First adoption is within the cap and resumes.
+      applyForceStop(shells, activity, threadId);
+      yield* watchdog.adoptExternalStop({ threadId, turnId: firstTurn });
+      yield* waitFor(() => harness.dispatched.some((c) => c.type === "thread.turn.start"));
+      const afterFirst = harness.dispatched.filter((c) => c.type === "thread.turn.start").length;
+
+      // A second wedge on a NEW turn pushes attempts past the cap. The counter
+      // deliberately persists across recovery cycles — a forceful resume mints a
+      // fresh turn id, so resetting per turn would let a re-wedging thread loop
+      // forever, adopted or not.
+      shells.set(threadId, makeShell(threadId, { status: "running", activeTurnId: secondTurn }));
+      activity.set(threadId, wedgedInToolEntry(threadId, secondTurn, nowMs));
+      applyForceStop(shells, activity, threadId);
+      yield* watchdog.adoptExternalStop({ threadId, turnId: secondTurn });
+      yield* Effect.sleep(Duration.millis(120));
+
+      expect(harness.dispatched.filter((c) => c.type === "thread.turn.start").length).toBe(
+        afterFirst,
       );
     }),
   );
