@@ -4,7 +4,7 @@
 
 **Goal:** Stop losing the provider session while a turn is parked on an AskUserQuestion (or approval), and auto-recover the session when it is lost, so answering never dead-ends on "No active provider session is bound to this thread."
 
-**Architecture:** Client-side prevention (don't auto-escalate a Stop/Cancel into a session-kill while input is pending; keep a double-press force-stop hatch; a dedicated cooperative "Cancel question"). Server-side resilience (reaper skips pending-input threads; the three request handlers relax their projection precheck and reuse the *existing* `resolveRoutableSession(allowRecovery:true)` recovery; a lost session's answer becomes one idempotent continuation turn; unrecoverable → an actionable error). See design: `docs/design/2026-07-07-provider-session-pending-input-design.md`.
+**Architecture:** Client-side prevention (don't auto-escalate a Stop/Cancel into a session-kill while input is pending; keep a double-press force-stop hatch; a dedicated cooperative "Cancel question"). Server-side resilience (reaper skips pending-input threads; the three request handlers relax their projection precheck and reuse the _existing_ `resolveRoutableSession(allowRecovery:true)` recovery; a lost session's answer becomes one idempotent continuation turn; unrecoverable → an actionable error). See design: `docs/design/2026-07-07-provider-session-pending-input-design.md`.
 
 **Tech Stack:** TypeScript, Effect, React; server tests via `bun`/vitest-style `it.effect`, web unit via the project's test runner, browser tests via the project's browser harness.
 
@@ -22,10 +22,12 @@
 ### Task 1: Reaper skips threads with pending user-input / approvals (P2)
 
 **Files:**
+
 - Modify: `apps/server/src/provider/Layers/ProviderSessionReaper.ts` (sweep loop, ~lines 63–73)
 - Test: `apps/server/src/provider/Layers/ProviderSessionReaper.test.ts`
 
 **Interfaces:**
+
 - Consumes: `projectionSnapshotQuery.getThreadShellById(threadId)` → shell with `session.activeTurnId`, `hasPendingUserInput`, `hasPendingApprovals`.
 - Produces: no new exports; behavior change only.
 
@@ -44,27 +46,32 @@ it.effect("does not reap a session with a pending user-input request", () =>
 ```
 
 - [ ] **Step 2: Run it, verify it fails** (reaper currently reaps because `activeTurnId` is null and it ignores the pending flags).
-Run: the reaper test file. Expected: FAIL (stopSession called once).
+      Run: the reaper test file. Expected: FAIL (stopSession called once).
 
 - [ ] **Step 3: Implement the skip.** In `sweep`, in the same block that skips on `activeTurnId != null`, add:
 
 ```ts
-if (thread?.session?.activeTurnId != null) { /* existing skip */ continue; }
+if (thread?.session?.activeTurnId != null) {
+  /* existing skip */ continue;
+}
 if (thread?.hasPendingUserInput === true || thread?.hasPendingApprovals === true) {
-  yield* Effect.logDebug("provider.session.reaper.skipped-pending-user-input", {
-    threadId: binding.threadId,
-    hasPendingUserInput: thread?.hasPendingUserInput ?? false,
-    hasPendingApprovals: thread?.hasPendingApprovals ?? false,
-    idleDurationMs,
-  });
+  yield *
+    Effect.logDebug("provider.session.reaper.skipped-pending-user-input", {
+      threadId: binding.threadId,
+      hasPendingUserInput: thread?.hasPendingUserInput ?? false,
+      hasPendingApprovals: thread?.hasPendingApprovals ?? false,
+      idleDurationMs,
+    });
   continue;
 }
 ```
+
 (Confirm the shell field names against `getThreadShellById`'s return type before finalizing.)
 
 - [ ] **Step 4: Run tests, verify green** (both new cases + existing reaper tests).
 
 - [ ] **Step 5: Commit.**
+
 ```bash
 git add apps/server/src/provider/Layers/ProviderSessionReaper.ts apps/server/src/provider/Layers/ProviderSessionReaper.test.ts
 git commit -m "fix(reaper): never reap a session with a pending user-input/approval request"
@@ -75,11 +82,13 @@ git commit -m "fix(reaper): never reap a session with a pending user-input/appro
 ### Task 2: Client Stop no longer auto-escalates while input is pending; double-press still force-stops (P1)
 
 **Files:**
+
 - Modify: `apps/web/src/components/ChatView.tsx` (`onInterrupt`, ~lines 3458–3496; add a `hasPendingInputRef`)
 - Modify: `apps/web/src/components/ChatView.logic.ts` (`shouldHardStopAfterGrace`, ~line 446)
 - Test: `apps/web/src/components/ChatView.logic.test.ts` (or the co-located logic test file)
 
 **Interfaces:**
+
 - Consumes: in `ChatView.tsx`, `activePendingUserInput` (~line 1617), `activePendingApproval` (~line 1746), `interruptEscalatedThreadRef`, `interruptEscalationTimerRef`, `nextStopAction`, `dispatchHardStop`, `clearInterruptEscalation`.
 - Produces: `shouldHardStopAfterGrace` gains an optional `hasPendingInput` param (default false) that forces `false` when true.
 
@@ -89,7 +98,10 @@ git commit -m "fix(reaper): never reap a session with a pending user-input/appro
 it("does not hard-stop after grace when input is pending", () => {
   expect(
     shouldHardStopAfterGrace({
-      threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false, hasPendingInput: true,
+      threadId: "t1",
+      escalatedThreadId: "t1",
+      latestTurnSettled: false,
+      hasPendingInput: true,
     }),
   ).toBe(false);
 });
@@ -97,7 +109,10 @@ it("does not hard-stop after grace when input is pending", () => {
 it("still hard-stops after grace when no input is pending (wedged turn)", () => {
   expect(
     shouldHardStopAfterGrace({
-      threadId: "t1", escalatedThreadId: "t1", latestTurnSettled: false, hasPendingInput: false,
+      threadId: "t1",
+      escalatedThreadId: "t1",
+      latestTurnSettled: false,
+      hasPendingInput: false,
     }),
   ).toBe(true);
 });
@@ -126,6 +141,7 @@ const hasPendingInputRef = useRef(false);
 // near line 1185:
 hasPendingInputRef.current = activePendingUserInput !== null || activePendingApproval !== null;
 ```
+
 Then in `onInterrupt`, keep the double-press hatch but only arm the timer when NOT pending, and pass the flag into the gate:
 
 ```ts
@@ -145,13 +161,15 @@ if (!pendingAtPress) {
     if (escalate) dispatchHardStop(threadId);
   }, INTERRUPT_ESCALATION_MS);
 }
-await api.orchestration.dispatchCommand({ type: "thread.turn.interrupt", /* …unchanged… */ });
+await api.orchestration.dispatchCommand({ type: "thread.turn.interrupt" /* …unchanged… */ });
 ```
-(Note: the ref is still set when pending, so a *second* Stop press hits `nextStopAction → "hardStop"` — the S2 escape hatch.)
+
+(Note: the ref is still set when pending, so a _second_ Stop press hits `nextStopAction → "hardStop"` — the S2 escape hatch.)
 
 - [ ] **Step 5: Run logic tests + typecheck the web app.** Expected: PASS.
 
 - [ ] **Step 6: Commit.**
+
 ```bash
 git add apps/web/src/components/ChatView.logic.ts apps/web/src/components/ChatView.tsx apps/web/src/components/ChatView.logic.test.ts
 git commit -m "fix(chat): don't auto-escalate Stop into a session-kill while input is pending; keep double-press force-stop"
@@ -162,11 +180,13 @@ git commit -m "fix(chat): don't auto-escalate Stop into a session-kill while inp
 ### Task 3: Dedicated cooperative "Cancel question" (P1b)
 
 **Files:**
+
 - Modify: `apps/web/src/components/chat/ComposerPrimaryActions.tsx` (the "Cancel question" button, ~lines 143–158)
 - Modify: `apps/web/src/components/ChatView.tsx` (add `onCancelQuestion`, pass to the composer)
 - Test: `apps/web/src/components/chat/ComposerPendingUserInputPanel.test.tsx` or the ComposerPrimaryActions test (assert Cancel calls the cancel handler, not the escalating interrupt)
 
 **Interfaces:**
+
 - Consumes: `ComposerPrimaryActions` currently takes `onInterrupt`.
 - Produces: `ComposerPrimaryActions` takes a new `onCancelQuestion: () => void`; the "Cancel question" button (aria-label "Cancel question") calls it; "Stop generation" keeps `onInterrupt`.
 
@@ -175,7 +195,13 @@ git commit -m "fix(chat): don't auto-escalate Stop into a session-kill while inp
 ```tsx
 const onInterrupt = vi.fn();
 const onCancelQuestion = vi.fn();
-render(<ComposerPrimaryActions {...baseProps} onInterrupt={onInterrupt} onCancelQuestion={onCancelQuestion} />);
+render(
+  <ComposerPrimaryActions
+    {...baseProps}
+    onInterrupt={onInterrupt}
+    onCancelQuestion={onCancelQuestion}
+  />,
+);
 await userEvent.click(screen.getByLabelText("Cancel question"));
 expect(onCancelQuestion).toHaveBeenCalledTimes(1);
 expect(onInterrupt).not.toHaveBeenCalled();
@@ -198,11 +224,13 @@ const onCancelQuestion = async () => {
   });
 };
 ```
+
 Pass `onCancelQuestion` down to `ComposerPrimaryActions` wherever `onInterrupt` is currently passed.
 
 - [ ] **Step 4: Run the component test + web typecheck.** Expected: PASS.
 
 - [ ] **Step 5: Commit.**
+
 ```bash
 git add apps/web/src/components/chat/ComposerPrimaryActions.tsx apps/web/src/components/ChatView.tsx apps/web/src/components/chat/*.test.tsx
 git commit -m "feat(chat): make 'Cancel question' a dedicated cooperative decline (no escalation)"
@@ -213,16 +241,18 @@ git commit -m "feat(chat): make 'Cancel question' a dedicated cooperative declin
 ### Task 4: Reactor — relax the three prechecks; interrupt-with-no-session settles the turn (Rung 1 + S3)
 
 **Files:**
+
 - Modify: `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` (`processTurnInterruptRequested` ~888, `processApprovalResponseRequested` ~911, `processUserInputResponseRequested` ~954)
 - Test: `apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts` (or the reactor's existing test file)
 
 **Interfaces:**
+
 - Consumes: `providerService.listSessions()` (live sessions), `providerService.interruptTurn`, `respondToRequest`, `respondToUserInput`; `setThreadSession` / a turn-settling dispatch.
 - Produces: no new exports.
 
 - [ ] **Step 1: Write failing tests.**
-  - (a) *projection drift:* projection `session.status === "stopped"` but a **live** session exists (stub `listSessions` to return one) → `processUserInputResponseRequested` calls `providerService.respondToUserInput` (answer delivered) and does NOT append the "No active provider session" failure.
-  - (b) *interrupt with no session:* no live session, projection stopped → `processTurnInterruptRequested` does NOT append the old error; instead it settles the turn (assert a `thread.session.set`/turn-settling dispatch clearing `activeTurnId` so the spinner clears) and does NOT call `startSession`/resume.
+  - (a) _projection drift:_ projection `session.status === "stopped"` but a **live** session exists (stub `listSessions` to return one) → `processUserInputResponseRequested` calls `providerService.respondToUserInput` (answer delivered) and does NOT append the "No active provider session" failure.
+  - (b) _interrupt with no session:_ no live session, projection stopped → `processTurnInterruptRequested` does NOT append the old error; instead it settles the turn (assert a `thread.session.set`/turn-settling dispatch clearing `activeTurnId` so the spinner clears) and does NOT call `startSession`/resume.
 
 - [ ] **Step 2: Run, verify they fail** (current code appends the error via the `hasSession` gate).
 
@@ -231,6 +261,7 @@ git commit -m "feat(chat): make 'Cancel question' a dedicated cooperative declin
 - [ ] **Step 4: Run tests, verify green** (new + existing reactor tests).
 
 - [ ] **Step 5: Commit.**
+
 ```bash
 git add apps/server/src/orchestration/Layers/ProviderCommandReactor.ts apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
 git commit -m "fix(reactor): recover instead of hard-failing on a stale/stopped session projection; interrupt-with-no-session settles the turn"
@@ -241,27 +272,30 @@ git commit -m "fix(reactor): recover instead of hard-failing on a stale/stopped 
 ### Task 5: Reactor — lost-session answer becomes one idempotent continuation turn; actionable unrecoverable error (Rung 2 + S1 + S4)
 
 **Files:**
+
 - Modify: `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` (`processUserInputResponseRequested`, `processApprovalResponseRequested`; add a `continuedRequestIds` guard near `handledTurnStartKeys` ~219)
 - Test: same reactor test file
 
 **Interfaces:**
+
 - Consumes: `isUnknownPendingUserInputRequestError` (~line 168) and the approval equivalent; the existing turn-start dispatch path (`orchestrationEngine.dispatch({ type: "thread.turn.start", … })`); `thread.modelSelection`, `runtimeMode`, `interactionMode` from the resolved thread.
 - Produces: `continuedRequestIds: Set<string>` (or a bounded `Cache`) — dedups continuation per pending `requestId`.
 
 - [ ] **Step 1: Write failing tests.**
-  - (a) *cleared map → continuation:* `respondToUserInput` rejects with `Unknown pending user-input request` → exactly ONE `thread.turn.start` is dispatched whose message text contains the user's chosen answer; a second identical `user-input-response-requested` for the same `requestId` dispatches NO further turn.
-  - (b) *unrecoverable → reworded error:* `resolveRoutableSession` fails (no binding) → the appended failure activity's detail equals the verbatim constant, not the old string.
+  - (a) _cleared map → continuation:_ `respondToUserInput` rejects with `Unknown pending user-input request` → exactly ONE `thread.turn.start` is dispatched whose message text contains the user's chosen answer; a second identical `user-input-response-requested` for the same `requestId` dispatches NO further turn.
+  - (b) _unrecoverable → reworded error:_ `resolveRoutableSession` fails (no binding) → the appended failure activity's detail equals the verbatim constant, not the old string.
 
 - [ ] **Step 2: Run, verify they fail.**
 
 - [ ] **Step 3: Implement.** Extend the `catchCause` in `processUserInputResponseRequested`:
   - If `isUnknownPendingUserInputRequestError(cause)` and `!continuedRequestIds.has(requestId)`: add the id, then dispatch a continuation `thread.turn.start` with `message.text` = `Regarding the earlier question, I chose: ${formatAnswers(event.payload.answers)}. Please continue.` (use a stable synthetic `messageId` = `user:pending-input-continue:${requestId}`), carrying the thread's `modelSelection`/`runtimeMode`/`interactionMode`.
   - Else (unrecoverable / already-continued rejection): append the failure activity with the verbatim actionable detail.
-  Apply the analogous branch to `processApprovalResponseRequested` (continuation text summarizing the decision). Keep the continuation dispatch itself inside a `catchCause` so a provider rejection (dangling `tool_use`) also lands on the reworded error rather than throwing.
+    Apply the analogous branch to `processApprovalResponseRequested` (continuation text summarizing the decision). Keep the continuation dispatch itself inside a `catchCause` so a provider rejection (dangling `tool_use`) also lands on the reworded error rather than throwing.
 
 - [ ] **Step 4: Run tests, verify green.**
 
 - [ ] **Step 5: Commit.**
+
 ```bash
 git add apps/server/src/orchestration/Layers/ProviderCommandReactor.ts apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
 git commit -m "fix(reactor): resume-and-continue a lost session's answer as one idempotent turn; actionable unrecoverable error"
@@ -272,10 +306,12 @@ git commit -m "fix(reactor): resume-and-continue a lost session's answer as one 
 ### Task 6: ClaudeAdapter — flush the abort deny before subprocess teardown (S6)
 
 **Files:**
+
 - Modify: `apps/server/src/provider/Layers/ClaudeAdapter.ts` (`stopSessionInternal`, ~lines 2850–2915)
 - Test: `apps/server/src/provider/Layers/ClaudeAdapter.test.ts` (if a unit seam exists) or cover via the reactor/integration test
 
 **Interfaces:**
+
 - Consumes: the pending-user-input abort path (`onAbort` at ~3098 resolves the deferred + returns `deny`); `context.query.close()`.
 - Produces: no new exports; ordering change only.
 
@@ -288,6 +324,7 @@ git commit -m "fix(reactor): resume-and-continue a lost session's answer as one 
 - [ ] **Step 4: Run tests, verify green.**
 
 - [ ] **Step 5: Commit.**
+
 ```bash
 git add apps/server/src/provider/Layers/ClaudeAdapter.ts
 git commit -m "fix(claude-adapter): flush pending user-input deny before subprocess teardown so graceful-stop resumes are clean"
@@ -298,9 +335,11 @@ git commit -m "fix(claude-adapter): flush pending user-input deny before subproc
 ### Task 7: Browser regression test — Cancel/Stop during a question doesn't kill the session
 
 **Files:**
+
 - Create/Modify: a browser test under `apps/web/src/components/` (follow the existing `ChatView.browser.tsx` patterns)
 
 **Interfaces:**
+
 - Consumes: the browser harness's ability to drive a thread with a pending user-input request.
 
 - [ ] **Step 1: Write the test.** Drive a thread into a pending-user-input state; click "Cancel question" → assert NO `thread.session.stop` command is dispatched (only `thread.turn.interrupt`). Separately: click "Stop generation" once → assert no `thread.session.stop` within the escalation window; then submit an answer → assert it is dispatched and not rejected with the "No active provider session" activity.
@@ -308,6 +347,7 @@ git commit -m "fix(claude-adapter): flush pending user-input deny before subproc
 - [ ] **Step 2: Run it, verify it fails on `main`/pre-fix behavior if run before the earlier tasks; PASS after.**
 
 - [ ] **Step 3: Commit.**
+
 ```bash
 git add apps/web/src/components/*.browser.tsx
 git commit -m "test(chat): Cancel/Stop during a pending question must not kill the provider session"

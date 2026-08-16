@@ -4,13 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ContextWindowSnapshot } from "~/lib/contextWindow";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import type { AccountUsageView } from "~/lib/vitals";
-import {
-  FIVE_HOUR_MS,
-  SEVERITY_STROKE,
-  fullnessArc,
-  vitalsLevel,
-  windowArc,
-} from "~/lib/vitals";
+import { FIVE_HOUR_MS, SEVERITY_STROKE, fullnessArc, vitalsLevel, windowArc } from "~/lib/vitals";
 import { MachineDetailList, VitalsDetail, VitalsGauge, VitalsGaugeIcon } from "./VitalsGauge";
 
 function countPaths(markup: string): number {
@@ -140,7 +134,13 @@ describe("VitalsGauge detail", () => {
       balances: [],
     };
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} timestampFormat="24-hour" />,
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+      />,
     );
     expect(markup).toContain("Context");
     expect(markup).toContain("92k / 200k");
@@ -187,7 +187,13 @@ describe("VitalsGauge detail", () => {
       balances: [],
     };
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={accountUsage} host={host} now={0} timestampFormat="24-hour" />,
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={accountUsage}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+      />,
     );
     expect(markup).toContain("Usage limits");
     expect(markup).toContain("Codex 5h");
@@ -262,7 +268,13 @@ describe("machine details", () => {
 
   it("keeps the detail collapsed so the summary bars stay the answer", () => {
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} timestampFormat="24-hour" />,
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={null}
+        host={detailedHost}
+        now={0}
+        timestampFormat="24-hour"
+      />,
     );
 
     expect(markup).toContain("details");
@@ -273,7 +285,13 @@ describe("machine details", () => {
 
   it("still renders the three summary bars alongside the toggle", () => {
     const markup = renderToStaticMarkup(
-      <VitalsDetail context={emptyContext} accountUsage={null} host={detailedHost} now={0} timestampFormat="24-hour" />,
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={null}
+        host={detailedHost}
+        now={0}
+        timestampFormat="24-hour"
+      />,
     );
 
     expect(markup).toContain("CPU");

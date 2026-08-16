@@ -1,10 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
-import {
-  WEBSOCKET_KEEPALIVE_IDLE_MS,
-  enableWebSocketKeepAlive,
-} from "./wsKeepAlive.ts";
+import { WEBSOCKET_KEEPALIVE_IDLE_MS, enableWebSocketKeepAlive } from "./wsKeepAlive.ts";
 
 function requestWithSource(source: unknown): HttpServerRequest.HttpServerRequest {
   return { source } as unknown as HttpServerRequest.HttpServerRequest;
@@ -44,9 +41,9 @@ describe("enableWebSocketKeepAlive", () => {
 
   it("reports false when the socket cannot do keepalive", () => {
     expect(enableWebSocketKeepAlive(requestWithSource({ socket: {} }))).toBe(false);
-    expect(
-      enableWebSocketKeepAlive(requestWithSource({ socket: { setKeepAlive: "nope" } })),
-    ).toBe(false);
+    expect(enableWebSocketKeepAlive(requestWithSource({ socket: { setKeepAlive: "nope" } }))).toBe(
+      false,
+    );
   });
 
   it("uses an idle delay short enough to reclaim a dead peer in minutes", () => {

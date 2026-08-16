@@ -59,10 +59,7 @@ export default function WorkspaceMembersControl({
             const isEditing = workspaceMember.id === editingId;
             return (
               <li
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5",
-                  isEditing && "bg-accent/40",
-                )}
+                className={cn("flex items-center gap-3 px-3 py-2.5", isEditing && "bg-accent/40")}
                 key={workspaceMember.id}
               >
                 <div className="min-w-0 flex-1">

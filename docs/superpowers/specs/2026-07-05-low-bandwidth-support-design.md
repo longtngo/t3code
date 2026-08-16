@@ -10,8 +10,8 @@
 ## 1. Problem
 
 The prior "connection resilience" work (offline outbox, never-give-up reconnect, quiet UX, PWA
-precache) solved *surviving disconnects*. It did **not** address *doing more with fewer bytes on a
-slow-but-present link*. On mobile over cellular/Tailscale the pain is: (a) every reconnect re-downloads
+precache) solved _surviving disconnects_. It did **not** address _doing more with fewer bytes on a
+slow-but-present link_. On mobile over cellular/Tailscale the pain is: (a) every reconnect re-downloads
 full state, (b) background subscriptions stream continuously even when nobody is looking, and (c) all
 traffic is uncompressed, verbose JSON.
 
@@ -47,20 +47,21 @@ Bun path, both via Effect's platform WS abstraction (`apps/server/src/server.ts:
 `permessage-deflate` is therefore not a guaranteed config flag.
 
 **Validated premises (probed 2026-07-05):**
+
 - `effect/unstable/rpc` `RpcSerialization` exports `layerMsgPack` in this version (`effect@4.0.0-beta.78`).
 - `RpcSerialization` has **no** built-in deflate/compression layer — the compression half is custom.
 
 ## 3. Design principle: two tiers, not one big "mode"
 
-Most of these wins are **strictly better for everyone** — no user wants *more* bytes — so we do **not**
+Most of these wins are **strictly better for everyone** — no user wants _more_ bytes — so we do **not**
 build a heavyweight "Low-Bandwidth Mode" framework (YAGNI). The design splits into:
 
 - **Tier A — always-on wins** (ship unconditionally, on by default for everyone, no detection):
   compression, incremental reconnect sync, pause-when-hidden, activity batching, the metrics-cadence ramp.
 - **Tier B — a thin adaptive layer** (only the one knob with a real quality tradeoff): how aggressively an
-  uploaded image is downscaled, where a *fast* link has a legitimate reason to prefer fidelity. A sensible
+  uploaded image is downscaled, where a _fast_ link has a legitimate reason to prefer fidelity. A sensible
   compression default is on for everyone; auto-detect (RN NetInfo / `navigator.connection.saveData`) only
-  *escalates* to a more aggressive tier when it measures a constrained link. **No manual toggle.**
+  _escalates_ to a more aggressive tier when it measures a constrained link. **No manual toggle.**
 
 The bandwidth savings are therefore **on by default** — Tier B is not a gate on the savings, only an
 optional escalation of the one setting whose aggressive form costs quality on a good connection. If
@@ -71,15 +72,15 @@ Every phase is gated by a **measurement** so each win is proven, not assumed.
 
 ## 4. Phased roadmap
 
-| Phase | What | Why it wins on cellular/Tailscale | Cost | Risk |
-|---|---|---|---|---|
-| **0. Measure** | Dev-only per-frame byte/count logger + a scripted byte-budget scenario (reconnect ×N, 10-min idle, one agentic turn). | Baseline so every later phase is verifiable. | S | none |
-| **1. Compression (MsgPack + deflate)** | Switch serialization JSON→MsgPack on both ends; add a custom deflate wrapper over frames above a size threshold; negotiate format at the `/ws` handshake. | Global 70–90% cut on all traffic; WireGuard/Tailscale doesn't compress, so this is the only compression. Binary also removes base64 attachment overhead. | M | med (both-ends cutover) |
-| **2. Quiet background subs + cadence ramp** | Pause `host-metrics` + `llm-models` on tab-hidden / RN app-background; progressive `host-metrics` ramp 1.5s→5s over a live connection, reset on foreground/interaction. | Kills continuous idle drain — hours of a backgrounded phone currently still stream metrics; the ramp relaxes the foreground cost too. | S | low |
-| **3. Incremental reconnect sync** | Wire the dormant `replayEvents` into `WsRpcClient`; on reconnect replay events since last-seen sequence; full snapshot only on gap / first load. | The signature cellular win — stops re-downloading the whole thread on every reconnect. | M | med (correctness; scaffolding exists) |
-| **4. Activity batching** | Buffer `thread.activity-appended` frames like assistant text already is. | Long agentic turns emit one frame per tool step; batching cuts frame count on the active path. | M | low |
-| **5. Attachment relief** | Client-side image pre-compress/resize before upload; carry bytes natively via MsgPack (base64 overhead already gone from Phase 1). | A phone photo is ~27MB base64 in one frame today — brutal on cellular uplink. | M | med |
-| **6. Adaptive escalation (Tier B)** | RN NetInfo / `navigator.connection.saveData` auto-detect → escalate to a more aggressive image-downscale tier on a measured-constrained link. On by default; no manual toggle. | Squeezes the one quality-tradeoff knob further when the link truly warrants it. | S | low |
+| Phase                                       | What                                                                                                                                                                           | Why it wins on cellular/Tailscale                                                                                                                        | Cost | Risk                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ------------------------------------- |
+| **0. Measure**                              | Dev-only per-frame byte/count logger + a scripted byte-budget scenario (reconnect ×N, 10-min idle, one agentic turn).                                                          | Baseline so every later phase is verifiable.                                                                                                             | S    | none                                  |
+| **1. Compression (MsgPack + deflate)**      | Switch serialization JSON→MsgPack on both ends; add a custom deflate wrapper over frames above a size threshold; negotiate format at the `/ws` handshake.                      | Global 70–90% cut on all traffic; WireGuard/Tailscale doesn't compress, so this is the only compression. Binary also removes base64 attachment overhead. | M    | med (both-ends cutover)               |
+| **2. Quiet background subs + cadence ramp** | Pause `host-metrics` + `llm-models` on tab-hidden / RN app-background; progressive `host-metrics` ramp 1.5s→5s over a live connection, reset on foreground/interaction.        | Kills continuous idle drain — hours of a backgrounded phone currently still stream metrics; the ramp relaxes the foreground cost too.                    | S    | low                                   |
+| **3. Incremental reconnect sync**           | Wire the dormant `replayEvents` into `WsRpcClient`; on reconnect replay events since last-seen sequence; full snapshot only on gap / first load.                               | The signature cellular win — stops re-downloading the whole thread on every reconnect.                                                                   | M    | med (correctness; scaffolding exists) |
+| **4. Activity batching**                    | Buffer `thread.activity-appended` frames like assistant text already is.                                                                                                       | Long agentic turns emit one frame per tool step; batching cuts frame count on the active path.                                                           | M    | low                                   |
+| **5. Attachment relief**                    | Client-side image pre-compress/resize before upload; carry bytes natively via MsgPack (base64 overhead already gone from Phase 1).                                             | A phone photo is ~27MB base64 in one frame today — brutal on cellular uplink.                                                                            | M    | med                                   |
+| **6. Adaptive escalation (Tier B)**         | RN NetInfo / `navigator.connection.saveData` auto-detect → escalate to a more aggressive image-downscale tier on a measured-constrained link. On by default; no manual toggle. | Squeezes the one quality-tradeoff knob further when the link truly warrants it.                                                                          | S    | low                                   |
 
 **Committed core:** Phases **1–5**. **Phase 6** is optional follow-on (and may collapse to near-nothing if
 the aggressive image default proves universally acceptable — see §3).
@@ -87,6 +88,7 @@ the aggressive image default proves universally acceptable — see §3).
 ## 5. Phase detail
 
 ### Phase 0 — Measurement harness
+
 - A dev-only instrument that counts frames and sums bytes per RPC method / subscription, on both client
   and server. Purpose-built and minimal (note: the older request-telemetry seams were deliberately
   retired in `ee12b1a5a`; don't resurrect that — add a small, scoped counter).
@@ -99,24 +101,25 @@ the aggressive image default proves universally acceptable — see §3).
 Current JSON transport, with a JSON+deflate column showing the headroom per-message deflate
 alone would recover (only applied above the ~1KB threshold):
 
-| Frame | JSON | JSON+deflate |
-|---|---|---|
-| host-metrics sample | 285 B | 285 B (—) |
-| llm-models sample | 440 B | 440 B (—) |
-| activity-appended (tool step) | 673 B | 673 B (—) |
-| activity-appended (assistant message) | 2.7 KB | 327 B (−88%) |
-| thread snapshot (24 activities) | 7.6 KB | 703 B (−91%) |
-| attachment upload (~768 KB photo) | 1.00 MB | 758 KB (−26%) |
+| Frame                                 | JSON    | JSON+deflate  |
+| ------------------------------------- | ------- | ------------- |
+| host-metrics sample                   | 285 B   | 285 B (—)     |
+| llm-models sample                     | 440 B   | 440 B (—)     |
+| activity-appended (tool step)         | 673 B   | 673 B (—)     |
+| activity-appended (assistant message) | 2.7 KB  | 327 B (−88%)  |
+| thread snapshot (24 activities)       | 7.6 KB  | 703 B (−91%)  |
+| attachment upload (~768 KB photo)     | 1.00 MB | 758 KB (−26%) |
 
-| Scenario | JSON | JSON+deflate |
-|---|---|---|
-| 10× reconnect on one thread | 75.5 KB | 6.9 KB (−91%) |
-| 10-min backgrounded idle | 175.8 KB | 175.8 KB (−0%) |
-| agentic turn (12 tool steps) | 10.6 KB | 8.2 KB (−23%) |
+| Scenario                     | JSON     | JSON+deflate   |
+| ---------------------------- | -------- | -------------- |
+| 10× reconnect on one thread  | 75.5 KB  | 6.9 KB (−91%)  |
+| 10-min backgrounded idle     | 175.8 KB | 175.8 KB (−0%) |
+| agentic turn (12 tool steps) | 10.6 KB  | 8.2 KB (−23%)  |
 
 **Baseline findings that shape the later phases:**
+
 1. **Idle drain is immune to compression.** The 10-min backgrounded idle budget (175.8 KB) gets
-   *zero* benefit from deflate because every host-metrics/llm-models frame is under the 1 KB
+   _zero_ benefit from deflate because every host-metrics/llm-models frame is under the 1 KB
    threshold. Only **Phase 2** (pause when hidden) removes this cost — it does not overlap with
    Phase 1 at all.
 2. **Reconnect and large frames compress 88–91%.** Phase 1's deflate is decisive for the snapshot
@@ -130,12 +133,13 @@ The live wire meter (`globalThis.__t3WireMeter` on the client; `T3CODE_WIRE_METE
 the server) validates these modelled numbers against the real app when running end-to-end.
 
 ### Phase 1 — Compression: MsgPack + deflate (both)
+
 - **MsgPack:** replace `RpcSerialization.layerJson` with `layerMsgPack` at both ends
   (`wsRpcProtocol.ts:296`, `ws.ts:1577`). Confirmed available in `effect@4.0.0-beta.78`.
 - **deflate:** add a custom compression wrapper (no built-in layer exists) that deflates encoded frames
   **only above a size threshold** (~1KB) — small frames like `Pong` gain nothing and pay ~11 bytes of
   deflate overhead. Stateless per-message deflate (no context takeover) for simplicity.
-- **Handshake negotiation (required):** a binary wire format is a *hard* break on version skew — a stale
+- **Handshake negotiation (required):** a binary wire format is a _hard_ break on version skew — a stale
   client can't deserialize at all. The server serves the web/desktop bundle (always lockstep), but the RN
   **mobile app deploys separately** and can lag. So the client advertises supported formats at the `/ws`
   handshake (subprotocol or query param) and the server falls back to JSON for clients that don't advertise
@@ -149,7 +153,7 @@ the server) validates these modelled numbers against the real app when running e
 #### Phase 1 implementation notes (2026-07-05, shipped)
 
 - **Codec:** a custom `RpcSerialization` (`@t3tools/shared/rpcSerialization`) using `msgpackr`
-  (`useRecords: true`) + `fflate` — the *same* deflate lib on both ends, so there is no cross-library
+  (`useRecords: true`) + `fflate` — the _same_ deflate lib on both ends, so there is no cross-library
   compatibility surface. Because deflated payloads aren't self-delimiting (unlike raw msgpack), the
   serialization does its **own length-prefixed framing**: `[flags:u8][len:u32-BE][payload]`, deflating
   only payloads above the 1 KB threshold (flag bit 0). Verified by unit tests (round-trip, multi-frame,
@@ -173,6 +177,7 @@ the server) validates these modelled numbers against the real app when running e
   10.6 KB → **7.3 KB (−32%)**. Small frames also shrink even without deflate (msgpack structure).
 
 ### Phase 2 — Quiet background subscriptions + cadence ramp
+
 - Client unsubscribes / pauses `host-metrics` and `llm-models` on `visibilitychange` hidden (web/desktop)
   and RN `AppState` background (mobile), resuming on foreground (reuse the existing app-resume reconnect
   hooks, `apps/mobile/src/state/use-remote-environment-registry.ts:462-520`).
@@ -186,6 +191,7 @@ the server) validates these modelled numbers against the real app when running e
 #### Phase 2 implementation notes (2026-07-05, shipped)
 
 **Verified before building (the premise was mostly already true):**
+
 - **Pause-when-hidden is already shipped.** `useHostMetrics`, `useLlmModels`, and `useResourceQueue` on
   web/desktop each tear their subscription down on `document.hidden` (each carries a "Pause … while the tab
   is hidden so a backgrounded window costs nothing" comment) and re-establish on visible. So the primary
@@ -201,11 +207,12 @@ resubscribes fresh when it shows, **returning to the tab is the ramp reset** —
 timers, no interaction plumbing. This is the whole remaining committed Phase 2 work; it benefits web/desktop
 foreground-idle (a web client on a metered link), since mobile doesn't stream metrics.
 
-**Deferred (follow-up):** resetting the ramp on in-tab *interaction* (vs. only on tab re-show) would need
+**Deferred (follow-up):** resetting the ramp on in-tab _interaction_ (vs. only on tab re-show) would need
 client-side interaction tracking + per-subscription `intervalMs` plumbing; low value for the modest saving,
 so deferred.
 
 ### Phase 3 — Incremental reconnect sync
+
 - Add `replayEvents` to the `WsRpcClient` orchestration interface (`packages/client-runtime/src/wsRpcClient.ts`),
   mapping to the existing server handler (`ws.ts:886-908`).
 - On reconnect: attempt replay from the last-seen sequence; fall back to a full snapshot only on a
@@ -225,22 +232,23 @@ uncompressed-JSON framing implied. It was still built in full (user-confirmed) f
 benefit of not re-snapshotting on every blip.
 
 **Design correction (an adversarial review caught a blocker in the first attempt).** The first cut
-reused the dormant `orchestrationRecovery` coordinator, whose gap check assumes a *contiguous global*
+reused the dormant `orchestrationRecovery` coordinator, whose gap check assumes a _contiguous global_
 event stream. But `subscribeThread` delivers a **filtered per-thread subset** of the global sequence
 axis, so consecutive delivered events are almost never `latestSequence + 1` apart — the coordinator
-would have fired "recover" (a full-snapshot resubscribe) on nearly every event, *increasing* bandwidth.
+would have fired "recover" (a full-snapshot resubscribe) on nearly every event, _increasing_ bandwidth.
 The corrected design drops the coordinator (it stays dormant) for a simple monotonic high-water mark.
 
 **Mechanism (folds `readEvents` into `subscribeThread`):**
+
 - **Contract:** `subscribeThread` input gains an optional `fromSequenceExclusive` cursor.
 - **Server (`ws.ts`):** with the cursor, materialize the missed global events (`readEvents(cursor)`),
   and only serve incrementally when the window is small enough to be complete
   (`< RESUME_MAX_MISSED_EVENTS`, kept below the store's 1000 read cap); it then streams the missed
-  *thread* events (filtered) with no snapshot. A larger/older window **falls back to a full snapshot**
+  _thread_ events (filtered) with no snapshot. A larger/older window **falls back to a full snapshot**
   rather than silently dropping the tail past the read cap. No cursor → the existing snapshot path.
 - **Client (`service.ts`):** each subscription tracks `lastAppliedSequence` (a monotonic high-water
   mark, persisted across reconnects). A reconnect resubscribes with `fromSequenceExclusive =
-  lastAppliedSequence`. Events apply when `sequence > lastAppliedSequence` (which preserves order AND
+lastAppliedSequence`. Events apply when `sequence > lastAppliedSequence` (which preserves order AND
   dedups the read/live overlap); there is deliberately **no contiguity/gap check** — the thread stream
   is sparse on the global axis, and completeness is the server's responsibility (stream-all-or-snapshot).
 - **Removed** the now-dead `applyEnvironmentThreadDetailEvent` (superseded by the inline apply path).
@@ -255,6 +263,7 @@ The corrected design drops the coordinator (it stays dormant) for a simple monot
   dormant and could be removed.
 
 ### Phase 4 — Activity batching
+
 - Extend the existing assistant-text buffering (`ProviderRuntimeIngestion.ts:1751-1797`) to coalesce
   `thread.activity-appended` frames within a turn, flushing on the same boundaries.
 - **Gate:** frame count on the Phase-0 agentic-turn scenario drops materially.
@@ -262,14 +271,15 @@ The corrected design drops the coordinator (it stays dormant) for a simple monot
 #### Phase 4 implementation notes (2026-07-05, shipped)
 
 **Data-driven scope note.** The spec framed this as extending the assistant-text buffering, but that
-buffering already handles the big win — collapsing per-token *text deltas* into one message
+buffering already handles the big win — collapsing per-token _text deltas_ into one message
 (`bufferedAssistantTextByMessageId`). `thread.activity-appended` events are **discrete** domain events
 (one per tool step / result / reasoning block via `runtimeEventToActivities`), not a token firehose, and
 each append has load-bearing side effects (drives the sidebar shell refetch + background-task recording,
-`ProviderRuntimeIngestion.ts` comment). So batching them at the *domain* level is both low-value (frame
+`ProviderRuntimeIngestion.ts` comment). So batching them at the _domain_ level is both low-value (frame
 overhead is ~a few % of a turn on a server→client push stream — content bytes are unchanged) and risky.
 
 **What was built — safe wire-level batching (no domain-event change):**
+
 - **Contract:** `OrchestrationThreadStreamItem` gains a `{ kind: "events", events: [...] }` batch variant.
 - **Server (`ws.ts`):** the live thread-event stream is coalesced with `Stream.groupedWithin(64, 20ms)`
   and emitted as batch frames; a burst within a turn ships as one frame, isolated events flush after the
@@ -280,6 +290,7 @@ overhead is ~a few % of a turn on a server→client push stream — content byte
 - **Tests:** batch apply + dedup + reconnect-cursor-from-batch-max; existing subscribe/reconnect tests pass.
 
 ### Phase 5 — Attachment relief
+
 - Client-side image resize/re-encode before upload (canvas on web/desktop, RN image API on mobile),
   with a sensible default quality/size cap.
 - Base64→binary already handled by Phase 1's MsgPack switch.
@@ -292,7 +303,7 @@ overhead is ~a few % of a turn on a server→client push stream — content byte
 (`resizeImageForUpload`) decodes an image via `createImageBitmap`, caps the longest edge at 2048 px,
 and re-encodes as JPEG (quality 0.85) on a canvas. It's wired into the composer upload
 (`ChatComposer.tsx`) **before** the `ATTACHMENT_UPLOAD_MAX_BYTES` check, so a large photo that shrinks
-under the 20 MB cap can now upload at all. Guards keep it safe: it returns the *original* file for
+under the 20 MB cap can now upload at all. Guards keep it safe: it returns the _original_ file for
 non-images, small images (< 512 KB), unsupported environments (no canvas), or when the re-encode would
 not actually shrink it — so upload behavior never regresses. A phone photo (several MB to the 20 MB cap)
 typically drops to a few hundred KB — ~90 %+ off, dwarfing every other lever — and it also cuts the
@@ -300,8 +311,9 @@ vision tokens the provider sees. Tests: pure dimension math + node passthrough c
 in-browser canvas resize test.
 
 **Deferred (follow-ups), each a deliberate data-driven scope cut:**
+
 - **base64 → binary attachment field.** The spec assumed Phase 1's MsgPack made this free, but the RPC
-  Schema layer sits *above* serialization and would still encode `Uint8Array` to a transport-safe value
+  Schema layer sits _above_ serialization and would still encode `Uint8Array` to a transport-safe value
   (and the browser-test JSON fallback can't carry raw bytes). After the resize the base64 33 % overhead
   is a few hundred KB — small next to the ~90 % the resize already saved — so it wasn't worth the
   Schema/JSON-fallback complexity here.
@@ -312,6 +324,7 @@ in-browser canvas resize test.
 - **Attachment chunking** — unnecessary once photos are resized to a few hundred KB.
 
 ### Phase 6 — Adaptive escalation (Tier B)
+
 - Detect constrained links via RN NetInfo (cellular / low `effectiveType`) and `navigator.connection.saveData`.
 - On a measured-constrained link, escalate to a more aggressive image-downscale tier (Phase 5). Everything
   else is already on by default and needs no detection.

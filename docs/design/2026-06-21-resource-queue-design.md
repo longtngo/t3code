@@ -40,7 +40,7 @@ a daemon as a side effect.
 **Why unary over a stream:** the two required cadences (60s idle / 5s open) map cleanly onto
 a client-controlled interval. A push-stream would need a re-subscribe to change interval and
 adds lifecycle for no benefit here. The existing streams (host-metrics, llm-models) use a
-*fixed* interval; this feature's interval is dynamic, so unary is the better fit.
+_fixed_ interval; this feature's interval is dynamic, so unary is the better fit.
 
 **Normalized DTO** (`ResourceQueueSnapshot`): `{ ts, available, maintenance, resources[],
 running[], waiting[] }`. The server flattens leases→`running` and queue→`waiting` (adding a

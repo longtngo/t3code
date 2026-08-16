@@ -15,11 +15,11 @@ Show Cursor account usage in the branch toolbar with labels and metrics that mat
 
 ## Alternatives considered
 
-| Alternative | Rejection |
-|---|---|
-| Map Cursor into Claude 5h/7d slots | Misleading labels; rejected after UI adaptation task |
+| Alternative                                    | Rejection                                                        |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| Map Cursor into Claude 5h/7d slots             | Misleading labels; rejected after UI adaptation task             |
 | Provider-specific UI only (no contract change) | Can't carry structured Cursor fields through activities reliably |
-| Browser session cookie auth | Unavailable to Node server; community pattern uses local JWT |
+| Browser session cookie auth                    | Unavailable to Node server; community pattern uses local JWT     |
 
 ## Tradeoffs
 

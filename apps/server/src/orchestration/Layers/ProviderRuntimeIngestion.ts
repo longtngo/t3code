@@ -830,7 +830,8 @@ export function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: status === "failed" ? "error" : "info",
           kind: "task.updated",
-          summary: status === "failed" ? "Task failed" : wasStopped ? "Task stopped" : "Task completed",
+          summary:
+            status === "failed" ? "Task failed" : wasStopped ? "Task stopped" : "Task completed",
           payload: {
             taskId: event.payload.taskId,
             ...(event.payload.description

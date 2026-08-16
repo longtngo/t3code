@@ -696,10 +696,7 @@ export const make = Effect.gen(function* () {
       AuthenticatedSession,
       ServerAuthCredentialError | ServerAuthInternalError
     >,
-  ): Effect.Effect<
-    AuthenticatedSession,
-    ServerAuthCredentialError | ServerAuthInternalError
-  > =>
+  ): Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError> =>
     config.disableAuthentication
       ? effect.pipe(
           Effect.catchTag("ServerAuthMissingCredentialError", () => resolveOpenAccessSession),

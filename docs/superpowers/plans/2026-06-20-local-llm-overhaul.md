@@ -23,12 +23,14 @@
 ### Task 1: Shared local-LLM catalog (`@t3tools/shared/localLlm`)
 
 **Files:**
+
 - Create: `packages/shared/src/localLlm/catalog.ts`
 - Create: `packages/shared/src/localLlm/index.ts`
 - Test: `packages/shared/src/localLlm/catalog.test.ts`
 - Modify: `packages/shared/package.json` (add `./localLlm` export)
 
 **Interfaces:**
+
 - Produces:
   - `LocalLlmFormat = "mlx" | "gguf" | "safetensors"`
   - `ProviderCatalogEntry`, `ModelCatalogEntry`, `ArgSpec` (shapes per spec §1)
@@ -46,8 +48,12 @@
 // packages/shared/src/localLlm/catalog.test.ts
 import { describe, expect, it } from "vitest";
 import {
-  LOCAL_LLM_MODELS, LOCAL_LLM_PROVIDERS, PROVIDER_ARG_SPECS,
-  compatibleModels, getModel, getProvider,
+  LOCAL_LLM_MODELS,
+  LOCAL_LLM_PROVIDERS,
+  PROVIDER_ARG_SPECS,
+  compatibleModels,
+  getModel,
+  getProvider,
 } from "./index.ts";
 
 describe("local llm catalog", () => {
@@ -59,7 +65,9 @@ describe("local llm catalog", () => {
   });
 
   it("marks only mlx-serve and ds4 as managed", () => {
-    const managed = LOCAL_LLM_PROVIDERS.filter((p) => p.managed).map((p) => p.id).sort();
+    const managed = LOCAL_LLM_PROVIDERS.filter((p) => p.managed)
+      .map((p) => p.id)
+      .sort();
     expect(managed).toEqual(["ds4", "mlx-serve"]);
   });
 
@@ -145,96 +153,310 @@ export interface ArgSpec {
 export const GiB = (n: number): number => n * 1024 ** 3;
 
 export const LOCAL_LLM_PROVIDERS: readonly ProviderCatalogEntry[] = [
-  { id: "mlx-serve", name: "mlx-serve", managed: true, format: "mlx",
-    host: "127.0.0.1", defaultPort: 8765, binaryPath: "mlx-serve", modelsDir: "~/llm/models",
+  {
+    id: "mlx-serve",
+    name: "mlx-serve",
+    managed: true,
+    format: "mlx",
+    host: "127.0.0.1",
+    defaultPort: 8765,
+    binaryPath: "mlx-serve",
+    modelsDir: "~/llm/models",
     defaultArgs: ["--reasoning-budget 0"],
-    note: "Apple Silicon, primary. One model per process/port. PLD default ON (26.6.8+)." },
-  { id: "ds4", name: "DeepSeek V4 engine (ds4)", managed: true, format: "gguf",
-    host: "127.0.0.1", defaultPort: 8000, binaryPath: "ds4-server", modelsDir: "~/ds4/gguf",
-    cwdFromBinary: true, defaultArgs: [],
-    note: "Offline frontier. Loads one GGUF via -m; cwd pinned to binary dir (Metal shaders)." },
-  { id: "vllm", name: "vLLM", managed: false, format: "safetensors",
-    host: "127.0.0.1", defaultPort: 8000, defaultArgs: [],
-    note: "External / probe-only. OpenAI-compatible /v1/models." },
-  { id: "llamacpp", name: "llama.cpp (llama-server)", managed: false, format: "gguf",
-    host: "127.0.0.1", defaultPort: 8080, defaultArgs: [],
-    note: "External / probe-only. Served ~= loaded." },
-  { id: "lmstudio", name: "LM Studio", managed: false, format: "gguf",
-    host: "127.0.0.1", defaultPort: 1234, defaultArgs: [], note: "External / probe-only." },
-  { id: "ollama", name: "Ollama", managed: false, format: "gguf",
-    host: "127.0.0.1", defaultPort: 11434, defaultArgs: [],
-    note: "External / probe-only. True resident via /api/ps (planned)." },
+    note: "Apple Silicon, primary. One model per process/port. PLD default ON (26.6.8+).",
+  },
+  {
+    id: "ds4",
+    name: "DeepSeek V4 engine (ds4)",
+    managed: true,
+    format: "gguf",
+    host: "127.0.0.1",
+    defaultPort: 8000,
+    binaryPath: "ds4-server",
+    modelsDir: "~/ds4/gguf",
+    cwdFromBinary: true,
+    defaultArgs: [],
+    note: "Offline frontier. Loads one GGUF via -m; cwd pinned to binary dir (Metal shaders).",
+  },
+  {
+    id: "vllm",
+    name: "vLLM",
+    managed: false,
+    format: "safetensors",
+    host: "127.0.0.1",
+    defaultPort: 8000,
+    defaultArgs: [],
+    note: "External / probe-only. OpenAI-compatible /v1/models.",
+  },
+  {
+    id: "llamacpp",
+    name: "llama.cpp (llama-server)",
+    managed: false,
+    format: "gguf",
+    host: "127.0.0.1",
+    defaultPort: 8080,
+    defaultArgs: [],
+    note: "External / probe-only. Served ~= loaded.",
+  },
+  {
+    id: "lmstudio",
+    name: "LM Studio",
+    managed: false,
+    format: "gguf",
+    host: "127.0.0.1",
+    defaultPort: 1234,
+    defaultArgs: [],
+    note: "External / probe-only.",
+  },
+  {
+    id: "ollama",
+    name: "Ollama",
+    managed: false,
+    format: "gguf",
+    host: "127.0.0.1",
+    defaultPort: 11434,
+    defaultArgs: [],
+    note: "External / probe-only. True resident via /api/ps (planned).",
+  },
 ];
 
 export const LOCAL_LLM_MODELS: readonly ModelCatalogEntry[] = [
-  { id: "Qwen3.6-35B-A3B-4bit", name: "Qwen3.6 35B A3B", format: "mlx",
-    resourceName: "Qwen3.6-35B-A3B-4bit", quant: "4-bit", moe: true, maxContext: 163840,
-    approxBytes: GiB(19), note: "Fastest at top quality (133 d_tps, PLD-on)." },
-  { id: "gemma-4-26b-a4b-it-4bit", name: "Gemma 4 26B A4B", format: "mlx",
-    resourceName: "gemma-4-26b-a4b-it-4bit", quant: "4-bit", moe: true, maxContext: 131072,
-    approxBytes: GiB(15), note: "Terser / lower wall (99 d_tps)." },
-  { id: "gemma-4-12B-it-4bit", name: "Gemma 4 12B", format: "mlx",
-    resourceName: "gemma-4-12B-it-4bit", quant: "4-bit", moe: false, maxContext: 131072,
-    approxBytes: GiB(10), note: "Lightweight, low RAM (~34 d_tps)." },
-  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", format: "gguf",
-    resourceName: "ds4flash.gguf", quant: "GGUF", moe: true, maxContext: 163840,
-    approxBytes: GiB(91), ds4Only: true, note: "Offline frontier capability." },
+  {
+    id: "Qwen3.6-35B-A3B-4bit",
+    name: "Qwen3.6 35B A3B",
+    format: "mlx",
+    resourceName: "Qwen3.6-35B-A3B-4bit",
+    quant: "4-bit",
+    moe: true,
+    maxContext: 163840,
+    approxBytes: GiB(19),
+    note: "Fastest at top quality (133 d_tps, PLD-on).",
+  },
+  {
+    id: "gemma-4-26b-a4b-it-4bit",
+    name: "Gemma 4 26B A4B",
+    format: "mlx",
+    resourceName: "gemma-4-26b-a4b-it-4bit",
+    quant: "4-bit",
+    moe: true,
+    maxContext: 131072,
+    approxBytes: GiB(15),
+    note: "Terser / lower wall (99 d_tps).",
+  },
+  {
+    id: "gemma-4-12B-it-4bit",
+    name: "Gemma 4 12B",
+    format: "mlx",
+    resourceName: "gemma-4-12B-it-4bit",
+    quant: "4-bit",
+    moe: false,
+    maxContext: 131072,
+    approxBytes: GiB(10),
+    note: "Lightweight, low RAM (~34 d_tps).",
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    format: "gguf",
+    resourceName: "ds4flash.gguf",
+    quant: "GGUF",
+    moe: true,
+    maxContext: 163840,
+    approxBytes: GiB(91),
+    ds4Only: true,
+    note: "Offline frontier capability.",
+  },
 ];
 
 export const PROVIDER_ARG_SPECS: Readonly<Record<string, readonly ArgSpec[]>> = {
   "mlx-serve": [
-    { flag: "--ctx-size", type: "number", placeholder: "tokens", desc: "Maximum context length (default: model max)." },
-    { flag: "--reasoning-budget", type: "number", placeholder: "0 = no-think", desc: "Max thinking tokens per request." },
-    { flag: "--kv-quant", type: "enum", values: ["off", "4", "8", "turbo2", "turbo4"], desc: "KV-cache quantization scheme." },
-    { flag: "--kv-attn-mode", type: "enum", values: ["dense", "fused"], desc: "Attention path for quantized KV." },
-    { flag: "--temp", type: "number", placeholder: "0.0-2.0", desc: "Default sampling temperature." },
+    {
+      flag: "--ctx-size",
+      type: "number",
+      placeholder: "tokens",
+      desc: "Maximum context length (default: model max).",
+    },
+    {
+      flag: "--reasoning-budget",
+      type: "number",
+      placeholder: "0 = no-think",
+      desc: "Max thinking tokens per request.",
+    },
+    {
+      flag: "--kv-quant",
+      type: "enum",
+      values: ["off", "4", "8", "turbo2", "turbo4"],
+      desc: "KV-cache quantization scheme.",
+    },
+    {
+      flag: "--kv-attn-mode",
+      type: "enum",
+      values: ["dense", "fused"],
+      desc: "Attention path for quantized KV.",
+    },
+    {
+      flag: "--temp",
+      type: "number",
+      placeholder: "0.0-2.0",
+      desc: "Default sampling temperature.",
+    },
     { flag: "--top-p", type: "number", placeholder: "0-1", desc: "Default nucleus top-p." },
     { flag: "--top-k", type: "number", placeholder: "0 = off", desc: "Default top-k." },
     { flag: "--no-pld", type: "flag", desc: "Force-disable Prompt-Lookup Decoding." },
-    { flag: "--pld-draft-len", type: "number", placeholder: "default 5", desc: "Max draft tokens per PLD step." },
+    {
+      flag: "--pld-draft-len",
+      type: "number",
+      placeholder: "default 5",
+      desc: "Max draft tokens per PLD step.",
+    },
     { flag: "--no-vision", type: "flag", desc: "Disable vision encoder (saves memory)." },
     { flag: "--no-mtp", type: "flag", desc: "Disable Qwen native MTP head." },
-    { flag: "--max-resident-models", type: "number", placeholder: "default 3", desc: "Max loaded models in memory." },
-    { flag: "--prefix-cache-mem", type: "string", placeholder: "2GB / 0=off", desc: "Hot prefix-cache KV budget." },
+    {
+      flag: "--max-resident-models",
+      type: "number",
+      placeholder: "default 3",
+      desc: "Max loaded models in memory.",
+    },
+    {
+      flag: "--prefix-cache-mem",
+      type: "string",
+      placeholder: "2GB / 0=off",
+      desc: "Hot prefix-cache KV budget.",
+    },
     { flag: "--timeout", type: "number", placeholder: "secs, 0=none", desc: "Request timeout." },
-    { flag: "--engine", type: "enum", values: ["auto", "ds4", "llama"], desc: "Engine selector for .gguf inputs only." },
-    { flag: "--log-level", type: "enum", values: ["error", "warn", "info", "debug"], desc: "Log level." },
+    {
+      flag: "--engine",
+      type: "enum",
+      values: ["auto", "ds4", "llama"],
+      desc: "Engine selector for .gguf inputs only.",
+    },
+    {
+      flag: "--log-level",
+      type: "enum",
+      values: ["error", "warn", "info", "debug"],
+      desc: "Log level.",
+    },
   ],
   ds4: [
-    { flag: "--ctx", type: "number", placeholder: "default 32768", desc: "Context size allocated at startup (-c)." },
-    { flag: "--tokens", type: "number", placeholder: "default 384K", desc: "Default max output tokens (-n)." },
-    { flag: "--mtp-draft", type: "number", placeholder: "default 1", desc: "Max MTP draft tokens per step." },
+    {
+      flag: "--ctx",
+      type: "number",
+      placeholder: "default 32768",
+      desc: "Context size allocated at startup (-c).",
+    },
+    {
+      flag: "--tokens",
+      type: "number",
+      placeholder: "default 384K",
+      desc: "Default max output tokens (-n).",
+    },
+    {
+      flag: "--mtp-draft",
+      type: "number",
+      placeholder: "default 1",
+      desc: "Max MTP draft tokens per step.",
+    },
     { flag: "--quality", type: "flag", desc: "Prefer exact kernels; strict MTP verification." },
     { flag: "--power", type: "number", placeholder: "1-100", desc: "Target GPU duty cycle %." },
-    { flag: "--backend", type: "enum", values: ["metal", "cuda", "cpu"], desc: "Select compute backend explicitly." },
+    {
+      flag: "--backend",
+      type: "enum",
+      values: ["metal", "cuda", "cpu"],
+      desc: "Select compute backend explicitly.",
+    },
     { flag: "--warm-weights", type: "flag", desc: "Touch mapped pages before serving." },
     { flag: "--cors", type: "flag", desc: "Add CORS headers for browser clients." },
-    { flag: "--kv-disk-dir", type: "string", placeholder: "path", desc: "Enable disk KV checkpoints in DIR." },
-    { flag: "--kv-disk-space-mb", type: "number", placeholder: "default 4096", desc: "Disk budget for checkpoints." },
+    {
+      flag: "--kv-disk-dir",
+      type: "string",
+      placeholder: "path",
+      desc: "Enable disk KV checkpoints in DIR.",
+    },
+    {
+      flag: "--kv-disk-space-mb",
+      type: "number",
+      placeholder: "default 4096",
+      desc: "Disk budget for checkpoints.",
+    },
   ],
   llamacpp: [
-    { flag: "--ctx-size", type: "number", placeholder: "tokens (-c)", desc: "Prompt context size." },
-    { flag: "--n-gpu-layers", type: "number", placeholder: "-ngl", desc: "Layers offloaded to GPU." },
+    {
+      flag: "--ctx-size",
+      type: "number",
+      placeholder: "tokens (-c)",
+      desc: "Prompt context size.",
+    },
+    {
+      flag: "--n-gpu-layers",
+      type: "number",
+      placeholder: "-ngl",
+      desc: "Layers offloaded to GPU.",
+    },
     { flag: "--threads", type: "number", placeholder: "-t", desc: "CPU threads." },
     { flag: "--parallel", type: "number", placeholder: "-np", desc: "Parallel request slots." },
     { flag: "--flash-attn", type: "flag", desc: "Enable Flash Attention." },
     { flag: "--cont-batching", type: "flag", desc: "Enable continuous batching." },
   ],
   vllm: [
-    { flag: "--max-model-len", type: "number", placeholder: "tokens", desc: "Max sequence length." },
-    { flag: "--gpu-memory-utilization", type: "number", placeholder: "0-1", desc: "Fraction of GPU mem to use." },
-    { flag: "--dtype", type: "enum", values: ["auto", "half", "bfloat16", "float16", "float32"], desc: "Weight/activation dtype." },
-    { flag: "--tensor-parallel-size", type: "number", placeholder: "GPUs", desc: "Tensor-parallel degree." },
-    { flag: "--quantization", type: "enum", values: ["awq", "gptq", "fp8", "none"], desc: "Quantization method." },
+    {
+      flag: "--max-model-len",
+      type: "number",
+      placeholder: "tokens",
+      desc: "Max sequence length.",
+    },
+    {
+      flag: "--gpu-memory-utilization",
+      type: "number",
+      placeholder: "0-1",
+      desc: "Fraction of GPU mem to use.",
+    },
+    {
+      flag: "--dtype",
+      type: "enum",
+      values: ["auto", "half", "bfloat16", "float16", "float32"],
+      desc: "Weight/activation dtype.",
+    },
+    {
+      flag: "--tensor-parallel-size",
+      type: "number",
+      placeholder: "GPUs",
+      desc: "Tensor-parallel degree.",
+    },
+    {
+      flag: "--quantization",
+      type: "enum",
+      values: ["awq", "gptq", "fp8", "none"],
+      desc: "Quantization method.",
+    },
   ],
   lmstudio: [
-    { flag: "--context-length", type: "number", placeholder: "tokens", desc: "Context length (lms load)." },
+    {
+      flag: "--context-length",
+      type: "number",
+      placeholder: "tokens",
+      desc: "Context length (lms load).",
+    },
     { flag: "--gpu", type: "enum", values: ["max", "off", "0.5"], desc: "GPU offload ratio." },
   ],
   ollama: [
-    { flag: "OLLAMA_CONTEXT_LENGTH", type: "number", placeholder: "tokens", desc: "Context length (env var)." },
-    { flag: "OLLAMA_NUM_PARALLEL", type: "number", placeholder: "requests", desc: "Parallel requests (env var)." },
-    { flag: "OLLAMA_KEEP_ALIVE", type: "string", placeholder: "e.g. 30m", desc: "Model keep-alive (env var)." },
+    {
+      flag: "OLLAMA_CONTEXT_LENGTH",
+      type: "number",
+      placeholder: "tokens",
+      desc: "Context length (env var).",
+    },
+    {
+      flag: "OLLAMA_NUM_PARALLEL",
+      type: "number",
+      placeholder: "requests",
+      desc: "Parallel requests (env var).",
+    },
+    {
+      flag: "OLLAMA_KEEP_ALIVE",
+      type: "string",
+      placeholder: "e.g. 30m",
+      desc: "Model keep-alive (env var).",
+    },
   ],
 };
 
@@ -286,10 +508,12 @@ git commit -m "feat(shared): build-time local-LLM provider/model/arg catalog"
 ### Task 2: `LocalLlmSettings` schema + defaults
 
 **Files:**
+
 - Modify: `packages/contracts/src/settings.ts` (add new schema near the existing `LocalModelsSettings` ~lines 395-440; keep `LocalModelsSettings` as deprecated/legacy for migration; add `localLlm` to `ServerSettings` and `ServerSettingsPatch`)
 - Test: `packages/contracts/src/settings.localLlm.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks (string ids validated at runtime by the catalog, not the schema).
 - Produces:
   - `LocalLlmProviderConfig`, `LocalLlmModelConfig`, `LocalLlmSettings` schemas + `.Type`s
@@ -318,8 +542,18 @@ describe("LocalLlmSettings", () => {
     const s = decode({
       ramBudgetBytes: 1024,
       providers: { "mlx-serve": { visible: false, modelsDir: "~/m", defaultArgs: ["--no-pld"] } },
-      models: [{ id: "c1", name: "Fast", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit",
-        contextWindow: 65536, visible: true, port: 8765, argsOverride: ["--reasoning-budget 0"] }],
+      models: [
+        {
+          id: "c1",
+          name: "Fast",
+          providerId: "mlx-serve",
+          modelId: "Qwen3.6-35B-A3B-4bit",
+          contextWindow: 65536,
+          visible: true,
+          port: 8765,
+          argsOverride: ["--reasoning-budget 0"],
+        },
+      ],
     });
     expect(s.providers["mlx-serve"].visible).toBe(false);
     expect(s.models[0].contextWindow).toBe(65536);
@@ -327,8 +561,10 @@ describe("LocalLlmSettings", () => {
   });
 
   it("defaults model.visible to true and provider.visible to true", () => {
-    const s = decode({ providers: { ds4: {} }, models: [
-      { id: "c2", name: "X", providerId: "ds4", modelId: "deepseek-v4-flash" }] });
+    const s = decode({
+      providers: { ds4: {} },
+      models: [{ id: "c2", name: "X", providerId: "ds4", modelId: "deepseek-v4-flash" }],
+    });
     expect(s.providers.ds4.visible).toBe(true);
     expect(s.models[0].visible).toBe(true);
   });
@@ -410,11 +646,13 @@ git commit -m "feat(contracts): LocalLlmSettings schema (providers + model confi
 ### Task 3: Legacy `localModels` → `localLlm` migration
 
 **Files:**
+
 - Create: `packages/contracts/src/localLlmMigration.ts`
 - Test: `packages/contracts/src/localLlmMigration.test.ts`
 - Modify: `apps/server/src/serverSettings.ts` (call migration after decode when `localLlm` is empty and `localModels` is present — locate the settings decode/normalize path; the migration is invoked there, not inside the Schema)
 
 **Interfaces:**
+
 - Consumes: `LocalLlmSettings`, `LocalModelsSettings` types (Task 2); catalog `getModel`/`LOCAL_LLM_MODELS` (Task 1) to match `perModel` keys to `resourceName`.
 - Produces: `migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSettings`
 
@@ -428,10 +666,17 @@ import { migrateLocalModels } from "./localLlmMigration.ts";
 describe("migrateLocalModels", () => {
   it("maps modelsDir/defaultArgs/ramBudget and ds4 enabled->visible", () => {
     const out = migrateLocalModels({
-      modelsDir: "~/llm/models", ramBudgetBytes: 42,
+      modelsDir: "~/llm/models",
+      ramBudgetBytes: 42,
       defaultArgs: ["--reasoning-budget", "0"],
       perModel: {},
-      ds4: { enabled: true, binaryPath: "~/x/ds4-server", modelsDir: "~/g", defaultArgs: [], perModel: {} },
+      ds4: {
+        enabled: true,
+        binaryPath: "~/x/ds4-server",
+        modelsDir: "~/g",
+        defaultArgs: [],
+        perModel: {},
+      },
     } as never);
     expect(out.ramBudgetBytes).toBe(42);
     expect(out.providers["mlx-serve"].modelsDir).toBe("~/llm/models");
@@ -442,9 +687,20 @@ describe("migrateLocalModels", () => {
 
   it("seeds a model config from a perModel key matching a catalog resourceName", () => {
     const out = migrateLocalModels({
-      modelsDir: "~/llm/models", ramBudgetBytes: 0, defaultArgs: [],
-      perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] }, "unknown-dir": { args: ["--x"] } },
-      ds4: { enabled: false, binaryPath: "ds4-server", modelsDir: "~/ds4/gguf", defaultArgs: [], perModel: {} },
+      modelsDir: "~/llm/models",
+      ramBudgetBytes: 0,
+      defaultArgs: [],
+      perModel: {
+        "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] },
+        "unknown-dir": { args: ["--x"] },
+      },
+      ds4: {
+        enabled: false,
+        binaryPath: "ds4-server",
+        modelsDir: "~/ds4/gguf",
+        defaultArgs: [],
+        perModel: {},
+      },
     } as never);
     const cfg = out.models.find((m) => m.modelId === "gemma-4-12B-it-4bit");
     expect(cfg).toBeDefined();
@@ -474,7 +730,8 @@ function groupArgs(flat: readonly string[]): string[] {
   for (let i = 0; i < flat.length; i++) {
     const tok = flat[i];
     if (tok.startsWith("-") && i + 1 < flat.length && !flat[i + 1].startsWith("-")) {
-      out.push(`${tok} ${flat[i + 1]}`); i++;
+      out.push(`${tok} ${flat[i + 1]}`);
+      i++;
     } else out.push(tok);
   }
   return out;
@@ -488,8 +745,12 @@ export function migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSetting
     const m = byResource.get(key);
     if (!m) continue; // non-catalog keys dropped
     models.push({
-      id: `mig-${++n}`, name: m.name, providerId: m.ds4Only ? "ds4" : "mlx-serve",
-      modelId: m.id, contextWindow: m.maxContext, visible: true,
+      id: `mig-${++n}`,
+      name: m.name,
+      providerId: m.ds4Only ? "ds4" : "mlx-serve",
+      modelId: m.id,
+      contextWindow: m.maxContext,
+      visible: true,
       argsOverride: v.args ? groupArgs(v.args) : undefined,
     });
   }
@@ -539,10 +800,12 @@ git commit -m "feat(contracts): migrate legacy localModels into localLlm"
 ### Task 4: RPC contract — load/unload by configId; sample fields
 
 **Files:**
+
 - Modify: `packages/contracts/src/rpc.ts` (`LlmModel` ~669-706 add `configId`/`configName`; `WsLlmServeLoadRpc`/`WsLlmServeUnloadRpc` ~755-766 payloads; `LlmServeError` kinds ~738-752 add `"external_not_managed"`)
 - Test: `packages/contracts/src/rpc.localLlm.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `LlmModel.configId?: string`, `LlmModel.configName?: string`
   - `WsLlmServeLoadRpc` payload `{ configId: string }`
@@ -559,7 +822,12 @@ import { LlmModel, WsLlmServeLoadRpc, WsLlmServeUnloadRpc } from "./rpc.ts";
 
 describe("local llm rpc", () => {
   it("LlmModel carries configId/configName", () => {
-    const m = Schema.decodeUnknownSync(LlmModel)({ id: "x", loaded: false, configId: "c1", configName: "Fast" });
+    const m = Schema.decodeUnknownSync(LlmModel)({
+      id: "x",
+      loaded: false,
+      configId: "c1",
+      configName: "Fast",
+    });
     expect(m.configId).toBe("c1");
     expect(m.configName).toBe("Fast");
   });
@@ -600,10 +868,12 @@ git commit -m "feat(contracts): local-LLM RPCs address models by configId"
 ### Task 5: Server — config→spawn resolution helpers (pure)
 
 **Files:**
+
 - Create: `apps/server/src/llm/resolveLaunch.ts`
 - Test: `apps/server/src/llm/resolveLaunch.test.ts`
 
 **Interfaces:**
+
 - Consumes: catalog (`getProvider`, `getModel`); settings types (`LocalLlmSettings`, `LocalLlmModelConfig`, `LocalLlmProviderConfig`); existing `expandTilde` from the server (import the same helper `LlmServeManager` currently uses).
 - Produces:
   - `resolveProvider(catalogId, settings): ResolvedProvider | null` — merges catalog defaults with `settings.providers[catalogId]` overrides; `{ id, managed, host, port, binaryPath, modelsDir, cwdFromBinary, defaultArgs, baseUrl }`.
@@ -622,14 +892,34 @@ const base = { ramBudgetBytes: 0, providers: {}, models: [] };
 
 describe("resolveLaunch", () => {
   it("builds mlx-serve args with grouped defaultArgs split and model path joined", () => {
-    const cfg = { id: "c1", name: "Fast", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit",
-      visible: true, port: 8765, contextWindow: 65536 } as never;
-    const r = resolveLaunch(cfg, { ...base, providers: { "mlx-serve": { visible: true, modelsDir: "/models" } } } as never);
+    const cfg = {
+      id: "c1",
+      name: "Fast",
+      providerId: "mlx-serve",
+      modelId: "Qwen3.6-35B-A3B-4bit",
+      visible: true,
+      port: 8765,
+      contextWindow: 65536,
+    } as never;
+    const r = resolveLaunch(cfg, {
+      ...base,
+      providers: { "mlx-serve": { visible: true, modelsDir: "/models" } },
+    } as never);
     expect("error" in r).toBe(false);
     if ("error" in r) return;
     expect(r.executable).toBe("mlx-serve");
     expect(r.modelPath).toBe("/models/Qwen3.6-35B-A3B-4bit");
-    expect(r.args).toEqual(["--serve", "--reasoning-budget", "0", "--host", "127.0.0.1", "--port", "8765", "--model", "/models/Qwen3.6-35B-A3B-4bit"]);
+    expect(r.args).toEqual([
+      "--serve",
+      "--reasoning-budget",
+      "0",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8765",
+      "--model",
+      "/models/Qwen3.6-35B-A3B-4bit",
+    ]);
     expect(r.cwd).toBeUndefined();
   });
 
@@ -638,8 +928,18 @@ describe("resolveLaunch", () => {
   });
 
   it("ds4 builds -m and a cwd pinned to the binary dir", () => {
-    const cfg = { id: "c2", name: "DS", providerId: "ds4", modelId: "deepseek-v4-flash", visible: true, port: 8000 } as never;
-    const r = resolveLaunch(cfg, { ...base, providers: { ds4: { visible: true, binaryPath: "/opt/ds4/ds4-server", modelsDir: "/g" } } } as never);
+    const cfg = {
+      id: "c2",
+      name: "DS",
+      providerId: "ds4",
+      modelId: "deepseek-v4-flash",
+      visible: true,
+      port: 8000,
+    } as never;
+    const r = resolveLaunch(cfg, {
+      ...base,
+      providers: { ds4: { visible: true, binaryPath: "/opt/ds4/ds4-server", modelsDir: "/g" } },
+    } as never);
     if ("error" in r) throw new Error(r.error);
     expect(r.executable).toBe("/opt/ds4/ds4-server");
     expect(r.modelPath).toBe("/g/ds4flash.gguf");
@@ -648,13 +948,23 @@ describe("resolveLaunch", () => {
   });
 
   it("returns an error for an external provider", () => {
-    const cfg = { id: "c3", name: "L", providerId: "llamacpp", modelId: "gemma-4-12B-it-4bit", visible: true } as never;
+    const cfg = {
+      id: "c3",
+      name: "L",
+      providerId: "llamacpp",
+      modelId: "gemma-4-12B-it-4bit",
+      visible: true,
+    } as never;
     const r = resolveLaunch(cfg, base as never);
     expect("error" in r && r.error).toMatch(/external/i);
   });
 
   it("splitGroupedArgs splits flag+value but leaves bare flags", () => {
-    expect(splitGroupedArgs(["--reasoning-budget 0", "--no-pld"])).toEqual(["--reasoning-budget", "0", "--no-pld"]);
+    expect(splitGroupedArgs(["--reasoning-budget 0", "--no-pld"])).toEqual([
+      "--reasoning-budget",
+      "0",
+      "--no-pld",
+    ]);
   });
 });
 ```
@@ -676,10 +986,12 @@ git commit -m "feat(server): pure config->launch resolution for local LLM config
 ### Task 6: Server — port assignment + RAM budget helpers
 
 **Files:**
+
 - Create: `apps/server/src/llm/portBudget.ts`
 - Test: `apps/server/src/llm/portBudget.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `providerPortRange(catalogId): { min: number; max: number }` — `{ defaultPort, defaultPort+34 }`.
   - `assignPort(catalogId, taken: ReadonlySet<number>): number | null` — first free in range.
@@ -694,8 +1006,10 @@ import { describe, expect, it } from "vitest";
 import { assignPort, budgetBytes, fits, providerPortRange } from "./portBudget.ts";
 
 describe("portBudget", () => {
-  it("mlx range starts at 8765", () => expect(providerPortRange("mlx-serve")).toEqual({ min: 8765, max: 8799 }));
-  it("assigns first free port", () => expect(assignPort("mlx-serve", new Set([8765, 8766]))).toBe(8767));
+  it("mlx range starts at 8765", () =>
+    expect(providerPortRange("mlx-serve")).toEqual({ min: 8765, max: 8799 }));
+  it("assigns first free port", () =>
+    expect(assignPort("mlx-serve", new Set([8765, 8766]))).toBe(8767));
   it("returns null when range is full", () => {
     const full = new Set(Array.from({ length: 35 }, (_, i) => 8765 + i));
     expect(assignPort("mlx-serve", full)).toBeNull();
@@ -721,11 +1035,13 @@ git commit -m "feat(server): port-assignment + RAM-budget helpers for local LLM"
 ### Task 7: Server — `LlmServeManager` refactor (config-driven, mocked spawner)
 
 **Files:**
+
 - Modify: `apps/server/src/llm/LlmServeManager.ts` (replace ps-scan/dir-discovery enumeration with config-driven load/unload + status; remove `matchMlxRow`/`matchDs4Row`/`discover`/`estimateDirBytes` enumeration paths; keep spawn/scope/supervisor/semaphore)
 - Modify: `apps/server/src/diagnostics/LlmModels.ts` (sample now built from `localLlm.models` + per-config probe + registry)
 - Test: `apps/server/src/llm/LlmServeManager.test.ts` (spawner + probe + settings all mocked — **never spawns**)
 
 **Interfaces:**
+
 - Consumes: `resolveLaunch`/`resolveProvider` (Task 5), `assignPort`/`budgetBytes`/`fits` (Task 6), `probeProvider` (existing), `LocalLlmSettings`.
 - Produces (manager service surface):
   - `load(configId: string): Effect<{ pid; port }, LlmServeError | EnvironmentAuthorizationError>`
@@ -756,6 +1072,7 @@ git commit -m "feat(server): drive LlmServeManager from model configs, drop auto
 ### Task 8: Server — WS wiring for new payloads
 
 **Files:**
+
 - Modify: `apps/server/src/ws.ts` (~1501-1514 handlers: `llmServeLoad`/`llmServeUnload` now take `{ configId }`)
 - Test: covered by Task 7 manager tests + a thin ws handler test if the file has an existing pattern; otherwise assert handler delegates via a manager mock.
 
@@ -773,11 +1090,13 @@ git commit -m "feat(server): ws load/unload handlers take configId"
 ### Task 9: Web — `ArgPickerMenu` component + logic
 
 **Files:**
+
 - Create: `apps/web/src/components/llm/ArgPickerMenu.tsx`
 - Create: `apps/web/src/components/llm/argPicker.logic.ts`
 - Test: `apps/web/src/components/llm/argPicker.logic.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PROVIDER_ARG_SPECS`, `ArgSpec` (Task 1).
 - Produces:
   - `argPicker.logic.ts`: `buildArg(spec: ArgSpec, value?: string): string` (flag→`"--x"`, value→`"--x val"`); `filterSpecs(specs, query): ArgSpec[]`; `addArg(list, str): string[]`; `removeArg(list, index): string[]`.
@@ -796,7 +1115,10 @@ describe("argPicker.logic", () => {
     expect(buildArg({ flag: "--kv-quant", type: "enum", values: ["8"] }, "8")).toBe("--kv-quant 8");
   });
   it("filters specs by flag and description", () => {
-    const specs = [{ flag: "--ctx-size", type: "number" as const, desc: "context" }, { flag: "--temp", type: "number" as const }];
+    const specs = [
+      { flag: "--ctx-size", type: "number" as const, desc: "context" },
+      { flag: "--temp", type: "number" as const },
+    ];
     expect(filterSpecs(specs, "ctx").map((s) => s.flag)).toEqual(["--ctx-size"]);
     expect(filterSpecs(specs, "context").map((s) => s.flag)).toEqual(["--ctx-size"]);
   });
@@ -822,10 +1144,12 @@ git commit -m "feat(web): CLI-flag arg picker menu for local LLM args"
 ### Task 10: Web — model-config logic (compatibility, defaults, ctx clamp)
 
 **Files:**
+
 - Create: `apps/web/src/components/settings/localLlm/modelConfig.logic.ts`
 - Test: `apps/web/src/components/settings/localLlm/modelConfig.logic.test.ts`
 
 **Interfaces:**
+
 - Consumes: catalog (`compatibleModels`, `getModel`, `getProvider`, `LOCAL_LLM_PROVIDERS`), settings types.
 - Produces:
   - `visibleProviders(settings): ProviderCatalogEntry[]` (visible OR referenced by a config).
@@ -850,6 +1174,7 @@ git commit -m "feat(web): model-config logic (compatibility, ctx clamp, port ass
 ### Task 11: Web — merged "Local LLM" settings tab (providers + model configs)
 
 **Files:**
+
 - Create: `apps/web/src/components/settings/localLlm/LocalLlmSettings.tsx` (panel: `LocalLlmProvidersSection` + `LocalLlmModelConfigsSection`)
 - Create: `apps/web/src/routes/settings.local-llm.tsx` (lazy route, mirrors `settings.local-models.tsx`)
 - Modify: `apps/web/src/components/settings/SettingsSidebarNav.tsx` (replace the "Local Models" item with "Local LLM" → `/settings/local-llm`, `CpuIcon`)
@@ -857,12 +1182,13 @@ git commit -m "feat(web): model-config logic (compatibility, ctx clamp, port ass
 - Test: rendering smoke via existing settings test harness if present; logic is already covered by Task 10. (No new browser test this phase.)
 
 **Interfaces:**
+
 - Consumes: `useSettings`/`useUpdateSettings` (existing), catalog, `ArgPickerMenu` (Task 9), `modelConfig.logic` (Task 10), shared eye-icon presentation.
 - Produces: `LocalLlmSettingsPanel` exported for the route.
 
 - [ ] **Step 1:** Implement the two sections per spec §5 and the prototype (eye-icon visibility via the existing icon set; provider override fields; model-config cards with provider→model selects, context slider, Advanced accordion with `ArgPickerMenu` + port/path overrides). Persist via `updateSettings({ localLlm: { ...lm, ... } })` (whole-object). Reuse `modelPresentation.tsx` for status dots if needed.
 - [ ] **Step 2:** Update `SettingsSidebarNav` and add the route; remove the old route/component/tests.
-- [ ] **Step 3:** Typecheck the web package without a full build: `cd apps/web && vp run typecheck`. Expected: no errors. *(typecheck only — not a build.)*
+- [ ] **Step 3:** Typecheck the web package without a full build: `cd apps/web && vp run typecheck`. Expected: no errors. _(typecheck only — not a build.)_
 - [ ] **Step 4:** Run web unit tests: `cd apps/web && vp test run --project unit`. Expected: PASS (no references to deleted modules remain).
 - [ ] **Step 5: Commit**
 
@@ -877,12 +1203,14 @@ git commit -m "feat(web): merged Local LLM settings tab (providers + model confi
 ### Task 12: Web — sidebar sourced from model configs
 
 **Files:**
+
 - Modify: `apps/web/src/components/sidebar/SidebarLocalModels.tsx` (rows from `localLlm.models` joined with live `LlmModelsSample`; click load/unload by `configId`; external rows non-loadable with tooltip)
 - Modify: `apps/web/src/hooks/useLlmModels.ts` (`load`/`unload` actions take `configId`)
 - Modify: `apps/web/src/lib/llmModels.ts` if needed (status derivation by config)
 - Test: `apps/web/src/components/sidebar/sidebarLocalModels.logic.test.ts` (extract a pure `mergeConfigsWithSample(models, sample)` → rows with status; test online/offline/loading/hidden filtering)
 
 **Interfaces:**
+
 - Consumes: `useSettings` (`localLlm.models`), `useLlmModels` sample, `getProvider`/`getModel`.
 - Produces: `mergeConfigsWithSample(models, sample): SidebarRow[]` and updated actions `load(configId)`/`unload(configId)`.
 
@@ -902,12 +1230,14 @@ git commit -m "feat(web): sidebar local models sourced from model configs"
 ### Task 13: Web — Providers tab env-var presets
 
 **Files:**
+
 - Create: `apps/web/src/components/settings/providers/localLlmPreset.logic.ts`
 - Create: `apps/web/src/components/settings/providers/PresetDialog.tsx`
 - Modify: `apps/web/src/components/settings/SettingsPanels.tsx` (`ProviderSettingsPanel` ~1132-1149: add a `Presets` button beside `+ Add`, open `PresetDialog`)
 - Test: `apps/web/src/components/settings/providers/localLlmPreset.logic.test.ts`
 
 **Interfaces:**
+
 - Consumes: catalog (`getProvider`, `getModel`), `localLlm.models`, `ProviderInstanceEnvironmentVariable` type, `ProviderDriverKind`.
 - Produces:
   - `presetEnv(config, driverKind): ProviderInstanceEnvironmentVariable[]` — driver-aware names via `DRIVER_ENV_NAMES: Record<string, { baseUrl: string; apiKey: string; model: string }>` (default/codex → `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`CODEX_MODEL`; claude → `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`; fall back to the OPENAI names). Base URL = `http://${host}:${port}/v1` from resolved provider; api key value `"local"` (sensitive); model = `config.modelId`.
@@ -920,7 +1250,14 @@ git commit -m "feat(web): sidebar local models sourced from model configs"
 import { describe, expect, it } from "vitest";
 import { mergeEnv, presetEnv } from "./localLlmPreset.logic.ts";
 
-const cfg = { id: "c1", name: "Fast", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit", visible: true, port: 8765 } as never;
+const cfg = {
+  id: "c1",
+  name: "Fast",
+  providerId: "mlx-serve",
+  modelId: "Qwen3.6-35B-A3B-4bit",
+  visible: true,
+  port: 8765,
+} as never;
 
 describe("localLlmPreset", () => {
   it("produces OpenAI-style vars for codex driver", () => {
@@ -930,8 +1267,14 @@ describe("localLlmPreset", () => {
     expect(byName.CODEX_MODEL).toBe("Qwen3.6-35B-A3B-4bit");
   });
   it("merge: preset wins on conflict and flags rows", () => {
-    const existing = [{ name: "OPENAI_API_KEY", value: "old", sensitive: true }, { name: "KEEP", value: "x", sensitive: false }];
-    const preset = [{ name: "OPENAI_API_KEY", value: "local", sensitive: true }, { name: "OPENAI_BASE_URL", value: "u", sensitive: false }];
+    const existing = [
+      { name: "OPENAI_API_KEY", value: "old", sensitive: true },
+      { name: "KEEP", value: "x", sensitive: false },
+    ];
+    const preset = [
+      { name: "OPENAI_API_KEY", value: "local", sensitive: true },
+      { name: "OPENAI_BASE_URL", value: "u", sensitive: false },
+    ];
     const r = mergeEnv(existing as never, preset as never);
     expect(r.merged.find((e) => e.name === "OPENAI_API_KEY")!.value).toBe("local");
     expect(r.merged.some((e) => e.name === "KEEP")).toBe(true);
@@ -958,13 +1301,13 @@ git commit -m "feat(web): Providers tab env-var presets from local LLM model con
 **Files:** repo-wide (no new feature code)
 
 - [ ] **Step 1:** Grep for dangling references to removed symbols: `localModels` UI editor, `modelId` RPC payloads, `matchMlxRow`, filesystem-discovery helpers. Fix imports/usages. Run:
-  `rg -n "settings/LocalModelsSettings|llmServe.*modelId|matchMlxRow|matchDs4Row" apps packages`
+      `rg -n "settings/LocalModelsSettings|llmServe.*modelId|matchMlxRow|matchDs4Row" apps packages`
 - [ ] **Step 2:** Run each touched package's unit suite (NOT a build, NOT browser):
   - `cd packages/shared && vp test run`
   - `cd packages/contracts && vp test run`
   - `cd apps/server && vp test run`
   - `cd apps/web && vp test run --project unit`
-  Expected: all PASS.
+    Expected: all PASS.
 - [ ] **Step 3:** Typecheck touched packages: `cd packages/contracts && vp run typecheck`, then shared/server/web the same way. Expected: clean.
 - [ ] **Step 4: Commit** any fixups.
 
@@ -980,6 +1323,7 @@ git commit -m "chore(llm): resolve dangling refs after local LLM overhaul"
 ## Self-Review
 
 **Spec coverage:**
+
 - Build-time catalog (decision 1, 2) → Task 1. ✔
 - New settings model + clean redesign (decision 4) → Tasks 2, 11. ✔
 - Migration (decision 4) → Task 3. ✔

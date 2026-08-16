@@ -25,7 +25,11 @@
  * @module chatFilePathLinks
  */
 import { classifyFileViewerKind } from "./lib/codeFileTypes";
-import { extractTerminalLinks, resolvePathLinkTarget, splitPathAndPosition } from "./terminal-links";
+import {
+  extractTerminalLinks,
+  resolvePathLinkTarget,
+  splitPathAndPosition,
+} from "./terminal-links";
 
 export interface ChatFilePathMention {
   /** The matched text, exactly as it appears in the message. */

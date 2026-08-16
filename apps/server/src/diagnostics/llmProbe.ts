@@ -47,7 +47,7 @@ export function parseModelsResponse(payload: unknown): LlmModel[] {
   }
 }
 
-function mapModel(raw: typeof ModelsResponse.Type.data[number]): LlmModel {
+function mapModel(raw: (typeof ModelsResponse.Type.data)[number]): LlmModel {
   const sizeBytes =
     raw.bytes_resident != null && raw.bytes_resident > MIN_PLAUSIBLE_SIZE_BYTES
       ? raw.bytes_resident
@@ -92,7 +92,9 @@ export function probeProvider(
     if (httpResponse.status < 200 || httpResponse.status >= 300) {
       return unreachable(provider, `HTTP ${httpResponse.status}`);
     }
-    const json = yield* httpResponse.json.pipe(Effect.catchCause(() => Effect.succeed<unknown>(null)));
+    const json = yield* httpResponse.json.pipe(
+      Effect.catchCause(() => Effect.succeed<unknown>(null)),
+    );
     return {
       name: provider.name,
       baseUrl: provider.baseUrl,

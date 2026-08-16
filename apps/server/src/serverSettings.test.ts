@@ -757,7 +757,13 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           ramBudgetBytes: 0,
           defaultArgs: [],
           perModel: { "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] } },
-          ds4: { enabled: false, binaryPath: "ds4-server", modelsDir: "~/ds4/gguf", defaultArgs: [], perModel: {} },
+          ds4: {
+            enabled: false,
+            binaryPath: "ds4-server",
+            modelsDir: "~/ds4/gguf",
+            defaultArgs: [],
+            perModel: {},
+          },
         },
       });
 
@@ -766,7 +772,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         localLlm: {
           ramBudgetBytes: 0,
           providers: {},
-          models: [{ id: "keep", name: "Keep", providerId: "mlx-serve", modelId: "gemma-4-12B-it-4bit", visible: true }],
+          models: [
+            {
+              id: "keep",
+              name: "Keep",
+              providerId: "mlx-serve",
+              modelId: "gemma-4-12B-it-4bit",
+              visible: true,
+            },
+          ],
         },
       });
       // localModels was retired to default — so a later read won't re-migrate.

@@ -3,7 +3,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { RETAINED_TURN_ITEMS, releaseOldTurnItems } from "./turnItemRetention.ts";
 
 const makeTurns = (count: number) =>
-  Array.from({ length: count }, (_unused, index) => ({ items: [`item-${index}`] as Array<unknown> }));
+  Array.from({ length: count }, (_unused, index) => ({
+    items: [`item-${index}`] as Array<unknown>,
+  }));
 
 describe("releaseOldTurnItems", () => {
   it("retains 20 turns", () => {

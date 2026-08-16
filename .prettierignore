@@ -1,0 +1,7 @@
+# Read by `vp fmt` (oxfmt), which loads .gitignore and .prettierignore from the
+# repo root but not the developer's global gitignore. These paths are local
+# agent-tooling artifacts that live inside the checkout and are never committed,
+# so without this entry `pnpm fmt:check` reports drift in files git does not
+# track — which would make the gate fail differently on every machine.
+.memsearch/
+.claude/settings.local.json

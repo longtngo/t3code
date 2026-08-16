@@ -5,7 +5,7 @@
 Three changes to the file-preview side panel and the inline file chip:
 
 1. **Editable address bar** in the preview header — type any path (URI-like) to retarget the preview.
-2. **Replace security-by-obscurity with a real sandbox** — currently the backend reads *any*
+2. **Replace security-by-obscurity with a real sandbox** — currently the backend reads _any_
    absolute path and the UI merely hides it (`basenameOf`). Since the user has native terminal
    access, hiding is moot. Expose the real path in the UI; instead restrict backend reads to
    `$HOME` (`~`) and below.
@@ -23,14 +23,17 @@ Three changes to the file-preview side panel and the inline file chip:
 ## Approach
 
 ### 1. Address bar (`FileViewerSidebar.tsx`)
+
 Replace the static filename span with an `AddressBar` input that shows the full path
 (`resolvedPath` once loaded, else `current.path`). Enter navigates (pushes a history entry, kind
 inferred from extension, default `markdown`); Escape reverts; blur reverts. Truncates when
-unfocused. Reuses existing `navBaseCwdRef` so a typed *relative* path resolves against the current
+unfocused. Reuses existing `navBaseCwdRef` so a typed _relative_ path resolves against the current
 file's directory; absolute / `~` paths pass straight to the backend.
 
 ### 2. Read sandbox (backend)
+
 New pure helper `apps/server/src/workspace/readAccess.ts`:
+
 - `allowedReadRoots(cwd?)` → `[homedir, tmpdir, (absolute cwd)]`.
 - `isWithinAllowedRoots(absolutePath, roots)` — lexical containment against any root.
 
@@ -40,26 +43,29 @@ outside `~`) stay readable.
 
 **Security correction from design review (CRITICAL):** the first cut derived the third root from
 the request's `cwd`, but `cwd` is client-supplied — a caller could send `{cwd:"/", path:"/etc/passwd"}`
-and read anything, defeating the sandbox. Fixed by deriving the project roots from *server* state:
+and read anything, defeating the sandbox. Fixed by deriving the project roots from _server_ state:
 the read RPC handlers (`ws.ts`) read `ProjectionSnapshotQuery.getCommandReadModel().projects[].workspaceRoot`
 and pass them as trusted `allowedRoots` into the read. The client `cwd` is used **only** to resolve
 relative paths, never to authorize. Fails safe to no extra roots if the read model can't load.
 
 Two checks in `WorkspaceFileSystem.ts`:
+
 - **Lexical** (`authorizeReadPath`), before any FS access in `readFile`/`readFileAsHtml` — blocks
   out-of-root paths with no existence oracle.
 - **Realpath** (`authorizeRealPath`), after the file is known to exist — catches symlinks inside an
   allowed root that point outside (e.g. `~/link → /etc/passwd`). On the HTML path it runs only on a
   cache miss (the cached bytes were validated when rendered). Home/tmp roots + their realpaths are
   memoized once per process; per-read realpath work covers only the trusted roots + the target.
-Both raise `WorkspaceFileSystemError` → "Could not open file" with detail
-"Path is outside the allowed read roots (~, temp dir, or project)".
+  Both raise `WorkspaceFileSystemError` → "Could not open file" with detail
+  "Path is outside the allowed read roots (~, temp dir, or project)".
 
 ### 3. Copy path (`ChatMarkdown.tsx`)
+
 Add `<MenuItem onClick={copyPath}>Copy path</MenuItem>` to the markdown chip dropdown. Copies the
 chip's `text` (the path as written) via `navigator.clipboard`, toast on success/failure.
 
 ## Alternatives considered
+
 - **Boundary: `$HOME` only vs `$HOME`+tmp+projects.** User chose the latter. tmp keeps
   handoff/temp reports previewable; project roots keep out-of-home projects readable.
 - **Trust client `cwd` as a root vs server-known project roots.** Trusting `cwd` is a sandbox
@@ -69,6 +75,7 @@ chip's `text` (the path as written) via `navigator.clipboard`, toast on success/
 - **Copy path on HTML chips too.** HTML chips have no dropdown (single button). Out of scope.
 
 ## Files touched
+
 - `apps/server/src/workspace/readAccess.ts` (new) + `readAccess.test.ts` (new)
 - `apps/server/src/workspace/Layers/WorkspaceFileSystem.ts` (+ `.test.ts`)
 - `apps/server/src/workspace/Services/WorkspaceFileSystem.ts` (shape: `allowedRoots` param)
@@ -78,6 +85,7 @@ chip's `text` (the path as written) via `navigator.clipboard`, toast on success/
 - `apps/web/src/components/ChatMarkdown.tsx`
 
 ## Known limitations / follow-ups deferred
+
 - `$HOME` is an allowed root, so the read RPC can reach `~/.ssh`, `~/.aws`, etc. for a holder of
   the read scope. This matches the user's "limit to $HOME" intent and the pre-existing posture
   (`filesystemBrowse` already lists any host dir under read scope). An extension allowlist or a
@@ -87,5 +95,6 @@ chip's `text` (the path as written) via `navigator.clipboard`, toast on success/
 - No web-component test yet for AddressBar / Copy path (server-side sandbox is covered).
 
 ## Prototype-first
+
 User asked to see a prototype before full commit. Implement on `feat/file-viewer-address-bar`,
 typecheck + test + screenshot, check in **before** merge/release.

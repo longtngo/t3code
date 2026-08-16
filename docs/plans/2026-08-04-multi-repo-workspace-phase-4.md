@@ -1,6 +1,6 @@
 # Multi-repo workspace — Phase 4: checkpoint integrity
 
-Implements the *Checkpoint integrity* section of
+Implements the _Checkpoint integrity_ section of
 `docs/design/2026-08-04-multi-repo-workspace-design.md`.
 
 **Goal:** a revert either restores the whole tree or says precisely which repositories
@@ -13,11 +13,11 @@ the project is a workspace.
 
 ## Premises, validated before designing
 
-| Premise | Probe | Result |
-|---|---|---|
-| The revert path can see the checkpoint summaries | read `CheckpointReactor.ts:740-745` | true — it already looks a checkpoint up in `thread.checkpoints` by turn count |
-| There is a mechanism for refusing a revert with a reason | `appendRevertFailureActivity` at the same site | true — used for both "ref unavailable" and "checkpoint unavailable" |
-| Capture and revert are in the same reactor as the member sweep | `CheckpointReactor.ts` capture ~`:253`, revert ~`:757` | true — no new wiring, and Phase 3's sweep already reads each member |
+| Premise                                                        | Probe                                                  | Result                                                                        |
+| -------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| The revert path can see the checkpoint summaries               | read `CheckpointReactor.ts:740-745`                    | true — it already looks a checkpoint up in `thread.checkpoints` by turn count |
+| There is a mechanism for refusing a revert with a reason       | `appendRevertFailureActivity` at the same site         | true — used for both "ref unavailable" and "checkpoint unavailable"           |
+| Capture and revert are in the same reactor as the member sweep | `CheckpointReactor.ts` capture ~`:253`, revert ~`:757` | true — no new wiring, and Phase 3's sweep already reads each member           |
 
 ## Model
 

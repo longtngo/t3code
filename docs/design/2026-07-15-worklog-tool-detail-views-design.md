@@ -21,10 +21,10 @@ receives what it needs.
 - **The client entry carries the raw tool payload.** `session-logic.ts:602` sets
   `entry.detailPayload = payload` (the full raw activity payload, held by reference). The merge
   path (`mergeDerivedWorkLogEntries`, `{...previous, ...next}`) keeps the latest activity's
-  `detailPayload`, i.e. the *completed* one that includes `result`. ✓ (read source)
+  `detailPayload`, i.e. the _completed_ one that includes `result`. ✓ (read source)
 - **The payload shape is `data: { toolName, input, result }`, passed through raw.**
   `ClaudeAdapter.ts:2177` emits `toolData = { toolName: tool.toolName, input: tool.input, result:
-  toolResult.block }` on item completion; `input` and `result` are not stripped or reshaped.
+toolResult.block }` on item completion; `input` and `result` are not stripped or reshaped.
   `result` is the raw tool-result block `{ type: "tool_result", content, tool_use_id, is_error? }`.
   ✓ (read emission path) — and the three example payloads in the task args are live captures that
   match this exactly (direct measurement of the live system).
@@ -38,7 +38,7 @@ receives what it needs.
   worker-backed intra-line syntax highlighting. **Proof by precedent in the same file:**
   `UserMessageReviewCommentCard` (`MessagesTimeline.tsx:1086-1102`) already renders `<FileDiff>`
   via `getRenderablePatch` with **no** `DiffWorkerPoolProvider` in its ancestry, in the exact same
-  component tree as the work-log modal. And `FileDiff` is imported *eagerly* at
+  component tree as the work-log modal. And `FileDiff` is imported _eagerly_ at
   `MessagesTimeline.tsx:20` (already in the main chat chunk). So the Edit body renders `<FileDiff>`
   **inline and poolless**, cloning that pattern — no new file, no `React.lazy`, no scoped provider.
   ✓ (read source + installed package)
@@ -48,7 +48,7 @@ receives what it needs.
 - **AskUserQuestion answers exist only in `result.content` as a formatted string** — there is no
   structured answers field. Format:
   `Your questions have been answered: "Q1"="A1", "Q2"="A2". You can now continue with these
-  answers in mind.` Answers can contain commas, periods, and quotes, so naive splitting fails;
+answers in mind.` Answers can contain commas, periods, and quotes, so naive splitting fails;
   the exact question texts (from `input.questions[].question`) are used as anchors to slice each
   answer deterministically. ✓ (live captured payload)
 
@@ -68,16 +68,20 @@ one-line summary and is out of scope. Two files change plus one new lazy compone
 
 ```ts
 type WorkEntryDetailBody =
-  | { kind: "questions"; questions: ReadonlyArray<{
-        header?: string; question: string;
+  | {
+      kind: "questions";
+      questions: ReadonlyArray<{
+        header?: string;
+        question: string;
         options: ReadonlyArray<{ label: string; description?: string }>;
-        answer: string | null;  // null when not parseable from result.content
-      }> }
+        answer: string | null; // null when not parseable from result.content
+      }>;
+    }
   | { kind: "command"; command: string; output: string | null; isError: boolean }
-  | { kind: "edit"; filePath: string; patch: string }   // patch = unified diff string
-  | { kind: "json"; json: string }                       // existing
-  | { kind: "text"; text: string }                       // existing
-  | { kind: "empty" };                                   // existing
+  | { kind: "edit"; filePath: string; patch: string } // patch = unified diff string
+  | { kind: "json"; json: string } // existing
+  | { kind: "text"; text: string } // existing
+  | { kind: "empty" }; // existing
 ```
 
 ### `formatWorkEntryDetail` dispatch order
@@ -98,15 +102,16 @@ type WorkEntryDetailBody =
 **First normalize `result.content` to a string** via the shared `normalizeToolResultContent`
 (below) — Stage-6 correctness Finding 1: server-side the result block's `content` is frequently an
 **array** of `{ type: "text", text }` blocks, not a string, and feeding an array to the anchor
-parser would `indexOf`-search array elements → `-1` for every anchor → *every* answer silently
+parser would `indexOf`-search array elements → `-1` for every anchor → _every_ answer silently
 blanks out. Normalizing first closes that gap and makes the parser robust to both shapes.
 
 `extractAskUserQuestionAnswers(content: string, questionTexts): (string | null)[]`:
+
 - For each question text `Ti`, find the anchor `"${Ti}"="` via `indexOf` starting after the
   previous match (left-to-right, sequential).
 - Answer `i` runs from just after its anchor to just before the next question's anchor (trimming
   the `", ` + closing quote that separates them); the last answer runs to the `". You can now
-  continue` suffix, or the final `"` if that suffix is absent.
+continue` suffix, or the final `"` if that suffix is absent.
 - Any question whose anchor isn't found → its answer is `null` (rendered as "no recorded answer");
   the questions/options still render. Extraction never throws.
 - The view highlights the option whose `label` equals the parsed `answer` (computed at render time
@@ -116,6 +121,7 @@ blanks out. Normalizing first closes that gap and makes the parser robust to bot
 ### Shared result-content normalization
 
 `normalizeToolResultContent(content): string | null` (shared by Bash and AskUserQuestion):
+
 - `string` → as-is.
 - array → concat, for each element, `element.text` **only when** `element.type === "text"` and
   `typeof element.text === "string"` (Stage-6 correctness Finding 4 — a non-text block, e.g. an

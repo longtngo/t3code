@@ -81,8 +81,7 @@ export function OutboxFlushCoordinator() {
 
     // flushOutbox keeps a turn queued only for transport-shaped failures, so
     // "not yet sendable" conditions must be reported in that shape.
-    const keepQueued = (environmentId: string) =>
-      new Error(`${environmentId} is not connected.`);
+    const keepQueued = (environmentId: string) => new Error(`${environmentId} is not connected.`);
 
     flushingRef.current = true;
     void flushOutbox(

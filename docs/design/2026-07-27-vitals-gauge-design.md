@@ -42,7 +42,7 @@ Three stacked blocks:
 1. **Context** — big `NN%` + `used / max` tokens (e.g. `116k / 200k`, `350k / 1m`), a fill bar.
    Colored by **absolute fullness**.
 2. **Usage limits (5h / 7d)** — colored by **pace**, not fullness. A projection marker shows where
-   usage *would* be if spent evenly toward 100% at reset; the fill is actual usage; a signed number
+   usage _would_ be if spent evenly toward 100% at reset; the fill is actual usage; a signed number
    says how far over/under that line. **No reset time is shown** (the user cannot reset the window);
    the signed pace diff replaces it.
 3. **Machine** — CPU / GPU / MEM rows: label + bar + `NN%`, colored by absolute fullness. A live dot
@@ -64,13 +64,14 @@ Track = `color-mix(in oklab, var(--color-muted-foreground) 24%, transparent)` (m
 
 ## Data sources — all validated against live code (Hard Rule 8)
 
-| Metric | Source | Verified |
-|---|---|---|
-| Context | `deriveLatestContextWindowSnapshot(activities)` → `usedTokens`, `maxTokens`, `usedPercentage` | `lib/contextWindow.ts:50`, already consumed by `ContextWindowMeter` in `ChatComposer.tsx:431` |
-| CPU/GPU/MEM | `useHostMetrics(environmentId, enabled)` → `sample.cpu.pct` / `gpu?.pct` / `mem.pct`, all 0–100 | `hooks/useHostMetrics.ts:76`, `contracts/hostMetrics.ts:37` |
-| 5h / 7d | `account.usage.updated` activity → `payload.fiveHour` / `payload.sevenDay`, each `{utilization, resetsAt}` | `contracts/providerRuntime.ts:624`; built in `ProviderRuntimeIngestion.ts:855`; **activity schema is open** (`kind: TrimmedNonEmptyString`, `payload: Schema.Unknown`, `orchestration.ts:319`) so it reaches the client intact |
+| Metric      | Source                                                                                                     | Verified                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Context     | `deriveLatestContextWindowSnapshot(activities)` → `usedTokens`, `maxTokens`, `usedPercentage`              | `lib/contextWindow.ts:50`, already consumed by `ContextWindowMeter` in `ChatComposer.tsx:431`                                                                                                                                  |
+| CPU/GPU/MEM | `useHostMetrics(environmentId, enabled)` → `sample.cpu.pct` / `gpu?.pct` / `mem.pct`, all 0–100            | `hooks/useHostMetrics.ts:76`, `contracts/hostMetrics.ts:37`                                                                                                                                                                    |
+| 5h / 7d     | `account.usage.updated` activity → `payload.fiveHour` / `payload.sevenDay`, each `{utilization, resetsAt}` | `contracts/providerRuntime.ts:624`; built in `ProviderRuntimeIngestion.ts:855`; **activity schema is open** (`kind: TrimmedNonEmptyString`, `payload: Schema.Unknown`, `orchestration.ts:319`) so it reaches the client intact |
 
 Key premise findings:
+
 - The 5h/7d data **is currently unsurfaced** client-side — no consumer exists (`deriveLatestUsageSnapshot`
   is referenced in a server comment but never landed). So this ships the first client reader:
   `deriveLatestAccountUsage(activities)`, mirroring the context derivation (defensive parse of an

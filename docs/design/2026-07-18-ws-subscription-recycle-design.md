@@ -31,6 +31,7 @@ subscription. When the stream **completes**, the fiber exits, is removed from
 `Exit(success)` response is sent to the client (`RpcServer.js:362-368`).
 
 **Evidence (high confidence):**
+
 - 4+ live heap snapshots across sessions: `_stack` fan-out 517K → 690K → 1.09M
   frames, ~3 GB+ retained after forced GC, dominated by ~6 big fibers.
 - Fiber spans are **per-subscription** (`ws.rpc.orchestration.subscribeThread`,
@@ -55,7 +56,7 @@ up on anything missed. Peak per-fiber stack is bounded to N frames; it is freed
 and rebuilt from zero on every recycle, so the heap can no longer climb without
 bound.
 
-**Why event-count, not duration:** the `_stack` grows per *streamed element*, so
+**Why event-count, not duration:** the `_stack` grows per _streamed element_, so
 element-count is the direct, correct lever. An idle subscription over a long
 duration has a tiny stack and must not be churned; a busy subscription over a
 short duration has a huge stack and must be recycled. Event-count is
@@ -67,7 +68,7 @@ idle subs pointlessly, and doesn't bound a burst that fills the stack fast).
 
 1. **Ending a subscription's stream cleanly frees its fiber `_stack`.**
    ✅ Confirmed by effect source (`RpcServer.js:238` `onExit` removes the fiber
-   from `client.fibers` → GC) *and* empirically ("frees on unsubscribe").
+   from `client.fibers` → GC) _and_ empirically ("frees on unsubscribe").
 
 2. **The client resubscribes-and-resyncs on CLEAN completion, but STOPS on a
    non-transport error.** ✅ Confirmed at `packages/client-runtime/src/wsTransport.ts`:
@@ -81,6 +82,7 @@ idle subs pointlessly, and doesn't bound a burst that fills the stack fast).
    cause, which would silently stop client updates.
 
 **Resync is lossless for all three targeted methods:**
+
 - `subscribeThread` — client re-issues with `fromSequenceExclusive` and dedups on
   `sequence > lastAppliedSequence`; server replays past the cursor or falls back
   to a windowed snapshot (`apps/web/src/environments/runtime/service.ts:441-489`).
@@ -97,6 +99,7 @@ client resync is confirmed lossless: `subscribeThread`, `subscribeShell`,
 `subscribeTerminalMetadata`.
 
 **Excluded:**
+
 - `subscribeTerminalEvents` (raw PTY byte output) — can be high-volume, but was
   **not** in the forensics and its output is **not** losslessly replayable on
   re-subscribe (bytes emitted during the resubscribe gap would be lost).
@@ -105,7 +108,7 @@ client resync is confirmed lossless: `subscribeThread`, `subscribeShell`,
   bound; unverified resync. No benefit, so untouched.
 
 Central injection in `observeRpcStream*` was rejected: although event-count is
-self-targeting (low-volume streams never hit N), it would leave a *latent*
+self-targeting (low-volume streams never hit N), it would leave a _latent_
 correctness risk for any unverified method that ever crossed N (e.g.
 `subscribeTerminalEvents`). Targeted wrapping has zero latent risk and documents
 intent at the exact leak sites.
@@ -115,7 +118,7 @@ intent at the exact leak sites.
 New standalone helper, `apps/server/src/recycleSubscriptionStream.ts` (beside
 `ws.ts` / `wsRpcServerProtocol.ts` — the WS-transport layer it belongs to, and the
 conceptual twin of `orchestration/Layers/boundedSubscriberStream.ts`, which bounds
-the *same* subscription streams on the other axis, capacity-lag):
+the _same_ subscription streams on the other axis, capacity-lag):
 
 ```ts
 import * as Stream from "effect/Stream";
@@ -153,11 +156,11 @@ export const resolveSubscriptionRecycleLimit = (raw: string | undefined): number
 export const recycleSubscriptionStream = <A, E, R>(
   stream: Stream.Stream<A, E, R>,
   maxElements: number,
-): Stream.Stream<A, E, R> =>
-  maxElements > 0 ? Stream.take(stream, maxElements) : stream;
+): Stream.Stream<A, E, R> => (maxElements > 0 ? Stream.take(stream, maxElements) : stream);
 ```
 
 Wiring in `apps/server/src/ws.ts`:
+
 - Module scope (matching the file's existing const-tunable style — `RESUME_MAX_MISSED_EVENTS`, `DEFAULT_SUBSCRIBE_WINDOW_TURNS`, …), read the env **once**:
   `const WS_SUBSCRIPTION_MAX_EVENTS = resolveSubscriptionRecycleLimit(process.env.T3CODE_WS_SUBSCRIPTION_MAX_EVENTS);`
 - At each of the three sites, wrap the **constructed** stream (the `Stream.concat(...)`
@@ -180,9 +183,9 @@ exact axis both reviews flagged.
 
 **Streamed elements are batch frames, not raw events (calibration nuance).**
 `subscribeThread`'s live tail coalesces events via `Stream.groupedWithin` (20 ms /
-64-event batches), so each element the RpcServer counts is a *batch frame*;
-`subscribeShell` is per-event. Either way `take(N)` bounds the fiber to N *frames*
-— the memory bound holds regardless; only recycle *frequency* differs per path.
+64-event batches), so each element the RpcServer counts is a _batch frame_;
+`subscribeShell` is per-event. Either way `take(N)` bounds the fiber to N _frames_
+— the memory bound holds regardless; only recycle _frequency_ differs per path.
 
 **Default N rationale.** Measured ~6.2 KB retained per stack frame (3.07 GB / 517K
 frames). N = 20000 bounds a single fiber's peak to ~124 MB before recycle; with ~6
@@ -192,7 +195,7 @@ bounded-snapshot resyncs) are infrequent. Env-tunable so the default can be adju
 without a redeploy.
 
 **No lost-event window on recycle (confirmed by correctness review).** The
-projection read-model is updated *inside the committed transaction, before* the
+projection read-model is updated _inside the committed transaction, before_ the
 event is published to the hub (`OrchestrationEngine.ts:202-243`). So on the recycle
 gap (old subscription scope closes → new subscribe), any event a subscriber could
 have seen is already in the read model; the new subscribe reads a fresh snapshot +
@@ -202,7 +205,7 @@ same durable-read guarantee that makes first-connect safe. Holds for thread/shel
 
 **New-completion surface.** `subscribeThread`/`subscribeShell` **already** recycle
 on clean completion in production via `boundedSubscriberStream`'s drop-behind path,
-so the take adds *zero* new client contract for them. `subscribeTerminalMetadata` is
+so the take adds _zero_ new client contract for them. `subscribeTerminalMetadata` is
 the one method gaining a genuinely-new mid-life clean completion; it is covered by
 the same method-agnostic `wsTransport` resubscribe loop and its resync is idempotent
 (full metadata snapshot on every subscribe). (Verified: the web/mobile clients share
@@ -211,7 +214,7 @@ the `packages/client-runtime` `WsTransport`.)
 ## Tradeoffs and known limitations
 
 - **Resync bandwidth per recycle.** On `subscribeThread`, the client re-issues
-  with the `fromSequenceExclusive` captured at *first* attach, so after a long
+  with the `fromSequenceExclusive` captured at _first_ attach, so after a long
   session each recycle's missed window is large → the server sends a **windowed**
   snapshot (bounded by `windowTurns`/`maxRows`, not the whole thread), deduped by
   the client. This is bounded and identical to the cost the client already pays on
@@ -265,6 +268,6 @@ the `packages/client-runtime` `WsTransport`.)
      re-subscribe (raw escape sequences / gap events are lost). Left unbounded;
      safely recycling them needs a replayable scrollback resync first (still a
      follow-up).
-   The dominant monotonic climb (long autonomous sessions streaming every SDK event
-   through `subscribeThread`/`subscribeShell`) was closed by the base change; this
-   follow-up closes the leak *class* for every idempotent-resync stream.
+     The dominant monotonic climb (long autonomous sessions streaming every SDK event
+     through `subscribeThread`/`subscribeShell`) was closed by the base change; this
+     follow-up closes the leak _class_ for every idempotent-resync stream.

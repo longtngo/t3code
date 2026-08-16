@@ -806,8 +806,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     }).pipe(
       Effect.map(
         (result) =>
-          result.stdoutTruncated ||
-          result.stdout.split("\n").some((line) => /^[a-zS]/.test(line)),
+          result.stdoutTruncated || result.stdout.split("\n").some((line) => /^[a-zS]/.test(line)),
       ),
     );
 
@@ -899,19 +898,16 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         const realIndexExists = yield* fileSystem
           .exists(realIndexPath)
           .pipe(Effect.orElseSucceed(() => false));
-        const canSeedFromRealIndex =
-          realIndexExists && !(yield* realIndexHasSkipBits(input.cwd));
+        const canSeedFromRealIndex = realIndexExists && !(yield* realIndexHasSkipBits(input.cwd));
 
         // The copy can fail (disk, permissions); on any failure fall back to the
         // read-tree HEAD seed, which still produces a correct (just slower) checkpoint.
         let seededFromRealIndex = false;
         if (canSeedFromRealIndex) {
-          seededFromRealIndex = yield* fileSystem
-            .copyFile(realIndexPath, tempIndexPath)
-            .pipe(
-              Effect.as(true),
-              Effect.orElseSucceed(() => false),
-            );
+          seededFromRealIndex = yield* fileSystem.copyFile(realIndexPath, tempIndexPath).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
         }
 
         if (!seededFromRealIndex) {

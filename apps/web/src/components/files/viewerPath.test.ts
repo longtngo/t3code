@@ -58,7 +58,6 @@ describe("viewerHttpUrl", () => {
   });
 });
 
-
 describe("absolutePathFromViewerSplat", () => {
   it("restores the leading slash the router strips from the splat", () => {
     expect(absolutePathFromViewerSplat("Users/foo/report.md")).toBe("/Users/foo/report.md");

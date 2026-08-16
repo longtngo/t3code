@@ -29,7 +29,13 @@ const gitCommandError = (reason: "timeout" | "spawn" | undefined) =>
     ...(reason === undefined ? {} : { reason }),
   });
 const exitError = () =>
-  new VcsProcessExitError({ operation: "op", command: "git x", cwd: "/tmp", exitCode: 1, detail: "d" });
+  new VcsProcessExitError({
+    operation: "op",
+    command: "git x",
+    cwd: "/tmp",
+    exitCode: 1,
+    detail: "d",
+  });
 
 // A counting effect that fails `failTimes` times with `makeError`, then succeeds with the
 // attempt number. Returns the ref so the test can assert the attempt count.
@@ -150,9 +156,7 @@ describe("transient VCS retry", () => {
   it.live("the real jittered schedule retries a transient failure to success", () =>
     Effect.gen(function* () {
       const { ref, attempt } = yield* countingAttempt(timeoutError, 1);
-      const result = yield* attempt.pipe(
-        Effect.retry(makeTransientGitRetryPolicy(3)),
-      );
+      const result = yield* attempt.pipe(Effect.retry(makeTransientGitRetryPolicy(3)));
       expect(result).toBe(2);
       expect(yield* Ref.get(ref)).toBe(2);
     }),

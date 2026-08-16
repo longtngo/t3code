@@ -92,7 +92,9 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
 
     const stallThresholdMs = Math.max(
       1,
-      options?.stallThresholdMs ?? parsePositiveIntEnv("T3CODE_TURN_STALL_THRESHOLD_MS") ?? DEFAULT_STALL_THRESHOLD_MS,
+      options?.stallThresholdMs ??
+        parsePositiveIntEnv("T3CODE_TURN_STALL_THRESHOLD_MS") ??
+        DEFAULT_STALL_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
     const stopGraceMs = Math.max(1, options?.stopGraceMs ?? DEFAULT_STOP_GRACE_MS);
@@ -215,9 +217,7 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
       );
 
     const resolveShell = (threadId: ThreadId) =>
-      projectionSnapshotQuery
-        .getThreadShellById(threadId)
-        .pipe(Effect.map(Option.getOrUndefined));
+      projectionSnapshotQuery.getThreadShellById(threadId).pipe(Effect.map(Option.getOrUndefined));
 
     const shouldTrip = (
       entry: TurnActivitySnapshot,
@@ -250,8 +250,7 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
       Effect.gen(function* () {
         const { threadId, entry, nowMs } = input;
         const shell = yield* resolveShell(threadId);
-        const record =
-          (yield* Ref.get(recoveryByThread)).get(threadId) ?? EMPTY_RECORD;
+        const record = (yield* Ref.get(recoveryByThread)).get(threadId) ?? EMPTY_RECORD;
         const activeTurnId = shell?.session?.activeTurnId ?? null;
 
         // 1) Drive a pending forceful stop towards a resume.
@@ -463,7 +462,10 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
         });
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("provider.turn.stall-watchdog.adopt-failed", { threadId: input.threadId, cause }),
+          Effect.logWarning("provider.turn.stall-watchdog.adopt-failed", {
+            threadId: input.threadId,
+            cause,
+          }),
         ),
       );
 

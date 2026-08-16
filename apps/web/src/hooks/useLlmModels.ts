@@ -58,21 +58,18 @@ export function useLlmModelActions(
     reportFailure: false,
   });
 
-  const withPending = useCallback(
-    async (key: string, run: () => Promise<void>) => {
-      setPending((prev) => new Set(prev).add(key));
-      try {
-        await run();
-      } finally {
-        setPending((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
-      }
-    },
-    [],
-  );
+  const withPending = useCallback(async (key: string, run: () => Promise<void>) => {
+    setPending((prev) => new Set(prev).add(key));
+    try {
+      await run();
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }, []);
 
   const load = useCallback(
     (configId: string) =>

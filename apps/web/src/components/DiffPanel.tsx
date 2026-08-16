@@ -240,8 +240,7 @@ export default function DiffPanel({
     collapsedDiffFiles.scopeKey === collapseScopeKey
       ? collapsedDiffFiles.fileKeys
       : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
-  const reviewScopeTitle =
-    selectedGitScope === "unstaged" ? "Working tree" : "Branch changes";
+  const reviewScopeTitle = selectedGitScope === "unstaged" ? "Working tree" : "Branch changes";
   const reviewSectionTitle = selectedTurn
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
     : isPrimaryRepo
@@ -577,31 +576,33 @@ export default function DiffPanel({
               </DropdownMenuItem>
             )}
             {isPrimaryRepo && (
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Turn</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-64">
-                {orderedTurnDiffSummaries.map((summary) => {
-                  const turnCount =
-                    summary.checkpointTurnCount ??
-                    inferredCheckpointTurnCountByTurnId[summary.turnId] ??
-                    "?";
-                  return (
-                    <DropdownMenuItem
-                      key={summary.turnId}
-                      className={
-                        summary.turnId === selectedTurn?.turnId ? "bg-foreground/[0.08]" : undefined
-                      }
-                      onClick={() => selectTurn(summary.turnId)}
-                    >
-                      <span>Turn {turnCount}</span>
-                      <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                        {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
-                      </span>
-                    </DropdownMenuItem>
-                  );
-                })}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>Turn</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-64">
+                  {orderedTurnDiffSummaries.map((summary) => {
+                    const turnCount =
+                      summary.checkpointTurnCount ??
+                      inferredCheckpointTurnCountByTurnId[summary.turnId] ??
+                      "?";
+                    return (
+                      <DropdownMenuItem
+                        key={summary.turnId}
+                        className={
+                          summary.turnId === selectedTurn?.turnId
+                            ? "bg-foreground/[0.08]"
+                            : undefined
+                        }
+                        onClick={() => selectTurn(summary.turnId)}
+                      >
+                        <span>Turn {turnCount}</span>
+                        <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                          {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
+                        </span>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             )}
           </DropdownMenuContent>
         </DropdownMenu>

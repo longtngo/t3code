@@ -110,7 +110,14 @@ export function parseResourceQueue(text: string, nowMs: number): ResourceQueueSn
 }
 
 function unavailable(nowMs: number): ResourceQueueSnapshot {
-  return { ts: nowMs, available: false, maintenance: false, resources: [], running: [], waiting: [] };
+  return {
+    ts: nowMs,
+    available: false,
+    maintenance: false,
+    resources: [],
+    running: [],
+    waiting: [],
+  };
 }
 
 /** Run `resctl status --json --no-spawn`, returning its stdout, or `null` on any failure. */

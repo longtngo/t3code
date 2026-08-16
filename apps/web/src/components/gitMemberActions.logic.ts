@@ -1,7 +1,4 @@
-import type {
-  WorkspaceMemberBranchReport,
-  WorkspaceMemberPrBaseSource,
-} from "@t3tools/contracts";
+import type { WorkspaceMemberBranchReport, WorkspaceMemberPrBaseSource } from "@t3tools/contracts";
 
 /**
  * Whether a git action may run against an attached repository, and why not.

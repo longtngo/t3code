@@ -32,11 +32,12 @@ running mlx-serve processes discovered via `ps`.
 
 **mlx-serve only.** v1 drops the generic `llmProviders` read-only probe and its
 `dedupeProviders` path entirely (delete the dead code + its test). The single managed
-mlx-serve group *is* the list. Generic read-only providers move to follow-ups.
+mlx-serve group _is_ the list. Generic read-only providers move to follow-ups.
 
 ## Architecture
 
 ### Model identity & correlation
+
 A model's id = its directory basename. **Correlate running processes to disk models by
 the `--model` PATH parsed from the `ps` command line, NOT by the `/v1/models` id** (the
 reported id can differ — `--served-model-name`, HF repo ids, external processes).
@@ -44,6 +45,7 @@ reported id can differ — `--served-model-name`, HF repo ids, external processe
 same physical model appearing as both an offline disk row and an online process row.
 
 ### Server: `LlmServeManager` service (`apps/server/src/llm/LlmServeManager.ts`, new)
+
 Long-lived `Context.Service` (mirrors `cloud/ManagedEndpointRuntime.ts`) with a
 `Ref<Map<number /*pid*/, ManagedLaunch>>` registry and a **`Semaphore.make(1)`**
 guarding load admission. `ManagedLaunch = { child, scope, modelId, modelPath, port,
@@ -53,6 +55,7 @@ Provided in `RuntimeDependenciesLive` (`server.ts`). A **layer finalizer
 
 **`list()`** — total (never throws; `Effect.catchCause`-degrade) and opens **no
 scopes**, so the sampler's `never` error channel is preserved:
+
 1. `readProcessRows()` (lower-level export, lists ALL processes) → filter to **strict
    mlx-serve**: resolved executable basename `mlx-serve` AND `--serve` present AND a
    `--model` under the models dir; parse `--model <path>`, `--port`, capture `pid`,
@@ -70,6 +73,7 @@ scopes**, so the sampler's `never` error channel is preserved:
 
 **`load(modelId)`** — runs **entirely under the load semaphore** (atomic
 check-then-spawn-then-register, closing the TOCTOU on both port and budget):
+
 1. **Validate `modelId` (security-critical):** must match `^[A-Za-z0-9._-]+$` (reject
    `/ \ .. NUL`, leading `-`), AND be an exact entry in the live `readdir(modelsDir)`
    allowlist. `modelPath = realpath(join(modelsDir, modelId))`; assert it is a direct
@@ -78,21 +82,22 @@ check-then-spawn-then-register, closing the TOCTOU on both port and budget):
    `already_online`.
 3. Estimate RAM = sum of file sizes in the model dir (flat, capped entry count — no
    unbounded recursion). Enforce budget: `Σ(online RSS) + Σ(in-flight loading
-   estimates) + estimate ≤ budget` (budget default = `os.totalmem() * 0.8` when unset)
+estimates) + estimate ≤ budget` (budget default = `os.totalmem() * 0.8` when unset)
    → else `budget_exceeded`.
 4. Assign a free port from the fixed range **8765–8799**, skipping ports used by **any**
    process seen in `ps` and any registry entry → else `no_free_port`.
 5. Build args: `["--serve", ...defaultArgs, ...(perModel[modelId]?.args ?? []),
-   "--host", "127.0.0.1", "--port", String(port), "--model", modelPath]` — `--model`
+"--host", "127.0.0.1", "--port", String(port), "--model", modelPath]` — `--model`
    and its value pushed as an **atomic pair**, value never whitespace-split.
 6. Spawn into a **service-owned `Scope.make()`** (`Effect.provideService(Scope.Scope,
-   …)`), so it outlives the RPC. The spawner detaches the child into its own process
+…)`), so it outlives the RPC. The spawner detaches the child into its own process
    group by default on non-Windows (so the scope's release reaps the group); set
    `detached: true` explicitly for clarity. Register as `loading`; fork a supervisor on
    `child.exitCode` that marks `exited`/removes the entry. Returns `{ pid, port }`.
    Spawn failure → `spawn_failed`.
 
 **`unload(pid)`**:
+
 - **Managed pid** → `Scope.close(launch.scope)`. The Effect spawner's release path
   **already reaps the whole detached process group** (it calls `killProcessGroup` =
   `process.kill(-pid, …)` with a bounded SIGTERM→SIGKILL escalation; children spawned
@@ -108,10 +113,11 @@ check-then-spawn-then-register, closing the TOCTOU on both port and budget):
   (command still strict-mlx AND same `--model`/`--port` AND matching `etime`/start —
   detects pid reuse); refuse `pid === process.pid` and any non-mlx process. Then
   `process.kill(pid, "SIGTERM")` → escalate (single pid only — never kill an external
-  process *group*, which could include the user's shell). Best-effort; documented.
+  process _group_, which could include the user's shell). Best-effort; documented.
   Unknown/stale/mismatched pid → `not_mlx_process`.
 
 ### Contract (`packages/contracts/src/rpc.ts`, extend the merged schemas — additive)
+
 - `LlmModel`: add `status: Schema.optional(Schema.Literal("online","offline","loading","stopping","error"))`,
   `pid?`, `port?`, `managed?: boolean`, `modelId?`, `loadError?`. Keep `loaded`
   required (back-compat); `mapModel` sets both `loaded` and `status`. Client derives
@@ -126,9 +132,10 @@ check-then-spawn-then-register, closing the TOCTOU on both port and budget):
     `Schema.Union([LlmServeError, EnvironmentAuthorizationError])`.
   - `WsLlmServeUnloadRpc` — payload `{ pid }`, success `{ ok: true }`, same error.
   - `LlmServeError` (tagged): `budget_exceeded | already_online | no_free_port |
-    not_found | spawn_failed | not_mlx_process`, each with a message.
+not_found | spawn_failed | not_mlx_process`, each with a message.
 
 ### Server wiring (`apps/server/src/ws.ts`)
+
 `yield* LlmServeManager` in the handler gen; 2 unary handlers via `observeRpcEffect`;
 **2 `RPC_REQUIRED_SCOPE` rows with `AuthOrchestrationOperateScope`** (mutating + spawns
 processes — read-only `subscribeLlmModels` stays `ReadScope`). Every method MUST have a
@@ -137,12 +144,15 @@ scope row or dispatch throws (fails closed). The `subscribeLlmModels` sampler no
 `ChildProcessSpawner`), satisfied ambiently — `list()` stays total so `E` stays `never`.
 
 ### Client wiring
+
 `wsRpcClient.ts` (interface+impl, `RpcUnaryMethod`), `environmentApi.ts`, `ipc.ts`
 (`EnvironmentApi.llmModels.load/unload`). New `useLlmModelActions` hook wrapping the
 two RPCs with per-row pending state + an error toast.
 
 ### Settings (`packages/contracts/src/settings.ts`) — leaner
+
 Replace `llmProviders` with:
+
 ```
 localModels: {
   modelsDir: string                    // default "~/llm/models" (server expands ~)
@@ -151,11 +161,13 @@ localModels: {
   perModel: Record<string, { args?: readonly string[] }>
 }
 ```
+
 All `withDecodingDefault`; updated via the existing `server.updateSettings` RPC. `host`
 is hardcoded `127.0.0.1` (loopback — no setting, no `0.0.0.0` footgun); the port range
 is a fixed constant (bounds concurrent processes at ~35). `llmProviders` is removed.
 
 ### UI — inline collapsible sidebar section
+
 - **Relocate:** remove `<LlmModels>` + its hooks from `BranchToolbar.tsx`. In
   `SidebarChromeFooter` (`Sidebar.tsx:2543`), above the Settings `SidebarMenu`, render
   a collapsible section: a `SidebarMenuItem` header (dot + "Local models" + online
@@ -183,7 +195,7 @@ is a fixed constant (bounds concurrent processes at ~35). `llmProviders` is remo
   `manager.list()`).
 - **Leaner settings**: dropped configurable `host` (hardcoded loopback) and `portRange`
   (fixed constant); `perModel` trimmed to `{ args? }` (dropped `port`, `disabled`).
-- **Budget**: keep real-RSS accounting + a *cheap* flat-dir-size estimate (advisory);
+- **Budget**: keep real-RSS accounting + a _cheap_ flat-dir-size estimate (advisory);
   dropped any deep weight-file estimator subsystem.
 - **Sidebar**: inline collapsible section, not a hover `side="right"` popover (which is
   non-idiomatic here and hostile to actionable rows); dropped the manual pause toggle.
@@ -206,7 +218,7 @@ is a fixed constant (bounds concurrent processes at ~35). `llmProviders` is remo
 - Load is slow (~tens of seconds for a 35B); the row shows `loading` until `/health` +
   `/v1/models` confirm. No progress %.
 - **External** GGUF processes: killing the single external pid may orphan an mlx-spawned
-  llama.cpp grandchild (we don't kill external *groups* for safety). Managed GGUF
+  llama.cpp grandchild (we don't kill external _groups_ for safety). Managed GGUF
   reaps the whole group. Documented.
 - pid-reuse on external kill is narrowed (snapshot + immediate re-verify of
   command/args/start-time) but remains best-effort.

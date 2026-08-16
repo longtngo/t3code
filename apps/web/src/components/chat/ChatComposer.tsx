@@ -2990,7 +2990,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                       onInterrupt={handleInterruptPrimaryAction}
                       isStopEscalated={isStopEscalated}
-                  onCancelQuestion={handleCancelQuestionPrimaryAction}
+                      onCancelQuestion={handleCancelQuestionPrimaryAction}
                       onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     />
                   ) : null}
@@ -3327,7 +3327,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     isStopEscalated={isStopEscalated}
-                  onCancelQuestion={handleCancelQuestionPrimaryAction}
+                    onCancelQuestion={handleCancelQuestionPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                   />
                 </div>

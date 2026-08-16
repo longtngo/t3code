@@ -92,9 +92,7 @@ export function validateMemberDraft(
   }
   if (branch.length === 0) return "Enter the branch this repository integrates into.";
   if (
-    existing.some(
-      (member) => member.id !== editingId && normalizeMemberPath(member.path) === path,
-    )
+    existing.some((member) => member.id !== editingId && normalizeMemberPath(member.path) === path)
   ) {
     return "That repository is already attached.";
   }

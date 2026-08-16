@@ -37,7 +37,10 @@ it("fails when the shape the patch replaced is back", () => {
 
 it("treats a missing `forbids` as nothing to check", () => {
   const { forbids: _forbids, ...withoutForbids } = invariant;
-  assert.strictEqual(checkInvariant(withoutForbids, "the fixed shape and the broken shape"), undefined);
+  assert.strictEqual(
+    checkInvariant(withoutForbids, "the fixed shape and the broken shape"),
+    undefined,
+  );
 });
 
 it("names the invariant and says what to do", () => {
@@ -67,13 +70,18 @@ it.effect("the installed dependencies still hold every invariant", () =>
   Effect.gen(function* () {
     const failures = yield* checkInvariants(dependencyInvariants);
     assert.deepStrictEqual(failures.map(formatFailure), []);
-  }).pipe(Effect.provide(NodeServices.layer)));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 // Measured rather than read: beta.103 fixed the aggregate leak by refactoring,
 // which left the old source marker intact and its verdict wrong. Calibration is
 // ~3.8 MB on the leaking build against ~0.02 MB here.
-it.effect("the installed effect build does not leak on idle schedule ticks", () =>
-  Effect.gen(function* () {
-    const failures = yield* checkBehaviorInvariants(behaviorInvariants);
-    assert.deepStrictEqual(failures.map(formatFailure), []);
-  }).pipe(Effect.provide(NodeServices.layer)), { timeout: 120_000 });
+it.effect(
+  "the installed effect build does not leak on idle schedule ticks",
+  () =>
+    Effect.gen(function* () {
+      const failures = yield* checkBehaviorInvariants(behaviorInvariants);
+      assert.deepStrictEqual(failures.map(formatFailure), []);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  { timeout: 120_000 },
+);

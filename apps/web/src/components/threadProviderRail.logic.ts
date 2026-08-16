@@ -1,4 +1,8 @@
-import { PROVIDER_DISPLAY_NAMES, type ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
 
 import { normalizeProviderAccentColor } from "../providerInstances";
 import { formatProviderDriverKindLabel } from "../providerModels";

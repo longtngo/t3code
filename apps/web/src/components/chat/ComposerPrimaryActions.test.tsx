@@ -265,7 +265,11 @@ describe("ComposerPrimaryActions", () => {
 describe("ComposerPrimaryActions cancel question", () => {
   // Parameterised so a fixture cannot accidentally hide the control behind the
   // same flag that hides Stop.
-  function renderPending(options: { isRunning: boolean; isResponding?: boolean; compact?: boolean }) {
+  function renderPending(options: {
+    isRunning: boolean;
+    isResponding?: boolean;
+    compact?: boolean;
+  }) {
     return renderToStaticMarkup(
       createElement(ComposerPrimaryActions, {
         compact: options.compact ?? true,

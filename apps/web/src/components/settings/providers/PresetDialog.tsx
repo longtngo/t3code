@@ -110,7 +110,8 @@ export function PresetDialog(props: {
           {preview && config && provider ? (
             <div className="rounded-lg border border-border">
               <div className="border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
-                Merged environment — http://{settings.providers[config.providerId]?.host ?? provider.host}:
+                Merged environment — http://
+                {settings.providers[config.providerId]?.host ?? provider.host}:
                 {config.port ?? provider.defaultPort}/v1
               </div>
               <div className="divide-y divide-border/60">

@@ -1118,25 +1118,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  const refreshAccountUsage: ProviderService.ProviderService["Service"]["refreshAccountUsage"] = Effect.fn(
-    "refreshAccountUsage",
-  )(function* () {
-    const currentAdapters = yield* getAdapterEntries;
-    yield* Effect.forEach(
-      currentAdapters,
-      ([instanceId, adapter]) =>
-        adapter.refreshAccountUsage().pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider.account-usage.refresh-failed", {
-              instanceId,
-              provider: adapter.provider,
-              cause,
-            }),
+  const refreshAccountUsage: ProviderService.ProviderService["Service"]["refreshAccountUsage"] =
+    Effect.fn("refreshAccountUsage")(function* () {
+      const currentAdapters = yield* getAdapterEntries;
+      yield* Effect.forEach(
+        currentAdapters,
+        ([instanceId, adapter]) =>
+          adapter.refreshAccountUsage().pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.account-usage.refresh-failed", {
+                instanceId,
+                provider: adapter.provider,
+                cause,
+              }),
+            ),
           ),
-        ),
-      { discard: true },
-    );
-  });
+        { discard: true },
+      );
+    });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();

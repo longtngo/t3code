@@ -12,7 +12,7 @@ dependency is floored. User-facing Claude setup lives in
    on abnormal background-task exits (non-zero exit and `kill -9`). Earlier builds could settle a
    background task without any notification, so the thread never woke. t3code's wake path
    (`maybeWakeThreadForCompletedTask` in `ProviderRuntimeIngestion.ts`) depends on that event.
-2. **A known baseline for the stall below.** The parallel-subagent stall was observed *on* `0.3.159`,
+2. **A known baseline for the stall below.** The parallel-subagent stall was observed _on_ `0.3.159`,
    so the floor is the version we have characterised — not a version that fixes the stall.
 
 When bumping the SDK, re-validate both behaviours (see the checklist).

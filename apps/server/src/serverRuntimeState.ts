@@ -222,9 +222,7 @@ export const diagnosePreviousShutdown = (input: {
     Option.getOrUndefined,
   );
   const previousBootAgeMillis =
-    startedAtMillis === undefined
-      ? undefined
-      : Math.max(0, input.nowEpochMillis - startedAtMillis);
+    startedAtMillis === undefined ? undefined : Math.max(0, input.nowEpochMillis - startedAtMillis);
 
   return {
     _tag: "unclean",
@@ -232,8 +230,7 @@ export const diagnosePreviousShutdown = (input: {
     startedAt: previous.startedAt,
     previousBootAgeMillis,
     crashLoopSuspected:
-      previousBootAgeMillis !== undefined &&
-      previousBootAgeMillis < crashLoopUptimeThresholdMillis,
+      previousBootAgeMillis !== undefined && previousBootAgeMillis < crashLoopUptimeThresholdMillis,
   };
 };
 

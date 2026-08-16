@@ -6,7 +6,7 @@
 ## Goal
 
 Name the model the context window belongs to. The Vitals popover's Context block shows
-`Context … 1m window` and `18% · 182k / 1m`, but never says *which model* that window is for. On a
+`Context … 1m window` and `18% · 182k / 1m`, but never says _which model_ that window is for. On a
 fork where the active model changes per thread, a window size with no model attached is ambiguous.
 
 ## Why now: the reconcile owes it
@@ -19,11 +19,11 @@ lived. That was recorded as a deliberate, named follow-up rather than a silent d
 
 ## Premises validated (Hard Rule 8)
 
-| Premise | Probe | Result |
-|---|---|---|
-| The gauge has no model name today | `ContextBlock` takes only `providerDisplayName`, used solely in the compaction sentence | ✅ |
-| A display-name helper still exists | `getTriggerDisplayModelName(model)` in `chat/providerIconUtils.ts:54` | ✅ |
-| The composer can resolve the selection | `modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<AppModelOption>>` is already built there (`ChatComposer.tsx:920`), and `activeThreadModelSelection` is already in scope beside the existing `activeThreadProviderDisplayName` memo | ✅ |
+| Premise                                | Probe                                                                                                                                                                                                                                                     | Result |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| The gauge has no model name today      | `ContextBlock` takes only `providerDisplayName`, used solely in the compaction sentence                                                                                                                                                                   | ✅     |
+| A display-name helper still exists     | `getTriggerDisplayModelName(model)` in `chat/providerIconUtils.ts:54`                                                                                                                                                                                     | ✅     |
+| The composer can resolve the selection | `modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<AppModelOption>>` is already built there (`ChatComposer.tsx:920`), and `activeThreadModelSelection` is already in scope beside the existing `activeThreadProviderDisplayName` memo | ✅     |
 
 ## Approach
 
@@ -35,7 +35,7 @@ window size.**
    that instance's option list, fall back to the raw slug — using the surviving
    `getTriggerDisplayModelName`.
 2. Thread it as `modelDisplayName` through `VitalsGaugeConnected → VitalsGauge → VitalsDetail →
-   ContextBlock`, the same path `providerDisplayName` already takes.
+ContextBlock`, the same path `providerDisplayName` already takes.
 3. Render it in the Context block's header row, joined to the existing window size:
    `Opus 5 · 1m window`. When the name is unknown, the row degrades to exactly what it shows today.
 
@@ -44,12 +44,12 @@ new row.
 
 ## Alternatives rejected
 
-| Alternative | Why not |
-|---|---|
-| Restore `ContextWindowMeter.logic.ts` and import it | The component it served is deleted; reviving a module whose only consumer is gone re-creates the orphan the reconcile just removed. The one function worth keeping is ~6 lines. |
-| Put the model name in a tooltip, as upstream did | Upstream needed a tooltip because its meter was a bare bar in the composer. The Vitals popover **is** the disclosure surface — a tooltip on a popover is a second hover layer for information that fits in view. |
-| Replace the provider name in the compaction sentence | Different sentence, different meaning ("Claude automatically compacts…" is about the provider's behaviour). Swapping in a model name makes that line read oddly and loses the provider. |
-| Give it its own row under the header | The header slot is empty and adjacent; a new row costs height in a popover that already carries three blocks. |
+| Alternative                                          | Why not                                                                                                                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Restore `ContextWindowMeter.logic.ts` and import it  | The component it served is deleted; reviving a module whose only consumer is gone re-creates the orphan the reconcile just removed. The one function worth keeping is ~6 lines.                                  |
+| Put the model name in a tooltip, as upstream did     | Upstream needed a tooltip because its meter was a bare bar in the composer. The Vitals popover **is** the disclosure surface — a tooltip on a popover is a second hover layer for information that fits in view. |
+| Replace the provider name in the compaction sentence | Different sentence, different meaning ("Claude automatically compacts…" is about the provider's behaviour). Swapping in a model name makes that line read oddly and loses the provider.                          |
+| Give it its own row under the header                 | The header slot is empty and adjacent; a new row costs height in a popover that already carries three blocks.                                                                                                    |
 
 ## Tradeoffs and limitations
 
@@ -75,10 +75,10 @@ renders a string the client already holds.
 **6b lenses: correctness + simplicity.** No conditional lens fires (no new entry point, query
 pattern, hot-path loop, config key, or failure-capable path). Round 1, both findings applied:
 
-| # | Lens | Finding | Resolution |
-|---|---|---|---|
-| 1 | Correctness | `ContextBlock` renders the header's right slot only when `hasMax`. A model name hung off that slot disappears for a provider that reports no window size — the case where naming the model matters *most*. | Render the slot when there is **either** a max or a model name, joining with `·` only when both are present. |
-| 2 | Simplicity | Does this need a separate memo, or can it be computed inside the gauge? | The gauge has no access to `modelOptionsByInstance`; passing that whole map down to derive one string would be a wider prop than the string itself. Memo stays in the composer, mirroring `providerDisplayName`. |
+| #   | Lens        | Finding                                                                                                                                                                                                    | Resolution                                                                                                                                                                                                       |
+| --- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Correctness | `ContextBlock` renders the header's right slot only when `hasMax`. A model name hung off that slot disappears for a provider that reports no window size — the case where naming the model matters _most_. | Render the slot when there is **either** a max or a model name, joining with `·` only when both are present.                                                                                                     |
+| 2   | Simplicity  | Does this need a separate memo, or can it be computed inside the gauge?                                                                                                                                    | The gauge has no access to `modelOptionsByInstance`; passing that whole map down to derive one string would be a wider prop than the string itself. Memo stays in the composer, mirroring `providerDisplayName`. |
 
 Round 2: only repeats — the sole edit was finding 1, inside correctness's own dimension, and
 re-running it produced nothing new. Exit: quiescence.

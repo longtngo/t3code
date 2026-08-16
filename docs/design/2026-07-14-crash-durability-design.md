@@ -25,32 +25,33 @@ rebooted." Two asks:
 
 Two independent investigations reached the **same mechanism** from the log + code.
 
-| Premise | Status | Evidence |
-|---|---|---|
-| Crashes are a **V8 heap-OOM abort** + launchd auto-restart — not an external kill or machine reboot | **CONFIRMED (2× independent)** | 49× `FATAL … heap out of memory` (V8 abort); launchd bare `KeepAlive=true` + `ThrottleInterval=5` relaunches in ~5 s. Not jetsam (128 GB RAM, no pressure). `launchctl` last-exit **-9 is a red herring** — it's the 09:32 `t3-rebuild kickstart -k`, not the recurring killer |
-| **Unbounded leak**, not a spike | **CONFIRMED** | Ceiling raised 4→12 GB (Jul 9) only moved OOM from ~2.4 h to **13–21 h** uptime; heap climbs ~1 GB/h; GC works (RSS dips) |
-| Restart amplifies damage | **CONFIRMED** | 160 restarts / 49 OOM this window; each SIGKILLs in-flight work |
-| Background-task recovery **already works**; foreground turns are abandoned | **CONFIRMED** | `BackgroundTaskRecoveryWatchdog` (migration 033) fired **240×** (e.g. thread `1c3fbd3f` — the user's own thread) resuming orphaned bg-tasks. `BootTurnReconciler` only stops+interrupts foreground turns. **Recovery isn't the problem — the crash loop is; it resumes work, then OOMs again before it finishes** |
-| Resume/dedup primitives exist | **CONFIRMED** | `resumeCursor` re-applied on next `startSession`; durable `orchestration_events`; SQL `orchestration_command_receipts` dedup deterministic `commandId`s across boots |
+| Premise                                                                                             | Status                         | Evidence                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Crashes are a **V8 heap-OOM abort** + launchd auto-restart — not an external kill or machine reboot | **CONFIRMED (2× independent)** | 49× `FATAL … heap out of memory` (V8 abort); launchd bare `KeepAlive=true` + `ThrottleInterval=5` relaunches in ~5 s. Not jetsam (128 GB RAM, no pressure). `launchctl` last-exit **-9 is a red herring** — it's the 09:32 `t3-rebuild kickstart -k`, not the recurring killer                                    |
+| **Unbounded leak**, not a spike                                                                     | **CONFIRMED**                  | Ceiling raised 4→12 GB (Jul 9) only moved OOM from ~2.4 h to **13–21 h** uptime; heap climbs ~1 GB/h; GC works (RSS dips)                                                                                                                                                                                         |
+| Restart amplifies damage                                                                            | **CONFIRMED**                  | 160 restarts / 49 OOM this window; each SIGKILLs in-flight work                                                                                                                                                                                                                                                   |
+| Background-task recovery **already works**; foreground turns are abandoned                          | **CONFIRMED**                  | `BackgroundTaskRecoveryWatchdog` (migration 033) fired **240×** (e.g. thread `1c3fbd3f` — the user's own thread) resuming orphaned bg-tasks. `BootTurnReconciler` only stops+interrupts foreground turns. **Recovery isn't the problem — the crash loop is; it resumes work, then OOMs again before it finishes** |
+| Resume/dedup primitives exist                                                                       | **CONFIRMED**                  | `resumeCursor` re-applied on next `startSession`; durable `orchestration_events`; SQL `orchestration_command_receipts` dedup deterministic `commandId`s across boots                                                                                                                                              |
 
 ### Leak source — localized and confirmed by mechanism
 
 **The global event hub is `PubSub.unbounded`, and a WS subscription's take-loop is
 coupled to a blockable socket write.**
+
 - `eventPubSub = PubSub.unbounded<OrchestrationEvent>()` (`OrchestrationEngine.ts:97`);
   **every** domain event publishes here (`:223`). **Verified.**
 - **Every** consumer subscribes to this one hub: the correctness-critical internal
   reactors (`ProviderCommandReactor.ts:1312`, `CheckpointReactor.ts:837`,
   `ProviderRuntimeIngestion.ts:2122`, `ThreadDeletionReactor.ts:94`,
   `AgentAwarenessRelay.ts:472`) **and** each WS thread client
-  (`ws.ts:1046`, filtering to its thread *after* dequeue). **Verified.**
+  (`ws.ts:1046`, filtering to its thread _after_ dequeue). **Verified.**
 - Effect `PubSub.unbounded` retains a message until **every** current subscriber
   has taken it. A WS subscriber whose socket write blocks (dead mobile socket, no
   close frame — heavy Tailscale/screen-off churn here) **backpressures its own
   take-loop → stops draining → the hub retains all threads' events for it forever**
   → 12 GB over 13+ h.
 - **This dissolves the earlier "only 2 live sockets yet ~1 GB/h" paradox:** the
-  fingerprint is a stalled *subscription take-loop*, not live TCP socket count.
+  fingerprint is a stalled _subscription take-loop_, not live TCP socket count.
 
 **Secondary leaks (real, smaller — opportunistic):** command read model never
 evicts deleted/archived threads (`OrchestrationEngine.ts:94`, `projector.ts:333-345`);
@@ -61,7 +62,7 @@ git-fetch cache (Effect `Cache` cap 2048 + TTL); DEFLATE window (freed on discon
 ## Approach — the minimal set that solves the user's actual complaint
 
 Both review rounds converged: **the crash loop is the whole problem; recovery
-already works.** So the build is deliberately scoped to *stop the crash*, plus the
+already works.** So the build is deliberately scoped to _stop the crash_, plus the
 cheap independent cleanups. Bigger durability work is deferred until measured.
 
 ### Ship 1 — Non-disruptive leak gauge + git-fetch noise cleanup (cheap, independent, first)
@@ -71,11 +72,11 @@ cheap independent cleanups. Bigger durability work is deferred until measured.
   `PubSub.size(eventPubSub)` + active-subscriber count, `process.memoryUsage().heapUsed`
   / `v8.getHeapStatistics()` ratio, and WS subscription open/close markers. Watch
   hub size + heapUsed climb → confirms the firehose-retention leak directly.
-  (On-demand heap snapshot kept only as a fallback if the gauge does *not*
+  (On-demand heap snapshot kept only as a fallback if the gauge does _not_
   implicate the hub → would point at the secondary #2/#3.)
 - **Git-fetch quieting.** The upstream-status fix (`5a5ff6099`) **is deployed** and
-  correctly fail-*fasts* (`GIT_TERMINAL_PROMPT=0`), but ~38k `could not read
-  Username` failures still fire (post-boot) against an auth-requiring remote
+  correctly fail-_fasts_ (`GIT_TERMINAL_PROMPT=0`), but ~38k `could not read
+Username` failures still fire (post-boot) against an auth-requiring remote
   (`sparse-attn-lab`), spamming the 52 MB log (which would obscure the gauge reads)
   and burning CPU. Cheap fix: cache the auth-failure and back off long / let the
   user exclude the repo. Not the OOM cause; fully independent.
@@ -84,11 +85,12 @@ cheap independent cleanups. Bigger durability work is deferred until measured.
 
 Round-2 review proved the first draft's "bound the hub / drop-on-overflow" wrong on
 two counts, both now designed around:
-- **The hub must stay unbounded.** Effect's drop policy is fixed at *construction*
+
+- **The hub must stay unbounded.** Effect's drop policy is fixed at _construction_
   and applies to **all** subscribers — a `sliding`/`dropping` hub would silently
   starve the internal reactors (a dropped `turn-start-requested` → a turn committed
   but never driven). No per-subscriber policy exists.
-- **Silent drop-while-connected is unrecoverable.** The client *deliberately* does
+- **Silent drop-while-connected is unrecoverable.** The client _deliberately_ does
   no gap-detection (`service.ts:474`) and only resyncs on **reconnect** — a
   mid-stream drop diverges it permanently (stuck spinner / missing tool result).
 
@@ -99,15 +101,15 @@ immediately and offers into a per-connection **non-blocking bounded buffer**; th
 socket writer drains that buffer. Because the take-loop is decoupled from the
 (blockable) socket write, it never stalls → the hub always reclaims. On buffer
 overflow (dead or slow socket) **close the connection** — never silently drop — so
-the client reconnects and catches up via the *existing* `fromSequenceExclusive`
-resync (`ws.ts:1067`). This covers **both** trigger classes (dead socket *and*
+the client reconnects and catches up via the _existing_ `fromSequenceExclusive`
+resync (`ws.ts:1067`). This covers **both** trigger classes (dead socket _and_
 slow-but-alive), keeps the hub unbounded (reactors never lose events), and never
 diverges the client. Buffer size is a tunable knob.
 
 **2b — Server-side heartbeat + idle-socket reaper (complementary hygiene).** Node's
 HTTP server has no idle-timeout and there is no server-side ping today (only
 client-side, `wsRpcProtocol.ts:508`). Add periodic ping + pong-deadline; on miss,
-close the socket so its scope releases — reclaiming a dead subscriber *proactively*,
+close the socket so its scope releases — reclaiming a dead subscriber _proactively_,
 before its 2a buffer even fills. **Invariant (state in code):** reaping a socket is
 read-path only and **never** affects an in-flight turn (turns are driven off the
 command queue by `ProviderCommandReactor`, fully decoupled from any WS socket) — a
@@ -124,14 +126,15 @@ stays bounded before doing anything else.
 ### Deferred (data-gated) — foreground-turn resume
 
 Background-task-bearing threads already recover (the common case — the user's own
-long threads spawn bg-tasks and *did* recover 240×). A plain foreground turn with
+long threads spawn bg-tasks and _did_ recover 240×). A plain foreground turn with
 no bg-task row is still abandoned on restart — but after Ship 2 removes the OOM
 loop, the only remaining trigger is a **deploy or OS reboot** (rare, human-timed),
-and whether residual foreground abandonment actually hurts *this* workload is
+and whether residual foreground abandonment actually hurts _this_ workload is
 **unmeasured**. So this is deferred to its own branch, built **only if** the Ship-1
 gauge/telemetry shows real residual foreground abandonment after the crash stops.
 
 When built, it must (recorded now so the round-1 correctness fixes aren't lost):
+
 - Run as a **post-reactor sweep** (not from the pre-reactor `BootTurnReconciler`,
   whose dispatch is published before reactors subscribe → dropped, C2) **with an
   explicit "reactors subscribed" barrier** (subscriptions are lazy via `forkScoped`
@@ -140,7 +143,7 @@ When built, it must (recorded now so the round-1 correctness fixes aren't lost):
 - Persist a recovery-intent row keyed to the interrupted turn (migration; reuse
   `pending_background_tasks` with a `kind` column), increment attempts **before**
   dispatch, and delete the row **only on a terminal turn event** — never on
-  dispatch — so a *slow* post-resume OOM actually hits the attempt cap (C1). The
+  dispatch — so a _slow_ post-resume OOM actually hits the attempt cap (C1). The
   **existing bg-task path shares this delete-on-dispatch flaw** and should be fixed
   in the same change, or "one unified mechanism" is a misnomer.
 - Attempt-keyed idempotent `commandId` (double-boot-safe via the receipt store, C3);
@@ -151,7 +154,7 @@ When built, it must (recorded now so the round-1 correctness fixes aren't lost):
 ### Not building — memory-pressure guard
 
 Documented as a fallback recipe only, **not shipped**. It is insurance for a leak
-that Ship 2 *fixes*; a default-off feature is dead code plus a restart-loop surface.
+that Ship 2 _fixes_; a default-off feature is dead code plus a restart-loop surface.
 If Ship 2 measurably fails to hold, the recipe is: own `v8.getHeapStatistics()` loop
 (not `ProcessResourceMonitor`, which samples RSS via `ps`); soft threshold + idle
 (no active turn, no pending approval/input) → `process.exit(0)` (launchd restarts);
@@ -168,7 +171,7 @@ it exists.
   (round-2 CRITICAL-1); the hub must stay unbounded.
 - **Per-WS bounded queue that silently drops middle events.** Rejected — the client
   has no mid-stream gap detection, so it diverges permanently (round-2 CRITICAL-2).
-  Overflow must *disconnect* (→ reconnect-resync), not drop.
+  Overflow must _disconnect_ (→ reconnect-resync), not drop.
 - **Heartbeat reaper (2b) as the sole cure.** Insufficient alone — a slow-but-alive
   client still pins the unbounded hub (round-2 HIGH-3 / simplicity review). 2a is
   what closes the invariant; 2b is hygiene.
@@ -194,7 +197,7 @@ it exists.
   `node dist/bin.mjs` per the plist — confirmed). `server.ts` also has a **Bun**
   branch whose WS server has a default `idleTimeout`; 2b is only strictly needed
   under Node. Verify before assuming universality.
-- **Deferred foreground resume** means a *deploy/OS-reboot* during a foreground-only
+- **Deferred foreground resume** means a _deploy/OS-reboot_ during a foreground-only
   turn still abandons it until that follow-up ships — acceptably rare post-Ship-2.
 
 ## Follow-ups deferred

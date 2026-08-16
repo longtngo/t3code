@@ -24,7 +24,7 @@ required interaction.
   - `.chat-markdown table { min-width: max-content }` — forces the table wider than
     its container, which is what pushes the last column off-screen.
   - `[data-expanded="false"] th,td { white-space: nowrap; text-overflow: ellipsis;
-    overflow: hidden; max-width: 24rem }` — truncates every cell to one line by
+overflow: hidden; max-width: 24rem }` — truncates every cell to one line by
     default.
   - An `expanded` toggle (the `⤢` button) flips cells to `overflow-wrap: anywhere`
     and freezes measured column widths.
@@ -43,7 +43,7 @@ full-width overlay for the extreme case.**
 
 1. **Default = wrap, not truncate.** Remove `min-width: max-content` and the
    `nowrap/ellipsis` truncation. Cells get `white-space: normal; overflow-wrap:
-   anywhere`. With `table { width: 100% }` and auto table layout, the browser caps
+anywhere`. With `table { width: 100% }` and auto table layout, the browser caps
    the table at the column width and wraps cell content — no text is ever hidden.
    `overflow-wrap: anywhere` also breaks long unbreakable tokens (URLs/paths) so
    they cannot force horizontal overflow on desktop.
@@ -56,7 +56,7 @@ full-width overlay for the extreme case.**
 
 3. **Make the scroll visible.** Drop `hideScrollbars` from the `ScrollArea` (keep
    `scrollFade`). On desktop, wrapping means there is usually no overflow, so no
-   scrollbar appears (clean). When there *is* overflow (mobile floor, or a residual
+   scrollbar appears (clean). When there _is_ overflow (mobile floor, or a residual
    wide table), a real scrollbar + edge fade signal it.
 
 4. **Expand → full-width overlay.** Repurpose the existing `⤢` footer button: it no
@@ -71,14 +71,14 @@ The `Copy as Markdown / CSV` menu is unchanged.
 ## Alternatives considered
 
 - **B — wrap only (no overlay, no responsive floor).** Simplest diff, but the
-  prototype showed it is the *worst* on mobile: fixed narrow columns become tall
+  prototype showed it is the _worst_ on mobile: fixed narrow columns become tall
   word-towers. Rejected as the sole solution; its wrap behavior is the desktop core
   of D.
 - **C — visible horizontal scroll only (keep single-line cells).** Preserves table
   shape (good for dense numeric grids) and is natural with touch, but every wide
   prose row requires scrolling back and forth to read — does not satisfy "easier to
   read" for the prose-heavy tables in the screenshot. Its visible-scroll mechanism
-  is reused in D as the *fallback*, not the default.
+  is reused in D as the _fallback_, not the default.
 - **A — current (truncate + invisible scroll).** The status quo being fixed.
 
 ## Files touched

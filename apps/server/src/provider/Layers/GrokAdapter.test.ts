@@ -318,7 +318,6 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
       });
 
-
       const error = yield* Effect.flip(
         adapter.sendTurn({
           threadId,

@@ -24,8 +24,8 @@ load/unload → coding-agent env-var presets.
    (env-var preset targets), never spawned.
 4. **Clean redesign + migrate** — introduce the new schema, migrate existing
    `localModels` settings into it, and remove the old auto-detect code paths.
-5. **One merged Settings tab** — "Local LLM" holds both a *Providers* section
-   and a *Model configurations* section. The cloud-agent "Providers" tab stays
+5. **One merged Settings tab** — "Local LLM" holds both a _Providers_ section
+   and a _Model configurations_ section. The cloud-agent "Providers" tab stays
    separate.
 6. **Provider toggle is visibility-only** (eye icon), not enable/disable — a
    hidden provider is still fully configurable and usable; visibility only
@@ -140,6 +140,7 @@ LocalLlmSettings = {
 #### Migration (decode transform)
 
 When `localLlm` is absent but `localModels` is present:
+
 - `localModels.ramBudgetBytes` → `localLlm.ramBudgetBytes`
 - `localModels.modelsDir` / `defaultArgs` → `providers["mlx-serve"]`
 - `localModels.ds4.{binaryPath,modelsDir,defaultArgs}` → `providers["ds4"]`,
@@ -222,4 +223,7 @@ streams.
 - Re-surfacing externally-started processes the user launched by hand (the
   sidebar is now the curated config list by design).
 - Ollama's `/api/ps` resident probe (still a future follow-up).
+
+```
+
 ```

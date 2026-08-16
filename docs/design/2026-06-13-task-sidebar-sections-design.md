@@ -12,6 +12,7 @@ sections and add a click-through detail panel:
    (derived from `task.*` activities).
 
 Cross-cutting requirements:
+
 - Every section is collapsible (reuse the `Collapsible` primitive).
 - Within every section, **completed items sink to the bottom** (tasks too).
 - Each item is marked **pending / running / completed** with the same status
@@ -36,8 +37,8 @@ Scope: the **active thread only** (matches how the task sidebar already works).
   (`components/ui/collapsible.tsx`, base-ui) is the disclosure primitive, with a
   chevron-rotate pattern already used in `ChatMarkdown`.
 - **Terminal sessions** (background): `useKnownTerminalSessions({environmentId,
-  threadId})` → `KnownTerminalSession[]` (`{ target:{...,terminalId},
-  state }`). `TerminalSessionState` carries `summary` (`label`, `cwd`, `status`,
+threadId})` → `KnownTerminalSession[]` (`{ target:{...,terminalId},
+state }`). `TerminalSessionState` carries `summary` (`label`, `cwd`, `status`,
   `exitCode`, `pid`), `status` (`running|idle|exited|closed|…`), and `buffer`
   (the terminal output = the log). `TerminalViewport` (exported from
   `ThreadTerminalDrawer.tsx`) renders the live xterm; the existing terminal
@@ -70,12 +71,12 @@ New module `apps/web/src/sidebarSections.ts`. The activity payload is
   otherwise delegates.)
 - `deriveAgentItems(activities): AgentSidebarItem[]` — fold `task.*` by `taskId`:
   `{ taskId, label (started.detail/description), status, startedAt,
-  completedAt?, outputFile?, finalSummary?, log: { at, text, lastToolName? }[] }`.
+completedAt?, outputFile?, finalSummary?, log: { at, text, lastToolName? }[] }`.
   `task.started` ⇒ running; `task.completed` ⇒ completed, or `failed` when
   `payload.status ∈ {failed, stopped}`. **Final summary = the completed
   activity's `payload.detail`** (the server maps `message.summary` → `detail`
   on completion); each progress log entry's text = `payload.summary ??
-  payload.detail`. `completedAt` = the completed activity's `createdAt`.
+payload.detail`. `completedAt` = the completed activity's `createdAt`.
   Agents are **Claude-only** today (only `ClaudeAdapter` emits `task.*`).
 - `deriveBackgroundItems(terminals): BackgroundSidebarItem[]` from
   `useKnownTerminalSessions`. Terminal status enum is
@@ -95,14 +96,15 @@ New module `apps/web/src/sidebarSections.ts`. The activity payload is
 
 Reuse the existing **`uiStateStore`** (already persisted, already holds per-UI
 prefs): add a `dismissedSidebarItemsById: Record<itemKey, dismissedAtIso>` slice
-+ `dismissSidebarItem(key)` / a section-collapse slice. Pure
-`isAutoCleared(item, nowMs, ttlHours)` hides a *completed/failed* item when
-`now - completedAt > ttl` (`AUTO_CLEAR_TTL_HOURS = 6`). A terminal/agent item is
-hidden when dismissed OR auto-cleared. **No interval** — the filter runs at
-render time against `Date.now()`; the sidebar already re-renders as
-activities/terminals stream, and a coarse delay for a fully-idle thread is
-cosmetic. Manual remove (`×`) sets `dismissedAt = now`; offered on
-completed/failed rows (the common case) — running items aren't dismissable.
+
+- `dismissSidebarItem(key)` / a section-collapse slice. Pure
+  `isAutoCleared(item, nowMs, ttlHours)` hides a _completed/failed_ item when
+  `now - completedAt > ttl` (`AUTO_CLEAR_TTL_HOURS = 6`). A terminal/agent item is
+  hidden when dismissed OR auto-cleared. **No interval** — the filter runs at
+  render time against `Date.now()`; the sidebar already re-renders as
+  activities/terminals stream, and a coarse delay for a fully-idle thread is
+  cosmetic. Manual remove (`×`) sets `dismissedAt = now`; offered on
+  completed/failed rows (the common case) — running items aren't dismissable.
 
 ### UI
 
@@ -150,7 +152,7 @@ the right-region column budget, and still presents as a right-side panel
 - **New server RPC to list pending background tasks / subagents.** Rejected: the
   thread `activities[]` already carry the task lifecycle client-side, and
   terminals already have a client store. Per-active-thread scope needs no new
-  server surface. (A cross-thread/global view *would* need server work — out of
+  server surface. (A cross-thread/global view _would_ need server work — out of
   scope per the active-thread decision.)
 - **Server-side dismissal/auto-clear state.** Rejected: dismissal is a per-user
   view preference; the client persistence store is the right home and avoids
@@ -158,7 +160,7 @@ the right-region column budget, and still presents as a right-side panel
 - **Route-level peer detail panel + global `sidebarDetailStore` (mirroring
   diff/file-viewer mounting).** Rejected after design review: the plan sidebar is
   mounted inside `ChatView` and is uncoordinated with the route panels, and the
-  detail panel must coexist with the plan sidebar (you click an item *in* it) —
+  detail panel must coexist with the plan sidebar (you click an item _in_ it) —
   a route-level peer would create an uncoordinated 4th/5th column and need a
   global store only to bridge that self-inflicted gap. Mounting the detail panel
   as a ChatView-local master/detail sibling removes the store, the extra host

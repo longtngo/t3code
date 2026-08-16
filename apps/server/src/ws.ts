@@ -414,7 +414,8 @@ const makeWsRpcLayer = (
       // layer is transport — it must not REQUIRE a provider-recovery service to
       // build. Absent (router-seam tests, trimmed layers) the force-stop still
       // stops; only the follow-up resume is skipped.
-      const providerTurnStallWatchdogOption = yield* Effect.serviceOption(ProviderTurnStallWatchdog);
+      const providerTurnStallWatchdogOption =
+        yield* Effect.serviceOption(ProviderTurnStallWatchdog);
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
@@ -1088,9 +1089,10 @@ const makeWsRpcLayer = (
           if (command.type !== "thread.session.stop" || command.recoverAfterStop !== true) {
             return;
           }
-          const shell = yield* projectionSnapshotQuery
-            .getThreadShellById(command.threadId)
-            .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+          const shell = yield* projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+          );
           const activeTurnId = shell?.session?.activeTurnId ?? null;
           if (activeTurnId === null) return;
           const watchdog = Option.getOrUndefined(providerTurnStallWatchdogOption);
@@ -1115,17 +1117,15 @@ const makeWsRpcLayer = (
                   ),
                 );
 
-        return startup
-          .enqueueCommand(dispatchEffect)
-          .pipe(
-            Effect.mapError((cause) =>
-              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-            ),
-            // Arm recovery only AFTER the stop is accepted: adopting a stop that
-            // never dispatched would leave the watchdog waiting for a session
-            // teardown that is not coming.
-            Effect.tap(() => adoptForceStopForRecovery(normalizedCommand)),
-          );
+        return startup.enqueueCommand(dispatchEffect).pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
+          // Arm recovery only AFTER the stop is accepted: adopting a stop that
+          // never dispatched would leave the watchdog waiting for a session
+          // teardown that is not coming.
+          Effect.tap(() => adoptForceStopForRecovery(normalizedCommand)),
+        );
       };
 
       const loadServerConfig = Effect.gen(function* () {
@@ -1384,9 +1384,7 @@ const makeWsRpcLayer = (
                           // recover to an empty batch. The concat then continues to
                           // bufferedLiveStream (which is likewise ending → resync).
                           Effect.catchTag("Done", () =>
-                            Effect.succeed(
-                              [] as ReadonlyArray<OrchestrationShellStreamItem>,
-                            ),
+                            Effect.succeed([] as ReadonlyArray<OrchestrationShellStreamItem>),
                           ),
                         ),
                       ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
@@ -2168,7 +2166,10 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const project = yield* projectionSnapshotQuery
                 .getProjectShellById(input.projectId)
-                .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+                .pipe(
+                  Effect.map(Option.getOrUndefined),
+                  Effect.orElseSucceed(() => undefined),
+                );
               const members = project?.members ?? [];
               // Inspecting a member is read-only and costs several git
               // subprocesses, so the members overlap rather than adding up into
@@ -2213,9 +2214,10 @@ const makeWsRpcLayer = (
                 return unavailable("This repository is no longer attached to the project.");
               }
               const member = resolved.member;
-              const thread = yield* projectionSnapshotQuery
-                .getThreadShellById(input.threadId)
-                .pipe(Effect.map(Option.getOrUndefined), Effect.orElseSucceed(() => undefined));
+              const thread = yield* projectionSnapshotQuery.getThreadShellById(input.threadId).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.orElseSucceed(() => undefined),
+              );
               // The branch this cuts records the thread as its owner, so a
               // thread from another project must not be able to claim a
               // repository here by naming someone else's project id.

@@ -8,8 +8,8 @@
 Cut the 10–20s window between a mobile screen-off/on (over WiFi + Tailscale) and
 the latest thread payload arriving. This sits **on top of** the just-shipped
 correctness fix (`9ab8ca8a2`, `retryTransientErrors:false` + `send abandoned`
-classification) which made the reconnect *happen at all*; this item makes the
-reconnect *fast*.
+classification) which made the reconnect _happen at all_; this item makes the
+reconnect _fast_.
 
 Success = bound the worst-case dead-wait after connectivity is restored to a few
 seconds, and instrument the path so the user's next phone repro tells us
@@ -22,7 +22,7 @@ The reconnect path has two serial cost centers:
 1. **Dead-socket detection — 5–10s.** Effect's RPC client runs its own pinger
    (`effect@4.0.0-beta.78` `RpcClient.ts:1176`): `Effect.delay("5 seconds")` with
    a one-cycle pong check, so a dead socket surfaces 1–2 ping cycles later. Runs
-   *before* the orange "reconnecting" icon appears.
+   _before_ the orange "reconnecting" icon appears.
 2. **Reconnect-backoff dead-time — up to the current backoff gap.**
    `DEFAULT_RECONNECT_BACKOFF` (`reconnectBackoff.ts:20`) is
    `initialDelayMs 1000 → ×2 → cap 64000`, infinite retries, **no jitter**, and
@@ -32,7 +32,7 @@ The reconnect path has two serial cost centers:
    t = 0, 1, 3, 7, 15, 31s… **The worst-case dead-time equals the gap you have
    escalated to**: if the socket reopen-attempts fail while the Tailscale tunnel
    re-establishes and you reach the 8s or 16s slot, you then sit idle that long
-   *after connectivity is already back*.
+   _after connectivity is already back_.
 
 **Why WiFi+Tailscale makes it worse, not better:** the WiFi link never drops
 (only the Tailscale tunnel does), so `navigator.onLine` never flips →
@@ -56,12 +56,12 @@ Two independent, low-risk changes on one branch.
 
 Change **one knob** of `DEFAULT_RECONNECT_BACKOFF`:
 
-| field           | before   | after   |
-| --------------- | -------- | ------- |
-| `initialDelayMs`| 1000     | 1000    |
-| `backoffFactor` | 2        | 2       |
-| `maxDelayMs`    | 64000    | 3000    |
-| `maxRetries`    | null     | null    |
+| field            | before | after |
+| ---------------- | ------ | ----- |
+| `initialDelayMs` | 1000   | 1000  |
+| `backoffFactor`  | 2      | 2     |
+| `maxDelayMs`     | 64000  | 3000  |
+| `maxRetries`     | null   | null  |
 
 New curve: `1000, 2000, 3000, 3000…` — worst-case gap **3000ms**.
 
@@ -70,9 +70,9 @@ idle-after-connectivity-returns equals the backoff gap you have escalated to, an
 that gap is bounded **entirely by `maxDelayMs`**. Lowering only the cap gives the
 identical ≤3s bound as a gentler `{500, ×1.5, 3000}` ramp would, with a two-line
 diff instead of rewriting the whole expected-delay test table — and the early-ramp
-shape is unmotivated by any evidence (if a snappier *first* retry ever proves
+shape is unmotivated by any evidence (if a snappier _first_ retry ever proves
 worth it, that is a separate, measured tweak). t3code is a **single self-hosted
-server** reached over LAN/Tailscale — the 64s cap exists to spare *shared* servers
+server** reached over LAN/Tailscale — the 64s cap exists to spare _shared_ servers
 from a thundering herd, which does not apply here. Desktop (localhost) and
 remote/saved environments all benefit; none wants a 64s reconnect ceiling on a
 self-hosted tool.
@@ -85,10 +85,10 @@ open internet now retry every ≤3s while a server is genuinely down, vs every �
 before — each attempt is a cheap WS open/close, and mobile freezes background tabs
 so it does not spin while backgrounded. Acceptable.
 
-**Jitter — considered and rejected.** Jitter's purpose is de-synchronizing *many*
+**Jitter — considered and rejected.** Jitter's purpose is de-synchronizing _many_
 clients to avoid a synchronized herd; irrelevant for a single-user self-hosted
 app. It would also desync the reconnect UI: `getReconnectDelayMs` is called
-*separately* by the status atom to display `nextRetryAt`
+_separately_ by the status atom to display `nextRetryAt`
 (`wsConnectionState.ts:214`) and by the Effect schedule for the actual delay —
 non-determinism would make the countdown disagree with reality. Keep the delay
 deterministic.
@@ -111,7 +111,7 @@ Add a reconnect logger, gated exactly like the existing wire meter
 
 **Stateless + labeled (design-review outcome).** The first design tracked a
 module-level "previous-event timestamp" and formatted deltas — but the shared web
-`telemetryLifecycle` is written by **every** `WsTransport` (the primary *and* any
+`telemetryLifecycle` is written by **every** `WsTransport` (the primary _and_ any
 saved/remote environment; `service.ts:1442` and `:1457`), and a mobile
 Tailscale drop takes them all down at once, so shared prev-state would interleave
 two connections' events and silently falsify the exact split we are trying to

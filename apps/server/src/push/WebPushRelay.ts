@@ -97,24 +97,26 @@ export const getOrCreateVapidKeys = Effect.fn("getOrCreateVapidKeys")(function* 
         new ServerSecretStore.SecretStoreEncodeError({ resource: VAPID_SECRET_RESOURCE, cause }),
     ),
   );
-  return yield* secrets.create(WEB_PUSH_VAPID_KEY_PAIR_SECRET, new TextEncoder().encode(encoded)).pipe(
-    Effect.as(generated as VapidKeyPair),
-    Effect.catchIf(ServerSecretStore.isSecretStoreError, (error) =>
-      ServerSecretStore.isSecretAlreadyExistsError(error)
-        ? readVapidKeyPair(secrets).pipe(
-            Effect.flatMap((concurrent) =>
-              concurrent !== null
-                ? Effect.succeed(concurrent)
-                : Effect.fail(
-                    new ServerSecretStore.SecretStoreConcurrentReadError({
-                      resource: VAPID_SECRET_RESOURCE,
-                    }),
-                  ),
-            ),
-          )
-        : Effect.fail(error),
-    ),
-  );
+  return yield* secrets
+    .create(WEB_PUSH_VAPID_KEY_PAIR_SECRET, new TextEncoder().encode(encoded))
+    .pipe(
+      Effect.as(generated as VapidKeyPair),
+      Effect.catchIf(ServerSecretStore.isSecretStoreError, (error) =>
+        ServerSecretStore.isSecretAlreadyExistsError(error)
+          ? readVapidKeyPair(secrets).pipe(
+              Effect.flatMap((concurrent) =>
+                concurrent !== null
+                  ? Effect.succeed(concurrent)
+                  : Effect.fail(
+                      new ServerSecretStore.SecretStoreConcurrentReadError({
+                        resource: VAPID_SECRET_RESOURCE,
+                      }),
+                    ),
+              ),
+            )
+          : Effect.fail(error),
+      ),
+    );
 });
 
 // ---------------------------------------------------------------------------

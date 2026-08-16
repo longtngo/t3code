@@ -16,7 +16,7 @@ Two changes driven by the 2026-06-18 update to the local-LLM runbook
    serves `/v1/models` + `/v1/chat/completions`, so it slots into the existing probe and
    sample contract with no new wire protocol.
 
-Non-goal: wiring ds4 as a *chat agent driver* (the codex/claude/cursor-style provider
+Non-goal: wiring ds4 as a _chat agent driver_ (the codex/claude/cursor-style provider
 instances are full CLI integrations, not generic OpenAI endpoints). "Run DeepSeek V4 in
 t3code" here means: manage the ds4-server process from the sidebar exactly as we manage
 mlx-serve. Selecting a local endpoint as the active generation backend is a separate,
@@ -35,13 +35,13 @@ larger feature (deferred follow-up).
 - **The contract already carries an array of providers** (`LlmModelsSample.providers`)
   and the web UI already flattens `providers.flatMap(p => p.models)` — so a second engine
   is additive at the contract/stream/UI layers. ✓
-- **ds4 models are single GGUF *files***, not directories. Present on disk:
+- **ds4 models are single GGUF _files_**, not directories. Present on disk:
   `~/src/personal/ds4/gguf/DeepSeek-V4-Flash-…-imatrix-fixed.gguf` (a regular file,
-  ~91 GiB / 97.6 GB on disk). The `ds4flash.gguf` symlink lives in the repo *root*
+  ~91 GiB / 97.6 GB on disk). The `ds4flash.gguf` symlink lives in the repo _root_
   (`~/src/personal/ds4/`), which is **outside** `modelsDir`, so it is never discovered —
   the glob only sees the real file in `…/gguf/`. ✓
 - **Suspected pre-existing bug to confirm+fix:** in `LlmServeManager.list` step 2 a
-  *managed* running process maps to status `loading`/`stopping` only — `LaunchState` has
+  _managed_ running process maps to status `loading`/`stopping` only — `LaunchState` has
   no `online`, and the `probeMeta` result is fetched but ignored for status. A managed,
   fully-serving model therefore appears to stay on the amber "loading" spinner forever.
   This must be confirmed live (load a real gemma model, observe the dot) and fixed, since
@@ -52,21 +52,21 @@ larger feature (deferred follow-up).
 
 ### Engine descriptors (closed set)
 
-Introduce an `Engine` value type — a *closed* set (`mlx-serve`, `ds4`), never a
+Introduce an `Engine` value type — a _closed_ set (`mlx-serve`, `ds4`), never a
 user-supplied command template (that would reintroduce the arg-injection surface the
 current code carefully defends). Each descriptor holds the per-engine behaviour:
 
 ```ts
 interface Engine {
-  readonly id: "mlx-serve" | "ds4";       // also the provider display name
-  readonly executable: (cfg) => string;    // resolved binary (expandTilde'd)
+  readonly id: "mlx-serve" | "ds4"; // also the provider display name
+  readonly executable: (cfg) => string; // resolved binary (expandTilde'd)
   // Enumerate candidate models + their RAM estimate in one pass (collapses the old
   // listModels + estimateBytes): dir-scan + dir-sum (mlx) | *.gguf glob + statSync (ds4).
   readonly discover: (cfg) => { id: string; path: string; estBytes: number }[];
-  readonly matches: (row: ProcessRow) => ManagedProc | null;  // ps matcher + model/port extract
-  readonly buildArgs: (a: {host; port; modelPath; defaultArgs; perModelArgs}) => string[];
+  readonly matches: (row: ProcessRow) => ManagedProc | null; // ps matcher + model/port extract
+  readonly buildArgs: (a: { host; port; modelPath; defaultArgs; perModelArgs }) => string[];
   // Per-engine load allowlist + realpath confinement (mlx: subdir; ds4: *.gguf file).
-  readonly resolveModelPath: (cfg, modelId) => string | null;  // null ⇒ not found / escapes dir
+  readonly resolveModelPath: (cfg, modelId) => string | null; // null ⇒ not found / escapes dir
 }
 ```
 
@@ -94,7 +94,7 @@ engine, and returns `providers: LlmProvider[]` instead of a single `provider`. T
 diagnostics stream spreads them straight into `LlmModelsSample.providers`.
 
 **Spawn cwd (found in the live smoke).** ds4-server resolves its `metal/` Metal shaders
-*relative to its working directory* — launched from elsewhere it aborts with "metal
+_relative to its working directory_ — launched from elsewhere it aborts with "metal
 backend unavailable; aborting startup". So the descriptor carries a `cwd(cfg)`: ds4 returns
 `dirname(binaryPath)` (the ds4 repo root, where `metal/` lives); mlx returns `undefined`
 (PATH tool, no cwd-relative assets). The spawn passes `cwd` through to `ChildProcess.make`.
@@ -109,7 +109,7 @@ scan runs under the existing load semaphore, so no race; deterministic engine or
 mlx→ds4, first match wins). Keeping the RPC byte-identical avoids a second code path and
 any client/server version-skew surface.
 
-`LlmModel` gains **one** optional `engine` field — not for load routing but for *display*:
+`LlmModel` gains **one** optional `engine` field — not for load routing but for _display_:
 the UI needs it to label rows (`ds4 · MoE · …`), build collision-free React keys, and word
 the unload dialog ("stops the `<engine>` process"). The server already knows it (it built
 the provider); the client cannot otherwise derive it.
@@ -147,12 +147,13 @@ versa. The port window (8765–8799) is shared and allocated uniquely across eng
 externally started ds4 on its default 8000 is out of window and never collides.
 
 **Inflight double-count fix (review m2):** the admission check sums `online RSS (from ps)`
-+ `inflight estBytes (registry entries with state=loading)` + `this estBytes`. A launch
-that is *already visible in ps* yet still registry-`loading` is counted twice (its real
-RSS in the ps sum **and** its estimate in the inflight sum) during the overlap window —
-pre-existing, but ds4's ~13 s startup and ~91 GB estimate make a spurious
-`budget_exceeded` on a concurrent second load likely. Fix: exclude registry-loading
-entries whose `pid` is already present in `procs` from the inflight sum.
+
+- `inflight estBytes (registry entries with state=loading)` + `this estBytes`. A launch
+  that is _already visible in ps_ yet still registry-`loading` is counted twice (its real
+  RSS in the ps sum **and** its estimate in the inflight sum) during the overlap window —
+  pre-existing, but ds4's ~13 s startup and ~91 GB estimate make a spurious
+  `budget_exceeded` on a concurrent second load likely. Fix: exclude registry-loading
+  entries whose `pid` is already present in `procs` from the inflight sum.
 
 ### Settings shape (back-compatible)
 
@@ -180,7 +181,7 @@ forks / CI / settings snapshot tests must decode to something neutral (review m4
 ```
 
 When `ds4.enabled` is false (the default everywhere) the engine is skipped entirely — no
-glob, no probe, no provider row. To actually surface ds4 for *this* user without a settings
+glob, no probe, no provider row. To actually surface ds4 for _this_ user without a settings
 UI, the implementation **seeds their live server-settings file** (the runtime JSON that
 `server.updateSettings` writes — not the shared contract) with an enabled `ds4` block
 pointing at their real paths (`binaryPath: ~/src/personal/ds4/ds4-server`,
@@ -193,6 +194,7 @@ it avoids a settings migration for the established mlx config.
 ### UI
 
 `SidebarLocalModels` already flattens providers. Changes:
+
 - Key rows by `engine + (modelId ?? id)` (avoid cross-engine key collisions).
 - Show a small engine tag in the meta line when more than one engine has models (e.g.
   `ds4 · MoE · 91 GB`), so the user can tell DeepSeek from the mlx models.
@@ -246,7 +248,7 @@ it avoids a settings migration for the established mlx config.
 - Asymmetric settings (mlx top-level, ds4 nested) is slightly inelegant but
   migration-free.
 - **Persisted `--no-pld` survives (review m1).** `Schema.withDecodingDefault` only supplies
-  a default when the field is *absent*. A user who already persisted
+  a default when the field is _absent_. A user who already persisted
   `localModels.defaultArgs` keeps `["--reasoning-budget","0","--no-pld"]` verbatim; the new
   default never reaches them. This is intentional (no migration), and `--no-pld` is still a
   valid flag — behaviour is merely stale, not broken. New/unset configs get the new default.

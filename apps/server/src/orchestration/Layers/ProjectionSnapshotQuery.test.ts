@@ -1604,8 +1604,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const shell = yield* snapshotQuery.getSnapshot();
-      const snapshotThread = shell.threads.find((thread) => thread.id === ThreadId.make("thread-1"));
-      assert.deepStrictEqual(recordedTurn(snapshotThread?.checkpoints ?? [])?.memberStates, expected);
+      const snapshotThread = shell.threads.find(
+        (thread) => thread.id === ThreadId.make("thread-1"),
+      );
+      assert.deepStrictEqual(
+        recordedTurn(snapshotThread?.checkpoints ?? [])?.memberStates,
+        expected,
+      );
 
       // The windowed read is its own query path, so it has to be checked too:
       // this is exactly where two of the four paths silently stopped forwarding

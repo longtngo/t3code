@@ -139,10 +139,7 @@ export default function WorkspaceMemberEditor({
   );
   const refs = refsQuery.data?.refs;
   const isRepository = refsQuery.data?.isRepo ?? true;
-  const currentBranch = useMemo(
-    () => refs?.find((ref) => ref.current)?.name ?? null,
-    [refs],
-  );
+  const currentBranch = useMemo(() => refs?.find((ref) => ref.current)?.name ?? null, [refs]);
   const branchItems = useMemo(
     () => resolveBranchOptions(refs?.map((ref) => ref.name) ?? [], branch),
     [branch, refs],

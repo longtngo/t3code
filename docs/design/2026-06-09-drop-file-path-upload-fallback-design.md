@@ -17,21 +17,22 @@ the base feature. Both branches converge on "an absolute path the agent can `Rea
 ## Approach
 
 `addComposerFilePaths` becomes **async**. For each non-image file:
+
 1. `window.desktopBridge?.getPathForFile(file)` → if non-empty **and** the active environment
    is local (`isLocalEnvironment(environmentId)` — see the locality-gate follow-up below), use
    it (zero-copy, unchanged). A desktop-resolved path is meaningless to a remote/SSH agent.
 2. Otherwise, read the file as base64 and call a new RPC `attachments.upload`, which writes
    the bytes on the **server (= agent host)** and returns its absolute path.
 3. Collect all resolved paths (local + uploaded) and insert them once via
-   `buildFilePathInsertion` + `applyPromptReplacement` (snapshot read *after* the awaits so
+   `buildFilePathInsertion` + `applyPromptReplacement` (snapshot read _after_ the awaits so
    the cursor is current).
 
 ### New RPC: `attachments.upload`
 
 - **Contract** (`packages/contracts`): input `{ threadId, fileName, dataBase64 }`, result
   `{ path }`, plus an `AttachmentUploadError`. Register in `rpc.ts` (WS_METHODS + `Rpc.make`
-  + group) and add `attachments.upload` to `EnvironmentApi` (ipc.ts). A size constant
-  `ATTACHMENT_UPLOAD_MAX_BYTES` (20 MB raw, in the new `attachment.ts`) bounds the payload.
+  - group) and add `attachments.upload` to `EnvironmentApi` (ipc.ts). A size constant
+    `ATTACHMENT_UPLOAD_MAX_BYTES` (20 MB raw, in the new `attachment.ts`) bounds the payload.
 - **Server** (`apps/server/src/ws.ts` + a writer in `attachmentUpload.ts`): decode base64,
   enforce the size limit, **sanitize the filename** (basename only; strip separators / NUL;
   fall back to `"file"`), and write to

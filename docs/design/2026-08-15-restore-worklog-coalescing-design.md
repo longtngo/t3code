@@ -36,7 +36,7 @@ nominal import would drag the component into the logic module and make it untest
 
 ## Why adjacency matters
 
-Only *consecutive* runs collapse. A repeat separated by another entry is a genuinely separate
+Only _consecutive_ runs collapse. A repeat separated by another entry is a genuinely separate
 occurrence in the timeline, and merging it behind a count would hide information rather than tidy
 it. A test asserts `A A B A → [A×2, B, A]`.
 
@@ -57,7 +57,7 @@ Seven logic tests cover the arithmetic and the edges: a run, a singleton, differ
 non-adjacent repeats, a differing `detail`, differing `changedFiles`, the `complete`-suffix
 normalisation, and the empty input.
 
-The render test asserts what a static render *can* honestly observe — that a burst collapses behind
+The render test asserts what a static render _can_ honestly observe — that a burst collapses behind
 the group toggle — and says in a comment why the badge itself is not asserted there (expansion is
 internal component state `renderToStaticMarkup` cannot set). Asserting the badge would have required
 either exporting internals or a fixture that lies about the collapse behaviour.
@@ -69,10 +69,10 @@ boundary, contract, data model, dependency, deployment, or sensitive-data surfac
 
 **6b: correctness + simplicity.** Findings, both applied:
 
-| # | Lens | Finding | Resolution |
-|---|---|---|---|
-| 1 | Correctness | A count in the visible text but not the accessible name would under-report to screen readers | Count folded into `heading` before `displayText`, which is the row's `aria-label` |
-| 2 | Simplicity | Import `WorkLogEntry` for the signature? | No — it lives in the component module; structural typing keeps the logic unit-testable |
+| #   | Lens        | Finding                                                                                      | Resolution                                                                             |
+| --- | ----------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 1   | Correctness | A count in the visible text but not the accessible name would under-report to screen readers | Count folded into `heading` before `displayText`, which is the row's `aria-label`      |
+| 2   | Simplicity  | Import `WorkLogEntry` for the signature?                                                     | No — it lives in the component module; structural typing keeps the logic unit-testable |
 
 Exit: round 2 produced only repeats.
 

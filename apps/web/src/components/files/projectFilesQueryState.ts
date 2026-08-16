@@ -61,10 +61,9 @@ export function useTrustedMarkdownHtmlQuery(
   path: string | null,
 ): ProjectQueryState<{ readonly html: string }> {
   const enabled = environmentId !== null && path !== null;
-  const atom =
-    enabled
-      ? projectEnvironment.renderTrustedMarkdown({ environmentId, input: { path } })
-      : EMPTY_RENDERED_HTML_ATOM;
+  const atom = enabled
+    ? projectEnvironment.renderTrustedMarkdown({ environmentId, input: { path } })
+    : EMPTY_RENDERED_HTML_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
@@ -242,8 +241,9 @@ export function useTrustedFileQuery(
   path: string | null,
 ): ProjectQueryState<ProjectReadFileResult> {
   const enabled = environmentId !== null && path !== null;
-  const atom =
-    enabled ? getTrustedFileQueryAtom(environmentId, path) : EMPTY_PROJECT_FILE_QUERY_ATOM;
+  const atom = enabled
+    ? getTrustedFileQueryAtom(environmentId, path)
+    : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);

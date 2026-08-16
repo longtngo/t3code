@@ -89,9 +89,7 @@ export const batchWithinStackSafe = <A>(
       // `maxBatch` of whatever accumulated since the last pull => one batch per
       // downstream element. `fromPull` takes an acquire effect that resolves to
       // the (reused) pull.
-      const pull = Queue.takeBetween(queue, 1, maxBatch).pipe(
-        Effect.map((batch) => Arr.of(batch)),
-      );
+      const pull = Queue.takeBetween(queue, 1, maxBatch).pipe(Effect.map((batch) => Arr.of(batch)));
       return Stream.fromPull(Effect.succeed(pull));
     }),
   );

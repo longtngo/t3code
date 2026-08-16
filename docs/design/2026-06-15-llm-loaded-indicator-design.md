@@ -53,23 +53,27 @@ behaviors.
 A new streaming subscription `subscribeLlmModels` parallel to `subscribeHostMetrics`.
 
 ### Contract (`packages/contracts/src/rpc.ts`)
+
 New schemas:
+
 - `LlmModel` = `{ id, loaded: boolean, state?: string, sizeBytes?: number,
-  quantization?: string, contextLength?: number, isMoe?: boolean,
-  capabilities?: readonly string[] }`
+quantization?: string, contextLength?: number, isMoe?: boolean,
+capabilities?: readonly string[] }`
 - `LlmProvider` = `{ name, baseUrl, reachable: boolean, error?: string,
-  models: readonly LlmModel[] }`
+models: readonly LlmModel[] }`
 - `LlmModelsSample` = `{ ts: number, providers: readonly LlmProvider[] }`
 - `WsSubscribeLlmModelsRpc` = `Rpc.make(WS_METHODS.subscribeLlmModels, { payload:{
-  intervalMs?: number }, success: LlmModelsSample, error:
-  EnvironmentAuthorizationError, stream: true })`, added to `WsRpcGroup` and
+intervalMs?: number }, success: LlmModelsSample, error:
+EnvironmentAuthorizationError, stream: true })`, added to `WsRpcGroup` and
   `WS_METHODS` (`subscribeLlmModels`) — a 3-site change (enum @ `rpc.ts:209`,
   `Rpc.make`, group list @ `rpc.ts:658-717`).
 - **Each schema gets its `typeof X.Type` export** (mirror `rpc.ts:644`), since the
   client lib and the sampler import these types.
 
 ### Settings (`packages/contracts/src/settings.ts`)
+
 Add to `ServerSettings`:
+
 ```
 llmProviders: Schema.Array(Schema.Struct({
   name: TrimmedNonEmptyString,
@@ -78,11 +82,14 @@ llmProviders: Schema.Array(Schema.Struct({
   { name: "mlx-serve", baseUrl: "http://127.0.0.1:8765" },
 ])))
 ```
+
 Default seeds mlx-serve at the live port. Empty array ⇒ feature degrades to "no
 providers configured" (gray dot, popover explains).
 
 ### Server sampler (`apps/server/src/diagnostics/LlmModels.ts`, new)
+
 Mirror `HostMetrics.ts`:
+
 - `llmModelsStream(intervalMs)` → `Stream.unfold` that every tick reads the
   current `ServerSettings.llmProviders`, probes each endpoint **concurrently and
   independently** (one failing/unreachable provider yields `reachable:false` +
@@ -91,7 +98,7 @@ Mirror `HostMetrics.ts`:
   satisfied ambiently by `FetchHttpClient.layer` — **NOT raw `fetch`**, which the
   server source never uses and which won't interrupt/trace correctly). Pattern:
   `providerMaintenance.ts:403-406` — `const client = yield* HttpClient.HttpClient;
-  HttpClientRequest.get(baseUrl + "/v1/models").pipe(setHeader("accept","application/json"))`,
+HttpClientRequest.get(baseUrl + "/v1/models").pipe(setHeader("accept","application/json"))`,
   bounded by `Effect.timeout`/`timeoutOption` (~1.5 s) like `readGpu` bounds the
   spawn (`HostMetrics.ts:110-115`). Parse OpenAI `data[]`, map mlx-serve fields.
   Resident = `loaded === true` when the field exists, else `true` (served = loaded).
@@ -108,6 +115,7 @@ Mirror `HostMetrics.ts`:
   only, and the stream's declared error type is `never`. Pattern: `ws.ts:277-284`.
 
 ### Server wiring (`apps/server/src/ws.ts`)
+
 - Handler at the RpcServer methods block, mirroring `subscribeHostMetrics`:
   `[WS_METHODS.subscribeLlmModels]: (input) => observeRpcStreamEffect(WS_METHODS.subscribeLlmModels, Effect.succeed(LlmModels.llmModelsStream(input.intervalMs ?? 4000)), { "rpc.aggregate": "server" })`.
   **Use the locally-rebound `observeRpcStreamEffect` (`ws.ts:337-350`) — NOT the raw
@@ -122,12 +130,14 @@ Mirror `HostMetrics.ts`:
   `RPC_REQUIRED_SCOPE`.
 
 ### Client wiring
+
 - `packages/client-runtime/src/wsRpcClient.ts`: add `llmModels.subscribe` to the
   interface + impl (mirror `hostMetrics`).
 - `packages/contracts/src/ipc.ts`: add `llmModels.subscribe` to `EnvironmentApi`.
 - `apps/web/src/environmentApi.ts`: wrapper → `rpcClient.llmModels.subscribe`.
 
 ### Client UI
+
 - `apps/web/src/lib/llmModels.ts`: re-export the three `.Type` types; helpers
   `countResident(sample)` and `formatContext(n)` ("163k"). **No `formatModelSize`** —
   call `formatBytes` (`lib/hostMetrics.ts:17`) directly. Reuse `usageLevel` from
@@ -138,7 +148,7 @@ Mirror `HostMetrics.ts`:
 - `apps/web/src/components/chat/LlmModels.tsx`: the widget. **Copy
   `HostMetrics.tsx:232-280` structure verbatim** — two controls:
   1. **Popover trigger** (uncontrolled): `<PopoverTrigger openOnHover delay={150}
-     closeDelay={0} render={<button aria-label="Local models" .../>} />`. base-ui's
+closeDelay={0} render={<button aria-label="Local models" .../>} />`. base-ui's
      default `stickIfOpen:true` already gives "hover OR click opens, click pins it
      open" — **no controlled `open`/`onOpenChange` state, no custom hover handlers.**
   2. **Separate sibling live-dot button** (`aria-label="Pause local-model probing"`,
@@ -158,7 +168,7 @@ Mirror `HostMetrics.ts`:
     orange "unreachable" tag + note; footer "N resident · M available".
   - **Disabled (paused) collapsed state** mirrors `HostMetrics.tsx:208-221`: a single
     button (`aria-label="Enable local-model probing"`) with a gray dot + `models
-    paused` text (`hidden sm:inline`). Empty (no resident, providers up) and
+paused` text (`hidden sm:inline`). Empty (no resident, providers up) and
     connecting states mirror HostMetrics' popover bodies.
 - `apps/web/src/components/BranchToolbar.tsx`: render `<LlmModels />` after
   `<HostMetrics />` inside the existing wrap container; add the hook calls.

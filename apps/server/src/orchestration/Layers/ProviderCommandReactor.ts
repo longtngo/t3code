@@ -66,9 +66,7 @@ const isProviderDriverKind = Schema.is(ProviderDriverKind);
 function isRecoverableSessionLoss(cause: Cause.Cause<ProviderServiceError>): boolean {
   const failReason = cause.reasons.find(Cause.isFailReason);
   const error = failReason?.error;
-  return (
-    isProviderAdapterSessionClosedError(error) || isProviderAdapterSessionNotFoundError(error)
-  );
+  return isProviderAdapterSessionClosedError(error) || isProviderAdapterSessionNotFoundError(error);
 }
 
 type ProviderIntentEvent = Extract<
@@ -1290,17 +1288,15 @@ const make = Effect.gen(function* () {
         Effect.catchCause(recoverTurnStartFailure),
       );
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(
-        Effect.asVoid,
-        Effect.catchCause((cause) =>
-          isRecoverableSessionLoss(cause)
-            ? evictStaleSession().pipe(Effect.andThen(retryTurnStart()))
-            : recoverTurnStartFailure(cause),
-        ),
-        Effect.forkScoped,
-      );
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        isRecoverableSessionLoss(cause)
+          ? evictStaleSession().pipe(Effect.andThen(retryTurnStart()))
+          : recoverTurnStartFailure(cause),
+      ),
+      Effect.forkScoped,
+    );
   });
 
   const hasLiveSessionForThread = (threadId: ThreadId) =>

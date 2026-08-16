@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { ChevronRightIcon, EyeIcon, EyeOffIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import type { LocalLlmModelConfig, LocalLlmProviderConfig, LocalLlmSettings } from "@t3tools/contracts";
+import type {
+  LocalLlmModelConfig,
+  LocalLlmProviderConfig,
+  LocalLlmSettings,
+} from "@t3tools/contracts";
 import {
   LOCAL_LLM_PROVIDERS,
   type ProviderCatalogEntry,
@@ -99,7 +103,9 @@ function ProviderCard(props: {
           className="flex flex-1 items-center gap-2 text-left"
           onClick={() => setOpen((v) => !v)}
         >
-          <ChevronRightIcon className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")} />
+          <ChevronRightIcon
+            className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")}
+          />
           <span className="font-medium">{provider.name}</span>
         </button>
         <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
@@ -115,11 +121,17 @@ function ProviderCard(props: {
         >
           {provider.managed ? "managed" : "external"}
         </span>
-        <span className="text-[12px] text-muted-foreground">:{config.port ?? provider.defaultPort}</span>
+        <span className="text-[12px] text-muted-foreground">
+          :{config.port ?? provider.defaultPort}
+        </span>
         <EyeToggle
           on={config.visible}
           onToggle={() => patch({ visible: !config.visible })}
-          title={config.visible ? "Visible in pickers — click to hide" : "Hidden from pickers — click to show"}
+          title={
+            config.visible
+              ? "Visible in pickers — click to hide"
+              : "Hidden from pickers — click to show"
+          }
         />
       </div>
       {open ? (
@@ -128,7 +140,10 @@ function ProviderCard(props: {
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-[12px]">
               <span className="mb-1 block text-muted-foreground">Host</span>
-              <DraftInput value={config.host ?? provider.host} onCommit={(v) => patch({ host: v })} />
+              <DraftInput
+                value={config.host ?? provider.host}
+                onCommit={(v) => patch({ host: v })}
+              />
             </label>
             <label className="block text-[12px]">
               <span className="mb-1 block text-muted-foreground">Default port</span>
@@ -159,13 +174,18 @@ function ProviderCard(props: {
             <label className="block text-[12px]">
               <span className="mb-1 block text-muted-foreground">Base URL</span>
               <DraftInput
-                value={config.baseUrl ?? `http://${config.host ?? provider.host}:${config.port ?? provider.defaultPort}`}
+                value={
+                  config.baseUrl ??
+                  `http://${config.host ?? provider.host}:${config.port ?? provider.defaultPort}`
+                }
                 onCommit={(v) => patch({ baseUrl: v })}
               />
             </label>
           )}
           <div className="text-[12px]">
-            <span className="mb-1 block text-muted-foreground">Default launch args (runbook recommendation)</span>
+            <span className="mb-1 block text-muted-foreground">
+              Default launch args (runbook recommendation)
+            </span>
             <GroupedArgsInput
               value={config.defaultArgs ?? provider.defaultArgs}
               onChange={(next) => patch({ defaultArgs: next })}
@@ -217,7 +237,9 @@ function ModelConfigCard(props: {
           className="flex flex-1 items-center gap-2 text-left"
           onClick={() => setOpen((v) => !v)}
         >
-          <ChevronRightIcon className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")} />
+          <ChevronRightIcon
+            className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")}
+          />
           <span className="font-medium">{config.name || "Untitled"}</span>
         </button>
         {model ? (
@@ -232,11 +254,17 @@ function ModelConfigCard(props: {
             </span>
           </>
         ) : null}
-        <span className="text-[12px] text-muted-foreground">{provider?.name ?? config.providerId}</span>
+        <span className="text-[12px] text-muted-foreground">
+          {provider?.name ?? config.providerId}
+        </span>
         <EyeToggle
           on={config.visible}
           onToggle={() => patch({ visible: !config.visible })}
-          title={config.visible ? "Shown in sidebar — click to hide" : "Hidden from sidebar — click to show"}
+          title={
+            config.visible
+              ? "Shown in sidebar — click to hide"
+              : "Hidden from sidebar — click to show"
+          }
         />
       </div>
       {open ? (
@@ -273,7 +301,9 @@ function ModelConfigCard(props: {
                 items={modelItems}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder={modelItems.length === 0 ? "No compatible models" : undefined} />
+                  <SelectValue
+                    placeholder={modelItems.length === 0 ? "No compatible models" : undefined}
+                  />
                 </SelectTrigger>
                 <SelectPopup>
                   {modelItems.map((m) => (
@@ -296,13 +326,17 @@ function ModelConfigCard(props: {
               max={maxCtx}
               step={4096}
               value={ctx}
-              onChange={(e) => setCtxDraft(clampContext(Number(e.currentTarget.value), config.modelId))}
+              onChange={(e) =>
+                setCtxDraft(clampContext(Number(e.currentTarget.value), config.modelId))
+              }
               onPointerUp={commitCtx}
               onKeyUp={commitCtx}
               onBlur={commitCtx}
               className="w-full accent-primary"
             />
-            <div className="mt-0.5 text-[11px] text-muted-foreground/70">max {formatContext(maxCtx)}</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+              max {formatContext(maxCtx)}
+            </div>
           </div>
 
           <Collapsible>
@@ -327,7 +361,9 @@ function ModelConfigCard(props: {
                   <span className="mb-1 block text-muted-foreground">Port override</span>
                   <DraftInput
                     value={config.port != null ? String(config.port) : ""}
-                    onCommit={(v) => patch({ port: v.trim() === "" ? undefined : Number(v) || undefined })}
+                    onCommit={(v) =>
+                      patch({ port: v.trim() === "" ? undefined : Number(v) || undefined })
+                    }
                   />
                 </label>
                 <label className="block text-[12px]">
@@ -368,13 +404,17 @@ export function LocalLlmSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection title="Memory budget">
         <label className="block px-3 py-2 text-[12px]">
-          <span className="mb-1 block text-muted-foreground">RAM budget in GB (0 = auto, ~80% of system memory)</span>
+          <span className="mb-1 block text-muted-foreground">
+            RAM budget in GB (0 = auto, ~80% of system memory)
+          </span>
           <Input
             type="number"
             min={0}
             className="w-40"
             value={bytesToGb(lm.ramBudgetBytes)}
-            onChange={(e) => save({ ...lm, ramBudgetBytes: gbToBytes(Number(e.currentTarget.value)) })}
+            onChange={(e) =>
+              save({ ...lm, ramBudgetBytes: gbToBytes(Number(e.currentTarget.value)) })
+            }
           />
         </label>
       </SettingsSection>

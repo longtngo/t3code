@@ -148,16 +148,13 @@ export const checkInvariant = (
 
 export const formatFailure = (failure: InvariantFailure): string => {
   const { invariant, reason, detail } = failure;
-  const headline = reason === "missing"
-    ? `${invariant.id}: ${invariant.module} no longer contains the patched code`
-    : reason === "reverted"
-    ? `${invariant.id}: ${invariant.module} is back to the unpatched code`
-    : `${invariant.id}: ${detail}`;
-  return [
-    headline,
-    `  breaks:  ${invariant.breaks}`,
-    `  restore: ${invariant.restore}`,
-  ].join("\n");
+  const headline =
+    reason === "missing"
+      ? `${invariant.id}: ${invariant.module} no longer contains the patched code`
+      : reason === "reverted"
+        ? `${invariant.id}: ${invariant.module} is back to the unpatched code`
+        : `${invariant.id}: ${detail}`;
+  return [headline, `  breaks:  ${invariant.breaks}`, `  restore: ${invariant.restore}`].join("\n");
 };
 
 // Resolved the way an import from this package resolves, so it finds whatever
@@ -239,8 +236,8 @@ export const checkBehaviorInvariants = Effect.fn("checkBehaviorInvariants")(func
 const command = Command.make("check-dependency-invariants", {}, () =>
   Effect.gen(function* () {
     const failures = [
-      ...yield* checkInvariants(dependencyInvariants),
-      ...yield* checkBehaviorInvariants(behaviorInvariants),
+      ...(yield* checkInvariants(dependencyInvariants)),
+      ...(yield* checkBehaviorInvariants(behaviorInvariants)),
     ];
     if (failures.length === 0) {
       yield* Console.log(
@@ -254,11 +251,10 @@ const command = Command.make("check-dependency-invariants", {}, () =>
     return yield* new DependencyInvariantsViolatedError({
       ids: failures.map((failure) => failure.invariant.id),
     });
-  })).pipe(
-    Command.withDescription(
-      "Check that patched dependencies still carry the behavior we rely on.",
-    ),
-  );
+  }),
+).pipe(
+  Command.withDescription("Check that patched dependencies still carry the behavior we rely on."),
+);
 
 if (import.meta.main) {
   Command.run(command, { version: "0.0.0" }).pipe(

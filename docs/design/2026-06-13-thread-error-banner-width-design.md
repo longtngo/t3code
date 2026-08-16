@@ -48,11 +48,11 @@ wrong.
 
 ## Alternatives considered
 
-| Option | Rejected because |
-|--------|------------------|
-| Teach `Alert` to recurse into wrappers for nested slots | Broader blast radius; hides misuse at call sites |
-| Drop tooltip, use native `title` attribute only | Loses styled popup with `max-w-96` + `whitespace-pre-wrap` |
-| Add `AlertTitle` ("Runtime error") + description | Out of scope; banner already shows the message body |
+| Option                                                  | Rejected because                                           |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| Teach `Alert` to recurse into wrappers for nested slots | Broader blast radius; hides misuse at call sites           |
+| Drop tooltip, use native `title` attribute only         | Loses styled popup with `max-w-96` + `whitespace-pre-wrap` |
+| Add `AlertTitle` ("Runtime error") + description        | Out of scope; banner already shows the message body        |
 
 ## Files touched
 

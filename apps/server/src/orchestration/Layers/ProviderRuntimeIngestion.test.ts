@@ -702,7 +702,9 @@ describe("ProviderRuntimeIngestion", () => {
       provider: ProviderDriverKind.make("codex"),
       createdAt: "2026-01-01T00:00:01.001Z",
       threadId: asThreadId("thread-1"),
-      payload: { usage: { usedTokens: 100, inputTokens: 90, outputTokens: 10, lastUsedTokens: 100 } },
+      payload: {
+        usage: { usedTokens: 100, inputTokens: 90, outputTokens: 10, lastUsedTokens: 100 },
+      },
     });
     await harness.drain();
     activity = await harness.listTurnActivity();

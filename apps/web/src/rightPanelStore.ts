@@ -111,12 +111,7 @@ interface RightPanelStoreState {
    * `repoCwd` names the repository the path is relative to, for a file opened
    * from a workspace member. Omit it for the project's own repository.
    */
-  openFile: (
-    ref: ScopedThreadRef,
-    relativePath: string,
-    line?: number,
-    repoCwd?: string,
-  ) => void;
+  openFile: (ref: ScopedThreadRef, relativePath: string, line?: number, repoCwd?: string) => void;
   /** Open a read-only view of an absolute path outside the workspace. */
   openTrustedFile: (ref: ScopedThreadRef, absolutePath: string) => void;
   openPullRequest: (

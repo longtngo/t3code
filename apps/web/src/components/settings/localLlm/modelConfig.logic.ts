@@ -66,11 +66,19 @@ export function newModelConfig(settings: LocalLlmSettings): LocalLlmModelConfig 
   const provider = visibleProviders(settings)[0] ?? LOCAL_LLM_PROVIDERS[0];
   if (!provider) {
     // The catalog is never empty, but satisfy the type checker with a minimal config.
-    return { id: uniqueConfigId("config", new Set(settings.models.map((m) => m.id))), name: "New model", providerId: "", modelId: "", visible: true };
+    return {
+      id: uniqueConfigId("config", new Set(settings.models.map((m) => m.id))),
+      name: "New model",
+      providerId: "",
+      modelId: "",
+      visible: true,
+    };
   }
   const model = compatibleModels(provider.id)[0];
   const existing = new Set(settings.models.map((m) => m.id));
-  const port = provider.managed ? (firstFreePort(provider.id, takenPorts(settings)) ?? undefined) : undefined;
+  const port = provider.managed
+    ? (firstFreePort(provider.id, takenPorts(settings)) ?? undefined)
+    : undefined;
   return {
     id: uniqueConfigId(model?.id ?? "config", existing),
     name: model?.name ?? "New model",
@@ -100,11 +108,17 @@ export function onProviderChange(
 
 /** Switching model clamps the context window to the new model's max. */
 export function onModelChange(config: LocalLlmModelConfig, modelId: string): LocalLlmModelConfig {
-  const contextWindow = clampContext(config.contextWindow ?? getModel(modelId)?.maxContext ?? 0, modelId);
+  const contextWindow = clampContext(
+    config.contextWindow ?? getModel(modelId)?.maxContext ?? 0,
+    modelId,
+  );
   return { ...config, modelId, contextWindow };
 }
 
 /** The provider's default args label (catalog defaults, overridable per provider). */
-export function providerDefaultArgs(settings: LocalLlmSettings, providerId: string): readonly string[] {
+export function providerDefaultArgs(
+  settings: LocalLlmSettings,
+  providerId: string,
+): readonly string[] {
   return settings.providers[providerId]?.defaultArgs ?? getProvider(providerId)?.defaultArgs ?? [];
 }

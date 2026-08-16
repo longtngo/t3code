@@ -126,7 +126,14 @@ describe("classifyViewerPath", () => {
       absolutePath: "/Users/me/photo.png",
       kind: "image",
     });
-    for (const path of ["/a/b.jpg", "/a/b.JPEG", "/a/b.gif", "/a/b.webp", "/a/b.avif", "/a/b.ico"]) {
+    for (const path of [
+      "/a/b.jpg",
+      "/a/b.JPEG",
+      "/a/b.gif",
+      "/a/b.webp",
+      "/a/b.avif",
+      "/a/b.ico",
+    ]) {
       expect(classifyViewerPath(path)?.kind).toBe("image");
     }
     // SVG is an image here, but the route serves it under the strict asset CSP
@@ -171,8 +178,9 @@ describe("isWaivableLocalRequest", () => {
   it("waives a non-browser caller, which sends no Sec-Fetch-* at all", () => {
     // curl or an editor can already read the file directly with the user's own
     // permissions, which is the premise the waiver rests on.
-    expect(isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost:13773" } })))
-      .toBe(true);
+    expect(
+      isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost:13773" } })),
+    ).toBe(true);
   });
 
   it("refuses a cross-origin fetch from a page the user is merely visiting", () => {
@@ -199,7 +207,9 @@ describe("isWaivableLocalRequest", () => {
       { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" },
     ]) {
       expect(
-        isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost", ...headers } })),
+        isWaivableLocalRequest(
+          fakeRequest({ ...loopback, headers: { host: "localhost", ...headers } }),
+        ),
       ).toBe(false);
     }
   });
@@ -260,7 +270,11 @@ describe("isWaivableLocalRequest", () => {
       isWaivableLocalRequest(
         fakeRequest({
           remoteAddress: "192.168.1.20",
-          headers: { host: "127.0.0.1", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+          headers: {
+            host: "127.0.0.1",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-dest": "document",
+          },
         }),
       ),
     ).toBe(false);

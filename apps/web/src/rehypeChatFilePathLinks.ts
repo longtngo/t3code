@@ -15,10 +15,7 @@
  *
  * @module rehypeChatFilePathLinks
  */
-import {
-  findChatFilePathMentions,
-  type ChatFilePathResolution,
-} from "./chatFilePathLinks";
+import { findChatFilePathMentions, type ChatFilePathResolution } from "./chatFilePathLinks";
 
 interface HastNode {
   type: string;

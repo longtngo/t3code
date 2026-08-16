@@ -22,5 +22,4 @@ export const RuntimeBootIdLive = Layer.effect(
  * Test/explicit-value variant: pins the boot id to a caller-supplied string so
  * tests can simulate "this boot" vs "a prior boot" deterministically.
  */
-export const makeRuntimeBootIdLive = (bootId: string) =>
-  Layer.succeed(RuntimeBootId, { bootId });
+export const makeRuntimeBootIdLive = (bootId: string) => Layer.succeed(RuntimeBootId, { bootId });

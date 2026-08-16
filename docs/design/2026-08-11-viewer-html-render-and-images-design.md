@@ -19,14 +19,14 @@ Three asks against the fork's trusted-file viewer:
 Every load-bearing fact below was measured against the **running** server, not read from a doc.
 Two of them falsified my first reading, so they are recorded with the correction.
 
-| Premise | Probe | Result |
-|---|---|---|
-| The image read fails in the text reader | read `WorkspaceFileSystem.ts` | **Confirmed, source-pinned.** `readTrustedFile` delegates to `readFile`, whose NUL-byte guard (`fileBytes.includes(0)`) raises `WorkspaceBinaryFileError`. `ws.ts:256` maps every non-`errno` failure to `Failed to read '<path>'.` — byte-for-byte the reported message. |
-| `.png` is also rejected by the HTTP viewer route | `curl /viewer/<png>` | **Confirmed.** `400 Invalid or unsupported file path` — `classifyViewerPath` has no image branch. Both surfaces are broken, so the fix needs both. |
-| ~~"Open in new tab" serves a bare document, no sidebar~~ | `curl /viewer/<html>` → 200 raw HTML | **FALSIFIED.** curl does not run the **service worker**. `vite.config.ts:198` says it outright: "`/pair` and `/viewer` are CLIENT routes … they need the shell", and `navigateFallbackDenylist` deliberately omits `/viewer`. In a real browser the SW serves `index.html`, so the tab renders the SPA route `viewer.$.tsx` inside `AppSidebarLayout` — **with the sidebar open**. That is the reported behaviour. |
-| ~~The new tab 401s over Tailscale~~ | `curl -H 'X-Forwarded-For: …'` → 401 | **FALSIFIED — curl artifact.** `EnvironmentAuthPolicy.ts:39` lists `browser-session-cookie` in `sessionMethods` for every policy. A real browser carries the session cookie. curl carried none. |
-| The SPA shell is reachable for unmatched paths | `curl /some-random-path` | 200 `index.html` (17826 B). Confirms the SPA fallback, though the design no longer needs a new path. |
-| The sidebar's open state is not restored from its cookie | read `sidebar.tsx:112`, grep `SIDEBAR_COOKIE_NAME` | Confirmed. `SidebarProvider` writes `sidebar_state` but **never reads it back**; `defaultOpen` alone decides initial state. So `defaultOpen` is the whole lever for ask 2. |
+| Premise                                                  | Probe                                              | Result                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The image read fails in the text reader                  | read `WorkspaceFileSystem.ts`                      | **Confirmed, source-pinned.** `readTrustedFile` delegates to `readFile`, whose NUL-byte guard (`fileBytes.includes(0)`) raises `WorkspaceBinaryFileError`. `ws.ts:256` maps every non-`errno` failure to `Failed to read '<path>'.` — byte-for-byte the reported message.                                                                                                                                          |
+| `.png` is also rejected by the HTTP viewer route         | `curl /viewer/<png>`                               | **Confirmed.** `400 Invalid or unsupported file path` — `classifyViewerPath` has no image branch. Both surfaces are broken, so the fix needs both.                                                                                                                                                                                                                                                                 |
+| ~~"Open in new tab" serves a bare document, no sidebar~~ | `curl /viewer/<html>` → 200 raw HTML               | **FALSIFIED.** curl does not run the **service worker**. `vite.config.ts:198` says it outright: "`/pair` and `/viewer` are CLIENT routes … they need the shell", and `navigateFallbackDenylist` deliberately omits `/viewer`. In a real browser the SW serves `index.html`, so the tab renders the SPA route `viewer.$.tsx` inside `AppSidebarLayout` — **with the sidebar open**. That is the reported behaviour. |
+| ~~The new tab 401s over Tailscale~~                      | `curl -H 'X-Forwarded-For: …'` → 401               | **FALSIFIED — curl artifact.** `EnvironmentAuthPolicy.ts:39` lists `browser-session-cookie` in `sessionMethods` for every policy. A real browser carries the session cookie. curl carried none.                                                                                                                                                                                                                    |
+| The SPA shell is reachable for unmatched paths           | `curl /some-random-path`                           | 200 `index.html` (17826 B). Confirms the SPA fallback, though the design no longer needs a new path.                                                                                                                                                                                                                                                                                                               |
+| The sidebar's open state is not restored from its cookie | read `sidebar.tsx:112`, grep `SIDEBAR_COOKIE_NAME` | Confirmed. `SidebarProvider` writes `sidebar_state` but **never reads it back**; `defaultOpen` alone decides initial state. So `defaultOpen` is the whole lever for ask 2.                                                                                                                                                                                                                                         |
 
 The two falsified premises are why ask 2 needed no new route: the surface the user sees already
 exists and is already the right one. Designing on the curl result would have produced a route
@@ -43,12 +43,12 @@ why `.html` never gets one. Replace that boolean gate with the repo's existing c
 
 Per kind, with one `showAlternate` state meaning "show the non-default view":
 
-| Kind | Default view | Toggle shows |
-|---|---|---|
-| `markdown` | `ChatMarkdown` | server-rendered HTML (existing `renderTrustedMarkdown` RPC) |
-| `html` | **rendered** in a `sandbox=""` iframe | syntax-highlighted source |
-| `image` | `<img>` | (no toggle) |
-| `code` | highlighted source | (no toggle) |
+| Kind       | Default view                          | Toggle shows                                                |
+| ---------- | ------------------------------------- | ----------------------------------------------------------- |
+| `markdown` | `ChatMarkdown`                        | server-rendered HTML (existing `renderTrustedMarkdown` RPC) |
+| `html`     | **rendered** in a `sandbox=""` iframe | syntax-highlighted source                                   |
+| `image`    | `<img>`                               | (no toggle)                                                 |
+| `code`     | highlighted source                    | (no toggle)                                                 |
 
 **`.html` renders from the contents already in hand** — HTML is text, so it passes the NUL guard
 and the existing trusted-read RPC returns it. `srcDoc` + `sandbox=""` matches how rendered
@@ -57,7 +57,7 @@ markdown is already displayed: opaque origin, scripts inert, no access to the ap
 **Default = rendered, not source.** Opening a report to read it is the common case; the ask
 describes source-only as the problem. Source stays one click away.
 
-*Known limitation:* `sandbox=""` + `srcDoc` gives an opaque origin, so a report referencing
+_Known limitation:_ `sandbox=""` + `srcDoc` gives an opaque origin, so a report referencing
 **external or relative** images will not load them. The user's `uni-md2html` reports are generated
 `--self-contained` (data-URI assets), so this does not affect them. Recorded as a follow-up rather
 than solved by loosening the sandbox, which would be a real escalation for untrusted files.
@@ -71,7 +71,7 @@ sets initial open state, this is a one-line change plus a tested pure helper:
 <SidebarProvider defaultOpen={!isViewerRoutePath(pathname)} …>
 ```
 
-`defaultOpen` is *initial state only*, so this collapses the sidebar on a fresh load — which is
+`defaultOpen` is _initial state only_, so this collapses the sidebar on a fresh load — which is
 exactly what "Open in new tab" is — while leaving an in-app navigation's sidebar alone rather than
 yanking it away mid-session. The rail/`SidebarControl` still re-opens it, per the chosen option.
 
@@ -104,7 +104,7 @@ found defects that changed the approach; the sections above are the **revised** 
 **Structural changes**
 
 - **Image and `.html` URLs are environment-scoped, not origin-relative.** `TrustedFileView`
-  receives an `environmentId` and today reads through *that environment's* connection. An
+  receives an `environmentId` and today reads through _that environment's_ connection. An
   origin-relative `/viewer/<abs>` would silently target the local server — 404 for a remote
   environment, or worse, **the wrong machine's file at the same path**. It also breaks packaged
   desktop (renderer origin is `t3code://app`) and dev (`/viewer` is absent from
@@ -116,7 +116,7 @@ found defects that changed the approach; the sections above are the **revised** 
   — 38 of 92 `.html` files under `~/reports` contain `<script>`, and the server route already
   ships `allow-scripts` for `.html` **with the reason written down** at `http.ts:335-341`, so
   `srcDoc` would have made two surfaces disagree about one file; (b) `srcDoc` inherits the
-  *parent's* base URL, so relative assets resolve against the app origin — my "known limitation"
+  _parent's_ base URL, so relative assets resolve against the app origin — my "known limitation"
   had the mechanism backwards, and external absolute URLs load fine, making a rendered report a
   read-receipt beacon; (c) the trusted-read RPC truncates at 1 MiB
   (`PROJECT_READ_FILE_MAX_BYTES`), so a 1.4 MB self-contained report would have rendered cut
@@ -128,21 +128,21 @@ found defects that changed the approach; the sections above are the **revised** 
 
 - **Images are never covered by the loopback auth waiver.** Serving decodable images would
   otherwise turn the waiver's fail-open on absent `Sec-Fetch-*` (older Safari, embedded WebViews)
-  and the `SameSite=Lax` cookie's *site*-not-origin scope (any other `127.0.0.1:<port>` dev
+  and the `SameSite=Lax` cookie's _site_-not-origin scope (any other `127.0.0.1:<port>` dev
   server) into a cross-origin **file-existence and image-dimension oracle** for arbitrary absolute
   paths. Classification happens before the waiver check; the image kind always requires
   `orchestration:read`.
 - `isWaivableLocalRequest` additionally denies a present `Sec-Fetch-Site` that is not
   `same-origin`/`none`, closing the same fail-open for the existing text kinds.
 - SVG reuses the existing, stricter `SVG_CONTENT_SECURITY_POLICY` (`default-src 'none'; …;
-  sandbox`) via `assetResponseHeaders`, not the weaker `sandbox allow-popups` I proposed — which
+sandbox`) via `assetResponseHeaders`, not the weaker `sandbox allow-popups` I proposed — which
   would have permitted subresource beacons out of a crafted SVG.
 - `HttpServerResponse.file` **silently ignores its `contentType` option** (the platform derives
   the type from the path), so `Content-Type` is set explicitly in `headers` from a map mirroring
   the allow-list, and asserted on the wire in the route test.
 - The byte path re-adds guards the text reader had and `HttpServerResponse.file` lacks: a
   `stat`-based **regular-file check** (a directory named `foo.png` otherwise emits a 200 with a
-  bogus content-length, then errors *after* headers are flushed), a **size cap**, a NUL-byte check
+  bogus content-length, then errors _after_ headers are flushed), a **size cap**, a NUL-byte check
   in `classifyViewerPath`, and an `orElseSucceed` 404 funnel matching `assetRouteLayer`.
 
 **Correctness fixes applied**
@@ -151,7 +151,7 @@ found defects that changed the approach; the sections above are the **revised** 
   already consumed by both the web panel and the server. A divergent fourth list would have
   reintroduced this very bug for in-workspace images.
 - The view-mode toggle resets when `absolutePath` changes (`key`). Today's `showHtml` survives a
-  file switch; a single shared boolean would have made a `.html` open as *source* right after
+  file switch; a single shared boolean would have made a `.html` open as _source_ right after
   viewing a `.md` as HTML — verbatim the complaint this work exists to fix.
 - `.mdx` keeps rendering as markdown (`classifyFileViewerKind` covers only `md|markdown`), and
   unclassified paths (`Makefile`, `Dockerfile`, `.env`, any unlisted extension) explicitly fall
@@ -171,7 +171,7 @@ found defects that changed the approach; the sections above are the **revised** 
   which today requires a workspace root and so does not cover out-of-workspace paths. Still a
   strict improvement: local and same-origin remote work, and no surface silently serves the wrong
   machine's file.
-- The sidebar stays collapsed after navigating *away* from `/viewer` in the same tab
+- The sidebar stays collapsed after navigating _away_ from `/viewer` in the same tab
   (`defaultOpen` seeds `useState` once and the provider never remounts). Harmless for the new-tab
   case this targets.
 - On mobile the provider tracks `openMobile`, which already starts closed, so ask 2 is a
@@ -186,29 +186,29 @@ found defects that changed the approach; the sections above are the **revised** 
 - **Base64 the image through a new RPC.** Inflates bytes ~33%, needs a new contract + wire schema,
   and duplicates a byte-serving route that already exists. The HTTP route is same-origin and gets
   streaming and caching semantics for free.
-- **Relax the NUL-byte guard in `readFile`.** It is what keeps the *text* reader honest for every
+- **Relax the NUL-byte guard in `readFile`.** It is what keeps the _text_ reader honest for every
   caller, including the editor. Images want bytes, not decoded text; a separate path is correct.
-- **Render `.html` via the `uni-md2html` renderer.** That tool renders *markdown*. HTML is already
+- **Render `.html` via the `uni-md2html` renderer.** That tool renders _markdown_. HTML is already
   a document.
 - **Drop the app sidebar entirely on `/viewer` (render it standalone like `/pair`).** Goes beyond
   "hidden by default" and removes the ability to re-open it, which the chosen option asked to keep.
 
 ## Files touched
 
-| File | Change |
-|---|---|
-| `apps/web/src/lib/codeFileTypes.ts` | `"image"` kind + `IMAGE_FILE_EXTENSIONS` |
-| `apps/web/src/components/files/TrustedFileView.tsx` | kind-driven rendering; HTML toggle; `<img>` |
-| `apps/web/src/components/files/viewerPath.ts` | `viewerRawUrl` helper |
-| `apps/web/src/components/AppSidebarLayout.tsx` | `defaultOpen={!isViewerRoutePath(pathname)}` |
-| `apps/server/src/http.ts` | `"image"` in `classifyViewerPath`; byte-serving branch; SVG CSP |
+| File                                                | Change                                                          |
+| --------------------------------------------------- | --------------------------------------------------------------- |
+| `apps/web/src/lib/codeFileTypes.ts`                 | `"image"` kind + `IMAGE_FILE_EXTENSIONS`                        |
+| `apps/web/src/components/files/TrustedFileView.tsx` | kind-driven rendering; HTML toggle; `<img>`                     |
+| `apps/web/src/components/files/viewerPath.ts`       | `viewerRawUrl` helper                                           |
+| `apps/web/src/components/AppSidebarLayout.tsx`      | `defaultOpen={!isViewerRoutePath(pathname)}`                    |
+| `apps/server/src/http.ts`                           | `"image"` in `classifyViewerPath`; byte-serving branch; SVG CSP |
 
 Tests alongside each: classifier tables, `classifyViewerPath` image cases, the route's
 content-type/CSP behaviour, and the pathname helper.
 
 ## Follow-up shipped: relative assets in a rendered document (`a4fd5e120`)
 
-The `<iframe src>` decision above made *relative* assets resolve correctly for the first time —
+The `<iframe src>` decision above made _relative_ assets resolve correctly for the first time —
 and immediately exposed that they could not be **fetched**. A multi-file prototype
 (`index.html` + sibling `.js`/`.css`/images) rendered blank.
 
@@ -220,7 +220,7 @@ inline script ran and a `--self-contained` report rendered while an external scr
 
 The discriminating probe: adding an `<img>` alongside the failing `<script>`. **The image failed
 too** — and images are served with a correct content type, so MIME could not be the cause. `.js`
-being served as `text/plain` + `nosniff` *was* a real second bug (a browser refuses to execute it),
+being served as `text/plain` + `nosniff` _was_ a real second bug (a browser refuses to execute it),
 but fixing it alone would have changed nothing.
 
 **Fix: a capability URL in the path.** Cookies cannot reach an opaque origin, and un-sandboxing
@@ -231,7 +231,7 @@ mints a short-lived, directory-scoped token and 302s to `/viewer-asset/<token>/<
 cooperation from the document. **A query string would not survive relative resolution; a path
 segment does** — which is why the token is a path segment.
 
-Deliberately *not* the session token: the sandboxed document can read this one out of
+Deliberately _not_ the session token: the sandboxed document can read this one out of
 `document.location`, so it grants read-only access to one directory subtree for ten minutes and
 nothing else. The document could already read its own directory by fetching those files itself, so
 the token mainly bounds what leaks if the document is hostile and exfiltrates it.

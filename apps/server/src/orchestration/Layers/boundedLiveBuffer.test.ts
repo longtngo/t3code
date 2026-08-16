@@ -19,10 +19,7 @@ describe("pumpBoundedLiveBuffer", () => {
         const source = Stream.make(1, 2, 3);
         const buffer = yield* Queue.dropping<number, Cause.Done>(16);
         yield* Effect.forkScoped(pumpBoundedLiveBuffer(source, buffer));
-        const result = yield* Stream.fromQueue(buffer).pipe(
-          Stream.take(3),
-          Stream.runCollect,
-        );
+        const result = yield* Stream.fromQueue(buffer).pipe(Stream.take(3), Stream.runCollect);
         expect(result).toEqual([1, 2, 3]);
       }),
     ),
@@ -99,9 +96,7 @@ describe("pumpBoundedLiveBuffer", () => {
       Effect.gen(function* () {
         const capacity = 1;
         const buffer = yield* Queue.dropping<number, Cause.Done>(capacity);
-        yield* Effect.forkScoped(
-          pumpBoundedLiveBuffer(Stream.range(0, 100), buffer),
-        );
+        yield* Effect.forkScoped(pumpBoundedLiveBuffer(Stream.range(0, 100), buffer));
         yield* Effect.sleep("50 millis");
         // `Stream.fromQueue` excludes `Cause.Done`; a completed (not failed) stream
         // is what the client transport treats as a resubscribe trigger. `runCollect`

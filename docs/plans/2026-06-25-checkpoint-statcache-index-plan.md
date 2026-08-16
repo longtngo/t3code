@@ -6,10 +6,10 @@ LOC in one function + 2 tiny helpers + behavioral tests. All in
 
 ## TDD note
 
-The fix is *tree-equivalence-preserving* for normal files (that is the whole
+The fix is _tree-equivalence-preserving_ for normal files (that is the whole
 correctness argument), so a normal-file test cannot distinguish old vs new code. The
-genuinely **failing-first** tests are the ones that fail under a *naive* copy (no
-skip-worktree fallback) or a *missing* fallback (no index): T2/T3/T4 below. The
+genuinely **failing-first** tests are the ones that fail under a _naive_ copy (no
+skip-worktree fallback) or a _missing_ fallback (no index): T2/T3/T4 below. The
 performance win itself is proven empirically by the A/B in the design doc (89.79s→0.32s
 on a real 2.9 GB repo); a wall-clock unit assertion would be flaky and is deliberately
 omitted.
@@ -19,7 +19,7 @@ omitted.
 Add `describe("checkpoint capture index seeding")` using the existing harness
 (`initRepoWithCommit`, `writeTextFile`, `git`, `driver.checkpoints.captureCheckpoint`,
 `driver.checkpoints.hasCheckpointRef`). Helper to read captured content:
-`git(cwd, ["show", \`${ref}:${file}\`])` and captured tree: `git(cwd, ["rev-parse", \`${ref}^{tree}\`])`.
+`git(cwd, ["show", \`${ref}:${file}\`])`and captured tree:`git(cwd, ["rev-parse", \`${ref}^{tree}\`])`.
 
 - **T1 correctness (normal):** init+commit; modify a tracked file, add an untracked
   file, delete a tracked file; capture ref `refs/t3/test/cp1`; assert
@@ -64,13 +64,14 @@ In `captureCheckpoint`, replace the `read-tree HEAD` seed block (626–635) with
 // `git add -A` skips unchanged files instead of re-hashing the whole tree every
 // turn. These queries read the REAL index → run with plain env, never commitEnv
 // (which sets GIT_INDEX_FILE=tempIndexPath).
-const indexPath = yield* resolveGitIndexPath(input.cwd);
-const canCopy = (yield* fileSystem.exists(indexPath)) && !(yield* realIndexHasSkipBits(input.cwd));
+const indexPath = yield * resolveGitIndexPath(input.cwd);
+const canCopy = yield * fileSystem.exists(indexPath) && !(yield * realIndexHasSkipBits(input.cwd));
 if (canCopy) {
-  yield* fileSystem.copyFile(indexPath, tempIndexPath);
+  yield * fileSystem.copyFile(indexPath, tempIndexPath);
 } else {
-  const headExists = yield* hasHeadCommit(input.cwd);
-  if (headExists) yield* execute({ operation, cwd: input.cwd, args: ["read-tree","HEAD"], env: commitEnv });
+  const headExists = yield * hasHeadCommit(input.cwd);
+  if (headExists)
+    yield * execute({ operation, cwd: input.cwd, args: ["read-tree", "HEAD"], env: commitEnv });
 }
 ```
 

@@ -20,13 +20,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
  * path changes and the field is not being edited. (Ported from the fork's
  * FileViewerSidebar address bar.)
  */
-function AddressBar({
-  value,
-  onSubmit,
-}: {
-  value: string;
-  onSubmit: (path: string) => void;
-}) {
+function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: string) => void }) {
   const [draft, setDraft] = useState(value);
   const [editing, setEditing] = useState(false);
   // Set by Escape so the blur it triggers reverts instead of submitting. A ref

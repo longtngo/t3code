@@ -25,14 +25,14 @@ Each code item ships on its own branch; the upstream bug report is external.
 
 - **P1 — `runForEachArray`/`fromPull` are trampolined (no per-element `_stack`
   growth).** If false, removing the recycle would reintroduce a slow per-element
-  leak on the streams where the recycle is the *only* bound (host-metrics,
+  leak on the streams where the recycle is the _only_ bound (host-metrics,
   llm-models, vcs-status, terminal, shell). **VERIFIED** against the installed
   patched effect source: `runForEachArray = dual(2, (self, f) =>
-  Channel.runForEach(self.channel, f))` — it delegates to the trampolined channel
+Channel.runForEach(self.channel, f))` — it delegates to the trampolined channel
   executor, no per-element continuation push. Corroborated empirically: the
   `batchWithinStackSafe` path (also `Channel`-executor / `fromPull`) held a
   **24 h 15 m flat heap** (median 254 MB) under real streaming load, and the busy
-  streams stayed flat *well within* a single 20000-event recycle window — so the
+  streams stayed flat _well within_ a single 20000-event recycle window — so the
   bound was not doing the flattening. The recycle guards a mechanism that does not
   exist.
 - **P2 — the local effect patch does not already fix `aggregateWithin`.** If it
@@ -43,7 +43,7 @@ Each code item ships on its own branch; the upstream bug report is external.
 - **P3 — no live call-sites of the banned methods remain.** If any real
   `Stream.groupedWithin(...)`/`aggregate*(...)` call existed, an `error`-level rule
   would break the build. **VERIFIED** — the only remaining textual mentions are in
-  *comments* (`ws.ts` NOTE, `batchWithinStackSafe.ts` doc); oxlint matches AST
+  _comments_ (`ws.ts` NOTE, `batchWithinStackSafe.ts` doc); oxlint matches AST
   call-expressions, not comments, so an `error` rule is safe today.
 
 ## FU1 — remove `recycleSubscriptionStream`
@@ -59,13 +59,14 @@ the bare stream; drop the `WS_SUBSCRIPTION_MAX_EVENTS` module const, the
 every N events. This removes accidental churn, not a designed mechanism — the
 recycle was never a correctness/resync feature (consumer-lag resync is
 `boundedSubscriberStream`'s job, retained). Net effect on low-bandwidth/mobile
-clients is *positive*: fewer forced full-state re-snapshots.
+clients is _positive_: fewer forced full-state re-snapshots.
 
 **Alternatives rejected:**
-- *Keep it as "belt-and-braces"* — it costs real bandwidth/CPU (periodic full
+
+- _Keep it as "belt-and-braces"_ — it costs real bandwidth/CPU (periodic full
   re-snapshot ×6 streams) to defend against a mechanism proven not to exist;
   keeping falsified-premise code is the churn the report flagged for removal.
-- *Keep only the env kill-switch* — nothing to switch off once the wrapper is gone.
+- _Keep only the env kill-switch_ — nothing to switch off once the wrapper is gone.
 
 **Files:** delete `apps/server/src/recycleSubscriptionStream.ts` (+ `.test.ts`);
 edit `apps/server/src/ws.ts` (remove import, const, 6 call sites, env doc).
@@ -74,10 +75,11 @@ edit `apps/server/src/ws.ts` (remove import, const, 6 call sites, env doc).
 
 **Approach:** a new rule `t3code/no-unsafe-stream-aggregate` in the existing custom
 plugin `oxlint-plugin-t3code`, mirroring the two existing rules' shape (`defineRule`
-+ `createOnce` + AST visitor + a co-located `.test.ts` driving the real `oxlint`
-binary via `createOxlintRuleHarness`). `no-manual-effect-runtime-in-tests` already
-uses the exact visitor pattern (unwrap callee → `MemberExpression` → object
-`Identifier` === `Effect` + property in a `Set`); this rule swaps `Effect`→`Stream`.
+
+- `createOnce` + AST visitor + a co-located `.test.ts` driving the real `oxlint`
+  binary via `createOxlintRuleHarness`). `no-manual-effect-runtime-in-tests` already
+  uses the exact visitor pattern (unwrap callee → `MemberExpression` → object
+  `Identifier` === `Effect` + property in a `Set`); this rule swaps `Effect`→`Stream`.
 
 **Rule:** flag a `CallExpression` whose callee is a `MemberExpression`
 `Stream.<method>` where `<method> ∈ { groupedWithin, aggregate, aggregateWithin }`
@@ -105,7 +107,7 @@ over-broad ban would break the build and falsify P3.
 
 **Wiring:** register in `oxlint-plugin-t3code/index.ts`; add
 `"t3code/no-unsafe-stream-aggregate": "error"` to `vite.config.ts` `lint.rules`.
-Global scope (not server-only): the combinators are unsafe anywhere in *this*
+Global scope (not server-only): the combinators are unsafe anywhere in _this_
 codebase and there are no legitimate uses; a global `error` is simpler and stricter
 than a path override, and P3 confirms nothing breaks. (Registration path verified
 correct: `jsPlugins: ["./oxlint-plugin-t3code/index.ts"]` + plugin `meta.name:
@@ -114,12 +116,13 @@ correct: `jsPlugins: ["./oxlint-plugin-t3code/index.ts"]` + plugin `meta.name:
 `t3code/*` rule fires in `vp lint`/CI.)
 
 **Alternatives rejected:**
-- *`no-restricted-syntax` (eslint-style)* — **does not exist in oxlint at all**
+
+- _`no-restricted-syntax` (eslint-style)_ — **does not exist in oxlint at all**
   (verified against the native binding `@oxlint/binding-darwin-arm64@1.67.0`: it
   ships `no-restricted-imports` but no `no-restricted-syntax`). The "simpler
   one-liner" is unavailable, so a first-class custom-plugin rule is the correct and
   proportionate mechanism, not gold-plating.
-- *Ban only `groupedWithin`* — `aggregate`/`aggregateWithin` share the same
+- _Ban only `groupedWithin`_ — `aggregate`/`aggregateWithin` share the same
   `stepToBuffer` loop; ban the family.
 
 ## FU4 — local effect patch (fix the bug in-tree instead of reporting it)
@@ -131,20 +134,30 @@ repo's existing `patches/effect@4.0.0-beta.78.patch` (pnpm `patchedDependencies`
 
 **Approach:** minimal, semantics-preserving rewrite of the one leaking function.
 Original (installed `dist/Stream.js`):
+
 ```js
 return step(lastOutput).pipe(
-  Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep)),
+  Effect.flatMap(() => (!sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep))),
   Effect.flatMap(() => Effect.never),
-  Pull.catchDone(() => Cause.done()));
+  Pull.catchDone(() => Cause.done()),
+);
 ```
+
 `loop()` recurses while nested inside `flatMap(() => Effect.never)` + `catchDone`, so
 every idle schedule tick leaves +2 continuation frames on the fiber `_stack` that are
 never popped. Patched:
+
 ```js
 return step(lastOutput).pipe(
   Pull.catchDone(() => Cause.done()),
-  Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep).pipe(Effect.flatMap(() => Effect.never))));
+  Effect.flatMap(() =>
+    !sinkHasInput
+      ? loop()
+      : Queue.offer(buffer, scheduleStep).pipe(Effect.flatMap(() => Effect.never)),
+  ),
+);
 ```
+
 `loop()` is now in TAIL position (continuations replace, don't stack); `Effect.never`
 wraps only the emit path; `catchDone` scopes to the `step` call. Semantics preserved:
 idle → re-step; sink has input → offer a marker then park; schedule expiry → `Cause.done()`.
@@ -169,7 +182,7 @@ the patch is pure insurance for any future/transitive use. The existing repo pat
 `Stream.groupedWithin(Stream.never, 64, "5 millis")` (idle: the never-emitting
 source keeps the schedule ticking with an empty sink) and samples `heapUsed` under
 forced GC each second. Result: heap climbs **linearly and GC-survivingly** (+0.18
-MB/s ≈ ~630 MB/hr at 5 ms ticks), while the identical `Stream.never` drain *without*
+MB/s ≈ ~630 MB/hr at 5 ms ticks), while the identical `Stream.never` drain _without_
 `groupedWithin` is dead flat (0.0 MB). The growth is retained continuation frames,
 tracking the timer not the (zero) element rate — the production signature (~1.9
 GB/hr at 20 ms ticks × real fiber count). Pinned to
@@ -187,7 +200,7 @@ gate → squash-merge to trunk (`personal`) with **no release**; FU3 branch off
 updated trunk → same drill; FU2 produced (no merge). Then release the accumulated
 work. "Release" here = rebuild + restart the launchd server; because that restarts
 the freshly-CONFIRMED OOM-fix server (pid 87173, 24 h+ flat) and ends the active
-session, the deploy *timing* is surfaced to the user at Stage 9 rather than done
+session, the deploy _timing_ is surfaced to the user at Stage 9 rather than done
 silently — FU3 is dev-tooling (zero runtime effect) and FU1 is a behavior-neutral
 cleanup, so there is no urgency forcing an immediate restart.
 

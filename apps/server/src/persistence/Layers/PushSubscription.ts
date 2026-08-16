@@ -97,9 +97,7 @@ const makePushSubscriptionRepository = Effect.gen(function* () {
 
   const deleteByEndpoint: PushSubscriptionRepositoryShape["deleteByEndpoint"] = (input) =>
     deleteRowByEndpoint(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError("PushSubscriptionRepository.deleteByEndpoint:query"),
-      ),
+      Effect.mapError(toPersistenceSqlError("PushSubscriptionRepository.deleteByEndpoint:query")),
     );
 
   return {

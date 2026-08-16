@@ -8,6 +8,7 @@ options list — capped at `max-h-[min(50vh,22rem)]` — still covered ~80% of t
 screen, so the user could not read the conversation behind it before deciding.
 
 Give the user two controls:
+
 1. A **drag handle** to resize the options list height (explicitly requested).
 2. A **collapse toggle** to hide the options and read the chat behind, then
    re-expand to answer.
@@ -15,13 +16,14 @@ Give the user two controls:
 ## Approach (chosen)
 
 Local component state in `ComposerPendingUserInputCard`:
+
 - `isCollapsed: boolean` — collapse hides the options list + select hint, leaving
   the header, question text, and a tappable "N options hidden" hint.
 - `optionsHeight: number | null` — `null` keeps a responsive CSS cap; a number
   switches the list to an explicit pixel height (fixed by drag), still clamped by
   a CSS `max-height` so it can never exceed the viewport.
 
-Resize uses pointer events + pointer capture (works for touch *and* mouse, which
+Resize uses pointer events + pointer capture (works for touch _and_ mouse, which
 native CSS `resize: vertical` does not). Bounds: `[72px, 80dvh]`. Reset via
 double-click (desktop) **or** a reset button that appears once resized (touch),
 **or** keyboard ArrowUp/Down on the focusable separator.
@@ -34,13 +36,13 @@ users grow it back if they want more.
 
 - **Cut drag entirely; keep only collapse + smaller cap.** (Simplicity review's
   top pick.) Collapse + the lower default cap already solve the 80%-screen
-  problem with far less code. *Rejected* because the user explicitly asked for "a
+  problem with far less code. _Rejected_ because the user explicitly asked for "a
   handle to resize the height"; continuous resize is a distinct, requested need.
-  We *did* adopt the smaller default cap from this suggestion.
+  We _did_ adopt the smaller default cap from this suggestion.
 - **Two fixed-height "compact/expand" toggle instead of continuous drag.** Less
-  code, covers most of the need. *Rejected* for the same reason — a "handle"
+  code, covers most of the need. _Rejected_ for the same reason — a "handle"
   implies continuous control. Noted as a fallback if drag proves low-value.
-- **Native CSS `resize: vertical`.** *Rejected* — no touch support, which is the
+- **Native CSS `resize: vertical`.** _Rejected_ — no touch support, which is the
   primary target (web mobile).
 
 ## Files touched

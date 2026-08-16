@@ -39,26 +39,28 @@ layer("PendingBackgroundTaskRepository", (it) => {
     }),
   );
 
-  it.effect("upsert on conflict refreshes last_seen_at but preserves recovery_attempts + started_at", () =>
-    Effect.gen(function* () {
-      const repository = yield* PendingBackgroundTaskRepository;
-      const row = baseRow("task-conflict", "thread-conflict");
-      yield* repository.upsert(row);
-      yield* repository.incrementAttempts({ taskId: row.taskId });
+  it.effect(
+    "upsert on conflict refreshes last_seen_at but preserves recovery_attempts + started_at",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* PendingBackgroundTaskRepository;
+        const row = baseRow("task-conflict", "thread-conflict");
+        yield* repository.upsert(row);
+        yield* repository.incrementAttempts({ taskId: row.taskId });
 
-      // Re-observe the same task with a fresh started/last-seen + zero attempts.
-      yield* repository.upsert({
-        ...row,
-        startedAt: "2026-02-02T00:00:00.000Z",
-        lastSeenAt: "2026-02-02T00:00:00.000Z",
-        recoveryAttempts: 0,
-      });
+        // Re-observe the same task with a fresh started/last-seen + zero attempts.
+        yield* repository.upsert({
+          ...row,
+          startedAt: "2026-02-02T00:00:00.000Z",
+          lastSeenAt: "2026-02-02T00:00:00.000Z",
+          recoveryAttempts: 0,
+        });
 
-      const got = Option.getOrNull(yield* repository.getByTaskId({ taskId: row.taskId }));
-      assert.strictEqual(got?.recoveryAttempts, 1, "attempts preserved");
-      assert.strictEqual(got?.startedAt, "2026-01-01T00:00:00.000Z", "started_at preserved");
-      assert.strictEqual(got?.lastSeenAt, "2026-02-02T00:00:00.000Z", "last_seen_at refreshed");
-    }),
+        const got = Option.getOrNull(yield* repository.getByTaskId({ taskId: row.taskId }));
+        assert.strictEqual(got?.recoveryAttempts, 1, "attempts preserved");
+        assert.strictEqual(got?.startedAt, "2026-01-01T00:00:00.000Z", "started_at preserved");
+        assert.strictEqual(got?.lastSeenAt, "2026-02-02T00:00:00.000Z", "last_seen_at refreshed");
+      }),
   );
 
   it.effect("touch refreshes last_seen_at; incrementAttempts bumps the counter", () =>

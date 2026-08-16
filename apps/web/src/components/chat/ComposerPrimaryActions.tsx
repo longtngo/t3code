@@ -161,7 +161,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       // Note this checks `isSendBlocked`, NOT `isEnvironmentUnavailable`: a
       // disconnected environment leaves the button live so the message can be
       // queued for reconnect instead of being swallowed by a dead button.
-      disabled={isSendBusy || isSendDisabled || isConnecting || isSendBlocked || !hasSendableContent}
+      disabled={
+        isSendBusy || isSendDisabled || isConnecting || isSendBlocked || !hasSendableContent
+      }
       aria-label={
         isEnvironmentUnavailable
           ? "Queue message to send on reconnect"
@@ -325,7 +327,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           )}
           {...pointerFocusProps}
           disabled={
-            isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable || isSendBlocked
+            isSendBusy ||
+            isSendDisabled ||
+            isConnecting ||
+            isEnvironmentUnavailable ||
+            isSendBlocked
           }
         >
           {isConnecting || isSendBusy ? "Sending..." : "Refine"}
@@ -341,7 +347,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           className="h-9 rounded-l-full rounded-r-none bg-message-action px-4 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
           {...pointerFocusProps}
           disabled={
-            isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable || isSendBlocked
+            isSendBusy ||
+            isSendDisabled ||
+            isConnecting ||
+            isEnvironmentUnavailable ||
+            isSendBlocked
           }
         >
           {isConnecting || isSendBusy ? "Sending..." : "Implement"}

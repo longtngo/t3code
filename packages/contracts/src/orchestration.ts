@@ -355,9 +355,7 @@ export const OrchestrationProject = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
-  members: Schema.Array(WorkspaceMember).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  members: Schema.Array(WorkspaceMember).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -451,8 +449,7 @@ export const OrchestrationCheckpointMemberState = Schema.Struct({
   headSha: TrimmedNonEmptyString,
   isDirty: Schema.Boolean,
 });
-export type OrchestrationCheckpointMemberState =
-  typeof OrchestrationCheckpointMemberState.Type;
+export type OrchestrationCheckpointMemberState = typeof OrchestrationCheckpointMemberState.Type;
 
 export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
@@ -587,9 +584,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
-  members: Schema.Array(WorkspaceMember).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  members: Schema.Array(WorkspaceMember).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1999,4 +1994,3 @@ export class OrchestrationSearchThreadsError extends Schema.TaggedErrorClass<Orc
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-

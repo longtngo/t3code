@@ -17,10 +17,10 @@ holds archived threads. Today it fails with:
 The live project `pickup-v2-poc`
 (`~/.t3/userdata/state.sqlite`, id `67119381-…`) has two threads:
 
-| thread     | deleted_at            | archived_at           |
-| ---------- | --------------------- | --------------------- |
-| `e00207dd` | 2026-05-29 (deleted)  | —                     |
-| `0a63fbd0` | NULL                  | 2026-06-01 (archived) |
+| thread     | deleted_at           | archived_at           |
+| ---------- | -------------------- | --------------------- |
+| `e00207dd` | 2026-05-29 (deleted) | —                     |
+| `0a63fbd0` | NULL                 | 2026-06-01 (archived) |
 
 So one thread is **archived but not deleted**.
 
@@ -31,7 +31,7 @@ means:
   (`apps/server/src/orchestration/decider.ts:169`) counts
   `listThreadsByProjectId(projectId).filter(deletedAt === null)`. That set
   **includes archived threads** (archived ≠ deleted), so it sees 1 active
-  thread and rejects deletion unless `force === true`. It *must* include them:
+  thread and rejects deletion unless `force === true`. It _must_ include them:
   the force path cascades a `thread.delete` for exactly this set, so excluding
   archived threads would orphan them under a deleted project.
 
@@ -44,7 +44,7 @@ means:
   restart. So the client counts 0 threads → takes the "empty" path →
   `removeProject(member)` **without** `force` → server invariant fires.
 
-(When a thread is archived *during a live session* it stays in the client store,
+(When a thread is archived _during a live session_ it stays in the client store,
 so the bug only appears after a restart — matching the timeline: archived
 2026-06-01, delete attempted 2026-06-05.)
 

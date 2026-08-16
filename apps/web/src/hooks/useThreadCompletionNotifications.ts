@@ -22,7 +22,11 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { useClientSettings } from "./useSettings";
 import { useThreadShells } from "../state/entities";
-import { classifyThreadCompletion, notifyThreadCompletions, registerThreadNotificationHost } from "../lib/notifier";
+import {
+  classifyThreadCompletion,
+  notifyThreadCompletions,
+  registerThreadNotificationHost,
+} from "../lib/notifier";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 
 export function useThreadCompletionNotifications(): void {

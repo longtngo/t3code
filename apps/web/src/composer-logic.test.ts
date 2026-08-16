@@ -402,24 +402,21 @@ describe("buildFilePathInsertion", () => {
 
 describe("shouldUseLocalFilePath", () => {
   it("uses the local path only in the desktop app on the local (same-host) environment", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: true }),
-    ).toBe(true);
+    expect(shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: true })).toBe(true);
   });
 
   it("uploads instead of using a local path for a remote environment, even on desktop", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: false }),
-    ).toBe(false);
+    expect(shouldUseLocalFilePath({ hasDesktopBridge: true, isLocalEnvironment: false })).toBe(
+      false,
+    );
   });
 
   it("uploads in a plain browser (no desktop bridge), regardless of environment", () => {
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: true }),
-    ).toBe(false);
-    expect(
-      shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: false }),
-    ).toBe(false);
+    expect(shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: true })).toBe(
+      false,
+    );
+    expect(shouldUseLocalFilePath({ hasDesktopBridge: false, isLocalEnvironment: false })).toBe(
+      false,
+    );
   });
 });
-

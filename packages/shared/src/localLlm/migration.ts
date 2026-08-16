@@ -1,4 +1,8 @@
-import type { LocalLlmModelConfig, LocalLlmSettings, LocalModelsSettings } from "@t3tools/contracts";
+import type {
+  LocalLlmModelConfig,
+  LocalLlmSettings,
+  LocalModelsSettings,
+} from "@t3tools/contracts";
 import { LOCAL_LLM_MODELS } from "./catalog.ts";
 
 /**
@@ -36,7 +40,9 @@ export function migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSetting
   let n = 0;
 
   const seedFrom = (
-    perModel: Readonly<Record<string, { readonly args?: readonly string[] | undefined }>> | undefined,
+    perModel:
+      | Readonly<Record<string, { readonly args?: readonly string[] | undefined }>>
+      | undefined,
   ) => {
     for (const [key, v] of Object.entries(perModel ?? {})) {
       const m = byResource.get(key);

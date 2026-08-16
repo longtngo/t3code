@@ -2007,27 +2007,27 @@ export default function GitActionsControl({
         <Group aria-label="Git actions" className="shrink-0">
           {repositoryPicker}
           <Button
-          variant="outline"
-          size="xs"
-          disabled={initAction.isPending || activeMemberRepo !== null}
-          onClick={() => {
-            void (async () => {
-              const result = await initAction.run();
-              if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-                return;
-              }
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Git initialization failed",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                  ...(threadToastData !== undefined ? { data: threadToastData } : {}),
-                }),
-              );
-            })();
-          }}
-        >
+            variant="outline"
+            size="xs"
+            disabled={initAction.isPending || activeMemberRepo !== null}
+            onClick={() => {
+              void (async () => {
+                const result = await initAction.run();
+                if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+                  return;
+                }
+                const error = squashAtomCommandFailure(result);
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Git initialization failed",
+                    description: error instanceof Error ? error.message : "An error occurred.",
+                    ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+                  }),
+                );
+              })();
+            }}
+          >
             <GitBranchPlusIcon className="size-3.5" aria-hidden />
             <span className="ml-0.5">
               {initAction.isPending ? "Initializing..." : "Initialize Git"}
@@ -2405,8 +2405,8 @@ export default function GitActionsControl({
               Open from {pendingMemberPrBase?.repositoryTitle ?? "this repository"}
             </DialogTitle>
             <DialogDescription>
-              The base decides which commits are included. Git records no branch ancestry, so
-              this is the best answer available — check it before continuing.
+              The base decides which commits are included. Git records no branch ancestry, so this
+              is the best answer available — check it before continuing.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>

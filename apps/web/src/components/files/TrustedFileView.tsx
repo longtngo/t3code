@@ -84,11 +84,7 @@ export function trustedViewKind(absolutePath: string): TrustedViewKind {
  * sits under the tab strip — so navigation stays out of this component while the
  * view controls live next to the state they act on.
  */
-function TrustedFileViewContents({
-  environmentId,
-  absolutePath,
-  className,
-}: TrustedFileViewProps) {
+function TrustedFileViewContents({ environmentId, absolutePath, className }: TrustedFileViewProps) {
   // "Show the non-default view for this kind": rendered↔source for html, and
   // markdown↔server-rendered-html for markdown. Reset per file by the `key` on the
   // wrapper below, so a toggle set while reading a report cannot follow you to the
@@ -219,9 +215,15 @@ function TrustedFileViewContents({
 
   const toggleLabel =
     kind === "markdown"
-      ? { text: showAlternate ? "MD" : "HTML", title: showAlternate ? "Show markdown" : "Render as HTML" }
+      ? {
+          text: showAlternate ? "MD" : "HTML",
+          title: showAlternate ? "Show markdown" : "Render as HTML",
+        }
       : kind === "html"
-        ? { text: showAlternate ? "Preview" : "Code", title: showAlternate ? "Render the document" : "Show HTML source" }
+        ? {
+            text: showAlternate ? "Preview" : "Code",
+            title: showAlternate ? "Render the document" : "Show HTML source",
+          }
         : null;
 
   return (

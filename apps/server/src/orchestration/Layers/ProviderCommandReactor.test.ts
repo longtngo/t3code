@@ -518,77 +518,75 @@ describe("ProviderCommandReactor", () => {
     };
   }
 
-  effectIt.effect(
-    "recovers a closed provider session on turn start by evicting and retrying",
-    () =>
-      Effect.gen(function* () {
-        const harness = yield* Effect.promise(() => createHarness());
-        const now = "2026-01-01T00:00:00.000Z";
-        const threadId = ThreadId.make("thread-1");
+  effectIt.effect("recovers a closed provider session on turn start by evicting and retrying", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-1");
 
-        // First turn establishes a live session.
-        yield* harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-recover-1"),
-          threadId,
-          message: {
-            messageId: asMessageId("user-message-recover-1"),
-            role: "user",
-            text: "first",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        });
-        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      // First turn establishes a live session.
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-recover-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-recover-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
 
-        // The underlying provider session died but the stale in-memory context is
-        // still routable, so the next turn-start hits a dead query. The first
-        // sendTurn of the second turn fails with a session-closed error; the
-        // recovery must evict the stale session and retry (which resumes cleanly).
-        harness.sendTurn.mockImplementationOnce(
-          () =>
-            Effect.fail(
-              new ProviderAdapterSessionClosedError({
-                provider: "claudeAgent",
-                threadId,
-                cause: new Error("Query closed before response received"),
-              }),
-            ) as unknown as ReturnType<typeof harness.sendTurn>,
-        );
+      // The underlying provider session died but the stale in-memory context is
+      // still routable, so the next turn-start hits a dead query. The first
+      // sendTurn of the second turn fails with a session-closed error; the
+      // recovery must evict the stale session and retry (which resumes cleanly).
+      harness.sendTurn.mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ProviderAdapterSessionClosedError({
+              provider: "claudeAgent",
+              threadId,
+              cause: new Error("Query closed before response received"),
+            }),
+          ) as unknown as ReturnType<typeof harness.sendTurn>,
+      );
 
-        yield* harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-recover-2"),
-          threadId,
-          message: {
-            messageId: asMessageId("user-message-recover-2"),
-            role: "user",
-            text: "second",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now,
-        });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-recover-2"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-recover-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
 
-        // Recovery: the failed attempt (call 2) is followed by a successful retry
-        // (call 3), and the stale session is evicted before the retry.
-        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 3));
-        expect(
-          harness.stopSession.mock.calls.some(
-            (call) => (call[0] as { threadId?: ThreadId })?.threadId === threadId,
-          ),
-        ).toBe(true);
+      // Recovery: the failed attempt (call 2) is followed by a successful retry
+      // (call 3), and the stale session is evicted before the retry.
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 3));
+      expect(
+        harness.stopSession.mock.calls.some(
+          (call) => (call[0] as { threadId?: ThreadId })?.threadId === threadId,
+        ),
+      ).toBe(true);
 
-        // No dead-end: the turn recovered, so no failure activity is recorded.
-        const readModel = yield* Effect.promise(() => harness.readModel());
-        const thread = readModel.threads.find((entry) => entry.id === threadId);
-        expect(
-          thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
-        ).toBe(false);
-      }),
+      // No dead-end: the turn recovered, so no failure activity is recorded.
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      expect(
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toBe(false);
+    }),
   );
 
   effectIt.effect("records a failure when the retried turn also loses its session", () =>
@@ -645,9 +643,8 @@ describe("ProviderCommandReactor", () => {
           const readModel = await harness.readModel();
           const thread = readModel.threads.find((entry) => entry.id === threadId);
           return (
-            thread?.activities.some(
-              (activity) => activity.kind === "provider.turn.start.failed",
-            ) ?? false
+            thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
           );
         }),
       );

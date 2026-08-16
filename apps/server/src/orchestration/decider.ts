@@ -403,9 +403,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const wholeSession = command.forkBeforeMessageId === undefined;
       const forkIndex = wholeSession
         ? sourceThread.messages.length
-        : sourceThread.messages.findIndex(
-            (message) => message.id === command.forkBeforeMessageId,
-          );
+        : sourceThread.messages.findIndex((message) => message.id === command.forkBeforeMessageId);
       if (!wholeSession && forkIndex < 0) {
         return yield* invariantError(
           command.type,

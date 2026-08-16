@@ -98,15 +98,15 @@ describe("writeUploadedAttachment", () => {
 
   it.effect("fails with a typed error when the decoded bytes exceed the size limit", () =>
     Effect.gen(function* () {
-    const dir = tempAttachmentsDir();
-    // 21 MB of zero bytes (limit is 20 MB).
-    const tooBig = Buffer.alloc(21 * 1024 * 1024);
-    const error = yield* writeUploadedAttachment({
-      attachmentsDir: dir,
-      threadId: "thread-1",
-      fileName: "big.bin",
-      dataBase64: tooBig.toString("base64"),
-    }).pipe(Effect.flip);
+      const dir = tempAttachmentsDir();
+      // 21 MB of zero bytes (limit is 20 MB).
+      const tooBig = Buffer.alloc(21 * 1024 * 1024);
+      const error = yield* writeUploadedAttachment({
+        attachmentsDir: dir,
+        threadId: "thread-1",
+        fileName: "big.bin",
+        dataBase64: tooBig.toString("base64"),
+      }).pipe(Effect.flip);
       expect(error).toBeInstanceOf(AttachmentUploadError);
       expect(error.message).toContain("limit");
     }),

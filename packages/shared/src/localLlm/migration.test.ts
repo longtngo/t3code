@@ -32,7 +32,13 @@ describe("migrateLocalModels", () => {
         "gemma-4-12B-it-4bit": { args: ["--kv-quant", "8"] },
         "unknown-dir": { args: ["--x"] },
       },
-      ds4: { enabled: false, binaryPath: "ds4-server", modelsDir: "~/ds4/gguf", defaultArgs: [], perModel: {} },
+      ds4: {
+        enabled: false,
+        binaryPath: "ds4-server",
+        modelsDir: "~/ds4/gguf",
+        defaultArgs: [],
+        perModel: {},
+      },
     } as never);
     const cfg = out.models.find((m) => m.modelId === "gemma-4-12B-it-4bit");
     expect(cfg).toBeDefined();

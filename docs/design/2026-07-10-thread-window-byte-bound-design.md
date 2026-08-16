@@ -3,8 +3,7 @@
 ## Goal
 
 Add a **serialized-byte budget** as a third bound on thread-load windowing, alongside
-the existing turn-count (`windowTurns`, default 15) and row-count (`maxRows`, default
-2000) bounds. Today a thread with a handful of turns and few rows but heavy per-row
+the existing turn-count (`windowTurns`, default 15) and row-count (`maxRows`, default 2000) bounds. Today a thread with a handful of turns and few rows but heavy per-row
 payloads escapes both existing bounds and ships as one multi-megabyte snapshot frame.
 
 ## Premise validation (Hard Rule 8) — DONE, live-measured
@@ -12,10 +11,10 @@ payloads escapes both existing bounds and ships as one multi-megabyte snapshot f
 Probed the live `state.sqlite` (`~/.t3/userdata/state.sqlite`), summing per-turn UTF-8
 byte size via `length(CAST(text|payload_json|plan_markdown AS BLOB))`:
 
-| thread       | turns | rows  | MB   | escapes 15-turn ∧ 2000-row? |
-|--------------|-------|-------|------|------------------------------|
-| `d0c31878`   | 4     | 901   | 5.0  | **yes** → full 5 MB frame    |
-| `03615fd3`   | 12    | 1684  | 6.2  | **yes** → full 6.2 MB frame  |
+| thread     | turns | rows | MB  | escapes 15-turn ∧ 2000-row? |
+| ---------- | ----- | ---- | --- | --------------------------- |
+| `d0c31878` | 4     | 901  | 5.0 | **yes** → full 5 MB frame   |
+| `03615fd3` | 12    | 1684 | 6.2 | **yes** → full 6.2 MB frame |
 
 `d0c31878` is the exact "loaded empty" thread from 2026-07-09. Per-turn byte
 distribution (newest-first):
@@ -89,7 +88,7 @@ Mirror the existing row-budget walk exactly, extended to also carry a byte budge
 - **Bound by decoded/serialized frame bytes after building the snapshot, then re-trim.**
   Rejected: requires materializing the full snapshot first (the exact OOM/large-frame
   cost we're avoiding), then discarding — backwards. The per-turn SQL sum bounds
-  *before* materialization.
+  _before_ materialization.
 - **Split an oversized single turn across frames.** Rejected: a turn is the atomic
   windowing unit throughout the design; sub-turn splitting would fracture turn-coherent
   rendering and the cursor model. A single pathological turn (e.g. one 30 MB tool

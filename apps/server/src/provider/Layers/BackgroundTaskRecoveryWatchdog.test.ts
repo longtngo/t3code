@@ -515,7 +515,11 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
         row({ taskId: "task-fresh", threadId, bootId: "OLD-BOOT" }),
       ],
       shells: new Map([[threadId, makeShell(threadId, { status: "ready" })]]),
-      options: { sweepIntervalMs: 60_000, staleThresholdMs: 60 * 60 * 1000, maxRecoveryAttempts: 3 },
+      options: {
+        sweepIntervalMs: 60_000,
+        staleThresholdMs: 60 * 60 * 1000,
+        maxRecoveryAttempts: 3,
+      },
     });
     return Effect.gen(function* () {
       yield* startWatchdog;

@@ -121,9 +121,7 @@ describe("deriveLatestAccountUsage", () => {
   });
 
   it("skips activities whose payload is not an object", () => {
-    expect(
-      deriveLatestAccountUsage([makeActivity("x", "account.usage.updated", null)]),
-    ).toBeNull();
+    expect(deriveLatestAccountUsage([makeActivity("x", "account.usage.updated", null)])).toBeNull();
   });
 
   it("surfaces Codex primary/secondary windows, labelled by window length", () => {

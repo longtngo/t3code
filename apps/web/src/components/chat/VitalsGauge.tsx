@@ -228,9 +228,7 @@ function WindowRow(props: {
           <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
           {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
         </span>
-        {resetAt !== null ? (
-          <span className="whitespace-nowrap">resets {resetAt}</span>
-        ) : null}
+        {resetAt !== null ? <span className="whitespace-nowrap">resets {resetAt}</span> : null}
       </div>
     </div>
   );

@@ -20,7 +20,7 @@
 - **Event payloads are replayed from history.** A payload field added now will be absent on every event already in the store, so payload fields are always `Schema.optional` and the projector supplies the default.
 - **Effect language service diagnostics fail typecheck.** Do not use `node:child_process`, bare `setTimeout`, `console.log`, or `Effect.fail(new Error(...))` in server code. Use `Effect.sleep`, `Console.log`, and typed `Schema.TaggedErrorClass` errors.
 - **Tests:** `import { assert, describe, it } from "@effect/vitest"`. Effect-returning tests use `it.effect(name, () => Effect.gen(function* () { ... }))`.
-- **Never write `Effect.runPromise` (or any `run*`) in a test.** The repo lint rule `t3code/no-manual-effect-runtime-in-tests` forbids it, and it enforces a **per-file legacy baseline** (`oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts`) that grandfathers existing counts and permits **no net-new** occurrences. This is a trap: a test file can be full of `Effect.runPromise` and still reject yours, because its whole existing count is already spent. Match the *rule*, not the surrounding file. Raising a baseline number is never an acceptable fix. Where a file mixes styles, the `it as effectIt` import from `@effect/vitest` is the sanctioned path for new tests.
+- **Never write `Effect.runPromise` (or any `run*`) in a test.** The repo lint rule `t3code/no-manual-effect-runtime-in-tests` forbids it, and it enforces a **per-file legacy baseline** (`oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts`) that grandfathers existing counts and permits **no net-new** occurrences. This is a trap: a test file can be full of `Effect.runPromise` and still reject yours, because its whole existing count is already spent. Match the _rule_, not the surrounding file. Raising a baseline number is never an acceptable fix. Where a file mixes styles, the `it as effectIt` import from `@effect/vitest` is the sanctioned path for new tests.
 - **Run `pnpm lint` before committing, not just typecheck.** Typecheck passing says nothing about the repo's custom oxlint rules, and several of them are project-specific traps.
 - **Test commands:** per package, `pnpm --filter <pkg> test run <path>`. Package names: `@t3tools/contracts`, `t3` (the server), `@t3tools/web`, `@t3tools/client-runtime`.
 - **Full gate:** `pnpm verify` (typecheck + lint + test) must be green before the phase is merged. Baseline on this branch is 2139 passed / 7 skipped.
@@ -30,18 +30,18 @@
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `packages/contracts/src/orchestration.ts` | `WorkspaceMember` schema; `members` on the project read model, shell, update command, and both project payloads | Modify |
-| `packages/contracts/src/orchestration.test.ts` | Skew and round-trip coverage for the above | Modify |
-| `apps/server/src/orchestration/decider.ts` | Pass `members` from command into the `project.meta-updated` event | Modify |
-| `apps/server/src/orchestration/projector.ts` | Apply `members` to the read model on create and update | Modify |
-| `packages/contracts/src/provider.ts` | `workspaceMemberPaths` on `ProviderSessionStartInput` | Modify |
-| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` | Fill `workspaceMemberPaths` from the resolved project | Modify |
-| `apps/server/src/provider/Layers/ClaudeAdapter.ts` | Include member paths in `additionalDirectories` | Modify |
-| `apps/web/src/components/WorkspaceMembersControl.logic.ts` | Pure add/remove/validate logic for the members editor | **Create** |
-| `apps/web/src/components/WorkspaceMembersControl.logic.test.ts` | Unit coverage for the logic module | **Create** |
-| `apps/web/src/components/WorkspaceMembersControl.tsx` | The members editor UI | **Create** |
+| File                                                             | Responsibility                                                                                                  | Action     |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------- |
+| `packages/contracts/src/orchestration.ts`                        | `WorkspaceMember` schema; `members` on the project read model, shell, update command, and both project payloads | Modify     |
+| `packages/contracts/src/orchestration.test.ts`                   | Skew and round-trip coverage for the above                                                                      | Modify     |
+| `apps/server/src/orchestration/decider.ts`                       | Pass `members` from command into the `project.meta-updated` event                                               | Modify     |
+| `apps/server/src/orchestration/projector.ts`                     | Apply `members` to the read model on create and update                                                          | Modify     |
+| `packages/contracts/src/provider.ts`                             | `workspaceMemberPaths` on `ProviderSessionStartInput`                                                           | Modify     |
+| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` | Fill `workspaceMemberPaths` from the resolved project                                                           | Modify     |
+| `apps/server/src/provider/Layers/ClaudeAdapter.ts`               | Include member paths in `additionalDirectories`                                                                 | Modify     |
+| `apps/web/src/components/WorkspaceMembersControl.logic.ts`       | Pure add/remove/validate logic for the members editor                                                           | **Create** |
+| `apps/web/src/components/WorkspaceMembersControl.logic.test.ts`  | Unit coverage for the logic module                                                                              | **Create** |
+| `apps/web/src/components/WorkspaceMembersControl.tsx`            | The members editor UI                                                                                           | **Create** |
 
 The `.logic.ts` + `.logic.test.ts` split for the client component follows the established
 pattern in this codebase (`GitActionsControl.logic.ts`, `SettingsPanels.logic.ts`,
@@ -53,10 +53,12 @@ module, and the `.tsx` file is wiring only.
 ## Task 1: Contract — `WorkspaceMember` and `members`
 
 **Files:**
+
 - Modify: `packages/contracts/src/orchestration.ts` (add schema near `ProjectScript` at `:211`; touch `OrchestrationProject` `:213`, `OrchestrationProjectShell` `:407`, `ProjectMetaUpdateCommand` `:603`, `ProjectCreatedPayload` `:1024`, `ProjectMetaUpdatedPayload` `:1035`)
 - Test: `packages/contracts/src/orchestration.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing (first task)
 - Produces: `WorkspaceMember` (type and schema) with fields `id: string`, `path: string`, `title: string`, `integrationBranch: string`. `OrchestrationProject.members: ReadonlyArray<WorkspaceMember>` and the same on `OrchestrationProjectShell`. `ProjectMetaUpdateCommand.members?: ReadonlyArray<WorkspaceMember>`. `ProjectCreatedPayload.members?` and `ProjectMetaUpdatedPayload.members?`.
 
@@ -237,11 +239,13 @@ fields are optional because they are replayed from events that predate them."
 ## Task 2: Decider and projector carry `members` through the event flow
 
 **Files:**
+
 - Modify: `apps/server/src/orchestration/decider.ts:284-295` (the `project.meta.update` case)
 - Modify: `apps/server/src/orchestration/projector.ts:207-250` (the `project.created` and `project.meta-updated` cases)
 - Test: `apps/server/src/orchestration/projector.test.ts`
 
 **Interfaces:**
+
 - Consumes: `WorkspaceMember`, `OrchestrationProject.members`, `ProjectMetaUpdateCommand.members`, `ProjectMetaUpdatedPayload.members`, `ProjectCreatedPayload.members` from Task 1
 - Produces: a read model whose `project.members` reflects the last `project.meta.update`. Nothing else depends on this beyond the read model shape already declared in Task 1.
 
@@ -255,109 +259,109 @@ and the local `makeEvent` helper plus `createEmptyReadModel` / `projectEvent` im
 beyond what is listed here.
 
 ```ts
-  const PROJECT_CREATED_AT = "2026-01-01T00:00:00.000Z";
+const PROJECT_CREATED_AT = "2026-01-01T00:00:00.000Z";
 
-  const projectCreatedEvent = (sequence: number) =>
-    makeEvent({
-      sequence,
-      type: "project.created",
-      aggregateKind: "project",
-      aggregateId: "project-1",
-      occurredAt: PROJECT_CREATED_AT,
-      commandId: "cmd-project-create",
-      payload: {
-        projectId: "project-1",
-        title: "Project",
-        workspaceRoot: "/tmp/workspace",
-        defaultModelSelection: null,
-        scripts: [],
-        createdAt: PROJECT_CREATED_AT,
-        updatedAt: PROJECT_CREATED_AT,
-      },
-    });
-
-  const memberFixture = {
-    id: "member-1",
-    path: "/tmp/prm_portal_api",
-    title: "prm_portal_api",
-    integrationBranch: "pickup-v2",
-  };
-
-  it("defaults members to an empty array on project.created", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const next = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
-
-    expect(next.projects[0]?.members).toEqual([]);
+const projectCreatedEvent = (sequence: number) =>
+  makeEvent({
+    sequence,
+    type: "project.created",
+    aggregateKind: "project",
+    aggregateId: "project-1",
+    occurredAt: PROJECT_CREATED_AT,
+    commandId: "cmd-project-create",
+    payload: {
+      projectId: "project-1",
+      title: "Project",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: PROJECT_CREATED_AT,
+      updatedAt: PROJECT_CREATED_AT,
+    },
   });
 
-  it("applies members from project.meta-updated", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
-    const next = await Effect.runPromise(
-      projectEvent(
-        created,
-        makeEvent({
-          sequence: 2,
-          type: "project.meta-updated",
-          aggregateKind: "project",
-          aggregateId: "project-1",
-          occurredAt: "2026-01-02T00:00:00.000Z",
-          commandId: "cmd-project-update",
-          payload: {
-            projectId: "project-1",
-            members: [memberFixture],
-            updatedAt: "2026-01-02T00:00:00.000Z",
-          },
-        }),
-      ),
-    );
+const memberFixture = {
+  id: "member-1",
+  path: "/tmp/prm_portal_api",
+  title: "prm_portal_api",
+  integrationBranch: "pickup-v2",
+};
 
-    expect(next.projects[0]?.members).toEqual([memberFixture]);
-  });
+it("defaults members to an empty array on project.created", async () => {
+  const model = createEmptyReadModel(PROJECT_CREATED_AT);
+  const next = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
 
-  it("leaves members untouched when project.meta-updated omits them", async () => {
-    const model = createEmptyReadModel(PROJECT_CREATED_AT);
-    const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
-    const withMembers = await Effect.runPromise(
-      projectEvent(
-        created,
-        makeEvent({
-          sequence: 2,
-          type: "project.meta-updated",
-          aggregateKind: "project",
-          aggregateId: "project-1",
-          occurredAt: "2026-01-02T00:00:00.000Z",
-          commandId: "cmd-project-update",
-          payload: {
-            projectId: "project-1",
-            members: [memberFixture],
-            updatedAt: "2026-01-02T00:00:00.000Z",
-          },
-        }),
-      ),
-    );
-    const renamed = await Effect.runPromise(
-      projectEvent(
-        withMembers,
-        makeEvent({
-          sequence: 3,
-          type: "project.meta-updated",
-          aggregateKind: "project",
-          aggregateId: "project-1",
-          occurredAt: "2026-01-03T00:00:00.000Z",
-          commandId: "cmd-project-rename",
-          payload: {
-            projectId: "project-1",
-            title: "Renamed",
-            updatedAt: "2026-01-03T00:00:00.000Z",
-          },
-        }),
-      ),
-    );
+  expect(next.projects[0]?.members).toEqual([]);
+});
 
-    expect(renamed.projects[0]?.title).toBe("Renamed");
-    expect(renamed.projects[0]?.members).toEqual([memberFixture]);
-  });
+it("applies members from project.meta-updated", async () => {
+  const model = createEmptyReadModel(PROJECT_CREATED_AT);
+  const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+  const next = await Effect.runPromise(
+    projectEvent(
+      created,
+      makeEvent({
+        sequence: 2,
+        type: "project.meta-updated",
+        aggregateKind: "project",
+        aggregateId: "project-1",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+        commandId: "cmd-project-update",
+        payload: {
+          projectId: "project-1",
+          members: [memberFixture],
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      }),
+    ),
+  );
+
+  expect(next.projects[0]?.members).toEqual([memberFixture]);
+});
+
+it("leaves members untouched when project.meta-updated omits them", async () => {
+  const model = createEmptyReadModel(PROJECT_CREATED_AT);
+  const created = await Effect.runPromise(projectEvent(model, projectCreatedEvent(1)));
+  const withMembers = await Effect.runPromise(
+    projectEvent(
+      created,
+      makeEvent({
+        sequence: 2,
+        type: "project.meta-updated",
+        aggregateKind: "project",
+        aggregateId: "project-1",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+        commandId: "cmd-project-update",
+        payload: {
+          projectId: "project-1",
+          members: [memberFixture],
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      }),
+    ),
+  );
+  const renamed = await Effect.runPromise(
+    projectEvent(
+      withMembers,
+      makeEvent({
+        sequence: 3,
+        type: "project.meta-updated",
+        aggregateKind: "project",
+        aggregateId: "project-1",
+        occurredAt: "2026-01-03T00:00:00.000Z",
+        commandId: "cmd-project-rename",
+        payload: {
+          projectId: "project-1",
+          title: "Renamed",
+          updatedAt: "2026-01-03T00:00:00.000Z",
+        },
+      }),
+    ),
+  );
+
+  expect(renamed.projects[0]?.title).toBe("Renamed");
+  expect(renamed.projects[0]?.members).toEqual([memberFixture]);
+});
 ```
 
 The third test is the one that matters most: it pins the conditional-spread behavior, so a
@@ -436,17 +440,17 @@ The full brief is at `.superpowers/sdd/2026-08-04-multi-repo-workspace-phase-1/t
 In outline, `members` mirrors `scripts` exactly — an array persisted as JSON in a `*_json`
 column:
 
-| Site | Change |
-|---|---|
-| `persistence/Migrations/038_ProjectionProjectMembers.ts` | `ALTER TABLE projection_projects ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'` — the default is required, the column is `NOT NULL` on a live table |
-| `ProjectionSnapshotQuery.ts` row schema | `members: Schema.fromJsonString(Schema.Array(WorkspaceMember))`, beside `scripts` |
-| `ProjectionPipeline.ts` `project.created` | `members: event.payload.members ?? []` |
-| `ProjectionPipeline.ts` `project.meta-updated` | conditional spread, so a title-only update cannot clear members |
-| The project repository | `members` ↔ `members_json`, following `scripts` ↔ `scripts_json` |
-| `ProjectionSnapshotQuery.ts` read mappings | `members` from the row at each project-building site |
-| ~15 test fixtures across server, client-runtime, web, and mobile | add `members: []` |
+| Site                                                             | Change                                                                                                                                                   |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `persistence/Migrations/038_ProjectionProjectMembers.ts`         | `ALTER TABLE projection_projects ADD COLUMN members_json TEXT NOT NULL DEFAULT '[]'` — the default is required, the column is `NOT NULL` on a live table |
+| `ProjectionSnapshotQuery.ts` row schema                          | `members: Schema.fromJsonString(Schema.Array(WorkspaceMember))`, beside `scripts`                                                                        |
+| `ProjectionPipeline.ts` `project.created`                        | `members: event.payload.members ?? []`                                                                                                                   |
+| `ProjectionPipeline.ts` `project.meta-updated`                   | conditional spread, so a title-only update cannot clear members                                                                                          |
+| The project repository                                           | `members` ↔ `members_json`, following `scripts` ↔ `scripts_json`                                                                                         |
+| `ProjectionSnapshotQuery.ts` read mappings                       | `members` from the row at each project-building site                                                                                                     |
+| ~15 test fixtures across server, client-runtime, web, and mobile | add `members: []`                                                                                                                                        |
 
-**The generalizable lesson for Phases 2-4:** this codebase has *two* projections. Any field
+**The generalizable lesson for Phases 2-4:** this codebase has _two_ projections. Any field
 added to `OrchestrationProject` or `OrchestrationProjectShell` must be carried through both
 the in-memory projector and the SQL projection, or it silently never reaches a consumer.
 Adding a field to the read-model schema also breaks every object literal that constructs one,
@@ -455,12 +459,14 @@ across four packages — the typecheck error count is the checklist.
 ## Task 3: Agent reach — member paths become `additionalDirectories`
 
 **Files:**
+
 - Modify: `packages/contracts/src/provider.ts:53-74` (`ProviderSessionStartInput`)
 - Modify: `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:622-643`
 - Modify: `apps/server/src/provider/Layers/ClaudeAdapter.ts:3708-3713`
 - Test: `packages/contracts/src/provider.test.ts`
 
 **Interfaces:**
+
 - Consumes: `OrchestrationProject.members` (Task 1), applied to the read model by Task 2
 - Produces: `ProviderSessionStartInput.workspaceMemberPaths?: ReadonlyArray<string>`, consumed by every provider adapter. Only the Claude adapter acts on it in this phase; other adapters ignore it harmlessly.
 
@@ -480,10 +486,7 @@ it.effect("carries workspace member paths on session start", () =>
       cwd: "/tmp/workspace",
       workspaceMemberPaths: ["/tmp/prm_portal_api", "/tmp/warehouse"],
     });
-    assert.deepStrictEqual(parsed.workspaceMemberPaths, [
-      "/tmp/prm_portal_api",
-      "/tmp/warehouse",
-    ]);
+    assert.deepStrictEqual(parsed.workspaceMemberPaths, ["/tmp/prm_portal_api", "/tmp/warehouse"]);
   }),
 );
 
@@ -532,7 +535,7 @@ resolved at `:622` (`const project = yield* resolveProject(thread.projectId);`).
 directly below the `effectiveCwd` assignment (`:626`):
 
 ```ts
-    const workspaceMemberPaths = (project?.members ?? []).map((member) => member.path);
+const workspaceMemberPaths = (project?.members ?? []).map((member) => member.path);
 ```
 
 Then in the `startProviderSession` call, after the `cwd` line (`:640`):
@@ -587,11 +590,13 @@ point of the feature and is recorded in the design doc."
 ## Task 4: Attach and detach members in the UI
 
 **Files:**
+
 - Create: `apps/web/src/components/WorkspaceMembersControl.logic.ts`
 - Create: `apps/web/src/components/WorkspaceMembersControl.logic.test.ts`
 - Create: `apps/web/src/components/WorkspaceMembersControl.tsx`
 
 **Interfaces:**
+
 - Consumes: `WorkspaceMember` (Task 1); `updateProject` from `packages/client-runtime/src/operations/commands.ts:98`, whose input type is `CommandInput<"project.meta.update">` and therefore already accepts `members` with no client-runtime change
 - Produces: nothing consumed by later Phase 1 tasks
 
@@ -610,7 +615,12 @@ import {
 } from "./WorkspaceMembersControl.logic";
 
 const existing = [
-  { id: "m1", path: "/srv/prm_portal_api", title: "prm_portal_api", integrationBranch: "pickup-v2" },
+  {
+    id: "m1",
+    path: "/srv/prm_portal_api",
+    title: "prm_portal_api",
+    integrationBranch: "pickup-v2",
+  },
 ];
 
 describe("memberTitleFromPath", () => {
@@ -640,10 +650,7 @@ describe("validateNewMember", () => {
 
   it("rejects a duplicate path", () => {
     assert.strictEqual(
-      validateNewMember(
-        { path: "/srv/prm_portal_api", integrationBranch: "pickup-v2" },
-        existing,
-      ),
+      validateNewMember({ path: "/srv/prm_portal_api", integrationBranch: "pickup-v2" }, existing),
       "That repository is already attached.",
     );
   });
@@ -707,7 +714,10 @@ export interface NewWorkspaceMemberInput {
 
 /** Final path segment, ignoring a trailing separator. Used as the display title. */
 export function memberTitleFromPath(path: string): string {
-  const segments = path.replaceAll("\\", "/").split("/").filter((s) => s.length > 0);
+  const segments = path
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((s) => s.length > 0);
   return segments[segments.length - 1] ?? path;
 }
 
@@ -781,11 +791,7 @@ import type { WorkspaceMember } from "@t3tools/contracts";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import {
-  addMember,
-  removeMember,
-  validateNewMember,
-} from "./WorkspaceMembersControl.logic";
+import { addMember, removeMember, validateNewMember } from "./WorkspaceMembersControl.logic";
 
 interface WorkspaceMembersControlProps {
   members: ReadonlyArray<WorkspaceMember>;
@@ -804,9 +810,7 @@ export default function WorkspaceMembersControl({
     const message = validateNewMember({ path, integrationBranch }, members);
     setError(message);
     if (message !== null) return;
-    onMembersChange(
-      addMember(members, { id: crypto.randomUUID(), path, integrationBranch }),
-    );
+    onMembersChange(addMember(members, { id: crypto.randomUUID(), path, integrationBranch }));
     setPath("");
     setIntegrationBranch("");
   };
@@ -818,9 +822,7 @@ export default function WorkspaceMembersControl({
           <li key={member.id} className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{member.title}</div>
-              <div className="truncate font-mono text-xs text-muted-foreground">
-                {member.path}
-              </div>
+              <div className="truncate font-mono text-xs text-muted-foreground">{member.path}</div>
             </div>
             <span className="shrink-0 font-mono text-xs">{member.integrationBranch}</span>
             <Button

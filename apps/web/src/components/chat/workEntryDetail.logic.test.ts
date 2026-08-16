@@ -109,7 +109,15 @@ describe("extractAskUserQuestionAnswers", () => {
     const a1 = "1, but before that, are the local PRs in sync? if not push. it might help";
     const q2 = "Where should the runbook live?";
     const a2 = "Reports dir only";
-    expect(extractAskUserQuestionAnswers(build([[q1, a1], [q2, a2]]), [q1, q2])).toEqual([a1, a2]);
+    expect(
+      extractAskUserQuestionAnswers(
+        build([
+          [q1, a1],
+          [q2, a2],
+        ]),
+        [q1, q2],
+      ),
+    ).toEqual([a1, a2]);
   });
 
   it("handles a single question", () => {
@@ -120,17 +128,30 @@ describe("extractAskUserQuestionAnswers", () => {
   it("is not fooled by a question that is a substring of another", () => {
     const q1 = "prod?";
     const q2 = "Deploy to prod?";
-    expect(extractAskUserQuestionAnswers(build([[q1, "no"], [q2, "yes"]]), [q1, q2])).toEqual([
-      "no",
-      "yes",
-    ]);
+    expect(
+      extractAskUserQuestionAnswers(
+        build([
+          [q1, "no"],
+          [q2, "yes"],
+        ]),
+        [q1, q2],
+      ),
+    ).toEqual(["no", "yes"]);
   });
 
   it("handles an answer that itself contains the quote-comma-quote separator", () => {
     const q1 = "First?";
     const a1 = 'she said "hi", then left';
     const q2 = "Second?";
-    expect(extractAskUserQuestionAnswers(build([[q1, a1], [q2, "b"]]), [q1, q2])).toEqual([a1, "b"]);
+    expect(
+      extractAskUserQuestionAnswers(
+        build([
+          [q1, a1],
+          [q2, "b"],
+        ]),
+        [q1, q2],
+      ),
+    ).toEqual([a1, "b"]);
   });
 
   it("returns null for a question whose anchor is absent, keeping others aligned", () => {
@@ -151,10 +172,7 @@ describe("formatWorkEntryDetail — AskUserQuestion", () => {
     {
       question: "Deploy now?",
       header: "Timing",
-      options: [
-        { label: "Yes", description: "Ship it" },
-        { label: "No" },
-      ],
+      options: [{ label: "Yes", description: "Ship it" }, { label: "No" }],
     },
     { question: "Which env?", options: [{ label: "staging" }, { label: "prod" }] },
   ];
@@ -215,11 +233,7 @@ describe("formatWorkEntryDetail — AskUserQuestion", () => {
 describe("formatWorkEntryDetail — Bash", () => {
   it("renders the command and its output", () => {
     const body = formatWorkEntryDetail(
-      toolEntry(
-        "Bash",
-        { command: "ls -la" },
-        { content: "total 8\ndrwxr-xr-x", is_error: false },
-      ),
+      toolEntry("Bash", { command: "ls -la" }, { content: "total 8\ndrwxr-xr-x", is_error: false }),
     );
     expect(body).toEqual({
       kind: "command",

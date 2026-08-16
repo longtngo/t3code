@@ -2322,10 +2322,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
               aria-hidden={!canOpenDetail}
             >
               {canOpenDetail ? (
-                <ChevronRightIcon
-                  className="size-3 shrink-0 opacity-70"
-                  aria-hidden
-                />
+                <ChevronRightIcon className="size-3 shrink-0 opacity-70" aria-hidden />
               ) : null}
             </span>
             <span className="flex size-4 shrink-0 items-center justify-center">

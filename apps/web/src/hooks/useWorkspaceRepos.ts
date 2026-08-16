@@ -24,9 +24,7 @@ export {
 export function useWorkspaceRepos(threadRef: ScopedThreadRef | null): ReadonlyArray<WorkspaceRepo> {
   const thread = useThread(threadRef);
   const project = useProject(
-    thread?.projectId
-      ? { environmentId: thread.environmentId, projectId: thread.projectId }
-      : null,
+    thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
   );
   return useMemo(
     () =>

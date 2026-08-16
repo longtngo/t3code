@@ -21,9 +21,10 @@ schedule loop **`stepToBuffer` (effect `Stream.js:5887-5888`) is not stack-safe*
 ```js
 const stepToBuffer = Effect.suspend(function loop() {
   return step(lastOutput).pipe(
-    Effect.flatMap(() => !sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep)), // recurses here
-    Effect.flatMap(() => Effect.never),   // this successCont frame never pops
-    Pull.catchDone(() => Cause.done()));  // this failureCont frame never pops
+    Effect.flatMap(() => (!sinkHasInput ? loop() : Queue.offer(buffer, scheduleStep))), // recurses here
+    Effect.flatMap(() => Effect.never), // this successCont frame never pops
+    Pull.catchDone(() => Cause.done()),
+  ); // this failureCont frame never pops
 });
 ```
 
@@ -40,8 +41,8 @@ frames (+81 frames/s ≈ 40 iterations/s — tracks the 20 ms timer, NOT the eve
 rate), children alternating `~effect/Effect/successCont` / `failureCont`. Heap:
 8.4M → 9.9M closures. The arithmetic closes: these ~3 fibers ARE the whole leak.
 
-**Why the prior `Stream.take(20000)` recycle failed:** it bounds *emitted batch
-frames*; this leak is per *idle schedule tick* and grows fastest when **zero**
+**Why the prior `Stream.take(20000)` recycle failed:** it bounds _emitted batch
+frames_; this leak is per _idle schedule tick_ and grows fastest when **zero**
 frames are emitted. Wrong axis — hence the straight-line climb with no sawtooth.
 
 **Blast radius:** `Stream.groupedWithin` / `aggregateWithin` is used in exactly
@@ -62,8 +63,8 @@ New helper `apps/server/src/orchestration/Layers/batchWithinStackSafe.ts`:
 // backpressure. Stack-safe; runs zero timers while idle; memory bounded.
 export const batchWithinStackSafe = <A>(
   source: Stream.Stream<A>,
-  maxBatch: number,          // >= 1; batch size cap (64)
-  bufferCapacity: number,    // bounded hand-off buffer (backpressure -> upstream drop+resync)
+  maxBatch: number, // >= 1; batch size cap (64)
+  bufferCapacity: number, // bounded hand-off buffer (backpressure -> upstream drop+resync)
 ): Stream.Stream<A[]> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -108,8 +109,8 @@ const liveStreamAfter = (afterSequence: number) =>
       Stream.filter((event) => event.sequence > afterSequence),
       Stream.filter(isThisThreadEvent),
     ),
-    ACTIVITY_BATCH_MAX_EVENTS,          // 64 (unchanged)
-    ACTIVITY_BATCH_BUFFER_CAPACITY,     // new const, 4096 (mirrors WS_SUBSCRIBER_BUFFER)
+    ACTIVITY_BATCH_MAX_EVENTS, // 64 (unchanged)
+    ACTIVITY_BATCH_BUFFER_CAPACITY, // new const, 4096 (mirrors WS_SUBSCRIBER_BUFFER)
   ).pipe(Stream.map((events) => ({ kind: "events" as const, events })));
 ```
 
@@ -121,7 +122,7 @@ const liveStreamAfter = (afterSequence: number) =>
 1. **Pump + output are trampolined.** `Stream.runForEachArray` and `Stream.fromPull`
    are both driven by `Channel.runWith`'s `Effect.forever(Effect.flatMap(pull, f))`
    (effect `Channel.js:3714`); `Effect.forever` = `whileLoop` (`internal/effect.js
-   :1186`), whose primitive re-pushes *itself* and returns to constant depth
+:1186`), whose primitive re-pushes _itself_ and returns to constant depth
    (`fiber._stack.push(this)`, effect.js:1827-1841). Each `pull`/pump iteration
    runs on a fresh shallow stack that unwinds on return — **no per-element or
    per-batch frame accumulation**, unlike `stepToBuffer`'s `loop()` self-recursion.
@@ -156,7 +157,7 @@ teardown cases:
 - **Slow-but-alive consumer:** its draining lets the pump make progress, the
   upstream `boundedSubscriberStream` eventually drops+ends, the source stream ends,
   `ensuring(Queue.end)` ends `q`, and the stream completes cleanly → resubscribe.
-- **Fully dead socket** (the original OOM trigger): the pump stays *parked* in
+- **Fully dead socket** (the original OOM trigger): the pump stays _parked_ in
   `offerAll` on a full `q` (bounded, not growing) and never observes source-end on
   its own; final reclaim comes from the WS transport's dead-socket detection
   tearing down the RPC scope, which interrupts the parked pump. Reclaim is via
@@ -174,7 +175,7 @@ caught in review.)
   client, or a dense burst outrunning the round-trip); the next `takeBetween`
   returns them as one ≤64 batch. For a client that keeps up event-for-event,
   batches are size-1 with **0 added latency** (vs. `groupedWithin`'s 0-20 ms tax).
-  This *dominates* the fixed window: it batches at least as aggressively exactly
+  This _dominates_ the fixed window: it batches at least as aggressively exactly
   when bandwidth matters, and adds no latency when it doesn't.
 - **Cap:** `takeBetween(_, 1, 64)` returns ≤64; a >64 backlog yields the next ≤64
   on the following pull. No loss, no overflow handling.
@@ -211,7 +212,7 @@ caught in review.)
 
 - One bounded `Queue` + one forked fiber per active `subscribeThread` subscription
   (same cost shape as `boundedSubscriberStream`). Negligible.
-- The upstream effect `aggregateWithin` bug remains for any *future* use of
+- The upstream effect `aggregateWithin` bug remains for any _future_ use of
   `groupedWithin`/`aggregate` — see follow-ups.
 - No fixed 20 ms window: isolated events on a fast client flush immediately
   (better latency); this is a behavior change, judged strictly better (above).

@@ -2,7 +2,7 @@
 
 **Status:** Design · **Date:** 2026-08-04
 
-A project maps 1:1 to a repository today. This adds *workspace members*: additional
+A project maps 1:1 to a repository today. This adds _workspace members_: additional
 repositories a project's threads can read, edit, and open pull requests against, without
 changing what a project or a thread fundamentally is.
 
@@ -12,15 +12,15 @@ changing what a project or a thread fundamentally is.
 
 The `pickup-v2` effort is one staging repository plus six code repositories:
 
-| Path | Branch | Remote |
-|---|---|---|
-| `~/src/uni/pickup-v2` (staging: docs, scripts, tests) | `main` | none |
-| `~/src/uni/prm_portal_api` | `pickup-v2` | yes |
-| `~/src/uni/unimap_front` | `pickup-v2` | yes |
-| `~/src/uni/uniuni_web_prm` | `pickup-v2` | yes |
-| `~/src/uni/warehouse` | `pickup-v2` | yes |
-| `~/src/uni/uniexpress-openplatform-backend` | `pickup-v2` | yes |
-| `~/src/uni/uniuni_api_prm` | `pickup-v2-prm2.0` | yes |
+| Path                                                  | Branch             | Remote |
+| ----------------------------------------------------- | ------------------ | ------ |
+| `~/src/uni/pickup-v2` (staging: docs, scripts, tests) | `main`             | none   |
+| `~/src/uni/prm_portal_api`                            | `pickup-v2`        | yes    |
+| `~/src/uni/unimap_front`                              | `pickup-v2`        | yes    |
+| `~/src/uni/uniuni_web_prm`                            | `pickup-v2`        | yes    |
+| `~/src/uni/warehouse`                                 | `pickup-v2`        | yes    |
+| `~/src/uni/uniexpress-openplatform-backend`           | `pickup-v2`        | yes    |
+| `~/src/uni/uniuni_api_prm`                            | `pickup-v2-prm2.0` | yes    |
 
 Two properties of this layout drive the design:
 
@@ -59,14 +59,14 @@ Two properties of this layout drive the design:
 
 Every server-side service is already parameterized by `cwd` rather than bound to a project:
 
-| Service | Shape |
-|---|---|
-| `VcsDriverRegistry.resolve({ cwd })` | stateless per call |
-| `GitWorkflowService` | `status`, `localStatus`, `remoteStatus`, `createRef`, `switchRef`, `runStackedAction`, `createWorktree` — all take `cwd` |
-| `CheckpointStore` | `captureCheckpoint({ cwd })`, `restoreCheckpoint({ cwd })` |
-| `WorkspaceFileSystem` / `WorkspacePaths` | `cwd` per operation |
-| `WorkspaceSearchIndex` | a `LayerMap.Service` keyed by root, with `idleTimeToLive` eviction |
-| `project.*` and `vcs.*` RPCs | every input carries `cwd` |
+| Service                                  | Shape                                                                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `VcsDriverRegistry.resolve({ cwd })`     | stateless per call                                                                                                       |
+| `GitWorkflowService`                     | `status`, `localStatus`, `remoteStatus`, `createRef`, `switchRef`, `runStackedAction`, `createWorktree` — all take `cwd` |
+| `CheckpointStore`                        | `captureCheckpoint({ cwd })`, `restoreCheckpoint({ cwd })`                                                               |
+| `WorkspaceFileSystem` / `WorkspacePaths` | `cwd` per operation                                                                                                      |
+| `WorkspaceSearchIndex`                   | a `LayerMap.Service` keyed by root, with `idleTimeToLive` eviction                                                       |
+| `project.*` and `vcs.*` RPCs             | every input carries `cwd`                                                                                                |
 
 The 1:1 assumption lives in four places only:
 
@@ -105,7 +105,7 @@ cwd. Members are additional repositories. A thread still belongs to exactly one 
 
 **`integrationBranch` is per member and non-nullable.** An "auto-detect the current branch"
 option reads as convenient but is ambiguous precisely when it matters: once a feature branch
-is cut, the current branch *is* the feature branch and the integration branch is gone. It is
+is cut, the current branch _is_ the feature branch and the integration branch is gone. It is
 resolved once when the member is attached and stored. If the stored value later disagrees
 with what is on disk, that member is **unmanaged** — T3 Code displays the state and takes no
 action, because these checkouts are hand-pinned and the tool should not fight the user.
@@ -128,10 +128,10 @@ derived from `git remote`, never configured.
 
 Two keys are written on each feature branch T3 Code cuts:
 
-| Key | Value | Purpose |
-|---|---|---|
+| Key                           | Value                  | Purpose                         |
+| ----------------------------- | ---------------------- | ------------------------------- |
 | `branch.<name>.gh-merge-base` | the integration branch | the existing PR flow targets it |
-| `branch.<name>.t3code-thread` | the thread id | who owns this branch |
+| `branch.<name>.t3code-thread` | the thread id          | who owns this branch            |
 
 This survives a database wipe and a server restart, it is discoverable with
 `git config --get-regexp`, and it makes each member repository self-describing — `cd` there
@@ -141,7 +141,7 @@ and you can see what T3 Code did and why.
 upstream tracking or the provider default (`apps/server/src/git/GitManager.ts:1341`):
 
 ```ts
-const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
+const configured = yield * gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
 if (configured) return configured;
 ```
 
@@ -155,7 +155,7 @@ the branch is pushed (`GitManager.ts:1565`), so at PR time every branch has an u
 it is `origin/<its own name>`. `resolveBaseBranch` then walks:
 
 1. `branch.<name>.gh-merge-base` — absent, skip.
-2. Upstream tracking — the guard is `upstreamBranch !== branch`, and the upstream *is* the
+2. Upstream tracking — the guard is `upstreamBranch !== branch`, and the upstream _is_ the
    branch itself, so it is correctly rejected.
 3. `provider.getDefaultBranch({ cwd })` → **`main`**.
 
@@ -173,12 +173,12 @@ So the invariant is **not** "T3 Code cuts the branch". It is narrower and covers
 `ensureMemberPrBase(cwd, branch, integrationBranch)` — idempotent, called pre-action in the
 git panel — resolves the base through a ladder and covers every branch origin uniformly:
 
-| # | Source | Quality |
-|---|---|---|
-| 1 | `branch.<name>.gh-merge-base` | explicit intent; always wins |
-| 2 | reflog creation record | **exact** when present |
-| 3 | the member's declared `integrationBranch` | ground truth for the effort |
-| 4 | `provider.getDefaultBranch()` | today's behavior |
+| #   | Source                                    | Quality                      |
+| --- | ----------------------------------------- | ---------------------------- |
+| 1   | `branch.<name>.gh-merge-base`             | explicit intent; always wins |
+| 2   | reflog creation record                    | **exact** when present       |
+| 3   | the member's declared `integrationBranch` | ground truth for the effort  |
+| 4   | `provider.getDefaultBranch()`             | today's behavior             |
 
 Step 2 parses `git reflog show <branch>` for the `branch: Created from X` entry. When `X` is
 a name it is used directly; when it is `HEAD` or a sha, `git branch --points-at <sha>`
@@ -196,15 +196,15 @@ to prevent, in a case the user did nothing wrong in.
 against known ground truth on four real branches in these repositories, and each was correct
 **once out of four times**:
 
-| Branch | Truth | Decoration walk | Closest merge-base |
-|---|---|---|---|
-| `t3code feat/multi-repo-workspace` | `personal` | `fork/personal` ✓ | `personal` ✓ |
-| `pickup-v2 feat/demo-suite` | `main` | none ✗ | `chore/demo-seed-db` ✗ |
-| `uniexpress pickup-v2` | integration | `origin/…UBM-1818…` ✗ | `fix/dispatch-restore-auth-checks` ✗ |
-| `prm_portal_api pickup-v2` | integration | `origin/UP-5044` ✗ | `fix/temu-pickup-idor-guard` ✗ |
+| Branch                             | Truth       | Decoration walk       | Closest merge-base                   |
+| ---------------------------------- | ----------- | --------------------- | ------------------------------------ |
+| `t3code feat/multi-repo-workspace` | `personal`  | `fork/personal` ✓     | `personal` ✓                         |
+| `pickup-v2 feat/demo-suite`        | `main`      | none ✗                | `chore/demo-seed-db` ✗               |
+| `uniexpress pickup-v2`             | integration | `origin/…UBM-1818…` ✗ | `fix/dispatch-restore-auth-checks` ✗ |
+| `prm_portal_api pickup-v2`         | integration | `origin/UP-5044` ✗    | `fix/temu-pickup-idor-guard` ✗       |
 
 `feat/demo-suite` is the instructive failure: its true parent `main` and the unrelated
-`chore/demo-seed-db` are *both* one commit back from the merge-base, and the tie broke wrong.
+`chore/demo-seed-db` are _both_ one commit back from the merge-base, and the tie broke wrong.
 That is not a tuning problem. Git does not record branch ancestry, so closest-merge-base
 cannot distinguish a parent from a sibling cut at the same commit. Reflog is the only exact
 source, which is why the ladder uses it and no topology inference at all.
@@ -221,7 +221,7 @@ projects too; keeping it in the workspace layer, where it writes `gh-merge-base`
 altering `resolveBaseBranch`, means `GitManager` does not diverge from upstream either way.
 
 The one case that cannot be fixed from outside is `runStackedAction` with
-`featureBranch: true`, which creates the branch *inside* the action (`GitManager.ts:2022`),
+`featureBranch: true`, which creates the branch _inside_ the action (`GitManager.ts:2022`),
 after the last chance to write config. Member actions therefore always run with
 `featureBranch: false` against a branch that already exists — which the post-turn cut
 provides. `GitManager` needs no change either way.
@@ -244,13 +244,13 @@ classifyMemberBranch(input: {
 }): "idle" | "cut-needed" | "owned-by-self" | "owned-by-other" | "unmanaged"
 ```
 
-| State | Condition | Action |
-|---|---|---|
-| `idle` | on integration branch, clean | none |
-| `cut-needed` | on integration branch, dirty | cut and record |
-| `owned-by-self` | owner is this thread | proceed |
-| `owned-by-other` | owner is a different thread | warn, take no action |
-| `unmanaged` | off integration branch with no owner key | none — the user is driving |
+| State            | Condition                                | Action                     |
+| ---------------- | ---------------------------------------- | -------------------------- |
+| `idle`           | on integration branch, clean             | none                       |
+| `cut-needed`     | on integration branch, dirty             | cut and record             |
+| `owned-by-self`  | owner is this thread                     | proceed                    |
+| `owned-by-other` | owner is a different thread              | warn, take no action       |
+| `unmanaged`      | off integration branch with no owner key | none — the user is driving |
 
 `currentBranch` is always read live (`git branch --show-current`) rather than trusted from
 stored state, so a hand-switched branch is detected rather than assumed away.
@@ -291,7 +291,7 @@ checkout (below), blocking buys less than it costs.
 
 With one shared checkout per member repository, **isolation between threads is impossible**.
 If two threads write to the same directory their changes mix in the working tree, and no
-amount of branch bookkeeping separates them. The guard makes the state *visible*; it does
+amount of branch bookkeeping separates them. The guard makes the state _visible_; it does
 not prevent it.
 
 Real prevention requires a worktree per thread per member, which was considered and
@@ -411,13 +411,13 @@ modes that caused past incidents.
 
 ## Error handling
 
-| Condition | Behavior |
-|---|---|
-| Member path missing or not a repository | Member shown as unavailable with the reason; excluded from `additionalDirectories`; panels and sandbox unaffected |
-| `integrationBranch` absent from the repository | Member treated as unmanaged; flagged in project settings |
-| Branch cut fails (detached HEAD, permissions) | Logged, member left unmanaged, surfaced in the diff group header |
-| One member fails during the sweep | Isolated — never fails the turn or blocks other members |
-| Two members resolve to the same path | Rejected at attach time |
+| Condition                                      | Behavior                                                                                                          |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Member path missing or not a repository        | Member shown as unavailable with the reason; excluded from `additionalDirectories`; panels and sandbox unaffected |
+| `integrationBranch` absent from the repository | Member treated as unmanaged; flagged in project settings                                                          |
+| Branch cut fails (detached HEAD, permissions)  | Logged, member left unmanaged, surfaced in the diff group header                                                  |
+| One member fails during the sweep              | Isolated — never fails the turn or blocks other members                                                           |
+| Two members resolve to the same path           | Rejected at attach time                                                                                           |
 
 ---
 
@@ -428,21 +428,22 @@ modes that caused past incidents.
 - **The load-bearing integration tests.** The entire pull-request story rests on the base
   resolving to the integration branch, so it is verified rather than trusted, on a real git
   fixture, for both branch origins:
-  - *T3 Code cut it* — cut a member branch, assert both config keys are written, assert
+  - _T3 Code cut it_ — cut a member branch, assert both config keys are written, assert
     `resolveBaseBranch` returns the integration branch.
-  - *The user cut it from the integration branch* — create a branch with no config, run
+  - _The user cut it from the integration branch_ — create a branch with no config, run
     `ensureMemberPrBase`, assert the base is the integration branch rather than `main`.
-  - *The user cut it from somewhere else* — create a branch from `main` in a repository
+  - _The user cut it from somewhere else_ — create a branch from `main` in a repository
     whose declared `integrationBranch` is `pickup-v2`, and assert the reflog step wins so
     the base is `main`. This is the case the ladder's ordering exists for.
-  - *Reflog says `Created from HEAD`* — assert the sha is resolved back to a branch name.
-  - *Reflog expired or absent* — assert a clean fall-through to the declared
+  - _Reflog says `Created from HEAD`_ — assert the sha is resolved back to a branch name.
+  - _Reflog expired or absent_ — assert a clean fall-through to the declared
     `integrationBranch` rather than an error.
-  - *Regression guard* — with `gh-merge-base` deliberately unset, assert the base resolves
+  - _Regression guard_ — with `gh-merge-base` deliberately unset, assert the base resolves
     to `main`, so the test proves the key is what is doing the work rather than passing for
     an unrelated reason.
 
   `apps/server/src/vcs/testing/VcsDriverContractHarness.ts` provides the harness.
+
 - Checkpoint completeness: capture with members clean → revert proceeds; capture then dirty
   a member → revert refuses and names it.
 - `useWorkspaceRepos` unit tests; diff aggregation grouping.
@@ -453,12 +454,12 @@ modes that caused past incidents.
 
 Each phase is independently shippable and leaves the product coherent.
 
-| Phase | Contents | Value on its own |
-|---|---|---|
-| **1. Model + reach** | `WorkspaceMember` contract, attach UI in project settings, `additionalDirectories`, `readAccess` roots | The agent edits member repositories without prompts — the highest-value, lowest-risk slice |
-| **2. Read surfaces** | `useWorkspaceRepos` hook (replacing the six scattered cwd derivations), Files root selector, aggregated Diff with local-only status for non-active members | You can see what changed across all repositories |
-| **3. Branch lifecycle** | `classifyMemberBranch`, `ensureMemberFeatureBranch`, `ensureMemberPrBase`, post-turn sweep, pre-turn guard warning, per-member git actions | Commit and pull request per repository, targeting the integration branch |
-| **4. Checkpoint integrity** | `memberStates` on the checkpoint summary, completeness check at revert | Revert stops being able to mislead |
+| Phase                       | Contents                                                                                                                                                   | Value on its own                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **1. Model + reach**        | `WorkspaceMember` contract, attach UI in project settings, `additionalDirectories`, `readAccess` roots                                                     | The agent edits member repositories without prompts — the highest-value, lowest-risk slice |
+| **2. Read surfaces**        | `useWorkspaceRepos` hook (replacing the six scattered cwd derivations), Files root selector, aggregated Diff with local-only status for non-active members | You can see what changed across all repositories                                           |
+| **3. Branch lifecycle**     | `classifyMemberBranch`, `ensureMemberFeatureBranch`, `ensureMemberPrBase`, post-turn sweep, pre-turn guard warning, per-member git actions                 | Commit and pull request per repository, targeting the integration branch                   |
+| **4. Checkpoint integrity** | `memberStates` on the checkpoint summary, completeness check at revert                                                                                     | Revert stops being able to mislead                                                         |
 
 Phase 3 is the only one that writes to member repositories. Phases 1 and 2 are read-only
 with respect to git, which makes them safe to live on before the branch machinery lands.
@@ -499,10 +500,10 @@ Two workspaces were measured. The first is the seven real repositories this desi
 imagines as members. The second saturates every root at
 `WORKSPACE_INDEX_MAX_ENTRIES` — the case the fear was written about.
 
-| | Entries | RSS over baseline, 7 resident | Slowest cold build | One-root search p95 | Seven-root search p95 |
-|---|---|---|---|---|---|
-| Real repositories | 664–17,572 | 179 MB | 353 ms | 8.7 ms | 34.2 ms |
-| Saturated at the cap | 25,250 each | 298 MB | 535 ms | 4.0 ms | 40.4 ms |
+|                      | Entries     | RSS over baseline, 7 resident | Slowest cold build | One-root search p95 | Seven-root search p95 |
+| -------------------- | ----------- | ----------------------------- | ------------------ | ------------------- | --------------------- |
+| Real repositories    | 664–17,572  | 179 MB                        | 353 ms             | 8.7 ms              | 34.2 ms               |
+| Saturated at the cap | 25,250 each | 298 MB                        | 535 ms             | 4.0 ms              | 40.4 ms               |
 
 **The memory worry was misplaced.** Even with every root at the entry cap, seven
 resident indexes cost 298 MB — under the server's own steady-state footprint, and

@@ -8454,8 +8454,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("records a confirmed pull-request base for the branch that is checked out", () =>
     Effect.gen(function* () {
-      const writes: Array<{ readonly cwd: string; readonly branch: string; readonly base: string }> =
-        [];
+      const writes: Array<{
+        readonly cwd: string;
+        readonly branch: string;
+        readonly base: string;
+      }> = [];
       yield* buildAppUnderTest({
         layers: {
           projectionSnapshotQuery: {

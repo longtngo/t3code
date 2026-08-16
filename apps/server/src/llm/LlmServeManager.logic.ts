@@ -160,7 +160,11 @@ export function buildSample(
     });
   }
 
-  return { providers, ramBudgetBytes: budgetBytes(settings.ramBudgetBytes, totalMem), ramUsedBytes };
+  return {
+    providers,
+    ramBudgetBytes: budgetBytes(settings.ramBudgetBytes, totalMem),
+    ramUsedBytes,
+  };
 }
 
 /** The endpoint (host, port) to probe for a config's online status. */

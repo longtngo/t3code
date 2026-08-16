@@ -7,7 +7,7 @@ seen right after answering an `AskUserQuestion` (3rd occurrence):
 
 1. **Prevent** the provider session from being lost in the first place while a turn is
    parked waiting for the user to answer a question (or approve a tool).
-2. **Auto-reattach** the provider session when it *is* gone, instead of dead-ending on a
+2. **Auto-reattach** the provider session when it _is_ gone, instead of dead-ending on a
    cryptic error, so the conversation can continue.
 
 ## Where the error comes from
@@ -25,7 +25,7 @@ const hasSession = thread.session && thread.session.status !== "stopped";
 
 When that projection is `null` or `status === "stopped"`, the handler hard-fails with the
 error and does **nothing else**. Contrast the **turn-start** path
-(`ensureSessionForThread`, lines 388–408), which consults *both* the projection **and** the
+(`ensureSessionForThread`, lines 388–408), which consults _both_ the projection **and** the
 live session and auto-starts/restarts when either is missing. The three request handlers are
 simply not resilient the way turn-start is.
 
@@ -47,7 +47,7 @@ are confirmed against the live code; RC-B is the dominant, AskUserQuestion-speci
   `Deferred.await` (line 3111). The subprocess stays alive; no `turn.completed` fires, so the
   turn legitimately stays `running` with `activeTurnId` set and `hasPendingUserInput === true`.
 - The **question panel's "Cancel" button** (`ComposerPrimaryActions.tsx:145`, aria-label
-  "Cancel question") **and the Stop button** (line 215) both call the *same* `onInterrupt`.
+  "Cancel question") **and the Stop button** (line 215) both call the _same_ `onInterrupt`.
 - `onInterrupt` (`ChatView.tsx`, added in commit `82f37451e`) dispatches a cooperative
   `thread.turn.interrupt` **and arms a 6-second timer** (`INTERRUPT_ESCALATION_MS = 6000`).
 - After the grace period, `shouldHardStopAfterGrace` (`ChatView.logic.ts:446`) escalates to a
@@ -58,7 +58,7 @@ are confirmed against the live code; RC-B is the dominant, AskUserQuestion-speci
 - Result: **any Stop/Cancel press during a pending question guarantees a hard session-stop
   ~6 s later** → `processSessionStopRequested` sets the projection to `status:"stopped"` →
   the user's subsequent answer submit hits the guard → the error. This escalation was
-  *intentional* for genuinely wedged tools (the stop-and-stall-recovery feature); it just
+  _intentional_ for genuinely wedged tools (the stop-and-stall-recovery feature); it just
   lacks a "waiting on the user is not wedged" carve-out.
 
 Aggravating UX: while the question is pending the composer still shows the agent as
@@ -82,23 +82,24 @@ during the wait, so the reaper normally spares it — but any provider/flow that
 also freezes at `sendTurn` time, so the 30-min idle clock runs during the human wait.
 
 **Verified premises (Hard Rule 8):**
-- ✓ The guard fires on the *projection*, not the live session (`resolveThread` →
+
+- ✓ The guard fires on the _projection_, not the live session (`resolveThread` →
   `getThreadDetailById`).
 - ✓ `provider_session_runtime` is SQLite-backed with `resume_cursor` + `runtime_payload`
   (migration 004) → binding + resume cursor **survive a restart**.
 - ✓ `respondToUserInput` already calls `resolveRoutableSession(allowRecovery:true)` →
-  `recoverSessionForThread`, which *adopts* a live session or *resumes* from the persisted
+  `recoverSessionForThread`, which _adopts_ a live session or _resumes_ from the persisted
   cursor — but the reactor's projection pre-check bails **before** this runs.
 - ✓ The "Cancel question" button is wired to the same escalating `onInterrupt` as Stop.
 - ✗ **Dangling-`tool_use` resume — UNVERIFIABLE from source, so NOT depended upon.** Whether a
   resumed Claude session accepts a continuation after a **dangling `tool_use`** (subprocess
   SIGKILLed mid-question → transcript has a `tool_use` with no `tool_result`) is decided inside
   the compiled native `claude` binary; the JS SDK does **not** heal it, and t3code's persisted
-  `resumeSessionAt` anchor points **at** the tool_use-bearing assistant message (inclusive), so
+  `resumeSessionAt` anchor points **at** the tool*use-bearing assistant message (inclusive), so
   fork-at-anchor as currently wired would **not** truncate it. Rather than settle this with an
   expensive crash-during-question experiment, the design **does not rely on it**: rung-2
   continuation is best-effort and catches a provider rejection, falling back to the reworded
-  actionable error (see Part 2). A *graceful* stop's abort path returns a `deny` tool result, so
+  actionable error (see Part 2). A \_graceful* stop's abort path returns a `deny` tool result, so
   graceful-stop resumes are clean **provided** the deny is flushed before subprocess teardown —
   the one ordering fix we do make (S6 below).
 
@@ -113,18 +114,19 @@ layer down — not by building a parallel recovery path.
 ### Part 1 — Prevention: don't kill a session that's waiting on the user
 
 **P1. Guard the Stop hard-stop escalation with pending-input awareness — but keep a manual
-escape hatch (client).** A turn parked on a pending user-input/approval request is *not* wedged;
+escape hatch (client).** A turn parked on a pending user-input/approval request is _not_ wedged;
 it is waiting on the human. So when `hasPendingUserInput || hasPendingApprovals` **at the moment
-Stop is pressed** (a *press-time* decision, per **S5** — the escalation gate reads state at fire
+Stop is pressed** (a _press-time_ decision, per **S5** — the escalation gate reads state at fire
 time via refs, so decide at press time to avoid the activity-lag flip), do **not** arm the 6 s
 escalation timer. The cooperative `thread.turn.interrupt` still fires (it correctly declines the
 question via the SDK abort → `deny`) but never auto-escalates to a session-killing
 `thread.session.stop`. This is the core fix for RC-B and aligns the client with the server stall
 watchdog, which already abstains on these same flags (**F4** — alignment, not regression).
-- **Escape hatch (S2, resolves the earlier open question): a *second* Stop press still hard-stops
+
+- **Escape hatch (S2, resolves the earlier open question): a _second_ Stop press still hard-stops
   unconditionally.** `onInterrupt` keeps recording `interruptEscalatedThreadRef = threadId` even
   when P1 declines to arm the timer, so `nextStopAction` returns `"hardStop"` on the next press
-  regardless of pending flags. Without this, a *stuck-true* pending flag (a dropped
+  regardless of pending flags. Without this, a _stuck-true_ pending flag (a dropped
   `user-input.resolved`, a stale projection) would leave a genuinely wedged turn with **no**
   killer — the watchdog abstains and the client wouldn't escalate — regressing the
   stop-and-stall-recovery guarantee (82f37451e). One press = safe (no accidental kill); two
@@ -136,16 +138,18 @@ watchdog, which already abstains on these same flags (**F4** — alignment, not 
 
 **P1b. "Cancel question" = dedicated cooperative decline, reusing the existing interrupt (F3).**
 Give the question panel's "Cancel" its own handler distinct from Stop: it dispatches the
-*existing* `thread.turn.interrupt` (which already denies the tool cleanly via the abort path,
+_existing_ `thread.turn.interrupt` (which already denies the tool cleanly via the abort path,
 `ClaudeAdapter.ts:3139-3144`) and **never** arms escalation — no new `decline`/`cancel-user-input`
 command, no `decider.ts`/contract change. This delivers the approved "dedicated cooperative
 decline" mental model (Cancel always declines; Stop is the escalating control) at minimal cost.
+
 - Touch: `chat/ComposerPrimaryActions.tsx` (separate `onCancelQuestion` prop for the "Cancel
   question" button vs. `onInterrupt` for "Stop generation"), `ChatView.tsx` (wire it).
 
 **P2. Harden the idle reaper (server).** Add the `hasPendingUserInput`/`hasPendingApprovals`
 skip to `ProviderSessionReaper.sweep`, mirroring `ProviderTurnStallWatchdog.shouldTrip`
-(lines 234–235). Defense-in-depth for RC-C; `activeTurnId` is no longer the *only* guard.
+(lines 234–235). Defense-in-depth for RC-C; `activeTurnId` is no longer the _only_ guard.
+
 - Touch: `ProviderSessionReaper.ts` (~lines 63–73). The shell it already loads exposes both flags
   (`ProjectionSnapshotQuery.ts:1911-1913`). Note (**S7**): these flags are projection-derived —
   fine as defense-in-depth, not claimed as authoritative.
@@ -165,8 +169,8 @@ first. So the fix is to **relax those three prechecks and let the existing recov
 handle the outcomes — **no new `resolveOrRecoverSessionForRequest` helper, no `ProviderService`
 change** (both cut per F1).
 
-The branch that matters is **pending-request presence, not session liveness (S1)** — a *live*
-session can have a *cleared* pending map (P1's own cooperative interrupt/Cancel deletes the
+The branch that matters is **pending-request presence, not session liveness (S1)** — a _live_
+session can have a _cleared_ pending map (P1's own cooperative interrupt/Cancel deletes the
 requestId from `pendingUserInputs`). So route the adapter's `Unknown pending … request` error
 (already detectable via `isUnknownPendingUserInputRequestError` / the approval equivalent) into
 continuation, not into a terminal error. Per handler:
@@ -182,8 +186,8 @@ continuation, not into a terminal error. Per handler:
      and any residual post-stop case with zero UX change.
    - **`Unknown pending … request`** (map cleared, or a resumed/fresh session) → **best-effort
      resume-and-continue**: start ONE continuation turn via the existing `thread.turn.start`
-     machinery carrying the user's choice (e.g. *"Regarding the earlier question '…', I chose: ….
-     Please continue."*), **idempotent per `requestId`** (**S4** — a "continued requestIds" set,
+     machinery carrying the user's choice (e.g. _"Regarding the earlier question '…', I chose: ….
+     Please continue."_), **idempotent per `requestId`** (**S4** — a "continued requestIds" set,
      since `handledTurnStartKeys` keys on turn-start events and won't dedup a redelivered/double-
      submitted answer). To avoid a wasteful resume-then-fail-then-resume double-spawn, check for a
      live session first and skip straight to the continuation turn when none exists.
@@ -192,16 +196,16 @@ continuation, not into a terminal error. Per handler:
      activity; **reword it** to the actionable message below. This is the safe fallback that lets
      us ship the full ladder without depending on the unverifiable premise.
 3. **Truly unrecoverable** (no binding / no resume cursor, or the continuation was rejected) →
-   an actionable error, not the dead-end: *"The provider session ended and couldn't be recovered
-   — start a new turn to continue."*
+   an actionable error, not the dead-end: _"The provider session ended and couldn't be recovered
+   — start a new turn to continue."_
 
 **S6 ordering fix (small, server):** when a graceful stop tears down the subprocess while a
 question is pending, ensure the abort's `deny` tool result is flushed to the SDK transcript
 **before** the subprocess is killed, so graceful-stop resumes are reliably clean (only true
 SIGKILL then dangles). Touch: `ClaudeAdapter.ts` `stopSessionInternal` teardown ordering
-(sequence the abort/deny drain before `query.close()`/fiber interrupt). *If this proves
+(sequence the abort/deny drain before `query.close()`/fiber interrupt). _If this proves
 intrusive it can drop to a follow-up, since the rung-2 fallback already covers a dangling
-transcript — but it's cheap and removes the most common dangling source.*
+transcript — but it's cheap and removes the most common dangling source._
 
 Each rung is independently valuable and testable. P1+P1b remove the dominant trigger; P2 covers
 the reaper edge; relaxing the precheck (rung 1) closes projection-drift; the continuation
@@ -230,15 +234,15 @@ decline command/contract.
 
 ## Tradeoffs & limitations
 
-- **Restart mid-question can't be *prevented*** — only recovered, best-effort. The recovered turn
-  is a *continuation carrying the answer*, not a byte-perfect resumption of the exact tool call;
+- **Restart mid-question can't be _prevented_** — only recovered, best-effort. The recovered turn
+  is a _continuation carrying the answer_, not a byte-perfect resumption of the exact tool call;
   the model receives the answer as a new user message. Acceptable and honest.
 - **The dangling-`tool_use` outcome is decided by the native binary, not us.** We attempt the
   continuation and fall back to the actionable error on rejection, so we neither depend on nor
   need to pre-verify that behavior. If it turns out the binary heals it (plausible — Claude Code
   continues such sessions in practice), users get seamless continuation for free.
 - **P1 keeps force-stop working** via the double-press hatch (S2); a single press can no longer
-  *accidentally* kill a waiting session, but a determined user still can.
+  _accidentally_ kill a waiting session, but a determined user still can.
 - **Rung 2's continuation** changes conversation shape slightly vs. a native answer — preferable
   to a dead end, and only reached when the in-memory pending request is already gone.
 - **Simplicity note (F5, acknowledged):** rung 2 covers double-press + restart, which were not

@@ -28,7 +28,7 @@ shared execution slot couples repos).
   timeout. Proof (server log + live repo):
   - **98** `git rev-parse --is-inside-work-tree` timeouts at **5000 ms** across **13 unrelated
     repos**, in same-second cross-repo bursts. That command does ~zero work (~50 ms) — 98 of
-    them blowing 5 s across unrelated repos can only be a *host* problem.
+    them blowing 5 s across unrelated repos can only be a _host_ problem.
   - Every relevant op runs **< 1.2 s idle**: `add -A` warm 0.66 s; full cold re-hash of all
     393 MiB tracked 1.16 s; empty-index cold hash 0.76 s; a 200-spawn `rev-parse` storm 0.18 s
     total (0.5 s worst). Hashing was never the bottleneck.
@@ -46,7 +46,7 @@ shared execution slot couples repos).
   bursts** — the observed same-second cross-repo bursts.
 - **All three prior fixes optimized hashing / git-work volume** (stat-cache real-index seed
   `d5e276e34`; untracked ≥10 MiB skip `f8015b6ef`). That is the **wrong axis** — confirmed by
-  zero-work commands timing out identically. They only lower *which* repo tips first. This is why
+  zero-work commands timing out identically. They only lower _which_ repo tips first. This is why
   it recurs.
 
 ## Approach (chosen)
@@ -64,19 +64,19 @@ generic option threaded through the `execute` layer.
   **strictly serial single fiber** (`makeDrainableWorker` = `TxQueue.take → process → forever`,
   `packages/shared/src/DrainableWorker.ts:44-56`; one item at a time). A capture issues ~4-5
   `execute` calls, so per-command retry would cost up to `commands × attempts × timeout ≈
-  4 × 3 × 30 s ≈ 360 s` of one capture holding the queue head and blocking every other thread's
+4 × 3 × 30 s ≈ 360 s` of one capture holding the queue head and blocking every other thread's
   captures/baselines. Whole-op retry bounds it to `attempts × timeout` (~90 s worst) and gives a
   **fresh clean temp-index seed per attempt** (the seed copy happens inside the retried body,
   `GitVcsDriver.ts:755-762`), so no shared partial-index state across attempts.
 - **Transient classification via the existing Vcs error tags (implementation correction).**
   The three design reviewers all assumed `captureCheckpoint` fails with `GitCommandError` and so
   recommended adding a structured `reason` field to it. **That premise is wrong:** capture runs
-  through the `VcsProcess` execution path, whose error channel is already the *distinct tagged
-  types* `VcsProcessTimeoutError` / `VcsProcessSpawnError` / `VcsProcessExitError` /
+  through the `VcsProcess` execution path, whose error channel is already the _distinct tagged
+  types_ `VcsProcessTimeoutError` / `VcsProcessSpawnError` / `VcsProcessExitError` /
   `VcsOutputDecodeError` / … (`packages/contracts/src/vcs.ts:89-145`) — **not** `GitCommandError`.
   So no new field is needed: the transient discriminant already exists as tags. The retry
   predicate is a plain boolean `isTransientVcsError(e) => e._tag === "VcsProcessTimeoutError" ||
-  e._tag === "VcsProcessSpawnError"` (structural `_tag` match — no schema dependency, no
+e._tag === "VcsProcessSpawnError"` (structural `_tag` match — no schema dependency, no
   substring-matching, and `VcsProcessExitError`/decode/detection are correctly excluded). The
   earlier `reason`-on-`GitCommandError` change was reverted.
 - **Policy (Effect v4.0.0-beta.78 verified):**
@@ -90,7 +90,7 @@ generic option threaded through the `execute` layer.
 - **Fresh scope + no leaked children per attempt (verified):** `Effect.scoped` is inside the
   retried unit, so each attempt re-runs it → fresh spawn + fresh 30 s timeout. On timeout,
   `Effect.timeoutOption` → `raceAllFirst` → `fiberInterruptAll` **awaits** the loser's finalizer,
-  which SIGTERMs git as a **process group** (`detached:true`) and awaits child exit *before* the
+  which SIGTERMs git as a **process group** (`detached:true`) and awaits child exit _before_ the
   timeout `GitCommandError` propagates. git's lockfile handler rolls back on SIGTERM, so an
   interrupted `add`/`update-ref` leaves the temp index + ref untouched and **no stale
   `<tempindex>.lock`**. Retry never overlaps the prior git process. **Guardrail:** retry must wrap
@@ -98,7 +98,7 @@ generic option threaded through the `execute` layer.
   worker-drain/shutdown interrupt passes through as an interrupt and `processInputSafely`'s
   `Cause.hasInterruptsOnly` re-fail (`CheckpointReactor.ts:821-824`) still shuts down cleanly.
 - **Give-up path unchanged:** on exhaustion the effect fails exactly as today → the existing
-  "capture failure activity" path runs. Graceful under *sustained* overload.
+  "capture failure activity" path runs. Graceful under _sustained_ overload.
 - **Pre-flight resolve also retried.** `resolveGitCommonDir` (`git rev-parse --git-common-dir`)
   runs before the retried operation body (the temp-index path derives from it). Since a zero-work
   `rev-parse` is the command that most often times out under overload, it gets its own transient
@@ -122,7 +122,7 @@ of the "prevent timeouts where possible" goal.)
    fails anyway under sustained overload; makes true hangs slower to surface.
 3. **Generic `retryTransient` option threaded through the `execute` layer + per-command retry** —
    REJECTED. Over-broad abstraction (one purpose, generic layer); and per-command retry multiplies
-   latency on the serial worker (F3). Whole-`captureCheckpoint` retry is smaller *and* safer.
+   latency on the serial worker (F3). Whole-`captureCheckpoint` retry is smaller _and_ safer.
 4. **Retry `diffCheckpoints` / status / detect in this branch** — DEFERRED to follow-ups. The
    reported pain is exclusively the capture-failure activity; status/detect self-heal via the
    poller's existing exponential failure-backoff (`VcsStatusBroadcaster.ts:56-65,278-289`).
@@ -155,7 +155,7 @@ backoff will, with high probability, land after the burst passes. **VALIDATED.**
 
 ## Tradeoffs & known limitations
 
-- Under *sustained* overload, a retried capture holds the **serial** CheckpointReactor worker
+- Under _sustained_ overload, a retried capture holds the **serial** CheckpointReactor worker
   while it retries. The common case is `attempts × timeout` (~90 s at defaults) since each attempt
   stops at its first timeout; the pathological upper bound is `commands × timeout × attempts` if
   several commands each run just under the timeout per attempt (still ≤ the rejected per-command

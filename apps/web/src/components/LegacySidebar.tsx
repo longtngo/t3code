@@ -2601,7 +2601,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               <WorkspaceMembersControl
                 environmentId={workspaceMembersTarget.environmentId}
                 members={workspaceMembersTarget.members}
-                onMembersChange={(members) => updateWorkspaceMembers(workspaceMembersTarget, members)}
+                onMembersChange={(members) =>
+                  updateWorkspaceMembers(workspaceMembersTarget, members)
+                }
               />
             ) : null}
           </DialogPanel>

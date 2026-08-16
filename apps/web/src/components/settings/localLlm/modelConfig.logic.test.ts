@@ -38,14 +38,28 @@ describe("newModelConfig", () => {
 
   it("avoids colliding with an existing config port", () => {
     const cfg = newModelConfig(
-      settings({ models: [{ id: "a", name: "A", providerId: "mlx-serve", modelId: "x", visible: true, port: 8765 }] as never }),
+      settings({
+        models: [
+          { id: "a", name: "A", providerId: "mlx-serve", modelId: "x", visible: true, port: 8765 },
+        ] as never,
+      }),
     );
     expect(cfg.port).toBe(8766);
   });
 
   it("generates a unique id when the model id is already used", () => {
     const cfg = newModelConfig(
-      settings({ models: [{ id: "qwen3.6-35b-a3b-4bit", name: "A", providerId: "mlx-serve", modelId: "x", visible: true }] as never }),
+      settings({
+        models: [
+          {
+            id: "qwen3.6-35b-a3b-4bit",
+            name: "A",
+            providerId: "mlx-serve",
+            modelId: "x",
+            visible: true,
+          },
+        ] as never,
+      }),
     );
     expect(cfg.id).not.toBe("qwen3.6-35b-a3b-4bit");
   });
@@ -53,7 +67,14 @@ describe("newModelConfig", () => {
 
 describe("onProviderChange / onModelChange", () => {
   it("resets to a compatible model and clamps ctx on provider change", () => {
-    const start = { id: "c1", name: "C", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit", visible: true, contextWindow: 163840 } as never;
+    const start = {
+      id: "c1",
+      name: "C",
+      providerId: "mlx-serve",
+      modelId: "Qwen3.6-35B-A3B-4bit",
+      visible: true,
+      contextWindow: 163840,
+    } as never;
     const next = onProviderChange(start, "ds4");
     expect(next.providerId).toBe("ds4");
     expect(next.modelId).toBe("deepseek-v4-flash");
@@ -61,7 +82,14 @@ describe("onProviderChange / onModelChange", () => {
   });
 
   it("clamps ctx when switching to a smaller model", () => {
-    const start = { id: "c1", name: "C", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit", visible: true, contextWindow: 163840 } as never;
+    const start = {
+      id: "c1",
+      name: "C",
+      providerId: "mlx-serve",
+      modelId: "Qwen3.6-35B-A3B-4bit",
+      visible: true,
+      contextWindow: 163840,
+    } as never;
     const next = onModelChange(start, "gemma-4-12B-it-4bit");
     expect(next.contextWindow).toBe(131072);
   });

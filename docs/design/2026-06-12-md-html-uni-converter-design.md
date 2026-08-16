@@ -26,6 +26,7 @@ path + content hash. The RPC `projects.renderMarkdownHtml` returns that HTML; th
 file viewer displays it in a **sandboxed iframe (`allow-scripts allow-popups`)**.
 
 Two facts make the swap feasible:
+
 - `uni_md2html.converter` exposes `convert_text(text, opts) -> str`, but the installed
   **console script is file-based** (reads file paths, writes `.html`). Per the chosen
   resolution strategy (PATH default `uni-md2html`), we drive the **file-based CLI** via
@@ -37,11 +38,11 @@ Two facts make the swap feasible:
 
 ## Decisions (settled with the user)
 
-| Question | Choice |
-|----------|--------|
-| Tool resolution | **Env var + PATH default** — `T3CODE_MD2HTML_CMD` if set, else `uni-md2html` on `PATH`. |
-| Fallback when tool unavailable/fails | **Fall back to the current `marked` renderer.** Viewer always works. |
-| Theme / offline | **`report` theme, with CDN fonts** (no `--self-contained`). |
+| Question                             | Choice                                                                                  |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| Tool resolution                      | **Env var + PATH default** — `T3CODE_MD2HTML_CMD` if set, else `uni-md2html` on `PATH`. |
+| Fallback when tool unavailable/fails | **Fall back to the current `marked` renderer.** Viewer always works.                    |
+| Theme / offline                      | **`report` theme, with CDN fonts** (no `--self-contained`).                             |
 
 ## Approach
 
@@ -72,14 +73,14 @@ interface MarkdownHtmlRendererShape {
    - write `<tmp>/in.md` ← markdown.
    - `processRunner.run({ command, args: ["<tmp>/in.md", "--theme", "report", "-o", "<tmp>/out.html"], timeout: "30 seconds", outputMode: "truncate" })`.
      `outputMode: "truncate"` because stdout/stderr are irrelevant (we read the output
-     *file*) — a chatty tool must never trip `ProcessOutputLimitError`.
+     _file_) — a chatty tool must never trip `ProcessOutputLimitError`.
    - on exit code `0` **and** a non-empty `<tmp>/out.html`, return the file contents.
 3. **Fallback** to `renderMarkdownDocument(markdown)` via a single blanket
    `Effect.catchAll` over the whole scoped round-trip — the failure channel is the full
    `ProcessRunError` union (`ProcessSpawnError | ProcessStdinError |
-   ProcessOutputLimitError | ProcessReadError | ProcessTimeoutError`) plus
-   `PlatformError` from the temp-file IO, so we catch the *union*, not named tags. We
-   additionally treat these *value*-channel results as fallback triggers: non-zero /
+ProcessOutputLimitError | ProcessReadError | ProcessTimeoutError`) plus
+   `PlatformError` from the temp-file IO, so we catch the _union_, not named tags. We
+   additionally treat these _value_-channel results as fallback triggers: non-zero /
    null `code`, `timedOut`, and a missing or whitespace-only output file. Log at debug
    level so a misconfigured command is diagnosable without spamming. `render` therefore
    has error type `never`.
@@ -114,7 +115,7 @@ coupling to Python internals or to a specific interpreter invocation. Smoke-test
   file-based script, not a Python entrypoint) and couples us to the package's import
   path + a Python interpreter. Rejected.
 - **Add a `--stdin`/`-` mode to uni-md2html, then pipe.** Cleaner runtime, but edits a
-  *separate repo* — cross-repo coupling and scope creep for a t3code feature. Rejected
+  _separate repo_ — cross-repo coupling and scope creep for a t3code feature. Rejected
   (could be a future enhancement that lets us drop the temp files).
 - **Port the tool's theme/CSS/slug/mermaid logic to TypeScript (in-process).** No Python
   dependency, synchronous, fastest. But duplicates a non-trivial, evolving tool and
@@ -148,12 +149,12 @@ coupling to Python internals or to a specific interpreter invocation. Smoke-test
   on-demand, user-initiated nature of the viewer. A 30 s timeout bounds the worst case.
 - **Determinism in tests/CI:** wherever `uni-md2html` isn't installed, output is the
   `marked` fallback. The existing `readFileAsHtml` tests assert the fallback shape, so
-  they stay green; the new renderer test drives the tool path with a *stub*
+  they stay green; the new renderer test drives the tool path with a _stub_
   `ProcessRunner`, so it doesn't depend on a real install.
 - **Branded output differs from the old plain doc** — by design. Intra-report link
   navigation still works (the viewer's link interceptor is renderer-agnostic).
 - **Cached fallback is sticky.** The LRU caches whatever `render` produced. If the tool
-  is *transiently* unavailable, the fallback HTML is cached and pinned until the file's
+  is _transiently_ unavailable, the fallback HTML is cached and pinned until the file's
   content changes or the process restarts — a later install/fix won't retroactively
   re-render it. Caching the fallback is deliberate: for the common "tool not installed"
   case it avoids re-spawning a doomed subprocess on every view. Distinguishing transient

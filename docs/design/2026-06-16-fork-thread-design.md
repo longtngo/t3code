@@ -17,8 +17,8 @@ critically — the underlying agent **conversation context** ("context window").
 
 ## Product decisions (confirmed with user)
 
-1. **Fork boundary = "pre-fill, don't send."** The forked thread contains every message *strictly
-   before* the clicked user message. The clicked message's text + attachments are pre-loaded into
+1. **Fork boundary = "pre-fill, don't send."** The forked thread contains every message _strictly
+   before_ the clicked user message. The clicked message's text + attachments are pre-loaded into
    the forked thread's composer **unsent**, so the user can tweak the prompt and send it themselves.
 2. **Git = share parent's worktree & branch.** The fork copies the parent's `branch` and
    `worktreePath` verbatim. No new worktree/branch is created. (Accepted limitation: if both threads
@@ -33,12 +33,12 @@ critically — the underlying agent **conversation context** ("context window").
 
 - **Threads are an event-sourced aggregate.** `OrchestrationThread`
   (`packages/contracts/src/orchestration.ts:333`) carries `id, projectId, title, modelSelection,
-  runtimeMode, interactionMode, branch, worktreePath, latestTurn, messages[], proposedPlans[],
-  activities[], checkpoints[], session, …`. Commands → `decider` → events → `projector` builds the
+runtimeMode, interactionMode, branch, worktreePath, latestTurn, messages[], proposedPlans[],
+activities[], checkpoints[], session, …`. Commands → `decider` → events → `projector` builds the
   in-memory read model. Creation today: `thread.create` command (`decider.ts:215`) →
   `thread.created` event → projector creates an empty thread (`projector.ts:243`).
 - **Messages** (`OrchestrationMessage`, `orchestration.ts:213`) carry `id, role, text, attachments?,
-  turnId, streaming, createdAt, updatedAt`. They live only in the read model (event-sourced, capped
+turnId, streaming, createdAt, updatedAt`. They live only in the read model (event-sourced, capped
   at 2000). There is **no per-message provider/SDK id** stored today.
 - **Per-turn checkpoints** (`OrchestrationCheckpointSummary`, `orchestration.ts:283`) carry
   `turnId, checkpointTurnCount, checkpointRef (git), assistantMessageId, status, files`. The
@@ -49,7 +49,7 @@ critically — the underlying agent **conversation context** ("context window").
 - **Session context is held by the agent backend, keyed by an opaque `resumeCursor`**
   (`ProviderSession.resumeCursor`, `provider.ts:34`):
   - **Claude** (`ClaudeAdapter.ts`): `resumeCursor = { threadId, resume: <sessionUUID>,
-    resumeSessionAt: <last assistant message uuid>, turnCount }`. The Claude Agent SDK 0.3.159
+resumeSessionAt: <last assistant message uuid>, turnCount }`. The Claude Agent SDK 0.3.159
     `query()` accepts `resume`, `resumeSessionAt`, and **`forkSession: true`** (`sdk.d.ts:1429`),
     which resumes from a session **into a new session id**, leaving the original transcript intact —
     exactly a fork. `resumeSessionAt` truncates the forked context to a specific message uuid. The
@@ -66,7 +66,7 @@ critically — the underlying agent **conversation context** ("context window").
 
 ## Approach
 
-A fork is a **non-destructive branch** of a thread: like a revert that produces a *copy* instead of
+A fork is a **non-destructive branch** of a thread: like a revert that produces a _copy_ instead of
 mutating in place, and defers the provider session fork until the user actually sends the pre-filled
 prompt.
 
@@ -84,14 +84,15 @@ title: TrimmedNonEmptyString  // default `${parent.title} (fork)`
 ```
 
 The **decider** (`decider.ts`):
+
 1. `requireThread(sourceThreadId)`, `requireThreadAbsent(newThreadId)`.
 2. Compute the fork slice: all messages with index `< indexOf(forkBeforeMessageId)`, reusing the
    same retention rule as revert (system messages always kept). Compute the corresponding
-   `forkTurnCount` (the turn count *before* the clicked message's turn — identical to the value
+   `forkTurnCount` (the turn count _before_ the clicked message's turn — identical to the value
    revert would use).
 3. Build a **fork resume directive** from the parent's live session + the fork point (see §3).
 4. Emit one `thread.forked` event carrying: cloned config (`projectId, title, modelSelection,
-   runtimeMode, interactionMode, branch, worktreePath`), the cloned `messages[]` slice, and the
+runtimeMode, interactionMode, branch, worktreePath`), the cloned `messages[]` slice, and the
    `forkResume` directive.
 
 The **projector** handles `thread.forked` by constructing a fully-populated `OrchestrationThread`
@@ -125,11 +126,12 @@ forkResume = {
 ```
 
 Adapter behavior:
+
 - **Claude**: pass `resume: parentSessionId`, `forkSession: true`, and `resumeSessionAt: forkAtAnchor`
   when an anchor is known. `forkSession` guarantees a **new** session id, so the original transcript
   is never appended to (original stays intact, satisfying decision-independence). When the fork point
-  is the *end* of the parent conversation, the anchor is the parent's live `resumeSessionAt` →
-  **precise**. For an *earlier* point, the precise anchor is the SDK uuid of the assistant message
+  is the _end_ of the parent conversation, the anchor is the parent's live `resumeSessionAt` →
+  **precise**. For an _earlier_ point, the precise anchor is the SDK uuid of the assistant message
   just before the clicked message.
 - **Codex**: issue `thread/fork` against the parent `threadId`, adopting the returned new thread id
   as the fork's cursor.
@@ -138,7 +140,7 @@ Adapter behavior:
   little more than the cloned messages show) and set a `forkContextApproximate: true` flag the client
   surfaces as a non-blocking notice. If the parent never ran a turn (no cursor), start fresh.
 
-**Precise mid-conversation anchors (additive, going forward).** To make *every* fork point precise
+**Precise mid-conversation anchors (additive, going forward).** To make _every_ fork point precise
 for threads created after this ships, capture the provider's resume anchor per assistant turn:
 the Claude adapter already sees `message.uuid` (`ClaudeAdapter.ts:2378`); plumb it onto the
 assistant message-complete path and store it as an optional `resumeAnchor` on the per-turn
@@ -163,16 +165,16 @@ same change or be deferred behind the fallback.)
 
 ## Files / modules touched
 
-| Area | File | Change |
-|---|---|---|
-| Contract | `packages/contracts/src/orchestration.ts` | `ThreadForkCommand`, `thread.forked` event, add to `DispatchableClientOrchestrationCommand`; optional `resumeAnchor` on checkpoint summary |
-| Decider | `apps/server/src/orchestration/decider.ts` | handle `thread.fork` → emit `thread.forked` |
-| Projector | `apps/server/src/orchestration/projector.ts` | apply `thread.forked` (populate thread + stash fork resume); reuse retention slice |
-| Session start | `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` / `ProviderService.ts` | feed the stashed fork directive as the first `resumeCursor` |
-| Claude adapter | `apps/server/src/provider/Layers/ClaudeAdapter.ts` | honor `fork`/`resumeSessionAt` → `forkSession: true`; (opt.) capture per-turn `resumeAnchor` |
-| Codex adapter | `apps/server/src/provider/Layers/CodexSessionRuntime.ts` | honor `fork` → `thread/fork` |
-| Client UI | `apps/web/src/components/chat/MessagesTimeline.tsx` | `ForkUserMessageButton` |
-| Client logic | `apps/web/src/components/ChatView.tsx` | `onForkUserMessage` handler, navigate + prefill + warn |
+| Area           | File                                                                                    | Change                                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Contract       | `packages/contracts/src/orchestration.ts`                                               | `ThreadForkCommand`, `thread.forked` event, add to `DispatchableClientOrchestrationCommand`; optional `resumeAnchor` on checkpoint summary |
+| Decider        | `apps/server/src/orchestration/decider.ts`                                              | handle `thread.fork` → emit `thread.forked`                                                                                                |
+| Projector      | `apps/server/src/orchestration/projector.ts`                                            | apply `thread.forked` (populate thread + stash fork resume); reuse retention slice                                                         |
+| Session start  | `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` / `ProviderService.ts` | feed the stashed fork directive as the first `resumeCursor`                                                                                |
+| Claude adapter | `apps/server/src/provider/Layers/ClaudeAdapter.ts`                                      | honor `fork`/`resumeSessionAt` → `forkSession: true`; (opt.) capture per-turn `resumeAnchor`                                               |
+| Codex adapter  | `apps/server/src/provider/Layers/CodexSessionRuntime.ts`                                | honor `fork` → `thread/fork`                                                                                                               |
+| Client UI      | `apps/web/src/components/chat/MessagesTimeline.tsx`                                     | `ForkUserMessageButton`                                                                                                                    |
+| Client logic   | `apps/web/src/components/ChatView.tsx`                                                  | `onForkUserMessage` handler, navigate + prefill + warn                                                                                     |
 
 ## Alternatives considered
 
@@ -184,7 +186,7 @@ same change or be deferred behind the fallback.)
   carry-over. The provider-native fork (Claude `forkSession`, Codex `thread/fork`) is higher fidelity
   and less new plumbing.
 - **Reuse the parent's session id without `forkSession`** (the naive "copy resumeCursor"). **Rejected
-  as unsafe**: Claude would append the fork's turns to the *same* transcript, corrupting the original.
+  as unsafe**: Claude would append the fork's turns to the _same_ transcript, corrupting the original.
   `forkSession: true` is mandatory.
 - **Create a new worktree + branch (true filesystem isolation).** Rejected per decision #2 (user
   chose shared worktree). Noted as the natural future hardening if collisions become a problem.
@@ -207,6 +209,7 @@ same change or be deferred behind the fallback.)
 Two adversarial reviews (correctness + simplicity) against the real code. Converged findings:
 
 **Applied (blockers):**
+
 - **`forkSession: true` must be explicitly set.** `ClaudeAdapter` queryOptions
   (`ClaudeAdapter.ts:3321-3351`) never sets `forkSession` today. When the resume directive carries
   `fork: true`, the adapter MUST add `forkSession: true` — otherwise the SDK appends to the parent
@@ -223,6 +226,7 @@ Two adversarial reviews (correctness + simplicity) against the real code. Conver
   streaming-accumulation path).
 
 **Applied (should-fix):**
+
 - **Streaming / mid-turn guard.** Disable the fork button while the thread is working (reuse the
   revert gate `activity.isRevertingCheckpoint || activity.isWorking`), AND have the decider reject a
   fork whose last in-slice message is still `streaming` (avoids cloning a half-written message).
@@ -235,12 +239,12 @@ Two adversarial reviews (correctness + simplicity) against the real code. Conver
   text (existing drop-file convention).
 
 **Scope decision — precise anchor (divergence from reviewers, with rationale):** Both reviewers urged
-cutting per-turn anchor capture entirely for v1 (they costed the *checkpoint-record* route at ~300
+cutting per-turn anchor capture entirely for v1 (they costed the _checkpoint-record_ route at ~300
 LOC). I keep a **slimmed** version: capture the provider message uuid as an optional
 **`providerMessageId` on the assistant `OrchestrationMessage`** (the adapter already has
 `message.uuid` at `ClaudeAdapter.ts:2378`; it equals the `resumeSessionAt` anchor). This is ~40–80
-additive LOC on the assistant-complete path, not 300, and it is load-bearing for *correctness of the
-primary use case*: forking mid-conversation to explore a **different** direction must NOT carry the
+additive LOC on the assistant-complete path, not 300, and it is load-bearing for _correctness of the
+primary use case_: forking mid-conversation to explore a **different** direction must NOT carry the
 abandoned later turns into the agent's context. Without an anchor every fork over-includes context.
 Old threads (no stored uuid) and Codex still fall back to best-effort + warn, honoring the user's
 choice. The heavier checkpoint-backfill route stays a follow-up.

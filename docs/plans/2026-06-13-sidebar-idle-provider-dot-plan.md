@@ -10,7 +10,7 @@ Branch: `feat/sidebar-idle-provider-dot`
   - Add `"Idle"` label + priority `0`.
   - Return Idle pill at resolver fallback with guards: `providerInstanceId`,
     not `error`/`closed`, settled turn (`latestTurn === null ||
-    isLatestTurnSettled(...)`).
+isLatestTurnSettled(...)`).
   - Skip `Idle` in `resolveProjectStatusIndicator`.
 - Commit: `feat(sidebar): add idle provider dot status pill`
 

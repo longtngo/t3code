@@ -219,10 +219,14 @@ export const make = Effect.gen(function* () {
     // Creating the branch at HEAD and switching to it carries uncommitted work
     // over untouched: both refer to the same commit, so no checkout happens and
     // nothing is stashed.
-    const switched = yield* (existed
-      ? git.switchRef({ cwd: target.cwd, refName: branch }).pipe(Effect.asVoid)
-      : git.createRef({ cwd: target.cwd, refName: branch, switchRef: true }).pipe(Effect.asVoid)
-    ).pipe(Effect.as(true), Effect.orElseSucceed(() => false));
+    const switched = yield* (
+      existed
+        ? git.switchRef({ cwd: target.cwd, refName: branch }).pipe(Effect.asVoid)
+        : git.createRef({ cwd: target.cwd, refName: branch, switchRef: true }).pipe(Effect.asVoid)
+    ).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
     if (!switched) {
       // `createRef` creates the ref and then checks it out, so a refused
       // checkout — an unresolved merge, an index that needs resolving — would
@@ -318,9 +322,10 @@ export const make = Effect.gen(function* () {
     });
 
   const writePrBase: WorkspaceMemberBranches["Service"]["writePrBase"] = (input) =>
-    git
-      .writeConfigValue(input.cwd, memberPrBaseConfigKey(input.branch), input.base)
-      .pipe(Effect.as(true), Effect.orElseSucceed(() => false));
+    git.writeConfigValue(input.cwd, memberPrBaseConfigKey(input.branch), input.base).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
 
   return WorkspaceMemberBranches.of({
     inspect,

@@ -808,14 +808,11 @@ export const WsWorkspaceMemberBranchesRpc = Rpc.make(WS_METHODS.workspaceMemberB
  * Separate from `workspace.memberBranches`, which only reads: this one writes,
  * and it is the git panel's half of the same cut the post-turn sweep performs.
  */
-export const WsWorkspaceMemberActionPrepareRpc = Rpc.make(
-  WS_METHODS.workspaceMemberActionPrepare,
-  {
-    payload: WorkspaceMemberActionPrepareInput,
-    success: WorkspaceMemberActionPrepareResult,
-    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-  },
-);
+export const WsWorkspaceMemberActionPrepareRpc = Rpc.make(WS_METHODS.workspaceMemberActionPrepare, {
+  payload: WorkspaceMemberActionPrepareInput,
+  success: WorkspaceMemberActionPrepareResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
 
 /** Records a pull-request base the user confirmed. */
 export const WsWorkspaceMemberPrBaseWriteRpc = Rpc.make(WS_METHODS.workspaceMemberPrBaseWrite, {

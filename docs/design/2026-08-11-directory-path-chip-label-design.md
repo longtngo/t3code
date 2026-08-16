@@ -11,12 +11,12 @@ it the folder's name, on every surface that turns a path into a label.
 Basename extraction assumed a filename. Four near-copies of the same helper took "the text after
 the last separator" with no trailing-separator handling, so a directory path yielded `""`:
 
-| Site | Consumer |
-| --- | --- |
+| Site                                 | Consumer                                                                                   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
 | `markdown-links.ts` `basenameOfPath` | `MarkdownFileLinkMeta.basename` → the chip label, and the copy-as-markdown text `[](href)` |
-| `pierre-icons.ts` `basenameOfPath` | the composer inline chip label, the `@`-path menu label |
-| `ChatMarkdown.tsx:1319` | the chip menu's `title` / `aria-label` ("View options for ") |
-| `RightPanelTabs.tsx` `surfaceTitle` | the file-viewer tab title |
+| `pierre-icons.ts` `basenameOfPath`   | the composer inline chip label, the `@`-path menu label                                    |
+| `ChatMarkdown.tsx:1319`              | the chip menu's `title` / `aria-label` ("View options for ")                               |
+| `RightPanelTabs.tsx` `surfaceTitle`  | the file-viewer tab title                                                                  |
 
 Probed directly rather than inferred: `basenameOfPath("…/engine-comparison-prototype/")` → `""`,
 which is also why the icon was right. `inferEntryKindFromPath` asks "does the last segment contain
@@ -31,7 +31,7 @@ duplicate helpers are deleted in favour of it; the remaining call sites now impo
 
 `inferEntryKindFromPath` gains an explicit trailing-separator check **before** the dotted-name
 guess. This is required by the fix, not extra scope: once the basename is trimmed, `config.d/`
-would start reading as a *file*, a regression the old accidental `""` never had.
+would start reading as a _file_, a regression the old accidental `""` never had.
 
 ## Alternatives rejected
 

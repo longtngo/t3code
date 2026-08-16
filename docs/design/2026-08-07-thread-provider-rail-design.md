@@ -57,16 +57,16 @@ geometries; each surface passes the inset that matches its row height.
 
 Probed against live code and the running instance before designing:
 
-| Premise | Probe | Result |
-|---|---|---|
-| A thread knows its provider client-side | `OrchestrationThreadShell` schema | `modelSelection` present, resolves to a `ProviderInstanceId` — **no backend work** |
-| Accent is reachable without settings | read `applyProviderInstanceSettings` | it overlays **`enabled` only**; `accentColor` comes from the provider snapshot, so the rail needs `serverConfig.providers` alone |
-| v1 row can host an absolutely-positioned rail | `Sidebar.tsx:678` | row wrapper is `relative isolate`; base class has no `overflow-hidden` |
-| v2 row can | `SidebarV2.tsx:762` | `relative … overflow-hidden rounded-md` — clips to the rounded rect, so the rail must be **vertically inset** to stay clear of the corner radius |
-| Accent hex is trustworthy | `normalizeProviderAccentColor` | strict `/^#[0-9a-fA-F]{6}$/`, returns `undefined` otherwise — malformed values cannot reach the rail |
-| Which sidebar is actually live | `data-sidebar-version` on the running app | **`v1`** — v2 defaults only on `nightly`/`dev`; a v2-only build would be invisible in production |
-| Is the project-default fallback reachable? | `OrchestrationThreadShell` + `ModelSelectionWire` | **No** — `modelSelection` is non-nullable, `instanceId` required. Fallback dropped as dead code |
-| Do any tests assert row DOM structure? | grep for row test-ids in test files | None — the only hits are fixture ids in `CommandPalette.logic.test.ts`. Adding a child is safe |
+| Premise                                       | Probe                                             | Result                                                                                                                                           |
+| --------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A thread knows its provider client-side       | `OrchestrationThreadShell` schema                 | `modelSelection` present, resolves to a `ProviderInstanceId` — **no backend work**                                                               |
+| Accent is reachable without settings          | read `applyProviderInstanceSettings`              | it overlays **`enabled` only**; `accentColor` comes from the provider snapshot, so the rail needs `serverConfig.providers` alone                 |
+| v1 row can host an absolutely-positioned rail | `Sidebar.tsx:678`                                 | row wrapper is `relative isolate`; base class has no `overflow-hidden`                                                                           |
+| v2 row can                                    | `SidebarV2.tsx:762`                               | `relative … overflow-hidden rounded-md` — clips to the rounded rect, so the rail must be **vertically inset** to stay clear of the corner radius |
+| Accent hex is trustworthy                     | `normalizeProviderAccentColor`                    | strict `/^#[0-9a-fA-F]{6}$/`, returns `undefined` otherwise — malformed values cannot reach the rail                                             |
+| Which sidebar is actually live                | `data-sidebar-version` on the running app         | **`v1`** — v2 defaults only on `nightly`/`dev`; a v2-only build would be invisible in production                                                 |
+| Is the project-default fallback reachable?    | `OrchestrationThreadShell` + `ModelSelectionWire` | **No** — `modelSelection` is non-nullable, `instanceId` required. Fallback dropped as dead code                                                  |
+| Do any tests assert row DOM structure?        | grep for row test-ids in test files               | None — the only hits are fixture ids in `CommandPalette.logic.test.ts`. Adding a child is safe                                                   |
 
 ## Design review
 
@@ -114,14 +114,14 @@ colour-collision limitation below.
 
 Full comparison with rendered mockups is in the prototype page. In brief:
 
-- **Provider dot (B)** — recolours the existing status dot, overloading a glyph that means *state*.
-- **Leading glyph (C)** — identifies the *driver*, but 5 of 7 configured instances are
+- **Provider dot (B)** — recolours the existing status dot, overloading a glyph that means _state_.
+- **Leading glyph (C)** — identifies the _driver_, but 5 of 7 configured instances are
   `claudeAgent`, so the same mark repeats on nearly every row.
 - **Trailing chip (D)** / **rail + chip (F)** — disambiguates colours, rejected by the user as
   too busy.
 - **Row wash (E)** — highest visibility, but turns a long list into a patchwork and fights the
   unread/active/selected row backgrounds.
-- **Accent-ringed favicon (G, v2 only)** — zero width cost, but conflates *project* and *provider*
+- **Accent-ringed favicon (G, v2 only)** — zero width cost, but conflates _project_ and _provider_
   in one glyph.
 
 ## Follow-ups deferred

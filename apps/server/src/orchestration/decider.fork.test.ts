@@ -224,7 +224,12 @@ it.layer(NodeServices.layer)("decider thread.fork", (it) => {
         yield* decideOrchestrationCommand({ command: forkCommand(), readModel }),
       );
       // Every message is cloned, first to last.
-      expect(forked.payload.messages.map((message) => message.id)).toEqual(["m1", "m2", "m3", "m4"]);
+      expect(forked.payload.messages.map((message) => message.id)).toEqual([
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+      ]);
       // Whole-session fork carries the full parent context ⇒ not approximate.
       expect(forked.payload.forkContextApproximate).toBe(false);
       expect(forked.payload.forkResume).toMatchObject({ fork: true });

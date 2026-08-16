@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  PlusIcon,
-  SettingsIcon,
-  Trash2Icon,
-} from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import type { ComposerShortcut } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
@@ -69,8 +63,7 @@ function ShortcutManagerDialog({
       next.splice(target, 0, moved as ComposerShortcut);
       return next;
     });
-  const add = () =>
-    setDraft((prev) => [...prev, { id: newShortcutId(), label: "", text: "" }]);
+  const add = () => setDraft((prev) => [...prev, { id: newShortcutId(), label: "", text: "" }]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

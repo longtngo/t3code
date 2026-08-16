@@ -104,17 +104,17 @@ fully user-editable. Multiple files → newline-separated so each is independent
 ## Alternatives considered
 
 1. **Dedicated non-image "file reference" attachment chip** carried through the message
-   payload (new `ChatAttachment` variant). *Rejected:* large blast radius — new contract
+   payload (new `ChatAttachment` variant). _Rejected:_ large blast radius — new contract
    type, draft-store persistence, payload assembly in `buildUserMessageEffect`, and mobile
    parity — for no added capability: the agent ultimately just needs the path as text. The
-   user explicitly wants to *see* the full path and bypass the interpretation layer, which
+   user explicitly wants to _see_ the full path and bypass the interpretation layer, which
    text insertion does directly with ~1/5 the surface area.
-2. **Read the file contents and inline them** (like images → base64). *Rejected:*
+2. **Read the file contents and inline them** (like images → base64). _Rejected:_
    directly contradicts the ask ("read the files directly, bypassing the interpretation
    layer"); also reintroduces size limits and loses the model's native file tooling
    (ranged reads, re-reads, grep).
 3. **Main-process IPC handler that returns the path** instead of a sync preload accessor.
-   *Rejected:* `File` objects can't cross IPC; `webUtils.getPathForFile` is specifically
+   _Rejected:_ `File` objects can't cross IPC; `webUtils.getPathForFile` is specifically
    meant to be called in the preload with the live `File`. A sync accessor is simpler and
    has no round-trip.
 
@@ -138,6 +138,6 @@ fully user-editable. Multiple files → newline-separated so each is independent
 
 ## Follow-ups deferred
 
-- Paste support for files that *do* carry a path.
+- Paste support for files that _do_ carry a path.
 - Optional: auto-add a dropped file's directory to the thread's allowed read dirs.
 - Optional: mobile parity (document picker → path is meaningless on mobile sandbox; likely N/A).

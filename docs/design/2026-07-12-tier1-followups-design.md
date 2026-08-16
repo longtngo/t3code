@@ -8,30 +8,35 @@ the validation results are inlined per item.
 ---
 
 ## Item 1 — CheckpointReactor.test.ts flake hardening
+
 **Branch:** `test/checkpoint-reactor-flake-hardening`
 
 ### Goal
+
 Stop `CheckpointReactor.test.ts` from occasionally reddening the gate (or burning `retry:2`
 attempts) under heavy concurrent CPU load.
 
 ### Premise validation (the catalog premise was PARTIALLY FALSIFIED — refined)
+
 The catalog said "timing/wait hardening." Reading the live config
 (`apps/server/vite.config.ts:54-72`) changed the picture:
+
 - The maintainers **already** diagnosed this exact class ("CheckpointReactor capture/revert …
   load-sensitive async-timing races: green in isolation, occasionally red only under heavy
   concurrent CPU load … environmental contention, not a product bug") and applied the accepted
   mitigation: `fileParallelism: false`, `testTimeout: 120_000`, `retry: 2`. A per-test
   racy-git fix "was tested and falsified on APFS's ns-mtime."
-- So a *new* per-test timing fix is out — it was tried and rejected. **But** there is a
+- So a _new_ per-test timing fix is out — it was tried and rejected. **But** there is a
   concrete, non-contradictory gap: the test's own internal poll helpers
   (`waitForThread`, `waitForEvent`, `waitForGitRefExists`) all default to **`timeoutMs = 15_000`**,
   while the sibling load-sensitive test `OrchestrationEngineHarness.integration.ts:143` already
   raised its internal deadline to **`40_000`** for exactly this reason. The 15 s internal
-  deadline trips *before* the 120 s framework budget the maintainers deliberately set, so under
+  deadline trips _before_ the 120 s framework budget the maintainers deliberately set, so under
   contention the helper throws its own "Timed out waiting for git ref" and forces a `retry`
   (or, if load persists across all 3 attempts, a red gate) — defeating the generous budget.
 
 ### Approach
+
 Align the three internal helper deadlines in `CheckpointReactor.test.ts` from `15_000` to
 `40_000`, matching the precedent already set by `OrchestrationEngineHarness.integration.ts`.
 Nothing else changes — `retry:2` stays as the backstop; a genuine hang still fails
@@ -39,29 +44,35 @@ deterministically at the 120 s framework timeout across all attempts (no regress
 because a real product break fails every attempt regardless of the poll deadline).
 
 ### Alternatives rejected
+
 - **New racy-git / mtime fix** — already tried and falsified per the config comment. Rejected.
 - **Bump `retry` to 3** — masks more, discriminates less; the maintainers chose 2 deliberately.
 - **Replace polling with event subscription** — larger rewrite of a working harness; the
   deadline mismatch is the actual defect, not the polling strategy.
 
 ### Files
+
 `apps/server/src/orchestration/Layers/CheckpointReactor.test.ts` (three default-arg constants).
 
 ### Limitations
-Does not *eliminate* contention flakes (that's environmental, per the maintainers) — it stops
+
+Does not _eliminate_ contention flakes (that's environmental, per the maintainers) — it stops
 the test's own tight deadline from pre-empting the framework's generous one, which is the part
 under our control. Ships alongside, not instead of, `retry:2`.
 
 ---
 
 ## Item 2 — Cursor + Grok `listSessions` consistency
+
 **Branch:** `fix/peer-adapter-listsessions-consistency`
 
 ### Goal
+
 Close the latent `listSessions`/`hasSession` inconsistency in the Cursor and Grok adapters —
 the exact shape that already shipped as a real defect in `ClaudeAdapter` (`633fd5775`).
 
 ### Premise validation (confirmed against live source)
+
 - Cursor `listSessions` (`CursorAdapter.ts:1166-1167`): `Array.from(sessions.values(), (c) => ({ ...c.session }))`
   — **no `!stopped` filter**, while `hasSession` (1169-1173) returns `!c.stopped`. Mismatch confirmed.
 - Cursor `stopSessionInternal` (528-546): sets `ctx.stopped = true` (531), yields through
@@ -74,14 +85,16 @@ the exact shape that already shipped as a real defect in `ClaudeAdapter` (`633fd
   finding. No live defect; this is consistency + defense-in-depth.
 
 ### Approach (per audit recommendations B1 + B4, identical edit in both files)
+
 1. **`listSessions` filters `!stopped`** — mirror the ClaudeAdapter contract:
    `Array.from(sessions.values()).filter((c) => !c.stopped).map((c) => ({ ...c.session }))`.
 2. **Identity-guard the key delete** (defense-in-depth): replace
    `sessions.delete(ctx.threadId)` with `if (sessions.get(ctx.threadId) === ctx) sessions.delete(ctx.threadId)`.
    Currently unreachable behind the `Semaphore`, but makes the delete correct independent of
-   the lock, so a future *unlocked* teardown path can't silently reintroduce the ClaudeAdapter race.
+   the lock, so a future _unlocked_ teardown path can't silently reintroduce the ClaudeAdapter race.
 
 ### Alternatives rejected
+
 - **Filter only, skip the identity guard** — leaves the delete lock-dependent; the guard is
   ~1 line and future-proofs it. The audit explicitly paired them (B1+B4).
 - **Refactor Cursor+Grok+OpenCode to a shared session-map helper** — larger; OpenCode has a
@@ -89,26 +102,32 @@ the exact shape that already shipped as a real defect in `ClaudeAdapter` (`633fd
   (B2/B3, deliberately out of this batch).
 
 ### Files
+
 `apps/server/src/provider/Layers/CursorAdapter.ts`, `apps/server/src/provider/Layers/GrokAdapter.ts`.
 Tests: extend each adapter's existing test to assert `listSessions` excludes a stopped session.
 
 ### Limitations
+
 OpenCode (the one genuinely-exposed peer) is intentionally excluded — its fix (B2/B3) is a
 distinct liveness-contract decision, tracked separately.
 
 ---
 
 ## Item 3 — `pushsubscriptionchange` SW handler (auto re-subscribe + background re-register)
+
 **Branch:** `feat/web-push-subscriptionchange`
 
 ### Goal
+
 When the browser/push-service rotates or invalidates the device's push subscription in the
 background, automatically re-subscribe and re-register with the server — instead of silently
 losing delivery until the user next opens the app and the page re-registers.
 
 ### Premise validation (the load-bearing auth premise, validated against live code)
-The valuable version re-registers with the server *in the background* (no tab). That requires
+
+The valuable version re-registers with the server _in the background_ (no tab). That requires
 the service-worker `fetch` to authenticate. Findings:
+
 - The web app's primary transport is bearer/DPoP tokens in storage — but the **primary
   (same-origin) environment**, which is what the Tailscale-served phone PWA is, bootstraps via
   `client.auth.browserSession` (`apps/web/src/environments/primary/auth.ts:182`).
@@ -120,13 +139,15 @@ the service-worker `fetch` to authenticate. Findings:
   `lax` allows it).
 - **Conclusion:** background re-register is viable and **degrades gracefully** — if the cookie
   has lapsed, the POST 401s and we fall back to the existing next-visit page re-registration
-  (i.e. no worse than today). The token/DPoP (`/oauth/token`) path is for *remote* cross-origin
+  (i.e. no worse than today). The token/DPoP (`/oauth/token`) path is for _remote_ cross-origin
   environments only and is not the phone-PWA path.
 
 ### Approach
+
 Two pieces:
 
 1. **SW handler** in `apps/web/public/push-sw.js`:
+
    ```
    self.addEventListener("pushsubscriptionchange", (event) => {
      event.waitUntil((async () => {
@@ -148,8 +169,9 @@ Two pieces:
      })());
    });
    ```
+
    Notes: `applicationServerKey` from `event.oldSubscription` avoids the SW needing to know the
-   VAPID key. If the *VAPID key itself* rotated (not just the endpoint), the old key is stale
+   VAPID key. If the _VAPID key itself_ rotated (not just the endpoint), the old key is stale
    and the re-subscribe rebinds to it — but VAPID keys are generated once (`getOrCreateVapidKeys`)
    and effectively never rotate in this app, so this is the correct trade for the real case. A
    VAPID-key-rotation recovery is the separate client key-aware path already shipped (`d833afe6b`).
@@ -169,6 +191,7 @@ Two pieces:
      handler ships on next load without a stale-SW lag.
 
 ### Alternatives rejected
+
 - **SW re-subscribes locally only, page re-registers on next visit (no HTTP route)** — adds
   ~nothing over the status quo: the server keeps the dead endpoint until a tab opens, which the
   existing key-aware on-load path already handles. The background server-update is the whole value.
@@ -179,6 +202,7 @@ Two pieces:
   background purpose.
 
 ### Files
+
 - `apps/web/public/push-sw.js` — new `pushsubscriptionchange` handler.
 - `apps/server/src/http.ts` — new `POST /push/subscriptions` route + router wiring.
 - `apps/server/src/push/register.ts` (or extend `persistence/Services/PushSubscription.ts`) —
@@ -189,6 +213,7 @@ Two pieces:
   covered by manual phone test.
 
 ### Limitations / follow-ups
+
 - Pure-background re-register depends on the session cookie being unexpired when
   `pushsubscriptionchange` fires; on lapse it degrades to next-visit re-registration (documented,
   no regression).
@@ -207,7 +232,7 @@ no caller breaks — `ProviderService.listSessions` is the only consumer and wan
 Item 3 viable but its **snippet had real bugs**; applied fixes:
 
 - **[HIGH wiring]** Raw route layers are aggregated in **`server.ts`** (`makeRoutesLayer =
-  Layer.mergeAll(...)`, ~line 349-363), not `http.ts`. Editing only `http.ts` ships an
+Layer.mergeAll(...)`, ~line 349-363), not `http.ts`. Editing only `http.ts` ships an
   exported-but-never-merged layer → 404. → Add the new route layer(s) to both the `server.ts`
   import block and the `Layer.mergeAll`. Requirements (`PushSubscriptionRepository`,
   `WebPushRelay`) are already in that runtime, so no new service layer.
@@ -226,7 +251,7 @@ Item 3 viable but its **snippet had real bugs**; applied fixes:
 - **[MED-3 shared contract]** The WS handler deliberately collapses SSRF-reject + persist-fail to
   `{ok:false}` to avoid widening its RPC error channel. → The shared helper returns a
   **discriminated** `"registered" | "rejected"` (SSRF branch → `"rejected"`; persistence failure
-  caught *inside* so it never escapes as an Effect error). WS maps `registered→{ok:true}` else
+  caught _inside_ so it never escapes as an Effect error). WS maps `registered→{ok:true}` else
   `{ok:false}`; the route maps `registered→204`, `rejected→403`, and wraps its own
   `catchCause→500`.
 - **[LOW CSRF defense-in-depth]** `sameSite:lax` + CORS (`devOrigin` only) + the opaque-origin
@@ -235,8 +260,8 @@ Item 3 viable but its **snippet had real bugs**; applied fixes:
   CORS preflight for any cross-origin caller, which the CORS layer denies) as cheap insurance.
 - **[INFO SSRF]** `isAllowedPushEndpoint` is hostname-string-based (no DNS resolution) — a
   pre-existing blind-SSRF limitation shared identically with the existing WS RPC, same required
-  scope. Applying the same guard in the route is necessary and sufficient *relative to the
-  existing bar*; DNS-resolving hardening is a separate improvement to both paths, not a blocker.
+  scope. Applying the same guard in the route is necessary and sufficient _relative to the
+  existing bar_; DNS-resolving hardening is a separate improvement to both paths, not a blocker.
 
 **Code review (Stage 9, 1 opus reviewer on the Item 3 diff): no HIGH/MED defects.** Verified
 auth-before-content-type, outcome→status mapping, persistence-failure-never-escapes (WS channel
@@ -254,6 +279,7 @@ the route; `apps/server/src/ws.ts` (call the helper). Tests: route auth + SSRF-r
 upsert; VAPID-key GET returns the key.
 
 ## Cross-cutting
+
 - Each item is independent → three branches, three squash-merges to `personal`, one verify gate
   per merge (Hard Rule 7). Fork practice: merge to `personal` unreleased; deploy (`t3-rebuild`)
   is a separate step offered to the user, not auto-run.

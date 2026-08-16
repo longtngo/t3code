@@ -20,7 +20,7 @@ Each ships as its own commit. Their diffs do not overlap.
 > - **Round 1** killed the largest piece of item 2 — a forced session replacement after a long
 >   background — on measured cost, and turned item 1 from an automatic rule into an opt-in one
 >   after two reviewers independently found it regressed `ThreadErrorBanner`.
-> - **Round 2** found that a probe *timeout* reaches the same replacement path, so the cost
+> - **Round 2** found that a probe _timeout_ reaches the same replacement path, so the cost
 >   argument that killed the forced reconnect applies to the 3s deadline too, and measured the
 >   real cellular path to size the risk.
 > - **Round 3** rejected the retry that would have removed that risk, on where it would have to
@@ -52,11 +52,11 @@ message column gets whatever is left. On a phone there is almost nothing left.
 Reproduced in a static harness built from the component's own emitted classes against the
 app's built stylesheet, at a 390px viewport:
 
-| | content column | banner height |
-|---|---|---|
-| today | **63px** | **308px** |
-| with the fix | **294px** | **144px** |
-| dismiss-only control in the same container | 258px, control stays inline | 54px |
+|                                            | content column              | banner height |
+| ------------------------------------------ | --------------------------- | ------------- |
+| today                                      | **63px**                    | **308px**     |
+| with the fix                               | **294px**                   | **144px**     |
+| dismiss-only control in the same container | 258px, control stays inline | 54px          |
 
 The harness is required because Tailwind's `max-sm:` keys off the **viewport**, not the
 container — an earlier attempt that put a 390px-wide `div` in a desktop-width window measured
@@ -81,7 +81,7 @@ control that still fits beside 12rem of text — a lone dismiss `×` — stays i
 do not, and drop below. `flex-1` still grows the content to the full line once the control has
 moved down.
 
-"Self-selecting" is a property of *this container's width*, not of the control, and the margin
+"Self-selecting" is a property of _this container's width_, not of the control, and the margin
 should be recorded at the edit site rather than trusted. At 390px the composer's inline padding
 (`index.css:419-422`) gives a 338px row, where the wrap threshold is a control wider than
 **112px**. Measured across all eleven banner shapes the stack can render, exactly one crosses
@@ -108,9 +108,9 @@ resolves to the text's fit-content width and does not grow to accommodate a 12re
 the row ends up narrower than `192 + icon + gaps + control` and the lone `×` wraps to its own
 line. Measured in Chromium at 390px:
 
-| error text | today | automatic rule |
-|---|---|---|
-| `"Cancelled."` | 154×**54**px, `×` inline | 154×**106**px, `×` wrapped below |
+| error text                     | today                    | automatic rule                   |
+| ------------------------------ | ------------------------ | -------------------------------- |
+| `"Cancelled."`                 | 154×**54**px, `×` inline | 154×**106**px, `×` wrapped below |
 | `"Turn failed: rate limited."` | 238×**54**px, `×` inline | 238×**106**px, `×` wrapped below |
 
 Every short thread error on a phone — the common shape — would have doubled in height with a
@@ -163,11 +163,11 @@ The supervisor understands three application-active wake reasons
 (`packages/client-runtime/src/connection/wakeups.ts:5-9`) and treats them very differently
 (`supervisor.ts:421-435`):
 
-| reason | behavior on wake |
-|---|---|
-| `application-active` | probe the live session, **15s** timeout (`CONNECTION_PROBE_TIMEOUT`) |
-| `application-active-probe` | probe the live session, **3s** timeout (`MOBILE_CONNECTION_PROBE_TIMEOUT`) |
-| `application-active-reconnect` | skip the probe, replace the session immediately |
+| reason                         | behavior on wake                                                           |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `application-active`           | probe the live session, **15s** timeout (`CONNECTION_PROBE_TIMEOUT`)       |
+| `application-active-probe`     | probe the live session, **3s** timeout (`MOBILE_CONNECTION_PROBE_TIMEOUT`) |
+| `application-active-reconnect` | skip the probe, replace the session immediately                            |
 
 **The web client emits only `application-active`** (`apps/web/src/connection/platform.ts:93-99`)
 — the slowest of the three, and the only one no other client uses. The fast path was built for,
@@ -176,11 +176,11 @@ and only wired into, the native app.
 Measured against the real supervisor on a virtual clock, with a transport that is dead but has
 not closed (every probe hangs) — seconds until a replacement session opens:
 
-| wake reason | measured |
-|---|---|
-| `application-active` (web today) | **15s** |
-| `application-active-probe` | **3s** |
-| `application-active-reconnect` | **~0s** |
+| wake reason                      | measured |
+| -------------------------------- | -------- |
+| `application-active` (web today) | **15s**  |
+| `application-active-probe`       | **3s**   |
+| `application-active-reconnect`   | **~0s**  |
 
 **Bound on the real-world saving.** That measurement isolates the probe path. In the real
 client, effect's RPC pinger runs concurrently — a 5s ping period with a one-cycle pong check
@@ -189,7 +189,7 @@ resume, and the close path then sleeps the first backoff rung (3s, `supervisor.t
 Whichever fires first wins. The honest claim is **8–13s today → 3s**.
 
 That covers the dead-socket case only. On a socket that is alive, today's outcome and the new
-one are identical — the probe returns and the session is kept — *unless* the probe exceeds 3s,
+one are identical — the probe returns and the session is kept — _unless_ the probe exceeds 3s,
 in which case the change is a loss, not a win. That branch is the risk section below.
 
 ### Approach
@@ -213,7 +213,7 @@ killed.** `supervisor.ts:449` sets `wakeProbeFailed`, read at `:685`, and `:722-
 the backoff and immediately builds a new session — a new object, so `subscribeDynamic`'s
 `switchMap` (`rpc/client.ts:208-218`) fires and **every cost listed below applies verbatim**.
 The earlier draft claimed that list "does not happen on the probe path at all" and that this
-change had "no new failure modes". Both were wrong: they hold for a *successful* probe. On a
+change had "no new failure modes". Both were wrong: they hold for a _successful_ probe. On a
 timed-out probe the full bill lands, on a link that was alive.
 
 **Today the fork's probe never fires first, and at 3s it would.** effect's pinger writes a ping
@@ -231,7 +231,7 @@ path, radio held warm by the pings themselves):
 ```
 
 Warm median ~230ms, warm max **518ms**, a tenfold spread across eight consecutive samples —
-and that is the *best* case. A real wake adds RRC idle→connected promotion, a CGNAT mapping
+and that is the _best_ case. A real wake adds RRC idle→connected promotion, a CGNAT mapping
 that cellular rebinds while the radio idles (so the first packet needs path re-discovery, with
 DERP fallback), and a possible TCP retransmit whose RTO floor is 1s and doubles. Exceeding 3s
 on a healthy link is plausible; exceeding 6s twice in a row is not.
@@ -245,7 +245,7 @@ survive.
 
 **A second, self-inflicted path to a false timeout.** `-probe` is in
 `shouldResubscribeAfterWakeup`, so the same `visibilitychange` that starts the probe also fires
-the shell and thread resubscriptions on the *same socket*. If the thread cursor is more than
+the shell and thread resubscriptions on the _same socket_. If the thread cursor is more than
 `THREAD_RESUME_MAX_GAP = 1_000` events behind head (`apps/server/src/ws.ts:359`) the server
 sends a full window rather than deltas, and the probe's reply queues behind it. "Returned to a
 phone after agents ran for a while" is simultaneously the biggest resume payload and the exact
@@ -253,15 +253,15 @@ case this design exists for.
 
 ### Why the risk is bounded enough to ship anyway
 
-The two conditions have to hold **together**: the socket is genuinely alive *and* the probe
+The two conditions have to hold **together**: the socket is genuinely alive _and_ the probe
 round trip exceeds 3s. Much of the scary tail fails that conjunction.
 
 - A phone asleep on cellular for minutes has almost certainly had its NAT mapping rebound, so
-  the socket is dead and the timeout is *correct* — that is the case this change is for.
+  the socket is dead and the timeout is _correct_ — that is the case this change is for.
 - A short background leaves the radio warm, where the measured distribution (median ~230ms,
   max 518ms) sits an order of magnitude inside the deadline.
 - The head-of-line case needs a cursor more than 1,000 events behind, which needs the client to
-  have *missed* events. A socket that stayed alive and delivering keeps the cursor current and
+  have _missed_ events. A socket that stayed alive and delivering keeps the cursor current and
   resumes with deltas. The overlap is real only where a mobile browser froze the page while the
   socket stayed up — narrow, and unmeasured in either direction.
 
@@ -288,19 +288,19 @@ rejected, on cost:
 - **`supervisor.ts` is the worst place this fork can diverge.** It is byte-identical to
   `origin/main` today, and upstream is actively iterating on this exact control flow — its last
   commits there include a from-scratch connection rewrite (which this fork already paid a
-  579-commit reconcile for), the commit that *created* the `-probe`/`-reconnect` split this
+  579-commit reconcile for), the commit that _created_ the `-probe`/`-reconnect` split this
   design consumes, and, most recently, `ae7b27de8 fix: prevent reconnect loops during server
-  stalls (#5561)` — a fix in the same neighbourhood as the stall the retry addresses. A
+stalls (#5561)` — a fix in the same neighbourhood as the stall the retry addresses. A
   divergence inside `monitorConnectedLease` maximises reconcile cost and stands a real chance of
   being superseded.
 - **Native pays for a web problem.** Native reaches `-probe` only after backgrounds under 10
   seconds, where the socket is least likely to be dead — so it gains little from the retry and
   pays doubled detection when the socket genuinely is dead.
-- **It forces edits to two upstream tests.** `supervisor.test.ts:1019` would *hang* rather than
+- **It forces edits to two upstream tests.** `supervisor.test.ts:1019` would _hang_ rather than
   fail (its `TestClock.adjust("3 seconds")` never reaches the second attempt), and `:996` too if
   the retry were unconditional. The design had already declined to rename those two
   misleadingly-named tests to avoid churn; the retry forces edits to them anyway.
-- **Two plausible spellings are silently inert.** Attaching the retry *after* `forkChild` type-
+- **Two plausible spellings are silently inert.** Attaching the retry _after_ `forkChild` type-
   checks clean under `--strict` and passes every existing test while doing nothing, because
   `forkChild`'s error channel is `never`. So does putting the timeout outside the retry. A
   change whose failure mode is "green on arrival, feature absent" is a poor thing to carry as a
@@ -334,7 +334,7 @@ become misleading; noted rather than renamed, for the same reason.
 
 The original design also emitted `application-active-reconnect` after ≥10s hidden, skipping the
 probe entirely for a further ~3s. All three reviewers rejected it, and the cost accounting is
-decisive. A session *replacement* is categorically more expensive than a *resubscribe*, because
+decisive. A session _replacement_ is categorically more expensive than a _resubscribe_, because
 `subscribeDynamic` switches on session object identity
 (`packages/client-runtime/src/rpc/client.ts:208-218`). Per wake, per connected environment:
 
@@ -342,7 +342,7 @@ decisive. A session *replacement* is categorically more expensive than a *resubs
   `lastAuthoritativeSession === session`, which a new session always fails, so it runs
   `GET /api/orchestration/shell` — five unbounded table scans, no limit parameter
   (`apps/server/src/orchestration/http.ts:49-61`,
-  `Layers/ProjectionSnapshotQuery.ts:1854-1899`). This does not happen on a *successful* probe —
+  `Layers/ProjectionSnapshotQuery.ts:1854-1899`). This does not happen on a _successful_ probe —
   but it does happen on a timed-out one, which is why (b) exists.
 - **Every mounted query atom re-executes**, because query atoms depend on `rpcGenerationAtom`
   and `generation` increments only on a successful establishment (`state/runtime.ts:487-521`,
@@ -360,7 +360,7 @@ decisive. A session *replacement* is categorically more expensive than a *resubs
   `phase !== "connected"`, and `ChatView.tsx:5141` routes sends into the offline outbox, which
   refuses attachments, context chips, first messages and second queued turns
   (`ChatView.logic.ts:620-706`). A user unlocking their phone after 15s onto a **healthy**
-  socket would be told *"Attachments and context can't be queued while disconnected."*
+  socket would be told _"Attachments and context can't be queued while disconnected."_
 - **It can be strictly slower.** On a slow-but-live link, discarding a healthy lease costs up to
   `CONNECTION_ESTABLISHMENT_TIMEOUT` (15s, `supervisor.ts:33`) where a probe would have
   succeeded in under a second.
@@ -407,11 +407,11 @@ Recorded as a follow-up requiring instrumentation, not folded into this design.
 
 ## Files touched
 
-| File | Item | Change |
-|---|---|---|
-| `apps/web/src/components/ui/alert.tsx` | 1 | opt-in prop (destructured, see below) + two conditional classes + the source-order and threshold comments |
-| `apps/web/src/components/chat/ComposerBannerStack.tsx` | 1 | pass the prop |
-| `apps/web/src/connection/platform.ts` | 2 | emit `application-active-probe` |
+| File                                                   | Item | Change                                                                                                    |
+| ------------------------------------------------------ | ---- | --------------------------------------------------------------------------------------------------------- |
+| `apps/web/src/components/ui/alert.tsx`                 | 1    | opt-in prop (destructured, see below) + two conditional classes + the source-order and threshold comments |
+| `apps/web/src/components/chat/ComposerBannerStack.tsx` | 1    | pass the prop                                                                                             |
+| `apps/web/src/connection/platform.ts`                  | 2    | emit `application-active-probe`                                                                           |
 
 All three are currently identical to `origin/main` — the fork's first divergence in each — and
 `alert.tsx`'s exact `cn()` block was last touched upstream by `cec1bb9de`. Accepted: the
@@ -432,7 +432,7 @@ this failure mode for the sibling `controlAlignment` prop.
   `w-fit` shape: exactly one changes (the reported banner, 188px → 124px tall, content column
   114px → 312px) and every other shape is byte-identical. Re-run against the deployed build.
   Existing `ComposerBannerStack` and `ThreadErrorBanner` tests must stay green; note
-  `ThreadErrorBanner.test.tsx:18` asserts the row's class string as a *substring*
+  `ThreadErrorBanner.test.tsx:18` asserts the row's class string as a _substring_
   (`"flex gap-2 items-start"`), so it is order-sensitive — opt-in means that banner's string is
   untouched, but any future automatic variant would have to respect it. Add the mirror
   DOM-leak assertion for the new prop in `ComposerBannerStack.test.tsx`.
@@ -443,10 +443,10 @@ this failure mode for the sibling `controlAlignment` prop.
   whole item rests on and would catch a silent revert to the slow reason.
 - **Item 2, the deadline** — deliberately left uncovered, and worth stating so the gap is not
   mistaken for coverage. Both existing probe tests (`supervisor.test.ts:996,1019`) drive the
-  probe with `Effect.never`, i.e. a transport that is *hung*, so they cover the mechanism and
+  probe with `Effect.never`, i.e. a transport that is _hung_, so they cover the mechanism and
   not the risk: nothing exercises a probe that would have succeeded just past the deadline.
   Adding that test would assert a behavior this change does not alter (the supervisor's handling
-  of a timeout is unchanged); the open question is the deadline's *value*, which only real-world
+  of a timeout is unchanged); the open question is the deadline's _value_, which only real-world
   measurement answers — follow-up 1.
 - Full `pnpm run verify` before merge (Hard Rule 7).
 

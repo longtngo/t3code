@@ -7,7 +7,7 @@ Three items requested together. Items 1 and 2 touch the same two files; item 3 i
 
 Review round 1 (simplicity) and round 2 (correctness) each falsified a load-bearing premise of
 the original design. Both corrections are kept in place below rather than quietly edited out,
-because the *reason* the first version was wrong is the useful part.
+because the _reason_ the first version was wrong is the useful part.
 
 ## Item 1 — Send stays mounted; Stop appears beside it while running
 
@@ -55,13 +55,13 @@ nothing. It was a tautological measurement, and I built the whole provider gate 
 
 What the adapters actually do with a concurrent send (verified):
 
-| adapter | behaviour |
-|---|---|
-| `ClaudeAdapter.ts:4637` | queues FIFO, drains on completion |
-| `CursorAdapter.ts:1004-1008` | **steers** — folds the prompt into the running turn, reuses the turn id (tested: `CursorAdapter.test.ts:253`) |
-| `GrokAdapter.ts:925-939` | **steers**, under `withThreadLock` |
-| `OpenCodeAdapter.ts:1425-1429` | **steers** — OpenCode queues into the busy session |
-| `CodexAdapter.ts` | no `activeTurnId` at all (0 hits); forwards to the session runtime |
+| adapter                        | behaviour                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `ClaudeAdapter.ts:4637`        | queues FIFO, drains on completion                                                                             |
+| `CursorAdapter.ts:1004-1008`   | **steers** — folds the prompt into the running turn, reuses the turn id (tested: `CursorAdapter.test.ts:253`) |
+| `GrokAdapter.ts:925-939`       | **steers**, under `withThreadLock`                                                                            |
+| `OpenCodeAdapter.ts:1425-1429` | **steers** — OpenCode queues into the busy session                                                            |
+| `CodexAdapter.ts`              | no `activeTurnId` at all (0 hits); forwards to the session runtime                                            |
 
 Every provider has a defined concurrent-send path. There is nothing to protect against.
 
@@ -166,7 +166,7 @@ verification.
   input (`:2851`), and the desktop approval footer (`:3201`). Those rows are dense and are
   answering a question rather than composing. Deliberate.
 - **Continuous host-metrics sampling on phones.** `useHostMetrics` subscribes while visible and
-  its family uses `idleTtlMs: 0`, which also drives *server-side* sampling. Today that stops when
+  its family uses `idleTtlMs: 0`, which also drives _server-side_ sampling. Today that stops when
   a phone's composer collapses; after this it does not. Opt-in behind `useHostMetricsEnabled`,
   but a real battery/bandwidth change on the targeted device class.
 - `:2889` and `:3180` hardcode `isRunning={false}`, so those two pending-answer rows never show
@@ -210,11 +210,11 @@ the server write the session row directly, bypassing the guard. Review disproved
 it is skipped precisely in the latched state. The other direct write (`bindSessionToThread`,
 `:724`) only runs when a session is actually (re)started, and this session was alive.
 
-The only mechanism consistent with the evidence is *inside* the guard:
+The only mechanism consistent with the evidence is _inside_ the guard:
 `ProviderRuntimeIngestion.ts:1927-1931` accepts a conflicting `turn.started` when a pending
 turn-start row exists **and** the adapter's live `activeTurnId` equals the event's turn id. That
 branch is **racy** — `getExpectedProviderTurnIdForThread` (`:1693-1698`) reads the adapter's
-*current* session at ingest time, so a short turn or a lagging ingestion worker fails `sameId`
+_current_ session at ingest time, so a short turn or a lagging ingestion worker fails `sameId`
 and no heal occurs. That is the only explanation I have for "60 turns did not heal, the 61st
 did", and it points at a cheaper, deterministic fix considered below.
 
@@ -252,7 +252,7 @@ Corrections forced by review:
   permission-mode change fires. "Make `startTurnNow` claim first" cannot work.
 - **A claim without a release is worse than the bug.** `startTurnNow` can fail at `setModel`,
   `setPermissionMode`, `buildUserMessageEffect` (file IO) or `Queue.offer`, and the fiber is
-  `forkScoped` so it can also be *interrupted*. An unreleased claim makes `sendTurn` queue every
+  `forkScoped` so it can also be _interrupted_. An unreleased claim makes `sendTurn` queue every
   later message forever while `drainNextPendingTurn`'s `if (context.turnState) return` never
   fires: thread permanently unsendable, nothing running, nothing to interrupt.
 - The release must be `Effect.ensuring` (runs on interruption); `Effect.tapError` is insufficient.
@@ -272,7 +272,7 @@ interrupt.**
 
 Corrections forced by review:
 
-- **Do both.** As originally specified ("settle *instead of* interrupting"), Fix B would skip
+- **Do both.** As originally specified ("settle _instead of_ interrupting"), Fix B would skip
   `handleResultMessage`'s non-completed branch, so `pendingTurns` is never cleared (`:3068`) and
   **queued follow-ups would fire after a Stop** — directly breaking
   `ClaudeAdapter.test.ts:4409`. It would also skip `interruptTurn`'s stop-everything sweep
@@ -288,7 +288,7 @@ Corrections forced by review:
   one-predicate change that works uniformly.
 - Fix A's claim **must be visible to Fix B's probe**, or Fix A converts a rare race into a
   reproducible false negative during exactly the window it creates.
-- `activeTurnId` alone is a false positive for stale *synthetic* turns (`:2941-2946`), the case
+- `activeTurnId` alone is a false positive for stale _synthetic_ turns (`:2941-2946`), the case
   `sendTurn:4642-4646` treats as garbage. The stall watchdog excludes them
   (`ProviderTurnStallWatchdog.ts:232`) but the snapshot carries no synthetic flag. This sub-case
   is the only part that genuinely needs more than the existing snapshot.
@@ -318,7 +318,7 @@ committing to A+B.
   discipline; Codex and OpenCode are unexamined.
 - **Test strategy.** The existing queue tests (`ClaudeAdapter.test.ts:4409`, `:4472`) are strictly
   sequential and cannot observe the race. Fix A needs a genuinely concurrent test (two forked
-  `sendTurn`s) plus a claim-release test where `startTurnNow` fails *and* is interrupted.
+  `sendTurn`s) plus a claim-release test where `startTurnNow` fails _and_ is interrupted.
 
 ### Status: item 3 is NOT ready to implement
 
@@ -371,7 +371,7 @@ None of these may be reported as confirmed until the package is built and exerci
 4. **Interrupt is unobservable** — a no-op and a success are indistinguishable. Emitting a
    failure activity would have turned a 27-hour investigation into a log line.
 5. Last-resort Stop escalation to `thread.session.stop`.
-6. `BackgroundTaskRecoveryWatchdog` dispatches concurrent resumes for the *same thread*;
+6. `BackgroundTaskRecoveryWatchdog` dispatches concurrent resumes for the _same thread_;
    serialising per-thread would remove item 3's trigger even without Fix A.
 7. **Queued messages are dropped silently on Stop**, leaving orphaned user messages in the
    transcript. Needs either a distinct rendering or an event.

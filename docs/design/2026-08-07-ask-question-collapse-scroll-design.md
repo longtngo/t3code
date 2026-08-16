@@ -17,16 +17,16 @@ the viewport, and there is no way to get the space back short of answering.
 
 Not the recent upstream sync, as assumed. Bisecting the file by content:
 
-| Commit | Date | `isCollapsed` |
-|---|---|---|
-| `45b4f7b1` fork: resizable + collapsible panel | 2026-06-06 | 8 |
-| `a4757c265` **upstream #3018** "Composer polish: … answer panel" | 2026-06-10 | 0 |
-| `HEAD` | 2026-08-07 | 0 |
+| Commit                                                           | Date       | `isCollapsed` |
+| ---------------------------------------------------------------- | ---------- | ------------- |
+| `45b4f7b1` fork: resizable + collapsible panel                   | 2026-06-06 | 8             |
+| `a4757c265` **upstream #3018** "Composer polish: … answer panel" | 2026-06-10 | 0             |
+| `HEAD`                                                           | 2026-08-07 | 0             |
 
 Upstream PR #3018 rewrote the answer panel four days after the fork shipped the controls, taking
 both fork commits with it (the `max-h` cap from 2026-06-05 and the collapse/resize from
 2026-06-06). The 2026-06-05 `Cancel` button in `ComposerPrimaryActions.tsx` was collateral in the
-same rewrite; it is *not* restored here (out of the stated scope, recorded as a follow-up).
+same rewrite; it is _not_ restored here (out of the stated scope, recorded as a follow-up).
 
 This file has taken four upstream changes since, so it is an actively-churned upstream surface:
 expect this to be a recurring merge conflict, and resolve toward the fork.
@@ -50,16 +50,16 @@ with no extra wiring.
 ## Approach — restore the cap and the collapse toggle
 
 1. **Bounded, internally scrolling options.** `max-h-[40dvh] sm:max-h-[22rem] overflow-y-auto
-   overscroll-contain pr-1`. Only the options list scrolls; the header, the question text and the
+overscroll-contain pr-1`. Only the options list scrolls; the header, the question text and the
    multi-select hint stay pinned above it, so the thing you must read to answer is never scrolled
    away. `dvh` (not `vh`) so the mobile keyboard opening or a rotation re-clamps.
    `overscroll-contain` stops a flick at the list's end from chaining into the timeline behind.
 2. **Collapse toggle.** A chevron in the panel header hides the options entirely, leaving the
    header, the question, and a tappable "N options hidden" hint. Collapsed, the panel is a few
    rems tall and the conversation is readable at full height.
-3. **Reset per question.** The card is keyed by `requestId`, so it does *not* remount when
+3. **Reset per question.** The card is keyed by `requestId`, so it does _not_ remount when
    `questionIndex` advances inside a multi-question prompt. Collapse state resets on
-   `questionIndex` change, or a collapsed panel would hide the *next* question's options.
+   `questionIndex` change, or a collapsed panel would hide the _next_ question's options.
 
 ### Rejected — move the composer and question into the conversation scroll
 
@@ -71,9 +71,9 @@ The user's stated alternative ("how Claude Code solves it"). Rejected on archite
   focus loss on recycling, measurement thrash against `maintainScrollAtEnd`, and mobile-keyboard
   interplay — a large, risky change to the most load-bearing screen in the app.
 - **Its main benefit is already there.** Reachability is not the problem: because
-  `contentInsetEndAdjustment` tracks the overlay height, no message is ever *permanently* hidden
+  `contentInsetEndAdjustment` tracks the overlay height, no message is ever _permanently_ hidden
   behind the composer — you can already scroll every message into the strip above it. What the
-  alternative would add is that the question scrolls *out of view*, freeing the whole viewport.
+  alternative would add is that the question scrolls _out of view_, freeing the whole viewport.
   Collapse delivers exactly that, in one click, reversibly.
 - **It is strictly worse while the question is on screen.** Keeping the panel "full height" by
   design means that at any scroll position where the question is visible it still eats the
@@ -98,12 +98,12 @@ Left out deliberately; the cap plus collapse covers the stated need. Cheap to re
 
 ## Files touched
 
-| File | Change |
-|---|---|
-| `apps/web/src/components/chat/ComposerPendingUserInputPanel.tsx` | Collapse state + chevron toggle + collapsed hint; bounded scrolling options list; scroll a keyboard-selected option into view. |
-| `apps/web/src/components/chat/pendingUserInputPanelLayout.ts` | New. Pure labelling logic for the toggle and the collapsed hint. |
-| `apps/web/src/components/chat/pendingUserInputPanelLayout.test.ts` | New. Unit tests for the above. |
-| `apps/web/src/components/chat/ComposerPendingUserInputPanel.test.tsx` | New. Static-markup tests for the cap classes and toggle a11y. |
+| File                                                                  | Change                                                                                                                         |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/web/src/components/chat/ComposerPendingUserInputPanel.tsx`      | Collapse state + chevron toggle + collapsed hint; bounded scrolling options list; scroll a keyboard-selected option into view. |
+| `apps/web/src/components/chat/pendingUserInputPanelLayout.ts`         | New. Pure labelling logic for the toggle and the collapsed hint.                                                               |
+| `apps/web/src/components/chat/pendingUserInputPanelLayout.test.ts`    | New. Unit tests for the above.                                                                                                 |
+| `apps/web/src/components/chat/ComposerPendingUserInputPanel.test.tsx` | New. Static-markup tests for the cap classes and toggle a11y.                                                                  |
 
 ## Side effects mitigated
 

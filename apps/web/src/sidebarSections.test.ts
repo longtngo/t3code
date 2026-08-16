@@ -56,17 +56,62 @@ describe("deriveBackgroundItems", () => {
 describe("sortSidebarItems", () => {
   it("puts active before terminal, and sinks completed to the bottom", () => {
     const items: SidebarItem[] = [
-      { kind: "background", id: "done-old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T00:00:01.000Z", exitCode: 0, buffer: "" },
-      { kind: "background", id: "running", label: "", status: "running", startedAt: "2026-06-13T00:00:00.000Z", completedAt: null, exitCode: null, buffer: "" },
-      { kind: "background", id: "done-new", label: "", status: "failed", startedAt: null, completedAt: "2026-06-13T00:00:09.000Z", exitCode: 1, buffer: "" },
+      {
+        kind: "background",
+        id: "done-old",
+        label: "",
+        status: "completed",
+        startedAt: null,
+        completedAt: "2026-06-13T00:00:01.000Z",
+        exitCode: 0,
+        buffer: "",
+      },
+      {
+        kind: "background",
+        id: "running",
+        label: "",
+        status: "running",
+        startedAt: "2026-06-13T00:00:00.000Z",
+        completedAt: null,
+        exitCode: null,
+        buffer: "",
+      },
+      {
+        kind: "background",
+        id: "done-new",
+        label: "",
+        status: "failed",
+        startedAt: null,
+        completedAt: "2026-06-13T00:00:09.000Z",
+        exitCode: 1,
+        buffer: "",
+      },
     ];
     expect(sortSidebarItems(items).map((i) => i.id)).toEqual(["running", "done-new", "done-old"]);
   });
 
   it("is stable with missing timestamps (tiebreak by id)", () => {
     const items: SidebarItem[] = [
-      { kind: "background", id: "b", label: "", status: "running", startedAt: null, completedAt: null, exitCode: null, buffer: "" },
-      { kind: "background", id: "a", label: "", status: "running", startedAt: null, completedAt: null, exitCode: null, buffer: "" },
+      {
+        kind: "background",
+        id: "b",
+        label: "",
+        status: "running",
+        startedAt: null,
+        completedAt: null,
+        exitCode: null,
+        buffer: "",
+      },
+      {
+        kind: "background",
+        id: "a",
+        label: "",
+        status: "running",
+        startedAt: null,
+        completedAt: null,
+        exitCode: null,
+        buffer: "",
+      },
     ];
     expect(sortSidebarItems(items).map((i) => i.id)).toEqual(["a", "b"]);
   });
@@ -76,23 +121,56 @@ describe("isAutoCleared / visibleSidebarItems", () => {
   const now = Date.parse("2026-06-13T12:00:00.000Z");
 
   it("auto-clears a completed item older than the TTL but not a recent one", () => {
-    expect(isAutoCleared({ status: "completed", completedAt: "2026-06-13T05:00:00.000Z" }, now, 6)).toBe(true);
-    expect(isAutoCleared({ status: "completed", completedAt: "2026-06-13T11:00:00.000Z" }, now, 6)).toBe(false);
+    expect(
+      isAutoCleared({ status: "completed", completedAt: "2026-06-13T05:00:00.000Z" }, now, 6),
+    ).toBe(true);
+    expect(
+      isAutoCleared({ status: "completed", completedAt: "2026-06-13T11:00:00.000Z" }, now, 6),
+    ).toBe(false);
     expect(isAutoCleared({ status: "running", completedAt: null }, now, 6)).toBe(false);
   });
 
   it("hides dismissed and auto-cleared items, keeps the rest sorted", () => {
     const items: SidebarItem[] = [
-      { kind: "background", id: "keep", label: "", status: "running", startedAt: "2026-06-13T11:59:00.000Z", completedAt: null, exitCode: null, buffer: "" },
-      { kind: "background", id: "dismissed", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T11:59:00.000Z", exitCode: 0, buffer: "" },
-      { kind: "background", id: "old", label: "", status: "completed", startedAt: null, completedAt: "2026-06-13T01:00:00.000Z", exitCode: 0, buffer: "" },
+      {
+        kind: "background",
+        id: "keep",
+        label: "",
+        status: "running",
+        startedAt: "2026-06-13T11:59:00.000Z",
+        completedAt: null,
+        exitCode: null,
+        buffer: "",
+      },
+      {
+        kind: "background",
+        id: "dismissed",
+        label: "",
+        status: "completed",
+        startedAt: null,
+        completedAt: "2026-06-13T11:59:00.000Z",
+        exitCode: 0,
+        buffer: "",
+      },
+      {
+        kind: "background",
+        id: "old",
+        label: "",
+        status: "completed",
+        startedAt: null,
+        completedAt: "2026-06-13T01:00:00.000Z",
+        exitCode: 0,
+        buffer: "",
+      },
     ];
     const visible = visibleSidebarItems(items, new Set(["dismissed"]), now, 6);
     expect(visible.map((i) => i.id)).toEqual(["keep"]);
   });
 });
 
-function makeSummary(overrides: { exitCode: number | null }): KnownTerminalSession["state"]["summary"] {
+function makeSummary(overrides: {
+  exitCode: number | null;
+}): KnownTerminalSession["state"]["summary"] {
   return {
     threadId: "thread-1",
     terminalId: "t",

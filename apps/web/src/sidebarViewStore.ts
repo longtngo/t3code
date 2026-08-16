@@ -39,8 +39,7 @@ export const useSidebarViewStore = create<SidebarViewStore>((set) => ({
     set((state) => {
       const next = { ...state.dismissedIds, [id]: true as const };
       // Removing the visible item also closes its detail panel if it was open.
-      const selectedDetail =
-        state.selectedDetail?.id === id ? null : state.selectedDetail;
+      const selectedDetail = state.selectedDetail?.id === id ? null : state.selectedDetail;
       return { dismissedIds: next, selectedDetail };
     }),
   dismissItems: (ids) =>

@@ -12,7 +12,7 @@ and never show one repository's diff under another's name.
 Two observable defects, one cause:
 
 - Member repositories render `VCS repository detection failed in ReviewService.getDiffPreview:
-  … Review diff preview cwd must stay within the configured workspace root.`
+… Review diff preview cwd must stay within the configured workspace root.`
 - The primary repository renders **the t3code server repo's working tree** under the project's
   name, because the client silently retries the failed request at the server's own cwd.
 
@@ -46,7 +46,7 @@ assumed (Hard Rule 8 — the load-bearing premise for this design):
 
 3. **No sibling VCS RPC enforces it.** `assertWorkspaceBoundCwd` appears in one file.
    `vcs.status`, `vcs.listRefs`, `filesystem.browse` and the terminal all accept any path — which
-   is why the `warehouse` tab correctly showed its real branch and changed-file count *next to*
+   is why the `warehouse` tab correctly showed its real branch and changed-file count _next to_
    the message claiming that repository was out of bounds.
 
 So the bound blocks a real feature while protecting nothing: a caller who can request a diff can
@@ -69,7 +69,7 @@ rather than an independent choice.
 registered project's `workspaceRoot`, any attached member path, any thread `worktreePath`, or
 `worktreesDir`. This is the semantically correct repair and was the RCA's first recommendation.
 
-Rejected because it buys a boundary that premise (1) shows is already bypassable with a *lower*
+Rejected because it buys a boundary that premise (1) shows is already bypassable with a _lower_
 scope, and it is not free:
 
 - a projection read (`ProjectionProjectRepository.listAll`) on every diff request;
@@ -90,11 +90,11 @@ repo from silently-wrong to honestly-broken, which is an improvement, but every 
 
 ## Files touched
 
-| File | Change |
-|---|---|
-| `apps/server/src/review/ReviewService.ts` | Delete `canonicalizePath`, `isWithinRoot`, `assertWorkspaceBoundCwd` and both call sites; drop the now-unused `FileSystem` / `Path` / `ServerConfig` / `VcsRepositoryDetectionError` imports. |
-| `apps/server/src/review/ReviewService.test.ts` | Invert the two rejection tests into reachability tests; drop the `canonicalizePath` failure test with the code it covered; keep the inside-root test. |
-| `apps/web/src/components/DiffPanel.tsx` | Remove `shouldRetryBranchDiffAtEnvironmentCwd` and `fallbackBranchDiffPreview`; use the single query directly. |
+| File                                           | Change                                                                                                                                                                                        |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server/src/review/ReviewService.ts`      | Delete `canonicalizePath`, `isWithinRoot`, `assertWorkspaceBoundCwd` and both call sites; drop the now-unused `FileSystem` / `Path` / `ServerConfig` / `VcsRepositoryDetectionError` imports. |
+| `apps/server/src/review/ReviewService.test.ts` | Invert the two rejection tests into reachability tests; drop the `canonicalizePath` failure test with the code it covered; keep the inside-root test.                                         |
+| `apps/web/src/components/DiffPanel.tsx`        | Remove `shouldRetryBranchDiffAtEnvironmentCwd` and `fallbackBranchDiffPreview`; use the single query directly.                                                                                |
 
 ## Tradeoffs and known limitations
 

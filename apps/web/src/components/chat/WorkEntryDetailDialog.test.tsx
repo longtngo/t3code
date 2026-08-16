@@ -8,10 +8,7 @@ describe("QuestionsDetail", () => {
     {
       header: "Timing",
       question: "Deploy now?",
-      options: [
-        { label: "Yes", description: "Ship it" },
-        { label: "No" },
-      ],
+      options: [{ label: "Yes", description: "Ship it" }, { label: "No" }],
       answer: "Yes",
     },
   ];
@@ -59,8 +56,8 @@ describe("CommandDetail", () => {
     expect(
       renderToStaticMarkup(<CommandDetail command="x" output={null} isError={false} />),
     ).toContain("No output.");
-    expect(
-      renderToStaticMarkup(<CommandDetail command="x" output="" isError={false} />),
-    ).toContain("(empty output)");
+    expect(renderToStaticMarkup(<CommandDetail command="x" output="" isError={false} />)).toContain(
+      "(empty output)",
+    );
   });
 });

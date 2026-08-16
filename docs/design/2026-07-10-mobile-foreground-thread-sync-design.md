@@ -23,6 +23,7 @@ socket closes the stream errors, the loop re-sends the **request object captured
 at first attach** (`wsRpcClient.ts:424-429`) on the new session. That request
 carries `fromSequenceExclusive = lastAppliedSequence` as it was **at attach
 time**, so:
+
 - a thread open long enough to have applied events resumes incrementally from
   its high-water mark;
 - a **freshly-opened** thread (attached at `lastAppliedSequence = 0` →
@@ -31,15 +32,17 @@ time**, so:
 
 Either way the catch-up is lossless — the snapshot reflects the latest state and
 the `sequence > lastAppliedSequence` dedup (`service.ts:476`) handles the
-incremental overlap. So *if* a reconnect fires on return, the active thread
+incremental overlap. So _if_ a reconnect fires on return, the active thread
 catches up. The bug is that on a mobile thaw **nothing reliably fires it**:
 
 1. **The resume-reconnect is gated behind a "we observed a `hidden` event first"
    flag.** `subscribeBrowserResumeReconnects` (`service.ts:1967-1976`):
+
    ```ts
    if (document.visibilityState === "hidden") { lastBrowserHiddenAt = Date.now(); return; }
    if (document.visibilityState === "visible" && lastBrowserHiddenAt !== null) { … reconnect }
    ```
+
    When a mobile OS **freezes / discards** the page on screen-off (Page Lifecycle
    `freeze`, or bfcache), the JS often never processes a clean `hidden`
    transition, so `lastBrowserHiddenAt` stays `null` and the return-to-`visible`
@@ -50,22 +53,22 @@ catches up. The bug is that on a mobile thaw **nothing reliably fires it**:
 2. **The `focus`-based coordinator does not cover it.**
    `WebSocketConnectionCoordinator` (`WebSocketConnectionSurface.tsx:113`) only
    reconnects when `shouldAutoReconnect(status, "focus")` is true, which requires
-   the UI to *already* be `reconnecting`/`exhausted` (`:36-56`). A socket that
-   still *looks* connected (a zombie/half-open socket after the radio slept) is
+   the UI to _already_ be `reconnecting`/`exhausted` (`:36-56`). A socket that
+   still _looks_ connected (a zombie/half-open socket after the radio slept) is
    ignored.
 
 The reconnect that already exists (`reconnectEnvironmentConnectionsAfterBrowserResume`,
 `service.ts:1941`) is correctly gated by `!isHeartbeatFresh()` — it just isn't
-being *reached* because of gate (1).
+being _reached_ because of gate (1).
 
 **Validated premises (Hard Rule 8):**
 
-| Premise | Evidence | Result |
-|---|---|---|
+| Premise                                                                                                                                                                              | Evidence                                                                             | Result       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------ |
 | Reconnect re-subscribes the open thread (lossless catch-up) via the transport stream loop replaying the captured request — incremental from HWM, or full snapshot for a fresh thread | `wsTransport.ts:261-328,337-357`, `wsRpcClient.ts:424-429`, `service.ts:445-446,476` | ✅ confirmed |
-| The return-to-visible reconnect is skipped when no `hidden` was recorded | `service.ts:1972` (`lastBrowserHiddenAt !== null` AND-gate) | ✅ confirmed |
-| `isHeartbeatFresh()` is a staleness signal on `performance.now()`, refreshed by any inbound frame, 15s window | `wsTransport.ts:359-363`, `wsRpcProtocol.ts:506-513` | ✅ confirmed |
-| The `focus` coordinator won't fire on a "still-connected"-looking socket | `WebSocketConnectionSurface.tsx:36-56,113` | ✅ confirmed |
+| The return-to-visible reconnect is skipped when no `hidden` was recorded                                                                                                             | `service.ts:1972` (`lastBrowserHiddenAt !== null` AND-gate)                          | ✅ confirmed |
+| `isHeartbeatFresh()` is a staleness signal on `performance.now()`, refreshed by any inbound frame, 15s window                                                                        | `wsTransport.ts:359-363`, `wsRpcProtocol.ts:506-513`                                 | ✅ confirmed |
+| The `focus` coordinator won't fire on a "still-connected"-looking socket                                                                                                             | `WebSocketConnectionSurface.tsx:36-56,113`                                           | ✅ confirmed |
 
 ## Approach (chosen)
 
@@ -84,12 +87,12 @@ being *reached* because of gate (1).
      `pageshow` is a full reload with a fresh connection, so it needs no resync
      (this preserves the current no-op on initial load; the freshness gate would
      skip it anyway).
-   `isHeartbeatFresh()` is the sole, sufficient gate.
+     `isHeartbeatFresh()` is the sole, sufficient gate.
 
 2. **Add the Page Lifecycle `resume` event** as a **defensive** foreground
    trigger, registered on **`document`** (next to `handleVisibilityChange` at
    `service.ts:1985`) — **not** on `window` where `pageshow` lives; `freeze`/
-   `resume` fire on `document`, and TypeScript will *not* catch a wrong target
+   `resume` fire on `document`, and TypeScript will _not_ catch a wrong target
    (`"resume"` isn't in `DocumentEventMap`, so it silently falls to the untyped
    string overload). This is belt-and-suspenders for the Chrome/Android
    frozen-then-thawed sub-case where the tab may already read `visible` on thaw
@@ -107,8 +110,9 @@ cooldown stays, preventing repeat reconnects when several foreground events fire
 together (e.g. `pageshow` + `visibilitychange` + `resume` on one thaw).
 
 **Why the freshness gate is correct and non-churny (the "active thread only"
-intent).** The user's need is that the *open* thread catches up without churn.
+intent).** The user's need is that the _open_ thread catches up without churn.
 `!isHeartbeatFresh()` delivers exactly that:
+
 - A truly-alive socket (frames within 15s — the app-level ping keeps them
   flowing) is left alone → **no reconnect churn on a healthy tab focus**, and it
   needs none: TCP already delivered the buffered events, which are applied on
@@ -123,7 +127,7 @@ active thread — matching the "sync active thread only" scope.
 **Coordinator split (intentional — don't add a third path).** There are two
 foreground-reconnect owners, covering complementary cases:
 `WebSocketConnectionCoordinator` (`WebSocketConnectionSurface.tsx`) reconnects
-the *primary* connection on `focus`/`online` **only when the UI already shows
+the _primary_ connection on `focus`/`online` **only when the UI already shows
 `reconnecting`/`exhausted`** (`shouldAutoReconnect`); this service path handles
 the "zombie socket that still looks connected" case, gated on
 `!isHeartbeatFresh()`, iterating **all** connections. This fix extends the
@@ -144,11 +148,11 @@ right home for the freshness gate + all-connection iteration.
   reconnect-from-high-water-mark, which handles both the alive and dead cases
   with one primitive.
 - **Narrow the resync to only `refCount > 0` (active) thread connections.**
-  Rejected: the existing resume reconnect intentionally resyncs *all* stale
+  Rejected: the existing resume reconnect intentionally resyncs _all_ stale
   connections (keeps the sidebar thread list fresh too), and reconnecting a
   connection resyncs its open thread anyway. Narrowing would regress
   sidebar-freshness with no benefit for the reported symptom. The freshness gate
-  already keeps the blast radius to *stale* connections only.
+  already keeps the blast radius to _stale_ connections only.
 - **Wire the app-level ping `onHeartbeatTimeout` to force a reconnect.**
   Out of scope (broader connection-reliability change, not foreground sync).
   Captured as a non-blocking improvement suggestion.
@@ -163,7 +167,7 @@ right home for the freshness gate + all-connection iteration.
 
 ## Tradeoffs and known limitations
 
-- **Residual <15s half-open edge.** If the socket goes half-open *within* the
+- **Residual <15s half-open edge.** If the socket goes half-open _within_ the
   last 15s before thaw, `isHeartbeatFresh()` can briefly read true and the
   foreground reconnect is skipped for that window; recovery then relies on the
   app-level ping. This does **not** affect the reported multi-minute scenario

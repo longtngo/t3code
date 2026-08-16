@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
-import type { LocalLlmModelConfig, LocalLlmProviderConfig, LocalLlmSettings } from "@t3tools/contracts";
+import type {
+  LocalLlmModelConfig,
+  LocalLlmProviderConfig,
+  LocalLlmSettings,
+} from "@t3tools/contracts";
 import { getModel, getProvider } from "@t3tools/shared/localLlm";
 
 import { expandHomePath } from "../pathExpansion.ts";
@@ -104,7 +108,8 @@ export function resolveLaunch(
   }
   const model = getModel(config.modelId);
   if (!model) return { error: `Unknown local LLM model: ${config.modelId}` };
-  if (!prov.binaryPath) return { error: `Provider ${config.providerId} has no binary path configured.` };
+  if (!prov.binaryPath)
+    return { error: `Provider ${config.providerId} has no binary path configured.` };
   if (!prov.modelsDir && !config.modelPathOverride) {
     return { error: `Provider ${config.providerId} has no models directory configured.` };
   }

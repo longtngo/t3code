@@ -139,9 +139,9 @@ describe("collectKnownAbsolutePaths", () => {
   });
 
   it("strips a line/column suffix so basenames match", () => {
-    expect(collectKnownAbsolutePaths("see /Users/dev/project/src/main.ts:10:3 for details")).toEqual(
-      ["/Users/dev/project/src/main.ts"],
-    );
+    expect(
+      collectKnownAbsolutePaths("see /Users/dev/project/src/main.ts:10:3 for details"),
+    ).toEqual(["/Users/dev/project/src/main.ts"]);
   });
 
   it("ignores relative paths", () => {
@@ -156,9 +156,7 @@ describe("findChatFilePathMentions", () => {
     expect(mentions).toHaveLength(1);
     expect(mentions[0]?.raw).toBe("/Users/dev/project/src/main.ts");
     expect(mentions[0]?.targetPath).toBe("/Users/dev/project/src/main.ts");
-    expect(text.slice(mentions[0]!.start, mentions[0]!.end)).toBe(
-      "/Users/dev/project/src/main.ts",
-    );
+    expect(text.slice(mentions[0]!.start, mentions[0]!.end)).toBe("/Users/dev/project/src/main.ts");
   });
 
   it("does not include a trailing sentence period in the path", () => {

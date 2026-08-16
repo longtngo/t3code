@@ -1,6 +1,6 @@
 # Mobile connection resilience: quiet UX + tolerant reconnect
 
-**Date:** 2026-06-27  **Branch:** `feat/mobile-conn-resilience`  **Status:** Design (in review)
+**Date:** 2026-06-27 **Branch:** `feat/mobile-conn-resilience` **Status:** Design (in review)
 
 ## Goal
 
@@ -18,7 +18,7 @@ without weakening any correctness guarantee.
 The connection is more resilient than it looks; this reframes the work as mostly UX, not transport.
 
 - **App-level heartbeat already runs in prod.** Effect's RPC layer (`RpcClient.makeProtocolSocket`)
-  sends `{_tag:"Ping"}` every 5s; the server replies `Pong` natively *before* RPC routing
+  sends `{_tag:"Ping"}` every 5s; the server replies `Pong` natively _before_ RPC routing
   (`effect` `RpcServer` switch); on a missed Pong the client proactively tears down and reconnects
   in ~10s — catching the mobile "zombie socket" where no close event fires. The client's raw-Pong
   listener (`wsRpcProtocol.ts:236-245`) and `isHeartbeatFresh()` (`wsTransport.ts:274-278`) are fed
@@ -31,14 +31,14 @@ The connection is more resilient than it looks; this reframes the work as mostly
 
 ## Load-bearing premises — validated against live code (Hard Rule 8)
 
-| Premise the design depends on | Evidence (file:line) | Result |
-|---|---|---|
-| Server dedupes commands by `commandId`; replaying an already-accepted command returns the cached receipt with no re-execution → **outbox replay is safe** | `apps/server/src/orchestration/Layers/OrchestrationEngine.ts:144-156` (`getByCommandId` → `accepted` returns `{sequence}`; rejected → `OrchestrationCommandPreviouslyRejectedError`) | ✅ confirmed |
-| Optimistic chat bubbles reconcile **by message id** → a kept "queued" bubble auto-clears when the server echoes the same `messageId` | `apps/web/src/components/ChatView.tsx:2761-2787` (removes optimistic msgs whose id ∈ server `messages`) | ✅ confirmed |
-| `maxRetries: null` yields infinite retry at the capped delay (`Schedule.forever`) — prong 2 is a one-line data change | `packages/client-runtime/src/wsRpcProtocol.ts:269-273` (`backoff.maxRetries === null ? Schedule.forever : Schedule.recurs(...)`, delay `getReconnectDelayMs(...) ?? 0`) | ✅ confirmed |
-| Send path & failure revert is the right outbox seam; `commandId` is a fresh client UUID | `ChatView.tsx:3329` (`dispatchCommand({type:"thread.turn.start", commandId: newCommandId(), …})`), `.catch` revert at `3347-3379` | ✅ confirmed |
-| `isQueuedSend` (existing) is **server-side turn-stacking**, not a network queue → outbox does not duplicate it | `ChatView.tsx:3174-3175` (`phase==="running" && provider===claudeAgent`) | ✅ confirmed — distinct concept |
-| `WS_RECONNECT_MAX_RETRIES = DEFAULT_RECONNECT_BACKOFF.maxRetries!` breaks when set to `null` | `apps/web/src/rpc/wsConnectionState.ts:13-14` | ✅ confirmed — must decouple |
+| Premise the design depends on                                                                                                                             | Evidence (file:line)                                                                                                                                                                 | Result                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| Server dedupes commands by `commandId`; replaying an already-accepted command returns the cached receipt with no re-execution → **outbox replay is safe** | `apps/server/src/orchestration/Layers/OrchestrationEngine.ts:144-156` (`getByCommandId` → `accepted` returns `{sequence}`; rejected → `OrchestrationCommandPreviouslyRejectedError`) | ✅ confirmed                    |
+| Optimistic chat bubbles reconcile **by message id** → a kept "queued" bubble auto-clears when the server echoes the same `messageId`                      | `apps/web/src/components/ChatView.tsx:2761-2787` (removes optimistic msgs whose id ∈ server `messages`)                                                                              | ✅ confirmed                    |
+| `maxRetries: null` yields infinite retry at the capped delay (`Schedule.forever`) — prong 2 is a one-line data change                                     | `packages/client-runtime/src/wsRpcProtocol.ts:269-273` (`backoff.maxRetries === null ? Schedule.forever : Schedule.recurs(...)`, delay `getReconnectDelayMs(...) ?? 0`)              | ✅ confirmed                    |
+| Send path & failure revert is the right outbox seam; `commandId` is a fresh client UUID                                                                   | `ChatView.tsx:3329` (`dispatchCommand({type:"thread.turn.start", commandId: newCommandId(), …})`), `.catch` revert at `3347-3379`                                                    | ✅ confirmed                    |
+| `isQueuedSend` (existing) is **server-side turn-stacking**, not a network queue → outbox does not duplicate it                                            | `ChatView.tsx:3174-3175` (`phase==="running" && provider===claudeAgent`)                                                                                                             | ✅ confirmed — distinct concept |
+| `WS_RECONNECT_MAX_RETRIES = DEFAULT_RECONNECT_BACKOFF.maxRetries!` breaks when set to `null`                                                              | `apps/web/src/rpc/wsConnectionState.ts:13-14`                                                                                                                                        | ✅ confirmed — must decouple    |
 
 ## Approach (chosen)
 
@@ -84,13 +84,13 @@ user-input commands** — `thread.turn.start` (primary), plus the natural extens
 
 - Integrate in `ChatView.tsx onSend`: build the command envelope, then `dispatchOrQueueCommand` —
   if `getWsConnectionUiState() !== "connected"`, enqueue and **keep** the optimistic bubble (mark it
-  `queued`) instead of the current revert; if connected, send and on a *transport-disconnect* error
+  `queued`) instead of the current revert; if connected, send and on a _transport-disconnect_ error
   enqueue + keep the bubble (other errors behave as today).
 - Flush coordinator: a small component mounted in `routes/__root.tsx` next to
   `WebSocketConnectionCoordinator` (line 147), observing `wsConnectionStatusAtom` → `connected`.
   Replay queued commands FIFO via `dispatchCommand`; dequeue on success (idempotent via
   `commandId`); stop+retry next reconnect if transport drops again; drop + surface an error on a
-  *rejected* receipt. Cap the queue (e.g. 50).
+  _rejected_ receipt. Cap the queue (e.g. 50).
 - UX: the optimistic bubble renders a quiet "Queued · sends when reconnected" badge while pending;
   it auto-clears via the existing id reconciliation (`ChatView.tsx:2767`) when flushed events arrive.
 
@@ -113,21 +113,21 @@ disappears. Ripple cleanups:
 
 ## Alternatives considered
 
-- **Transport degradation WS→SSE→long-poll + auto-upgrade** — *rejected*. Investigated against
+- **Transport degradation WS→SSE→long-poll + auto-upgrade** — _rejected_. Investigated against
   Effect's RPC source: there is **no SSE/long-poll client transport** (only socket + one-POST-HTTP);
   HTTP streaming needs a framed serialization (we use JSON), so the HTTP path can't carry the ~11
   live subscriptions without an ndjson migration; there's no built-in fallback/upgrade. Decisive:
   Tailscale is a full L3 WireGuard tunnel — it does **not** block WebSockets, and over radio loss SSE
-  and long-poll die exactly as much as WS. It targets WS-*blocking* networks (corp proxy/captive
+  and long-poll die exactly as much as WS. It targets WS-_blocking_ networks (corp proxy/captive
   portal), not this user's problem. L–XL effort for ~zero benefit here. If a WS-hostile network ever
   becomes a real requirement, the cheap path is a single NDJSON-over-HTTP fallback (~M) — not
   SSE/long-poll. (User confirmed: skip.)
-- **Wire a new app-level heartbeat for faster dead-socket detection** — *rejected as redundant*. The
+- **Wire a new app-level heartbeat for faster dead-socket detection** — _rejected as redundant_. The
   effect RPC layer already does this in prod (~10s). Optional low-value follow-up only: surface
   `onPong`/`onPingTimeout` via `RpcClient.ConnectionHooks` for cleaner telemetry.
-- **Server idle-timeout backstop (Bun top-level `idleTimeout`)** — *deferred*. A harmless one-liner;
+- **Server idle-timeout backstop (Bun top-level `idleTimeout`)** — _deferred_. A harmless one-liner;
   user deselected it. The app-level heartbeat is the authoritative liveness layer on both runtimes.
-- **Debounce only the manual-reconnect path / shorten toast timeout** — *rejected*. Doesn't address
+- **Debounce only the manual-reconnect path / shorten toast timeout** — _rejected_. Doesn't address
   the immediate-surface root cause; the grace period is the correct mechanism.
 
 ## Experiments
@@ -157,7 +157,7 @@ None required — the decision space was settled by reading Effect's RPC source 
 
 ## Follow-ups deferred (non-blocking)
 
-- **localStorage persistence of the outbox** (cross-reload auto-resend). v1 is in-memory; `composerDraftStore.ts` already preserves the *text* across a tab reload, so nothing is lost — only auto-resend-after-reload is deferred (and a hard tab-kill is arguably a moment to let the user reconfirm before auto-firing a turn).
+- **localStorage persistence of the outbox** (cross-reload auto-resend). v1 is in-memory; `composerDraftStore.ts` already preserves the _text_ across a tab reload, so nothing is lost — only auto-resend-after-reload is deferred (and a hard tab-kill is arguably a moment to let the user reconfirm before auto-firing a turn).
 - Surface `onPong`/`onPingTimeout` via `RpcClient.ConnectionHooks` for cleaner heartbeat telemetry.
 - Optional Bun top-level `idleTimeout` backstop in `apps/server/src/server.ts`.
 
@@ -173,7 +173,7 @@ items here **supersede** the initial approach where they differ; the Stage 7 pla
 ### Critical correctness fix — verified against Effect source (Hard Rule 8)
 
 **A unary send issued while disconnected HANGS (does not reject) under `maxRetries: null`.** Verified
-in `effect` `RpcClient.js`: `Effect.retry(retryPolicy)` (line 675) wraps the *connection run*, not
+in `effect` `RpcClient.js`: `Effect.retry(retryPolicy)` (line 675) wraps the _connection run_, not
 individual requests; `send` (680-690) fails fast only when `currentError` is set, which `tapCause`
 (662-663) skips for transient `SocketOpenError` when `retryTransientErrors: true` (our config); and
 there is **no resend** of pending requests on reconnect (`requestClientMap` only routes responses).
@@ -185,8 +185,8 @@ So infinite retry means a send during an outage never settles until the next ses
 doomed send.** Queue predicate: `status.hasConnected && getWsConnectionUiState(status) !== "connected"`
 (connected before, now in an outage). This is robust regardless of request-hang semantics, and the
 `hasConnected` clause also means a not-yet-connected state (e.g. browser tests before socket open)
-→ *dispatch* (today's behavior), so it can't silently mis-queue real sends (resolves compat item
-10b without a blocking probe). The post-dispatch `.catch` becomes a *best-effort* fallback only.
+→ _dispatch_ (today's behavior), so it can't silently mis-queue real sends (resolves compat item
+10b without a blocking probe). The post-dispatch `.catch` becomes a _best-effort_ fallback only.
 
 ### Applied — correctness
 
@@ -198,7 +198,7 @@ doomed send.** Queue predicate: `status.hasConnected && getWsConnectionUiState(s
   `maxRetries` now `null`) and `wsConnectionState.test.ts:95-106` (drive `applyDisconnectState` to
   `exhausted` via an explicit finite config instead of the default).
 - **(C-F10, Compat-12) No double-text.** The transport-disconnect path keeps the optimistic bubble as
-  *queued* and must NOT also run the existing draft-restore (`ChatView.tsx:3362-3373`). It's a third
+  _queued_ and must NOT also run the existing draft-restore (`ChatView.tsx:3362-3373`). It's a third
   outcome distinct from success and hard-revert; preserve the "composer not re-dirtied" guard and
   reuse the existing transport-error classifier (`isTransportConnectionErrorMessage`/`formatErrorMessage`).
 - **(C-F11) Hoist `const commandId = newCommandId()`** to send-time (next to `messageIdForSend`,
@@ -215,7 +215,7 @@ doomed send.** Queue predicate: `status.hasConnected && getWsConnectionUiState(s
 
 - **1A grace period — derive from `status.disconnectedAt`, ride the existing `nowMs` tick.**
   `applyDisconnectState` already stamps a stable `disconnectedAt` per contiguous outage and clears it
-  on open — that *is* the outage-start. Drop `outageStartedAtRef`, `graceTimerRef`, and the new
+  on open — that _is_ the outage-start. Drop `outageStartedAtRef`, `graceTimerRef`, and the new
   `graceTick` state; keep only `outageSurfacedRef` (to gate the success toast — no existing
   equivalent). Widen the existing 1s `nowMs` interval guard (`WebSocketConnectionSurface.tsx:223-236`)
   to tick whenever `getWsConnectionUiState(status) !== "connected"`. Pure helper becomes

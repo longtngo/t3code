@@ -358,9 +358,7 @@ export function projectEvent(
             session: null,
             // Consumed once by the fork's first provider session start, then
             // cleared on `thread.session-set`.
-            ...(payload.forkResume !== undefined
-              ? { pendingForkResume: payload.forkResume }
-              : {}),
+            ...(payload.forkResume !== undefined ? { pendingForkResume: payload.forkResume } : {}),
           },
           event.type,
           "thread",

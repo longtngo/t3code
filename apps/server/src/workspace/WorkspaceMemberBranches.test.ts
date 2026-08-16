@@ -310,10 +310,7 @@ describe("WorkspaceMemberBranches", () => {
       });
 
       assert.strictEqual(report.state, "owned-by-self");
-      assert.notStrictEqual(
-        yield* git(cwd, ["branch", "--show-current"]),
-        INTEGRATION_BRANCH,
-      );
+      assert.notStrictEqual(yield* git(cwd, ["branch", "--show-current"]), INTEGRATION_BRANCH);
     }).pipe(Effect.provide(TestLayer)),
   );
 

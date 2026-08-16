@@ -95,9 +95,9 @@ function parseTime(value: string | null): number {
  * newest-first by completedAt. Missing/NaN timestamps sort last within their
  * group, with a stable id tiebreak.
  */
-export function sortSidebarItems<T extends Pick<SidebarItem, "id" | "status" | "startedAt" | "completedAt">>(
-  items: ReadonlyArray<T>,
-): T[] {
+export function sortSidebarItems<
+  T extends Pick<SidebarItem, "id" | "status" | "startedAt" | "completedAt">,
+>(items: ReadonlyArray<T>): T[] {
   return [...items].sort((left, right) => {
     const leftTerminal = isTerminalSidebarStatus(left.status);
     const rightTerminal = isTerminalSidebarStatus(right.status);
@@ -107,7 +107,11 @@ export function sortSidebarItems<T extends Pick<SidebarItem, "id" | "status" | "
       const byStarted = compareTimes(parseTime(left.startedAt), parseTime(right.startedAt), "asc");
       return byStarted !== 0 ? byStarted : left.id.localeCompare(right.id);
     }
-    const byCompleted = compareTimes(parseTime(left.completedAt), parseTime(right.completedAt), "desc");
+    const byCompleted = compareTimes(
+      parseTime(left.completedAt),
+      parseTime(right.completedAt),
+      "desc",
+    );
     return byCompleted !== 0 ? byCompleted : left.id.localeCompare(right.id);
   });
 }

@@ -2,7 +2,7 @@
 
 This checkout is a long-lived personal fork of `pingdotgg/t3code`. Upstream work is merged in
 periodically; fork work never goes back upstream. This file records the things a reconcile must
-not silently break — the invariants that are *invisible to the test suite* and therefore cannot
+not silently break — the invariants that are _invisible to the test suite_ and therefore cannot
 be recovered from a green gate.
 
 Everything here was verified against the tree, not recalled. Re-verify before trusting it: a
@@ -10,10 +10,10 @@ stale entry is a hypothesis, not evidence.
 
 ## Topology
 
-| | |
-|---|---|
-| `origin` | `pingdotgg/t3code` — upstream, read-only |
-| `fork` | `longtngo/t3code` — backup remote for `personal` |
+|            |                                                           |
+| ---------- | --------------------------------------------------------- |
+| `origin`   | `pingdotgg/t3code` — upstream, read-only                  |
+| `fork`     | `longtngo/t3code` — backup remote for `personal`          |
 | `personal` | the fork trunk. Work lands here by **direct push, no PR** |
 
 Reconcile is `git merge origin/main` into `personal`. Feature work branches off `personal`
@@ -102,8 +102,8 @@ message joins the live agent loop and the turn id does not change. The fork repl
 the composer's Send-beside-Stop button ("Queue message"), and the fork carries its own tests for
 the queue (drain order, interrupt discards the queue, model re-set on drain).
 
-So upstream's `ClaudeAdapter.test.ts` test *"steers a running turn instead of opening a new one on
-mid-turn sendTurn"* asserts a behaviour this adapter no longer has, and fails against it
+So upstream's `ClaudeAdapter.test.ts` test _"steers a running turn instead of opening a new one on
+mid-turn sendTurn"_ asserts a behaviour this adapter no longer has, and fails against it
 (`steeredTurn.turnId !== turn.turnId`). It is deliberately absent, with a comment where it used to
 sit. A reconcile that "restores" it — it reads exactly like an upstream addition inside a
 conflict — reintroduces a guaranteed red test.
@@ -114,7 +114,7 @@ Upstream `#5923`/`#5768` moved project settings to a `/projects/$projectKey` rou
 the sidebar's per-project button to navigate there. The fork's own project-actions **dialog**
 covers ground that route does not: **workspace member repositories** — attaching one, choosing
 its integration branch, removing it. (Both surfaces carry a grouping-rule control, so grouping is
-*not* the fork-only part; verified against the running app on 2026-08-11.) The project row
+_not_ the fork-only part; verified against the running app on 2026-08-11.) The project row
 therefore carries **both** buttons: an ellipsis opening the fork dialog and a gear navigating to
 upstream's page. Collapsing them to one drops multi-repo workspace management entirely.
 Consolidating the two is real work, not merge work.

@@ -1230,14 +1230,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       return;
     }
     handleOpenInEditor();
-  }, [
-    handleOpenInEditor,
-    line,
-    onOpenInPanel,
-    targetPath,
-    threadRef,
-    workspaceRelativePath,
-  ]);
+  }, [handleOpenInEditor, line, onOpenInPanel, targetPath, threadRef, workspaceRelativePath]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {
@@ -1383,7 +1376,11 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           render={
             <a
               href={href}
-              className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
+              className={cn(
+                CHAT_FILE_TAG_CHIP_CLASS_NAME,
+                MARKDOWN_FILE_LINK_CLASS_NAME,
+                className,
+              )}
               data-markdown-copy={copyMarkdown}
               onClick={(event) => {
                 event.preventDefault();

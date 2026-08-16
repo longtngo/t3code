@@ -13,12 +13,12 @@ label stays readable.
 
 Probed live before designing, via `resctl status --json`:
 
-| Premise | Probe | Result |
-|---|---|---|
-| How many pools does the strip render? | `resctl status --json` | **7** — `gpu`, `cpu_perf`, `cpu_eff`, `ram`, `dev_tab_a9`, `dev_pixel10`, `machine` |
-| How many survive the client filter? | `resource !== "ram"` in `SidebarResourceQueue.tsx:274` | **6** |
-| Is `ram` the only advisory pool? | same JSON | yes — `advisory: true` on `ram` only |
-| Is the container narrow enough to overflow? | `SIDEBAR_WIDTH = "16rem"` (`ui/sidebar.tsx:27`) | 256px outer, ~220px inner to the strip |
+| Premise                                     | Probe                                                  | Result                                                                              |
+| ------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| How many pools does the strip render?       | `resctl status --json`                                 | **7** — `gpu`, `cpu_perf`, `cpu_eff`, `ram`, `dev_tab_a9`, `dev_pixel10`, `machine` |
+| How many survive the client filter?         | `resource !== "ram"` in `SidebarResourceQueue.tsx:274` | **6**                                                                               |
+| Is `ram` the only advisory pool?            | same JSON                                              | yes — `advisory: true` on `ram` only                                                |
+| Is the container narrow enough to overflow? | `SIDEBAR_WIDTH = "16rem"` (`ui/sidebar.tsx:27`)        | 256px outer, ~220px inner to the strip                                              |
 
 6 columns whose narrowest legible content is `DEV_PIXEL10 0/1` (~85px) need ~510px. The
 container gives ~220px. The overflow is arithmetic, not a guess.

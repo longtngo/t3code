@@ -1,11 +1,6 @@
 import { expect, it } from "@effect/vitest";
 
-import {
-  type CpuTimesSnapshot,
-  cpuBusy,
-  parseMacGpu,
-  rampSampleInterval,
-} from "./HostMetrics.ts";
+import { type CpuTimesSnapshot, cpuBusy, parseMacGpu, rampSampleInterval } from "./HostMetrics.ts";
 
 const REAL_IOREG_FRAGMENT =
   '"PerformanceStatistics" = {"In use system memory (driver)"=0,"Alloc system memory"=6930890752,' +

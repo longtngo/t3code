@@ -17,7 +17,7 @@ TDD (failing test first), each its own commit. Full suite green before merge (Ha
    - `ProviderRuntimeIngestion.ts` (Services): add `readonly openToolItemIds: ReadonlySet<string>`
      to `TurnActivitySnapshot`.
    - `ProviderRuntimeIngestion.ts` (Layers): `FOREGROUND_TOOL_ITEM_TYPES = new Set([command_execution,
-     file_change, dynamic_tool_call, collab_agent_tool_call])`. In `recordTurnActivity`: init empty
+file_change, dynamic_tool_call, collab_agent_tool_call])`. In `recordTurnActivity`: init empty
      set on `turn.started`; on `item.started` with `payload.itemType ∈ set` and `event.itemId`
      present → add (copy set); on `item.completed` with `event.itemId` → remove (copy set); carry
      the set through the existing `{...existing, lastEventAt, lastEventType}` update.

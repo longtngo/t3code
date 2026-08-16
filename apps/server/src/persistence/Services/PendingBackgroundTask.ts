@@ -75,10 +75,7 @@ export interface PendingBackgroundTaskRepositoryShape {
 
   readonly getByTaskId: (
     input: GetPendingBackgroundTaskInput,
-  ) => Effect.Effect<
-    Option.Option<PendingBackgroundTask>,
-    PendingBackgroundTaskRepositoryError
-  >;
+  ) => Effect.Effect<Option.Option<PendingBackgroundTask>, PendingBackgroundTaskRepositoryError>;
 
   /**
    * List all pending-task rows (ascending started-at order).
@@ -93,10 +90,7 @@ export interface PendingBackgroundTaskRepositoryShape {
    */
   readonly listByThreadId: (input: {
     readonly threadId: ThreadId;
-  }) => Effect.Effect<
-    ReadonlyArray<PendingBackgroundTask>,
-    PendingBackgroundTaskRepositoryError
-  >;
+  }) => Effect.Effect<ReadonlyArray<PendingBackgroundTask>, PendingBackgroundTaskRepositoryError>;
 
   readonly deleteByTaskId: (
     input: DeletePendingBackgroundTaskInput,

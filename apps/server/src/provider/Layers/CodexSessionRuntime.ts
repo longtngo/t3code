@@ -492,19 +492,17 @@ export const openCodexThread = (input: {
       ...startParams,
       threadId: input.forkThreadId,
     } as EffectCodexSchema.V2ThreadForkParams;
-    return input.client
-      .request("thread/fork", forkParams)
-      .pipe(
-        Effect.catchIf(isRecoverableThreadResumeError, (error) =>
-          Effect.logWarning("codex app-server thread fork fell back to fresh start", {
-            threadId: input.threadId,
-            requestedRuntimeMode: input.runtimeMode,
-            forkThreadId: input.forkThreadId,
-            recoverable: true,
-            cause: error.message,
-          }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
-        ),
-      );
+    return input.client.request("thread/fork", forkParams).pipe(
+      Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+        Effect.logWarning("codex app-server thread fork fell back to fresh start", {
+          threadId: input.threadId,
+          requestedRuntimeMode: input.runtimeMode,
+          forkThreadId: input.forkThreadId,
+          recoverable: true,
+          cause: error.message,
+        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+      ),
+    );
   }
 
   if (resumeThreadId === undefined) {

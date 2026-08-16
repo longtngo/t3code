@@ -77,7 +77,9 @@ describe("estimatedTotalSeconds", () => {
   });
   it("falls back to elapsed + broker eta (eta is remaining)", () => {
     // elapsed 60s + 120s remaining = 180s total
-    expect(estimatedTotalSeconds(item({ reason: "no estimate", sinceMs: 0, etaSec: 120 }), 60_000)).toBe(180);
+    expect(
+      estimatedTotalSeconds(item({ reason: "no estimate", sinceMs: 0, etaSec: 120 }), 60_000),
+    ).toBe(180);
   });
   it("is undefined with neither a reason estimate nor an eta", () => {
     expect(estimatedTotalSeconds(item({ reason: "no estimate" }), 0)).toBeUndefined();

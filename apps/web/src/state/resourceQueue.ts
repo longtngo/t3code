@@ -2,5 +2,4 @@ import { createResourceQueueEnvironmentAtoms } from "@t3tools/client-runtime/sta
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-export const resourceQueueEnvironment =
-  createResourceQueueEnvironmentAtoms(connectionAtomRuntime);
+export const resourceQueueEnvironment = createResourceQueueEnvironmentAtoms(connectionAtomRuntime);

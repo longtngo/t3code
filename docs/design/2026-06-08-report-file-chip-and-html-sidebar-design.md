@@ -54,7 +54,7 @@ Replace `InlineHtmlPathCode` + `InlineMarkdownPathCode` with one `<button>` chip
 
 - **Keep `.html` in a new tab, just fix relative links with a `<base>` tag.** Rejected: a
   `srcdoc` iframe has an opaque origin; a `<base href="file://…">` can't be fetched
-  cross-origin and the file lives on the *server* in remote sessions anyway. Routing nav
+  cross-origin and the file lives on the _server_ in remote sessions anyway. Routing nav
   through `readFile` is the only thing that works remotely.
 - **Drive nav through the store (stack in zustand).** Rejected: the back/forward history is
   viewer-local UI state; keeping it in component state keeps the store minimal and avoids

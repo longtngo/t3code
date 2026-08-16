@@ -3,8 +3,8 @@
 ## Goal
 
 Deliver an OS notification to the web PWA when a thread **finishes a turn** or
-**starts asking the user a question**, *while the phone screen is off and no tab is
-alive*. The existing foreground notifier (`apps/web/src/lib/notifier.ts`) fires the
+**starts asking the user a question**, _while the phone screen is off and no tab is
+alive_. The existing foreground notifier (`apps/web/src/lib/notifier.ts`) fires the
 W3C `Notification` API from the live page over the WebSocket stream — it cannot fire
 when the tab is frozen (screen off / backgrounded), which is precisely the case the
 user cares about. This adds a second, WebSocket-independent delivery pipe: the
@@ -32,7 +32,7 @@ No native app is required.
 ## Approach
 
 A server-side reactor mirrors the existing `AgentAwarenessRelay` (which already taps
-the orchestration event stream and does the same edge selection for the *mobile/APNs*
+the orchestration event stream and does the same edge selection for the _mobile/APNs_
 path), but sends **VAPID Web Push** to subscriptions stored in SQLite. The client adds
 a per-device opt-in that subscribes via `PushManager` and registers the subscription
 over RPC. The SW gains `push` + `notificationclick` handlers.
@@ -52,20 +52,20 @@ over RPC. The SW gains `push` + `notificationclick` handlers.
 3. **Persistence — migration 034 `push_subscriptions`.** Follows the
    `PendingBackgroundTask` triplet (Migration + Service + Layer). Columns:
    `endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
-   environment_id TEXT, created_at TEXT NOT NULL, last_success_at TEXT`. Repository:
+environment_id TEXT, created_at TEXT NOT NULL, last_success_at TEXT`. Repository:
    `upsert(subscription)`, `list()`, `deleteByEndpoint(endpoint)`.
 
 4. **Contracts — RPC (mirror `WsGetResourceQueueRpc`).**
    - `push.getVapidPublicKey` → `{ publicKey: string }` (no-arg read).
    - `pushSubscriptions.register` → payload `{ endpoint, keys:{p256dh,auth},
-     expirationTime? }`, success ack.
+expirationTime? }`, success ack.
    - `pushSubscriptions.unregister` → payload `{ endpoint }`, success ack.
-   Added to `WS_METHODS`, `Rpc.make` defs, the `RpcGroup.make` group, `EnvironmentApi`,
-   and `createEnvironmentApi`.
+     Added to `WS_METHODS`, `Rpc.make` defs, the `RpcGroup.make` group, `EnvironmentApi`,
+     and `createEnvironmentApi`.
 
 5. **`WebPushSender` service.** `setVapidDetails` once; `send(subscription, payload)`
    wraps `webpush.sendNotification(sub, JSON.stringify(payload), {TTL, urgency:'high',
-   topic})`. On `statusCode` 404/410 → delete the subscription (it's gone). On 429 →
+topic})`. On `statusCode` 404/410 → delete the subscription (it's gone). On 429 →
    log + skip (best-effort; no retry storm). Uses the VAPID secret.
 
 6. **`WebPushRelay` reactor.** Structural clone of `AgentAwarenessRelay`:
@@ -84,7 +84,7 @@ over RPC. The SW gains `push` + `notificationclick` handlers.
 7. **Service-worker handlers (`public/push-sw.js`, via `workbox.importScripts`).**
    Kept from the spike (generateSW mode preserved, load-bearing `/assets` CacheFirst
    rule untouched). `push` → `showNotification(title, {body, tag: threadId,
-   data:{url}})`. `notificationclick` → focus an existing tab already on that thread,
+data:{url}})`. `notificationclick` → focus an existing tab already on that thread,
    else focus any tab and `navigate`, else `openWindow(url)` — **fixed** to use the
    real thread URL and exact-origin matching (the spike's bug).
 
@@ -98,6 +98,7 @@ over RPC. The SW gains `push` + `notificationclick` handlers.
 ### Payload shape
 
 `{ title, body, tag, url }`, JSON, end-to-end encrypted by web-push (aes128gcm):
+
 - **finished:** title = thread title (or "T3 Code"), body = "Task finished".
 - **asking:** title = thread title, body = "Waiting for your input".
 - `tag` = `threadId` so a newer notification for the same thread replaces the older.
@@ -167,7 +168,8 @@ re-subscribe on next app open (the settings toggle re-registers idempotently by
 ## Files / modules touched
 
 **Server**
-- `apps/server/package.json` — add `web-push` (dep) + `@types/web-push` (dev). *(spike)*
+
+- `apps/server/package.json` — add `web-push` (dep) + `@types/web-push` (dev). _(spike)_
 - `apps/server/src/persistence/Migrations/034_PushSubscriptions.ts` — new.
 - `apps/server/src/persistence/Migrations.ts` — register 034.
 - `apps/server/src/persistence/Services/PushSubscription.ts` — new (Context.Service).
@@ -180,11 +182,13 @@ re-subscribe on next app open (the settings toggle re-registers idempotently by
 - secret-name constants (near `cloud/config.ts`).
 
 **Contracts**
+
 - `packages/contracts/src/rpc.ts` — 3 RPC methods + group + EnvironmentApi entries.
 
 **Web**
-- `apps/web/public/push-sw.js` — kept from spike; `notificationclick` fixed. *(spike)*
-- `apps/web/vite.config.ts` — `workbox.importScripts` kept from spike. *(spike)*
+
+- `apps/web/public/push-sw.js` — kept from spike; `notificationclick` fixed. _(spike)_
+- `apps/web/vite.config.ts` — `workbox.importScripts` kept from spike. _(spike)_
 - `apps/web/src/lib/webPush.ts` — new (subscribe/unsubscribe/register helpers).
 - `apps/web/src/environmentApi.ts` — `pushSubscriptions` + `push` namespaces.
 - `apps/web/src/components/settings/SettingsPanels.tsx` — replace debug button with
@@ -227,7 +231,7 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
 ### Correctness
 
 - **[HIGH] Edge-detector, not change-detector.** Do NOT clone
-  `agentAwarenessPublishIdentity` (fires on *any* awareness-state change → push spam),
+  `agentAwarenessPublishIdentity` (fires on _any_ awareness-state change → push spam),
   and do NOT reuse `resolveThreadAwarenessPhase` (no `interrupted` case; `running`
   check precedes `completed` so a still-`running` session never yields `completed`).
   Instead the reactor stores, per thread, the **previous `latestTurn.state`** and
@@ -236,8 +240,8 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
   finished = `prev === "running"` && `next ∈ {completed,error,interrupted}`;
   asking = `hasPendingUserInput` explicitly-recorded-`false` → `true`.
 - **[MED] Restart replays stale "asking" edge.** The dedup state is in-memory. On
-  **first sight** of a thread, initialize prev-state = its *current* state and fire
-  nothing; fire only on a subsequently-*observed* transition. Never treat an absent
+  **first sight** of a thread, initialize prev-state = its _current_ state and fire
+  nothing; fire only on a subsequently-_observed_ transition. Never treat an absent
   prior entry as an implicit `false`. (No boot-time snapshot seeding needed — this is
   simpler and avoids the boot-spam that `AgentAwarenessRelay`'s active-thread seeding
   would cause here.)
@@ -248,7 +252,7 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
   one on the target thread. When a visible client exists the foreground path + app UI
   cover it; when none exists (screen off / backgrounded, the target case) the push
   shows. This is the sanctioned `userVisibleOnly` exemption (Chrome only penalises a
-  silent push when *no* visible client exists) and is evaluated per-device against that
+  silent push when _no_ visible client exists) and is evaluated per-device against that
   device's own clients, so desktop-open + phone-asleep still yields exactly one
   notification per device. (This overrides the simplicity reviewer's suggestion to
   defer the `matchAll` check — the check stays because it is now correctness-bearing,
@@ -256,7 +260,7 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
 - **[MED] Hung FCM send wedges the single-fiber reactor + unbounded queue growth.**
   `web-push` has no default socket timeout. Fan out with
   `Effect.forEach(subs, (s) => send(s).pipe(Effect.timeout("10 seconds"),
-  Effect.catchCause(log)), { concurrency: 8, discard: true })`, and pass web-push's own
+Effect.catchCause(log)), { concurrency: 8, discard: true })`, and pass web-push's own
   `timeout` option too. Per-send isolation so one 4xx/5xx/410 never aborts the batch.
 - **[LOW] VAPID/getOrCreate.** Client base64url-decodes the public key to a
   `Uint8Array` for `applicationServerKey` (the spike already does this). Server
@@ -274,11 +278,11 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
 - **Server 3 files → 1.** Collapse `WebPushKeys` + `WebPushSender` (Service) into a
   single `apps/server/src/push/WebPushRelay.ts` that mirrors `AgentAwarenessRelay`'s
   actual shape (one file: Service tag + `layer` at the bottom, inlined
-  `setVapidDetails`/`sendNotification`/410-prune, exported *pure* edge classifier for
+  `setVapidDetails`/`sendNotification`/410-prune, exported _pure_ edge classifier for
   tests). VAPID getOrCreate is a single exported fn (`getOrCreateVapidKeys(secrets)`),
   co-located, not a Service.
 - **Persistence columns → 4:** `endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL, created_at TEXT NOT NULL`. Drop `environment_id` (no v1 filter
+auth TEXT NOT NULL, created_at TEXT NOT NULL`. Drop `environment_id` (no v1 filter
   reads it) and `last_success_at` (no reader). Keep the Migration+Service+Layer triplet
   (hard repo convention).
 - **RPC surface → 1 method.** The non-secret VAPID **public** key rides on
@@ -302,7 +306,7 @@ above where they differ. Exit: findings converged, no conflicts left unresolved.
 - Update the full-object `EnvironmentApi` mock in
   `apps/web/src/components/ChatView.browser.tsx` (`createMockEnvironmentApi`) — adding
   a namespace breaks it (the "3 mocks" hazard). The WS test harness
-  (`apps/web/test/wsRpcHarness.ts`) auto-handles new *unary* methods — no edit needed.
+  (`apps/web/test/wsRpcHarness.ts`) auto-handles new _unary_ methods — no edit needed.
 - **Gate the settings toggle** on `!isElectron && import.meta.env.PROD` (no SW in
   Electron or dev → `serviceWorker.ready` would hang).
 - Serve `/push-sw.js` with `Cache-Control: no-cache` so a changed handler propagates on
@@ -318,13 +322,13 @@ branch diff. No regressions found; VAPID private key never leaks; SQL parameteri
 auth double-gated; no XSS. Applied:
 
 - **[F1, Medium] SW suppression dropped the "asking" push.** The any-visible-client
-  rule suppressed *both* edges, but the foreground path only covers *finished* — so an
+  rule suppressed _both_ edges, but the foreground path only covers _finished_ — so an
   "asking" push was silently dropped whenever a tab was visible. Fix: the payload now
   carries `kind`; the SW always shows `asking` and suppresses only `finished` when a
   visible client exists.
 - **[F2, Low-Med] Baseline advanced before send → lost alert on send failure.** The
   worker is single-fiber (no concurrent re-process to guard), so the baseline `Ref` is
-  now advanced *after* the fan-out; a failed shell/subscription read leaves the edge to
+  now advanced _after_ the fan-out; a failed shell/subscription read leaves the edge to
   retry on the next event instead of silently dropping it.
 - **[F4, Low-Med security] Blind SSRF via `register`.** Added `isAllowedPushEndpoint`
   (HTTPS-only; reject loopback/private/link-local IPs, `localhost`, `.local`, and
@@ -342,14 +346,15 @@ auth double-gated; no XSS. Applied:
 **Server:** `package.json` (spike) · `Migrations/034_PushSubscriptions.ts` (new) ·
 `Migrations.ts` (register 034) · `persistence/Services/PushSubscription.ts` (new) ·
 `persistence/Layers/PushSubscription.ts` (new) · `push/WebPushRelay.ts` (new — reactor
-+ inlined sender + `getOrCreateVapidKeys` + exported pure classifier) ·
-`orchestration/Layers/OrchestrationReactor.ts` (start it) · `server.ts` (layer wiring +
-`webPushVapidPublicKey` into `ServerConfig`) · `ws.ts` (register handler +
-`RPC_REQUIRED_SCOPE` entry) · secret-name constants.
-**Contracts:** `rpc.ts` (`pushSubscriptions.register` only) · `server.ts` /
-`ServerConfig` (`webPushVapidPublicKey?`) · `ipc.ts` (`EnvironmentApi` namespace).
-**Client-runtime:** `wsRpcClient.ts` (interface + factory).
-**Web:** `public/push-sw.js` (spike; add any-visible suppression + fix
-notificationclick) · `vite.config.ts` (spike) · `environmentApi.ts` (namespace) ·
-`components/settings/SettingsPanels.tsx` (real gated toggle, replace debug button) ·
-`components/ChatView.browser.tsx` (mock).
+
+- inlined sender + `getOrCreateVapidKeys` + exported pure classifier) ·
+  `orchestration/Layers/OrchestrationReactor.ts` (start it) · `server.ts` (layer wiring +
+  `webPushVapidPublicKey` into `ServerConfig`) · `ws.ts` (register handler +
+  `RPC_REQUIRED_SCOPE` entry) · secret-name constants.
+  **Contracts:** `rpc.ts` (`pushSubscriptions.register` only) · `server.ts` /
+  `ServerConfig` (`webPushVapidPublicKey?`) · `ipc.ts` (`EnvironmentApi` namespace).
+  **Client-runtime:** `wsRpcClient.ts` (interface + factory).
+  **Web:** `public/push-sw.js` (spike; add any-visible suppression + fix
+  notificationclick) · `vite.config.ts` (spike) · `environmentApi.ts` (namespace) ·
+  `components/settings/SettingsPanels.tsx` (real gated toggle, replace debug button) ·
+  `components/ChatView.browser.tsx` (mock).

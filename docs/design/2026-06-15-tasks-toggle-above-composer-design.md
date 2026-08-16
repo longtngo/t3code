@@ -7,7 +7,7 @@ toggle in the chat header that opens the plan/task sidebar):
 
 1. **Move** it from the header to a **permanent** row directly **above the main
    input textbox** (the composer).
-2. Its **spinner** must show whenever there is *any* running work — not only an
+2. Its **spinner** must show whenever there is _any_ running work — not only an
    in-progress plan step, but also running **background processes** (terminals)
    or running **agents/subagents** (task-stream).
 3. Its **count** must aggregate **plan steps + background processes + agents**,
@@ -25,7 +25,7 @@ toggle in the chat header that opens the plan/task sidebar):
   sidebar's sections:
   - `visibleAgentItems` — agents/subagents from `deriveAgentItems(threadActivities)`.
   - `visibleBackgroundItems` — terminals from `deriveBackgroundItems(activeThreadKnownSessions)`.
-  Each item has a `status: "running" | "completed" | "failed"`.
+    Each item has a `status: "running" | "completed" | "failed"`.
 - Clicking the toggle calls `togglePlanSidebar` → opens the plan sidebar, which
   contains the Tasks/Background/Agents sections. That wiring is unchanged.
 - The composer is rendered in the "Input bar" div in `ChatView.tsx`
@@ -43,8 +43,8 @@ toggle in the chat header that opens the plan/task sidebar):
    - `activeCount = planStepsActive + agentsRunning + backgroundRunning`
    - `totalCount = planStepsTotal + agents.length + background.length`
    - `hasActive = activeCount > 0`
-   It counts the **visible** agent/background lists (post dismissal + auto-clear)
-   so the badge matches what the sidebar panel shows.
+     It counts the **visible** agent/background lists (post dismissal + auto-clear)
+     so the badge matches what the sidebar panel shows.
 3. **Wire it in `ChatView.tsx`**: compute `planStepsActive`, call
    `summarizeTaskActivity`, render `<TasksPanelToggle>` in a permanent row just
    above the composer's `relative isolate` wrapper.

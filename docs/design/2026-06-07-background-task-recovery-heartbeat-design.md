@@ -21,7 +21,7 @@ Two concrete ways the event never arrives:
 
 Confirmed by investigation: **no persisted record exists** that a thread had a background task in
 flight (no table, no `task_id → thread` map), and **no startup reconciliation** walks pre-restart
-threads. The new `ProviderTurnStallWatchdog` (shipped earlier today) only watches *active turns*,
+threads. The new `ProviderTurnStallWatchdog` (shipped earlier today) only watches _active turns_,
 not idle threads waiting on a background task — so it does not cover this.
 
 ## Requirement (from the user)
@@ -99,6 +99,7 @@ instance-id needed — process boot time cleanly partitions "prior boot" from "t
 reconciliation = the first tick):
 
 For each pending row:
+
 1. Resolve the thread shell (`ProjectionSnapshotQuery.getThreadShellById`). If missing/archived → delete row (orphaned record), continue.
 2. **Skip if the thread is busy/blocked** — don't interrupt real work:
    `session.activeTurnId != null` OR `hasPendingApprovals` OR `hasPendingUserInput`. (Leave the row;
@@ -133,6 +134,7 @@ immediately, and if the thread's session is down (post-reboot), the dispatch pat
 subprocess can't wedge the sweep.
 
 **Config** (mirror the reaper — module consts + env overrides, no contract changes):
+
 - `DEFAULT_SWEEP_INTERVAL_MS = 60_000`
 - `DEFAULT_STALE_THRESHOLD_MS = 2 * 60 * 60_000` (2 h) — Trigger B only
 - `DEFAULT_MAX_RECOVERY_ATTEMPTS = 3`
@@ -142,7 +144,7 @@ subprocess can't wedge the sweep.
 
 In `ProviderSessionReaper.sweep`, **skip reaping a session whose thread has a pending background
 task** (`repository.listByThreadId(threadId)` non-empty). Rationale: a thread with a live background
-watcher is *not* truly idle; reaping its session kills the watcher (Trigger 2 above). This both
+watcher is _not_ truly idle; reaping its session kills the watcher (Trigger 2 above). This both
 prevents the premature kill and keeps the watcher's session alive so the normal `task.completed`
 wake can still fire. (If the session genuinely needs reaping later, the recovery watchdog's Trigger B
 backstop still covers a wedged task.)
@@ -156,7 +158,7 @@ reconciliation that was entirely missing before.
 
 ## Alternatives rejected
 
-- **Reuse `provider_instance_id` as the boot signal** — it's a *config routing* key (driver instance),
+- **Reuse `provider_instance_id` as the boot signal** — it's a _config routing_ key (driver instance),
   not a per-process identity; it does not change across restarts. Process boot time is the correct
   partition.
 - **Track in-memory only (like the stall watchdog)** — fails the explicit requirement; in-memory
@@ -179,9 +181,9 @@ Two adversarial design reviews (correctness/races + simplification) surfaced one
 several correctness issues. Revisions:
 
 - **[CRITICAL C1] The `eventTurnId === undefined` write discriminator is inverted.** Verified against
-  the SDK + adapter: a background task's `task_started` fires *while the launching turn is still
-  active*, so `base` (`ClaudeAdapter.ts:2404-2409`) stamps the launching `turnId`. `eventTurnId` is
-  only `undefined` at *completion* (after the turn ends). There is **no `is_backgrounded` flag** on
+  the SDK + adapter: a background task's `task_started` fires _while the launching turn is still
+  active_, so `base` (`ClaudeAdapter.ts:2404-2409`) stamps the launching `turnId`. `eventTurnId` is
+  only `undefined` at _completion_ (after the turn ends). There is **no `is_backgrounded` flag** on
   `task_started`/`task_notification` (only on `task_updated.patch`). "Background-ness" is a
   completion-time property. **Fix:** record a row for **every** `task.started` (keyed by `taskId`),
   delete on **every** `task.completed`/`stopped` (by `taskId`). Turn-scoped tasks (plan subtasks,
@@ -209,19 +211,19 @@ several correctness issues. Revisions:
     `T3CODE_BG_TASK_STALE_THRESHOLD_MS` override; deferred telemetry will tune it.
 - **[M6] Attempt cap is per-boot in effect** — delete-on-success means a successful reboot recovery
   leaves no row, so independent reboots don't accumulate toward give-up. The cap only bounds repeated
-  *dispatch failures* within a boot.
+  _dispatch failures_ within a boot.
 - **[M7] Wedged recovery turns** are covered by the already-shipped `ProviderTurnStallWatchdog`
   (active-turn stall). The reaper guard + stall watchdog together prevent an indefinite session pin.
 - **[m11] NaN/defect guards** mirror `ProviderSessionReaper` (`Number.isNaN(Date.parse(...))` skip +
   `Effect.catch`/`catchDefect` inside the repeated sweep so one bad row can't kill the fiber).
 - **[Simplification R3] Schema trimmed** to `(task_id PK, thread_id, boot_id, started_at,
-  last_seen_at, recovery_attempts)`. Dropped `summary`/`output_file` — the recovery message is
+last_seen_at, recovery_attempts)`. Dropped `summary`/`output_file` — the recovery message is
   deliberately "re-verify whether the work finished," so stale context adds noise. `last_seen_at` is
   refreshed on `task.progress` (needed by Trigger 2).
 - **[Simplification R4] Repository-only, no directory wrapper** — rows are inert scalars; no
   driver/instance decoding like `ProviderSessionDirectory` needs.
 - **[Simplification R1 — considered, declined] Fold into `ProviderSessionReaper`?** The reaper
-  iterates provider *bindings*; recovery iterates *tasks* (different domains, different intervals).
+  iterates provider _bindings_; recovery iterates _tasks_ (different domains, different intervals).
   Kept separate for clearer lifecycle/testing; the reaper guard is a one-line read of the task repo.
 
 Net shape: migration `033` + `PendingBackgroundTaskRepository`; a `RuntimeBootId` service; ingestion
@@ -240,4 +242,7 @@ with the existing `task.completed` wake at `ProviderRuntimeIngestion.ts:~1773`; 
   (row already deleted by completion) → no resume.
 - **Reaper guard**: a session with a pending background task is not reaped; without one it still reaps.
 - Full `apps/server` suite + `tsgo --noEmit`.
+
+```
+
 ```

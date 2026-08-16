@@ -28,6 +28,7 @@ Shiki language chunk, wasm, the 1.5 MB desktop-Clerk chunk, …). That would blo
 16 MB and re-fetch on every rebuild — wrong for an online-first, frequently-rebuilt app.
 
 Chosen instead — **shell precache + runtime cache for hashed chunks**:
+
 - `workbox.globPatterns` precaches only the small, always-needed shell:
   `index.html`, `manifest.webmanifest`, and `**/*.{css,woff2,ico,png,svg}` → **18 entries
   ≈ 731 KiB** (measured). **JS is deliberately excluded** from the precache.
@@ -37,7 +38,7 @@ Chosen instead — **shell precache + runtime cache for hashed chunks**:
   redundant with the precache — the precache contains no JS by design.
 - `navigateFallback: "index.html"` serves the SPA shell for client routes, with a
   `navigateFallbackDenylist` for every **server-owned** top-level route so they are never
-  hijacked: `/api`, `/attachments`, `/.well-known`, and `/viewer`. (`/pair` is a *client*
+  hijacked: `/api`, `/attachments`, `/.well-known`, and `/viewer`. (`/pair` is a _client_
   route — `apps/web/src/routes/pair.tsx` — so it is intentionally NOT denylisted; it needs the
   shell. `/ws` is a WebSocket upgrade the SW never sees.)
 
@@ -46,6 +47,7 @@ Chosen instead — **shell precache + runtime cache for hashed chunks**:
 Registered manually in `apps/web/src/main.tsx`, guarded `if (!isElectron && import.meta.env.PROD)`
 (`isElectron` already imported there; the desktop app loads from `file://` with hash history and
 must never register a SW). Dynamic `import("virtual:pwa-register")`:
+
 - `onNeedRefresh` → show a "New version available — Reload" toast via the existing
   `toastManager.add({ type, title, actionProps })` (`apps/web/src/components/ui/toast`); the
   action calls `updateSW(true)` (skip-waiting + reload).
@@ -77,14 +79,14 @@ Append `/// <reference types="vite-plugin-pwa/client" />` to the existing
 
 ## Premises validated (Hard Rule 8 — direct measurement)
 
-| Premise | Probe | Result |
-|---|---|---|
-| `vite-plugin-pwa` builds under `vite-plus`/rolldown-vite | real `vp build` | ✅ emits `sw.js`+`manifest`+`workbox-*.js` |
-| Shell-only precache avoids 16 MB | rebuild w/ scoped `globPatterns` | ✅ 731 KiB / 18 entries |
-| Server serves `.webmanifest`/SW MIME, no server change | `@effect/platform-node/Mime.getType` | ✅ `application/manifest+json`, `text/javascript` |
-| Manifest link auto-injected | inspect `dist/index.html` | ✅ present |
-| Existing toaster + `isElectron` guard exist | read `ui/toast`, `env.ts` | ✅ |
-| 1024px icon source | `sips` | ✅ `apps/marketing/public/icon.png` |
+| Premise                                                  | Probe                                | Result                                            |
+| -------------------------------------------------------- | ------------------------------------ | ------------------------------------------------- |
+| `vite-plugin-pwa` builds under `vite-plus`/rolldown-vite | real `vp build`                      | ✅ emits `sw.js`+`manifest`+`workbox-*.js`        |
+| Shell-only precache avoids 16 MB                         | rebuild w/ scoped `globPatterns`     | ✅ 731 KiB / 18 entries                           |
+| Server serves `.webmanifest`/SW MIME, no server change   | `@effect/platform-node/Mime.getType` | ✅ `application/manifest+json`, `text/javascript` |
+| Manifest link auto-injected                              | inspect `dist/index.html`            | ✅ present                                        |
+| Existing toaster + `isElectron` guard exist              | read `ui/toast`, `env.ts`            | ✅                                                |
+| 1024px icon source                                       | `sips`                               | ✅ `apps/marketing/public/icon.png`               |
 
 ## Design review resolutions (Stage 6)
 

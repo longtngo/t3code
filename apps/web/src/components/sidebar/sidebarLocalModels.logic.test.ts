@@ -3,9 +3,27 @@ import { describe, expect, it } from "vite-plus/test";
 import { countOnline, mergeConfigsWithSample } from "./sidebarLocalModels.logic.ts";
 
 const configs: LocalLlmModelConfig[] = [
-  { id: "c1", name: "Fast", providerId: "mlx-serve", modelId: "Qwen3.6-35B-A3B-4bit", visible: true },
-  { id: "c2", name: "Hidden", providerId: "mlx-serve", modelId: "gemma-4-12B-it-4bit", visible: false },
-  { id: "c3", name: "Llama", providerId: "llamacpp", modelId: "gemma-4-12B-it-4bit", visible: true },
+  {
+    id: "c1",
+    name: "Fast",
+    providerId: "mlx-serve",
+    modelId: "Qwen3.6-35B-A3B-4bit",
+    visible: true,
+  },
+  {
+    id: "c2",
+    name: "Hidden",
+    providerId: "mlx-serve",
+    modelId: "gemma-4-12B-it-4bit",
+    visible: false,
+  },
+  {
+    id: "c3",
+    name: "Llama",
+    providerId: "llamacpp",
+    modelId: "gemma-4-12B-it-4bit",
+    visible: true,
+  },
 ] as never;
 
 const sample: LlmModelsSample = {
@@ -15,7 +33,16 @@ const sample: LlmModelsSample = {
       name: "mlx-serve",
       baseUrl: "http://127.0.0.1:8765",
       reachable: true,
-      models: [{ id: "Qwen3.6-35B-A3B-4bit", loaded: true, status: "online", configId: "c1", pid: 5, port: 8765 }],
+      models: [
+        {
+          id: "Qwen3.6-35B-A3B-4bit",
+          loaded: true,
+          status: "online",
+          configId: "c1",
+          pid: 5,
+          port: 8765,
+        },
+      ],
     },
   ],
 };

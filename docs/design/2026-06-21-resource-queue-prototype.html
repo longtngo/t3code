@@ -1,529 +1,1222 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Resource Queue — sidebar prototype</title>
-<style>
-  :root {
-    --bg: #0d0d0f;
-    --sidebar: #161619;
-    --popover: #1d1d21;
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.14);
-    --fg: #f4f4f5;
-    --muted: #8b8b94;
-    --muted2: #6b6b73;
-    --hover: rgba(255, 255, 255, 0.05);
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Resource Queue — sidebar prototype</title>
+    <style>
+      :root {
+        --bg: #0d0d0f;
+        --sidebar: #161619;
+        --popover: #1d1d21;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.14);
+        --fg: #f4f4f5;
+        --muted: #8b8b94;
+        --muted2: #6b6b73;
+        --hover: rgba(255, 255, 255, 0.05);
 
-    --p-interactive: #fb7185;
-    --p-interactive-bg: rgba(251, 113, 133, 0.16);
-    --p-normal: #38bdf8;
-    --p-normal-bg: rgba(56, 189, 248, 0.16);
-    --p-background: #a1a1aa;
-    --p-background-bg: rgba(161, 161, 170, 0.13);
+        --p-interactive: #fb7185;
+        --p-interactive-bg: rgba(251, 113, 133, 0.16);
+        --p-normal: #38bdf8;
+        --p-normal-bg: rgba(56, 189, 248, 0.16);
+        --p-background: #a1a1aa;
+        --p-background-bg: rgba(161, 161, 170, 0.13);
 
-    --r-gpu: #c084fc;
-    --r-cpu: #34d399;
-    --r-ram: #60a5fa;
-    --r-machine: #fbbf24;
+        --r-gpu: #c084fc;
+        --r-cpu: #34d399;
+        --r-ram: #60a5fa;
+        --r-machine: #fbbf24;
 
-    --running: #22c55e;
-    --waiting: #f59e0b;
-    --maint: #ef4444;
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    height: 100%;
-    background:
-      radial-gradient(1200px 600px at 18% -10%, #1a1a20 0%, transparent 60%),
-      var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .stage {
-    display: flex;
-    gap: 40px;
-    padding: 40px;
-    min-height: 100%;
-    align-items: flex-start;
-  }
+        --running: #22c55e;
+        --waiting: #f59e0b;
+        --maint: #ef4444;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background:
+          radial-gradient(1200px 600px at 18% -10%, #1a1a20 0%, transparent 60%), var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .stage {
+        display: flex;
+        gap: 40px;
+        padding: 40px;
+        min-height: 100%;
+        align-items: flex-start;
+      }
 
-  /* ---- faux app frame ---- */
-  .app {
-    width: 264px;
-    flex: 0 0 264px;
-    height: 760px;
-    background: var(--sidebar);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
-  }
-  .app-top { padding: 12px; flex: 1; overflow: hidden; }
-  .brand { display: flex; align-items: center; gap: 8px; padding: 6px 8px 14px; font-weight: 600; font-size: 13px; letter-spacing: .2px; }
-  .brand .dot { width: 18px; height: 18px; border-radius: 6px; background: linear-gradient(135deg,#7c3aed,#db2777); }
-  .navitem { display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:8px; font-size:13px; color:var(--muted); }
-  .navitem.active { background: var(--hover); color: var(--fg); }
-  .navitem svg { width:15px; height:15px; opacity:.8; }
-  .ghost { height: 9px; border-radius: 5px; background: var(--hover); margin: 14px 9px; }
-  .ghost.w70 { width: 70%; } .ghost.w50 { width: 50%; } .ghost.w85 { width: 85%; }
+      /* ---- faux app frame ---- */
+      .app {
+        width: 264px;
+        flex: 0 0 264px;
+        height: 760px;
+        background: var(--sidebar);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+      }
+      .app-top {
+        padding: 12px;
+        flex: 1;
+        overflow: hidden;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px 14px;
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 0.2px;
+      }
+      .brand .dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, #7c3aed, #db2777);
+      }
+      .navitem {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 9px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .navitem.active {
+        background: var(--hover);
+        color: var(--fg);
+      }
+      .navitem svg {
+        width: 15px;
+        height: 15px;
+        opacity: 0.8;
+      }
+      .ghost {
+        height: 9px;
+        border-radius: 5px;
+        background: var(--hover);
+        margin: 14px 9px;
+      }
+      .ghost.w70 {
+        width: 70%;
+      }
+      .ghost.w50 {
+        width: 50%;
+      }
+      .ghost.w85 {
+        width: 85%;
+      }
 
-  .app-footer { padding: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; position: relative; }
+      .app-footer {
+        padding: 8px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        position: relative;
+      }
 
-  /* ---- footer sidebar items (match SidebarMenuButton size="sm") ---- */
-  .item {
-    display: flex; align-items: center; gap: 8px;
-    width: 100%; padding: 6px 8px; border-radius: 8px;
-    font-size: 12px; color: rgba(244,244,245,.7);
-    background: none; border: 0; cursor: pointer; text-align: left;
-    font-family: inherit;
-  }
-  .item:hover { background: var(--hover); color: var(--fg); }
-  .item svg { width: 14px; height: 14px; flex: 0 0 auto; }
-  .item .label { white-space: nowrap; }
-  .item .spacer { margin-left: auto; }
-  .item .chev { width:14px; height:14px; opacity:.6; transition: transform .15s; }
+      /* ---- footer sidebar items (match SidebarMenuButton size="sm") ---- */
+      .item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: 8px;
+        font-size: 12px;
+        color: rgba(244, 244, 245, 0.7);
+        background: none;
+        border: 0;
+        cursor: pointer;
+        text-align: left;
+        font-family: inherit;
+      }
+      .item:hover {
+        background: var(--hover);
+        color: var(--fg);
+      }
+      .item svg {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+      }
+      .item .label {
+        white-space: nowrap;
+      }
+      .item .spacer {
+        margin-left: auto;
+      }
+      .item .chev {
+        width: 14px;
+        height: 14px;
+        opacity: 0.6;
+        transition: transform 0.15s;
+      }
 
-  /* the new Resource Queue item */
-  #rq-item.open { background: var(--hover); color: var(--fg); }
-  .statusdot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
-  .counts { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
-  .cbadge {
-    font-variant-numeric: tabular-nums;
-    font-size: 11px; font-weight: 600;
-    min-width: 18px; text-align: center;
-    padding: 1px 6px; border-radius: 999px;
-  }
-  .cbadge.run  { color: #04130a; background: var(--running); }  /* running → green */
-  .cbadge.wait { color: #1a1205; background: var(--waiting); }  /* waiting → yellow */
-  .cbadge.zero { background: var(--hover); color: var(--muted); font-weight: 500; }  /* 0 → muted */
-  .cbadge.maint { background: var(--maint); color: #fff; }  /* maintenance → red */
+      /* the new Resource Queue item */
+      #rq-item.open {
+        background: var(--hover);
+        color: var(--fg);
+      }
+      .statusdot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .counts {
+        margin-left: auto;
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      .cbadge {
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        font-weight: 600;
+        min-width: 18px;
+        text-align: center;
+        padding: 1px 6px;
+        border-radius: 999px;
+      }
+      .cbadge.run {
+        color: #04130a;
+        background: var(--running);
+      } /* running → green */
+      .cbadge.wait {
+        color: #1a1205;
+        background: var(--waiting);
+      } /* waiting → yellow */
+      .cbadge.zero {
+        background: var(--hover);
+        color: var(--muted);
+        font-weight: 500;
+      } /* 0 → muted */
+      .cbadge.maint {
+        background: var(--maint);
+        color: #fff;
+      } /* maintenance → red */
 
-  /* ---- popover ---- */
-  .pop {
-    position: absolute; left: 8px; right: 8px; bottom: calc(100% + 8px);
-    background: var(--popover);
-    border: 1px solid var(--border-strong);
-    border-radius: 12px;
-    box-shadow: 0 18px 50px -12px rgba(0,0,0,.7);
-    padding: 10px;
-    display: none;
-    animation: pop .12s ease-out;
-  }
-  .pop.show { display: block; }
-  @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+      /* ---- popover ---- */
+      .pop {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: calc(100% + 8px);
+        background: var(--popover);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.7);
+        padding: 10px;
+        display: none;
+        animation: pop 0.12s ease-out;
+      }
+      .pop.show {
+        display: block;
+      }
+      @keyframes pop {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
 
-  .pop-head { display:flex; align-items:center; justify-content:space-between; padding: 2px 2px 8px; }
-  .pop-title { font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); }
-  .refresh { display:flex; align-items:center; gap:5px; font-size: 10px; color: var(--muted2); font-variant-numeric: tabular-nums; }
-  .refresh .spin { width:10px; height:10px; }
-  .maint { font-size:10px; color:#fff; background: var(--maint); padding:1px 6px; border-radius:999px; font-weight:600; }
+      .pop-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 2px 2px 8px;
+      }
+      .pop-title {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .refresh {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 10px;
+        color: var(--muted2);
+        font-variant-numeric: tabular-nums;
+      }
+      .refresh .spin {
+        width: 10px;
+        height: 10px;
+      }
+      .maint {
+        font-size: 10px;
+        color: #fff;
+        background: var(--maint);
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-weight: 600;
+      }
 
-  .util { display:flex; gap:6px; padding: 2px 2px 9px; }
-  .gauge { flex:1; }
-  .gauge .g-top { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-bottom:3px; }
-  .gauge .g-top b { color: var(--fg); font-weight:600; font-variant-numeric: tabular-nums; }
-  .gauge .bar { height:3px; border-radius:3px; background: var(--hover); overflow:hidden; }
-  .gauge .bar > span { display:block; height:100%; border-radius:3px; }
+      .util {
+        display: flex;
+        gap: 6px;
+        padding: 2px 2px 9px;
+      }
+      .gauge {
+        flex: 1;
+      }
+      .gauge .g-top {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: var(--muted);
+        margin-bottom: 3px;
+      }
+      .gauge .g-top b {
+        color: var(--fg);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .gauge .bar {
+        height: 3px;
+        border-radius: 3px;
+        background: var(--hover);
+        overflow: hidden;
+      }
+      .gauge .bar > span {
+        display: block;
+        height: 100%;
+        border-radius: 3px;
+      }
 
-  .divider { height:1px; background: var(--border); margin: 2px 0 6px; }
+      .divider {
+        height: 1px;
+        background: var(--border);
+        margin: 2px 0 6px;
+      }
 
-  .list { max-height: 262px; overflow-y: auto; display:flex; flex-direction:column; gap: 1px; padding-right: 2px; }
-  .list::-webkit-scrollbar { width: 8px; }
-  .list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+      .list {
+        max-height: 262px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding-right: 2px;
+      }
+      .list::-webkit-scrollbar {
+        width: 8px;
+      }
+      .list::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        border: 2px solid transparent;
+        background-clip: padding-box;
+      }
 
-  .rq-wrap { display: block; }  /* static wrapper: popup still anchors to .app-footer; hover spans item+popup */
-  .row { display:flex; gap:8px; padding: 7px 6px; border-radius: 8px; cursor: pointer; }
-  .row:hover { background: var(--hover); }
-  .row .sd { width:7px; height:7px; border-radius:50%; margin-top:4px; flex:0 0 auto; }
-  .row .sd.running { background: var(--running); box-shadow: 0 0 0 3px rgba(34,197,94,.16); }
-  .row .sd.waiting { background: var(--waiting); }
-  .row .body { min-width: 0; flex: 1; }
-  /* line 1: reason (primary) */
-  .row .reason { font-size: 12px; color: var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  /* line 2: labels (resource + priority badges) + project + elapsed */
-  .row .meta { font-size: 11px; color: var(--muted); margin-top: 4px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .row .meta .proj { color: var(--muted); }
-  .row .meta .sep { opacity:.4; }
-  .row .meta .elapsed { font-variant-numeric: tabular-nums; }
-  /* line 3: full details, revealed on row hover */
-  .row .more { max-height:0; overflow:hidden; opacity:0; transition: max-height .16s ease, opacity .16s ease; font-size:10.5px; color:var(--muted2); line-height:1.55; font-variant-numeric: tabular-nums; }
-  .row:hover .more { max-height:48px; opacity:1; margin-top:4px; }
-  .row.dismissed:hover .more { max-height:0; opacity:0; margin-top:0; }  /* clicked while open → back to simple */
-  .row .more .k { color: var(--muted); opacity:.6; }
+      .rq-wrap {
+        display: block;
+      } /* static wrapper: popup still anchors to .app-footer; hover spans item+popup */
+      .row {
+        display: flex;
+        gap: 8px;
+        padding: 7px 6px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .row:hover {
+        background: var(--hover);
+      }
+      .row .sd {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-top: 4px;
+        flex: 0 0 auto;
+      }
+      .row .sd.running {
+        background: var(--running);
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
+      }
+      .row .sd.waiting {
+        background: var(--waiting);
+      }
+      .row .body {
+        min-width: 0;
+        flex: 1;
+      }
+      /* line 1: reason (primary) */
+      .row .reason {
+        font-size: 12px;
+        color: var(--fg);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* line 2: labels (resource + priority badges) + project + elapsed */
+      .row .meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 4px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .row .meta .proj {
+        color: var(--muted);
+      }
+      .row .meta .sep {
+        opacity: 0.4;
+      }
+      .row .meta .elapsed {
+        font-variant-numeric: tabular-nums;
+      }
+      /* line 3: full details, revealed on row hover */
+      .row .more {
+        max-height: 0;
+        overflow: hidden;
+        opacity: 0;
+        transition:
+          max-height 0.16s ease,
+          opacity 0.16s ease;
+        font-size: 10.5px;
+        color: var(--muted2);
+        line-height: 1.55;
+        font-variant-numeric: tabular-nums;
+      }
+      .row:hover .more {
+        max-height: 48px;
+        opacity: 1;
+        margin-top: 4px;
+      }
+      .row.dismissed:hover .more {
+        max-height: 0;
+        opacity: 0;
+        margin-top: 0;
+      } /* clicked while open → back to simple */
+      .row .more .k {
+        color: var(--muted);
+        opacity: 0.6;
+      }
 
-  .badge { font-size: 9.5px; font-weight: 700; letter-spacing:.4px; text-transform: uppercase; padding: 1px 5px; border-radius: 5px; flex:0 0 auto; }
-  .b-gpu { color: var(--r-gpu); background: rgba(192,132,252,.14); }
-  .b-cpu { color: var(--r-cpu); background: rgba(52,211,153,.14); }
-  .b-ram { color: var(--r-ram); background: rgba(96,165,250,.14); }
-  .b-machine { color: var(--r-machine); background: rgba(251,191,36,.14); }
-  .prio { font-size: 9.5px; font-weight:600; letter-spacing:.3px; padding: 1px 5px; border-radius: 5px; flex:0 0 auto; }
-  .prio-interactive { color: var(--p-interactive); background: var(--p-interactive-bg); }
-  .prio-normal { color: var(--p-normal); background: var(--p-normal-bg); }
-  .prio-background { color: var(--p-background); background: var(--p-background-bg); }
+      .badge {
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        padding: 1px 5px;
+        border-radius: 5px;
+        flex: 0 0 auto;
+      }
+      .b-gpu {
+        color: var(--r-gpu);
+        background: rgba(192, 132, 252, 0.14);
+      }
+      .b-cpu {
+        color: var(--r-cpu);
+        background: rgba(52, 211, 153, 0.14);
+      }
+      .b-ram {
+        color: var(--r-ram);
+        background: rgba(96, 165, 250, 0.14);
+      }
+      .b-machine {
+        color: var(--r-machine);
+        background: rgba(251, 191, 36, 0.14);
+      }
+      .prio {
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        padding: 1px 5px;
+        border-radius: 5px;
+        flex: 0 0 auto;
+      }
+      .prio-interactive {
+        color: var(--p-interactive);
+        background: var(--p-interactive-bg);
+      }
+      .prio-normal {
+        color: var(--p-normal);
+        background: var(--p-normal-bg);
+      }
+      .prio-background {
+        color: var(--p-background);
+        background: var(--p-background-bg);
+      }
 
-  .pop-foot { font-size: 10px; color: var(--muted2); padding: 8px 2px 2px; border-top: 1px solid var(--border); margin-top: 6px; display:flex; justify-content:space-between; align-items:center; }
-  .empty { padding: 18px 8px; text-align:center; color: var(--muted2); font-size: 12px; }
+      .pop-foot {
+        font-size: 10px;
+        color: var(--muted2);
+        padding: 8px 2px 2px;
+        border-top: 1px solid var(--border);
+        margin-top: 6px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .empty {
+        padding: 18px 8px;
+        text-align: center;
+        color: var(--muted2);
+        font-size: 12px;
+      }
 
-  /* ---- side notes ---- */
-  .notes { max-width: 520px; color: var(--fg); }
-  .notes h1 { font-size: 18px; margin: 4px 0 4px; }
-  .notes h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 22px 0 8px; }
-  .notes p, .notes li { font-size: 13px; line-height: 1.6; color: #d4d4d8; }
-  .notes code { background: var(--hover); padding: 1px 5px; border-radius: 5px; font-size: 12px; color:#e9d5ff; }
-  .controls { display:flex; gap:8px; margin: 6px 0 2px; }
-  .btn { font-family:inherit; font-size:12px; color:var(--fg); background:var(--popover); border:1px solid var(--border-strong); padding:6px 12px; border-radius:8px; cursor:pointer; }
-  .btn.on { background: #2a2140; border-color: #7c3aed; color: #ddd6fe; }
-  .legend { display:flex; flex-wrap:wrap; gap: 6px 14px; margin-top:6px; }
-  .legend span { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
-  .swatch { width:10px; height:10px; border-radius:3px; }
-  .hint { font-size:12px; color:var(--muted2); margin-top:10px; }
+      /* ---- side notes ---- */
+      .notes {
+        max-width: 520px;
+        color: var(--fg);
+      }
+      .notes h1 {
+        font-size: 18px;
+        margin: 4px 0 4px;
+      }
+      .notes h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        margin: 22px 0 8px;
+      }
+      .notes p,
+      .notes li {
+        font-size: 13px;
+        line-height: 1.6;
+        color: #d4d4d8;
+      }
+      .notes code {
+        background: var(--hover);
+        padding: 1px 5px;
+        border-radius: 5px;
+        font-size: 12px;
+        color: #e9d5ff;
+      }
+      .controls {
+        display: flex;
+        gap: 8px;
+        margin: 6px 0 2px;
+      }
+      .btn {
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--fg);
+        background: var(--popover);
+        border: 1px solid var(--border-strong);
+        padding: 6px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .btn.on {
+        background: #2a2140;
+        border-color: #7c3aed;
+        color: #ddd6fe;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        margin-top: 6px;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted2);
+        margin-top: 10px;
+      }
 
-  body.app-only .notes { display: none; }
-  body.app-only .stage { padding: 26px; }
-</style>
-</head>
-<body>
-<div class="stage">
-  <!-- ============ faux app ============ -->
-  <div class="app">
-    <div class="app-top">
-      <div class="brand"><span class="dot"></span> t3code</div>
-      <div class="navitem active">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        Chats
-      </div>
-      <div class="ghost w85"></div>
-      <div class="ghost w70"></div>
-      <div class="ghost w50"></div>
-      <div class="ghost w70"></div>
-    </div>
-
-    <div class="app-footer">
-      <!-- ===== NEW: Resource Queue quick-glance item + popover (opens on hover & click) ===== -->
-      <div class="rq-wrap" id="rq-wrap">
-        <button class="item" id="rq-item" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
-          <span class="label">Resource Queue</span>
-          <span class="counts" id="rq-counts">
-            <span class="cbadge maint" id="rq-maint-badge" title="broker in maintenance (draining)" style="display:none">maint</span>
-            <span class="cbadge run" id="rq-run" title="running (holding a lease)">1</span>
-            <span class="cbadge wait" id="rq-wait" title="waiting (queued)">3</span>
-          </span>
-        </button>
-        <!-- popover lives inside the wrapper so hover bridges item↔popup -->
-        <div class="pop" id="rq-pop">
-          <div class="pop-head">
-            <span class="pop-title">Resource queue</span>
-            <span style="display:flex;align-items:center;gap:8px">
-              <span class="maint" id="rq-maint" style="display:none">maintenance</span>
-              <span class="refresh"><svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg><span id="rq-ago">updated 0s ago</span></span>
-            </span>
+      body.app-only .notes {
+        display: none;
+      }
+      body.app-only .stage {
+        padding: 26px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <!-- ============ faux app ============ -->
+      <div class="app">
+        <div class="app-top">
+          <div class="brand"><span class="dot"></span> t3code</div>
+          <div class="navitem active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Chats
           </div>
-          <div class="util" id="rq-util"></div>
-          <div class="divider"></div>
-          <div class="list" id="rq-list"></div>
-          <div class="pop-foot">
-            <span id="rq-summary"></span>
-            <span>refresh 5s</span>
+          <div class="ghost w85"></div>
+          <div class="ghost w70"></div>
+          <div class="ghost w50"></div>
+          <div class="ghost w70"></div>
+        </div>
+
+        <div class="app-footer">
+          <!-- ===== NEW: Resource Queue quick-glance item + popover (opens on hover & click) ===== -->
+          <div class="rq-wrap" id="rq-wrap">
+            <button class="item" id="rq-item" type="button">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 12h4l2-7 4 14 2-7h6" />
+              </svg>
+              <span class="label">Resource Queue</span>
+              <span class="counts" id="rq-counts">
+                <span
+                  class="cbadge maint"
+                  id="rq-maint-badge"
+                  title="broker in maintenance (draining)"
+                  style="display: none"
+                  >maint</span
+                >
+                <span class="cbadge run" id="rq-run" title="running (holding a lease)">1</span>
+                <span class="cbadge wait" id="rq-wait" title="waiting (queued)">3</span>
+              </span>
+            </button>
+            <!-- popover lives inside the wrapper so hover bridges item↔popup -->
+            <div class="pop" id="rq-pop">
+              <div class="pop-head">
+                <span class="pop-title">Resource queue</span>
+                <span style="display: flex; align-items: center; gap: 8px">
+                  <span class="maint" id="rq-maint" style="display: none">maintenance</span>
+                  <span class="refresh"
+                    ><svg
+                      class="spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                    >
+                      <path d="M21 12a9 9 0 1 1-6.2-8.5" /></svg
+                    ><span id="rq-ago">updated 0s ago</span></span
+                  >
+                </span>
+              </div>
+              <div class="util" id="rq-util"></div>
+              <div class="divider"></div>
+              <div class="list" id="rq-list"></div>
+              <div class="pop-foot">
+                <span id="rq-summary"></span>
+                <span>refresh 5s</span>
+              </div>
+            </div>
           </div>
+
+          <!-- existing item, for placement context -->
+          <button class="item">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+              <rect x="9" y="9" width="6" height="6" />
+              <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+            </svg>
+            <span class="label">Local models</span>
+            <span class="statusdot" style="background: var(--running)"></span>
+            <span class="spacer"></span>
+            <svg
+              class="chev"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+          <button class="item">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+              />
+            </svg>
+            <span class="label">Settings</span>
+          </button>
         </div>
       </div>
 
-      <!-- existing item, for placement context -->
-      <button class="item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
-        <span class="label">Local models</span>
-        <span class="statusdot" style="background:var(--running)"></span>
-        <span class="spacer"></span>
-        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-      </button>
-      <button class="item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <span class="label">Settings</span>
-      </button>
+      <!-- ============ notes / controls ============ -->
+      <div class="notes">
+        <h1>Resource Queue — sidebar prototype</h1>
+        <p>
+          Live mock using a <b>real <code>resctl status --json</code> snapshot</b> (1 GPU job
+          running, 3 queued). <b>Hover or click</b> the <b>Resource Queue</b> item in the footer to
+          open the popup (click pins it open). <b>Hover any row</b> to reveal its full details.
+          Durations tick live; the popup shows a simulated 5s refresh.
+        </p>
 
+        <div class="controls">
+          <button class="btn on" id="sc-real" onclick="setScenario('real')">
+            Real snapshot (3 queued)
+          </button>
+          <button class="btn" id="sc-busy" onclick="setScenario('busy')">
+            Busy (9 items → scroll)
+          </button>
+          <button class="btn" id="sc-idle" onclick="setScenario('idle')">All idle (0)</button>
+          <button class="btn" id="sc-maint" onclick="setScenario('maint')">Maintenance</button>
+        </div>
+        <div class="hint">
+          The popup list caps the visible area at ~5 rows, then scrolls (try “Busy”).
+        </div>
+
+        <h2>Quick-glance item (collapsed)</h2>
+        <ul>
+          <li>
+            <b>Counts</b> — two badges: <b>running</b> (green, holding a lease) and
+            <b>waiting</b> (yellow, queued across all resources). Each goes muted-grey when its
+            count is 0.
+          </li>
+          <li>
+            Opens the popup on <b>hover</b> and on <b>click</b> (click pins it so it stays while you
+            move the mouse away).
+          </li>
+          <li>
+            Updates every <b>60s</b> in the background; every <b>5s</b> while the popup is open.
+          </li>
+        </ul>
+
+        <h2>Popup — fields I recommend</h2>
+        <p>
+          From the JSON each item exposes: <code>resource</code>, <code>priority</code>,
+          <code>reason</code>, <code>project</code>, <code>agent</code>, <code>pid</code>,
+          <code>amount</code>, <code>seq</code>, <code>eta_sec</code>, and a timestamp. I show the
+          <b>5 that carry signal</b> and drop the rest:
+        </p>
+        <ul>
+          <li>
+            <b>Resource badge</b> (<span class="badge b-gpu">gpu</span> /
+            <span class="badge b-cpu">cpu</span> / <span class="badge b-ram">ram</span>) — what it
+            needs.
+          </li>
+          <li><b>Priority badge</b> — drives ordering &amp; is colour-coded.</li>
+          <li>
+            <b>Reason</b> — the human “what &amp; ETA” string; the most useful single field (primary
+            line).
+          </li>
+          <li><b>Project</b> — who owns it (secondary line).</li>
+          <li>
+            <b>Elapsed</b> — <i>running&nbsp;Xm</i> (held) or <i>waiting&nbsp;Xm</i> (since
+            enqueue); surfaces staleness.
+          </li>
+        </ul>
+        <p>
+          Each row puts the <b>reason on line 1</b> and the <b>labels on line 2</b> (resource +
+          priority badges, then project · elapsed). Running holders (green) are listed first so you
+          see <i>what’s blocking the queue</i>, then waiting jobs (amber) by queue order.
+          <code>amount</code> appears only when &gt;1. A utilization strip up top shows
+          <b>in_use / capacity</b> per resource.
+        </p>
+        <div class="legend">
+          <span
+            ><span class="swatch" style="background: var(--running)"></span>running (holding
+            lease)</span
+          >
+          <span
+            ><span class="swatch" style="background: var(--waiting)"></span>waiting (queued)</span
+          >
+          <span
+            ><span class="swatch" style="background: var(--p-interactive)"></span>interactive</span
+          >
+          <span><span class="swatch" style="background: var(--p-normal)"></span>normal</span>
+          <span
+            ><span class="swatch" style="background: var(--p-background)"></span>background</span
+          >
+        </div>
+
+        <h2>Row detail → hover to peek, click to dismiss</h2>
+        <p>
+          Hovering a row expands a third line with the fields that don’t earn permanent space:
+          <code>pid</code>, queue position (e.g. <i>#2 in gpu queue</i>), exact
+          <code>enqueued / started</code> time, and <code>eta</code>.
+          <b>Click the expanded row to collapse it back to simple</b> (handy when it covers the row
+          below); moving the pointer away resets it. Nothing is truly hidden — just progressively
+          disclosed.
+        </p>
+
+        <p class="hint">
+          Tell me what to change — placement, the count semantics (waiting-only vs waiting+running),
+          which fields, ordering — and I’ll wire it to the real server RPC.
+        </p>
+      </div>
     </div>
-  </div>
 
-  <!-- ============ notes / controls ============ -->
-  <div class="notes">
-    <h1>Resource Queue — sidebar prototype</h1>
-    <p>Live mock using a <b>real <code>resctl status --json</code> snapshot</b> (1 GPU job running, 3 queued). <b>Hover or click</b> the <b>Resource Queue</b> item in the footer to open the popup (click pins it open). <b>Hover any row</b> to reveal its full details. Durations tick live; the popup shows a simulated 5s refresh.</p>
+    <script>
+      const NOW0 = Date.now() / 1000;
+      // Real captured snapshot (resctl status --json), timestamps rebased to "now".
+      const real = {
+        maintenance: false,
+        resources: {
+          gpu: {
+            capacity: 1,
+            in_use: 1,
+            leases: [
+              {
+                resource: "gpu",
+                priority: "normal",
+                reason: "atlas v0.26.0 release (re-run after restart): build+eval+gate+push+CI",
+                project: "atlas",
+                pid: 18699,
+                amount: 1,
+                since: NOW0 - 3017,
+              },
+            ],
+            queue: [
+              {
+                resource: "gpu",
+                priority: "background",
+                reason: "E8: SSM+InfLLM-V2 hybrid MQAR recall, 20k steps (~20min)",
+                project: "sparse-attn-lab",
+                pid: 28502,
+                amount: 1,
+                since: NOW0 - 2887,
+              },
+              {
+                resource: "gpu",
+                priority: "background",
+                reason: "E5b: full-attn ceiling finder (4 rows, key_at_slot fix), ~15min",
+                project: "sparse-attn-lab",
+                pid: 98639,
+                amount: 1,
+                since: NOW0 - 1985,
+              },
+              {
+                resource: "gpu",
+                priority: "background",
+                reason: "E10: routing-trajectory mechanism (4 selectors, 12k steps), ~20min",
+                project: "sparse-attn-lab",
+                pid: 99351,
+                amount: 1,
+                since: NOW0 - 1980,
+              },
+            ],
+          },
+          cpu: { capacity: 16, in_use: 0, leases: [], queue: [] },
+          ram: { capacity: 124, in_use: 0, advisory: true, leases: [], queue: [] },
+          machine: { capacity: 1, in_use: 0, leases: [], queue: [] },
+        },
+      };
+      const busy = {
+        maintenance: false,
+        resources: {
+          gpu: {
+            capacity: 1,
+            in_use: 1,
+            leases: [
+              {
+                resource: "gpu",
+                priority: "interactive",
+                reason: "imatrix calibration for Q4_K_M quant (user waiting)",
+                project: "atlas",
+                pid: 18699,
+                amount: 1,
+                since: NOW0 - 412,
+              },
+            ],
+            queue: [
+              {
+                resource: "gpu",
+                priority: "normal",
+                reason: "OSRM route-grid rebuild for CA west region",
+                project: "pickup-v2",
+                pid: 28502,
+                amount: 1,
+                since: NOW0 - 2887,
+              },
+              {
+                resource: "gpu",
+                priority: "background",
+                reason: "E8: SSM+InfLLM-V2 hybrid MQAR recall, 20k steps",
+                project: "sparse-attn-lab",
+                pid: 98639,
+                amount: 1,
+                since: NOW0 - 1985,
+              },
+              {
+                resource: "gpu",
+                priority: "background",
+                reason: "E10: routing-trajectory mechanism (4 selectors, 12k steps)",
+                project: "sparse-attn-lab",
+                pid: 99351,
+                amount: 1,
+                since: NOW0 - 1980,
+              },
+            ],
+          },
+          cpu: {
+            capacity: 16,
+            in_use: 12,
+            leases: [
+              {
+                resource: "cpu",
+                priority: "normal",
+                reason: "pnpm verify — typecheck + lint + browser suite",
+                project: "t3code",
+                pid: 51200,
+                amount: 8,
+                since: NOW0 - 240,
+              },
+            ],
+            queue: [
+              {
+                resource: "cpu",
+                priority: "normal",
+                reason: "cargo test --all-features (atlas release gate)",
+                project: "atlas",
+                pid: 60011,
+                amount: 4,
+                since: NOW0 - 95,
+              },
+              {
+                resource: "cpu",
+                priority: "background",
+                reason: "LKH TSP solve, 1800 stops, 10 runs",
+                project: "pickup-v2",
+                pid: 61204,
+                amount: 6,
+                since: NOW0 - 60,
+              },
+            ],
+          },
+          ram: {
+            capacity: 124,
+            in_use: 40,
+            advisory: true,
+            leases: [
+              {
+                resource: "ram",
+                priority: "normal",
+                reason: "DeepSeek V4 ds4-server resident",
+                project: "t3code",
+                pid: 7781,
+                amount: 40,
+                since: NOW0 - 5400,
+              },
+            ],
+            queue: [
+              {
+                resource: "ram",
+                priority: "interactive",
+                reason: "mlx-serve load Qwen2.5-72B (user clicked load)",
+                project: "t3code",
+                pid: 7790,
+                amount: 48,
+                since: NOW0 - 8,
+              },
+            ],
+          },
+          machine: { capacity: 1, in_use: 0, leases: [], queue: [] },
+        },
+      };
+      const idle = {
+        maintenance: false,
+        resources: {
+          gpu: { capacity: 1, in_use: 0, leases: [], queue: [] },
+          cpu: { capacity: 16, in_use: 0, leases: [], queue: [] },
+          ram: { capacity: 124, in_use: 0, advisory: true, leases: [], queue: [] },
+          machine: { capacity: 1, in_use: 0, leases: [], queue: [] },
+        },
+      };
+      const maint = JSON.parse(JSON.stringify(real));
+      maint.maintenance = true;
 
-    <div class="controls">
-      <button class="btn on" id="sc-real" onclick="setScenario('real')">Real snapshot (3 queued)</button>
-      <button class="btn" id="sc-busy" onclick="setScenario('busy')">Busy (9 items → scroll)</button>
-      <button class="btn" id="sc-idle" onclick="setScenario('idle')">All idle (0)</button>
-      <button class="btn" id="sc-maint" onclick="setScenario('maint')">Maintenance</button>
-    </div>
-    <div class="hint">The popup list caps the visible area at ~5 rows, then scrolls (try “Busy”).</div>
+      const SCEN = { real, busy, idle, maint };
+      let scenario = "real";
+      let pinned = false,
+        hovering = false,
+        popOpen = false,
+        closeTimer = null;
+      let lastRefresh = Date.now();
 
-    <h2>Quick-glance item (collapsed)</h2>
-    <ul>
-      <li><b>Counts</b> — two badges: <b>running</b> (green, holding a lease) and <b>waiting</b> (yellow, queued across all resources). Each goes muted-grey when its count is 0.</li>
-      <li>Opens the popup on <b>hover</b> and on <b>click</b> (click pins it so it stays while you move the mouse away).</li>
-      <li>Updates every <b>60s</b> in the background; every <b>5s</b> while the popup is open.</li>
-    </ul>
+      const RBAR = {
+        gpu: "var(--r-gpu)",
+        cpu: "var(--r-cpu)",
+        ram: "var(--r-ram)",
+        machine: "var(--r-machine)",
+      };
 
-    <h2>Popup — fields I recommend</h2>
-    <p>From the JSON each item exposes: <code>resource</code>, <code>priority</code>, <code>reason</code>, <code>project</code>, <code>agent</code>, <code>pid</code>, <code>amount</code>, <code>seq</code>, <code>eta_sec</code>, and a timestamp. I show the <b>5 that carry signal</b> and drop the rest:</p>
-    <ul>
-      <li><b>Resource badge</b> (<span class="badge b-gpu">gpu</span> / <span class="badge b-cpu">cpu</span> / <span class="badge b-ram">ram</span>) — what it needs.</li>
-      <li><b>Priority badge</b> — drives ordering &amp; is colour-coded.</li>
-      <li><b>Reason</b> — the human “what &amp; ETA” string; the most useful single field (primary line).</li>
-      <li><b>Project</b> — who owns it (secondary line).</li>
-      <li><b>Elapsed</b> — <i>running&nbsp;Xm</i> (held) or <i>waiting&nbsp;Xm</i> (since enqueue); surfaces staleness.</li>
-    </ul>
-    <p>Each row puts the <b>reason on line 1</b> and the <b>labels on line 2</b> (resource + priority badges, then project · elapsed). Running holders (green) are listed first so you see <i>what’s blocking the queue</i>, then waiting jobs (amber) by queue order. <code>amount</code> appears only when &gt;1. A utilization strip up top shows <b>in_use / capacity</b> per resource.</p>
-    <div class="legend">
-      <span><span class="swatch" style="background:var(--running)"></span>running (holding lease)</span>
-      <span><span class="swatch" style="background:var(--waiting)"></span>waiting (queued)</span>
-      <span><span class="swatch" style="background:var(--p-interactive)"></span>interactive</span>
-      <span><span class="swatch" style="background:var(--p-normal)"></span>normal</span>
-      <span><span class="swatch" style="background:var(--p-background)"></span>background</span>
-    </div>
+      function fmtDur(sec) {
+        sec = Math.max(0, Math.floor(sec));
+        if (sec < 60) return sec + "s";
+        const m = Math.floor(sec / 60);
+        if (m < 60) return m + "m";
+        const h = Math.floor(m / 60);
+        return h + "h " + (m % 60) + "m";
+      }
+      function flatten(snap) {
+        const running = [],
+          waiting = [];
+        for (const [name, r] of Object.entries(snap.resources)) {
+          (r.leases || []).forEach((l) => running.push({ ...l, resource: name, state: "running" }));
+          (r.queue || []).forEach((q, idx) =>
+            waiting.push({ ...q, resource: name, state: "waiting", pos: idx + 1 }),
+          );
+        }
+        return { running, waiting };
+      }
+      function waitingCount(snap) {
+        return Object.values(snap.resources).reduce(
+          (n, r) => n + (r.queue ? r.queue.length : 0),
+          0,
+        );
+      }
+      function runningCount(snap) {
+        return Object.values(snap.resources).reduce(
+          (n, r) => n + (r.leases ? r.leases.length : 0),
+          0,
+        );
+      }
 
-    <h2>Row detail → hover to peek, click to dismiss</h2>
-    <p>Hovering a row expands a third line with the fields that don’t earn permanent space: <code>pid</code>, queue position (e.g. <i>#2 in gpu queue</i>), exact <code>enqueued / started</code> time, and <code>eta</code>. <b>Click the expanded row to collapse it back to simple</b> (handy when it covers the row below); moving the pointer away resets it. Nothing is truly hidden — just progressively disclosed.</p>
+      function elapsedText(it) {
+        return (
+          (it.state === "running" ? "running " : "waiting ") + fmtDur(Date.now() / 1000 - it.since)
+        );
+      }
+      function buildRow(it) {
+        const el = document.createElement("div");
+        el.className = "row";
+        const amount = it.amount > 1 ? ' <span class="sep">·</span> ×' + it.amount : "";
+        const clock = new Date(it.since * 1000).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const where =
+          it.state === "waiting" ? "#" + it.pos + " in " + it.resource + " queue" : "holding lease";
+        const eta = it.eta != null ? fmtDur(it.eta) : "—";
+        el.innerHTML =
+          '<span class="sd ' +
+          it.state +
+          '"></span>' +
+          '<div class="body">' +
+          // line 1 — reason (primary)
+          '<div class="reason">' +
+          it.reason +
+          "</div>" +
+          // line 2 — labels: resource + priority badges, then project + elapsed
+          '<div class="meta">' +
+          '<span class="badge b-' +
+          it.resource +
+          '">' +
+          it.resource +
+          "</span>" +
+          '<span class="prio prio-' +
+          it.priority +
+          '">' +
+          it.priority +
+          "</span>" +
+          '<span class="sep">·</span><span class="proj">' +
+          it.project +
+          "</span>" +
+          '<span class="sep">·</span><span class="elapsed">' +
+          elapsedText(it) +
+          "</span>" +
+          amount +
+          "</div>" +
+          // line 3 — full details, revealed on hover
+          '<div class="more">' +
+          '<span class="k">pid</span> ' +
+          it.pid +
+          ' <span class="k">·</span> ' +
+          where +
+          ' <span class="k">·</span> ' +
+          (it.state === "running" ? "started " : "enqueued ") +
+          clock +
+          ' <span class="k">·</span> <span class="k">eta</span> ' +
+          eta +
+          "</div>" +
+          "</div>";
+        // click toggles the detail closed/open; reset when the pointer leaves so a fresh hover previews again
+        el.addEventListener("click", () => el.classList.toggle("dismissed"));
+        el.addEventListener("mouseleave", () => el.classList.remove("dismissed"));
+        return el;
+      }
 
-    <p class="hint">Tell me what to change — placement, the count semantics (waiting-only vs waiting+running), which fields, ordering — and I’ll wire it to the real server RPC.</p>
-  </div>
-</div>
+      // Signature of the visible row set — when this is unchanged across a refresh we update text
+      // in place instead of rebuilding the DOM, so a hovered row keeps its expanded detail.
+      let lastSig = null;
+      function render() {
+        const snap = SCEN[scenario];
+        const wc = waitingCount(snap),
+          rc = runningCount(snap);
 
-<script>
-  const NOW0 = Date.now() / 1000;
-  // Real captured snapshot (resctl status --json), timestamps rebased to "now".
-  const real = {
-    maintenance: false,
-    resources: {
-      gpu: { capacity: 1, in_use: 1,
-        leases: [{ resource:'gpu', priority:'normal', reason:'atlas v0.26.0 release (re-run after restart): build+eval+gate+push+CI', project:'atlas', pid:18699, amount:1, since: NOW0 - 3017 }],
-        queue: [
-          { resource:'gpu', priority:'background', reason:'E8: SSM+InfLLM-V2 hybrid MQAR recall, 20k steps (~20min)', project:'sparse-attn-lab', pid:28502, amount:1, since: NOW0 - 2887 },
-          { resource:'gpu', priority:'background', reason:'E5b: full-attn ceiling finder (4 rows, key_at_slot fix), ~15min', project:'sparse-attn-lab', pid:98639, amount:1, since: NOW0 - 1985 },
-          { resource:'gpu', priority:'background', reason:'E10: routing-trajectory mechanism (4 selectors, 12k steps), ~20min', project:'sparse-attn-lab', pid:99351, amount:1, since: NOW0 - 1980 },
-        ] },
-      cpu: { capacity: 16, in_use: 0, leases: [], queue: [] },
-      ram: { capacity: 124, in_use: 0, advisory:true, leases: [], queue: [] },
-      machine: { capacity: 1, in_use: 0, leases: [], queue: [] },
-    },
-  };
-  const busy = {
-    maintenance: false,
-    resources: {
-      gpu: { capacity: 1, in_use: 1,
-        leases: [{ resource:'gpu', priority:'interactive', reason:'imatrix calibration for Q4_K_M quant (user waiting)', project:'atlas', pid:18699, amount:1, since: NOW0 - 412 }],
-        queue: [
-          { resource:'gpu', priority:'normal', reason:'OSRM route-grid rebuild for CA west region', project:'pickup-v2', pid:28502, amount:1, since: NOW0 - 2887 },
-          { resource:'gpu', priority:'background', reason:'E8: SSM+InfLLM-V2 hybrid MQAR recall, 20k steps', project:'sparse-attn-lab', pid:98639, amount:1, since: NOW0 - 1985 },
-          { resource:'gpu', priority:'background', reason:'E10: routing-trajectory mechanism (4 selectors, 12k steps)', project:'sparse-attn-lab', pid:99351, amount:1, since: NOW0 - 1980 },
-        ] },
-      cpu: { capacity: 16, in_use: 12,
-        leases: [{ resource:'cpu', priority:'normal', reason:'pnpm verify — typecheck + lint + browser suite', project:'t3code', pid:51200, amount:8, since: NOW0 - 240 }],
-        queue: [
-          { resource:'cpu', priority:'normal', reason:'cargo test --all-features (atlas release gate)', project:'atlas', pid:60011, amount:4, since: NOW0 - 95 },
-          { resource:'cpu', priority:'background', reason:'LKH TSP solve, 1800 stops, 10 runs', project:'pickup-v2', pid:61204, amount:6, since: NOW0 - 60 },
-        ] },
-      ram: { capacity: 124, in_use: 40, advisory:true,
-        leases: [{ resource:'ram', priority:'normal', reason:'DeepSeek V4 ds4-server resident', project:'t3code', pid:7781, amount:40, since: NOW0 - 5400 }],
-        queue: [
-          { resource:'ram', priority:'interactive', reason:'mlx-serve load Qwen2.5-72B (user clicked load)', project:'t3code', pid:7790, amount:48, since: NOW0 - 8 },
-        ] },
-      machine: { capacity: 1, in_use: 0, leases: [], queue: [] },
-    },
-  };
-  const idle = {
-    maintenance: false,
-    resources: {
-      gpu: { capacity:1, in_use:0, leases:[], queue:[] },
-      cpu: { capacity:16, in_use:0, leases:[], queue:[] },
-      ram: { capacity:124, in_use:0, advisory:true, leases:[], queue:[] },
-      machine: { capacity:1, in_use:0, leases:[], queue:[] },
-    },
-  };
-  const maint = JSON.parse(JSON.stringify(real));
-  maint.maintenance = true;
+        // quick-glance: cheap, no hover target — safe to update every tick
+        const runB = document.getElementById("rq-run");
+        runB.textContent = rc;
+        runB.className = "cbadge run" + (rc === 0 ? " zero" : "");
+        const waitB = document.getElementById("rq-wait");
+        waitB.textContent = wc;
+        waitB.className = "cbadge wait" + (wc === 0 ? " zero" : "");
+        document.getElementById("rq-maint-badge").style.display = snap.maintenance ? "" : "none";
 
-  const SCEN = { real, busy, idle, maint };
-  let scenario = 'real';
-  let pinned = false, hovering = false, popOpen = false, closeTimer = null;
-  let lastRefresh = Date.now();
+        if (!popOpen) return;
 
-  const RBAR = { gpu:'var(--r-gpu)', cpu:'var(--r-cpu)', ram:'var(--r-ram)', machine:'var(--r-machine)' };
+        const { running, waiting } = flatten(snap);
+        const rows = [...running, ...waiting];
+        const sig =
+          rows
+            .map((it) => it.state + ":" + it.resource + ":" + it.pid + ":" + (it.pos || 0))
+            .join("|") +
+          "@" +
+          scenario;
+        const list = document.getElementById("rq-list");
+        document.getElementById("rq-summary").textContent = rc + " running · " + wc + " waiting";
 
-  function fmtDur(sec) {
-    sec = Math.max(0, Math.floor(sec));
-    if (sec < 60) return sec + 's';
-    const m = Math.floor(sec / 60);
-    if (m < 60) return m + 'm';
-    const h = Math.floor(m / 60);
-    return h + 'h ' + (m % 60) + 'm';
-  }
-  function flatten(snap) {
-    const running = [], waiting = [];
-    for (const [name, r] of Object.entries(snap.resources)) {
-      (r.leases || []).forEach(l => running.push({ ...l, resource: name, state: 'running' }));
-      (r.queue || []).forEach((q, idx) => waiting.push({ ...q, resource: name, state: 'waiting', pos: idx + 1 }));
-    }
-    return { running, waiting };
-  }
-  function waitingCount(snap) {
-    return Object.values(snap.resources).reduce((n, r) => n + (r.queue ? r.queue.length : 0), 0);
-  }
-  function runningCount(snap) {
-    return Object.values(snap.resources).reduce((n, r) => n + (r.leases ? r.leases.length : 0), 0);
-  }
+        if (sig === lastSig) {
+          // same rows as last refresh → only refresh the live "elapsed" text, in place.
+          // No DOM teardown means the row you're hovering stays expanded across the 5s refresh.
+          const spans = list.querySelectorAll(".row .elapsed");
+          rows.forEach((it, i) => {
+            if (spans[i]) spans[i].textContent = elapsedText(it);
+          });
+          return;
+        }
+        lastSig = sig;
 
-  function elapsedText(it) {
-    return (it.state === 'running' ? 'running ' : 'waiting ') + fmtDur((Date.now() / 1000) - it.since);
-  }
-  function buildRow(it) {
-    const el = document.createElement('div');
-    el.className = 'row';
-    const amount = it.amount > 1 ? ' <span class="sep">·</span> ×' + it.amount : '';
-    const clock = new Date(it.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const where = it.state === 'waiting' ? ('#' + it.pos + ' in ' + it.resource + ' queue') : 'holding lease';
-    const eta = it.eta != null ? fmtDur(it.eta) : '—';
-    el.innerHTML =
-      '<span class="sd ' + it.state + '"></span>' +
-      '<div class="body">' +
-        // line 1 — reason (primary)
-        '<div class="reason">' + it.reason + '</div>' +
-        // line 2 — labels: resource + priority badges, then project + elapsed
-        '<div class="meta">' +
-          '<span class="badge b-' + it.resource + '">' + it.resource + '</span>' +
-          '<span class="prio prio-' + it.priority + '">' + it.priority + '</span>' +
-          '<span class="sep">·</span><span class="proj">' + it.project + '</span>' +
-          '<span class="sep">·</span><span class="elapsed">' + elapsedText(it) + '</span>' + amount +
-        '</div>' +
-        // line 3 — full details, revealed on hover
-        '<div class="more">' +
-          '<span class="k">pid</span> ' + it.pid +
-          ' <span class="k">·</span> ' + where +
-          ' <span class="k">·</span> ' + (it.state === 'running' ? 'started ' : 'enqueued ') + clock +
-          ' <span class="k">·</span> <span class="k">eta</span> ' + eta +
-        '</div>' +
-      '</div>';
-    // click toggles the detail closed/open; reset when the pointer leaves so a fresh hover previews again
-    el.addEventListener('click', () => el.classList.toggle('dismissed'));
-    el.addEventListener('mouseleave', () => el.classList.remove('dismissed'));
-    return el;
-  }
+        // row set changed → rebuild the popup contents (util strip, maintenance flag, list)
+        const util = document.getElementById("rq-util");
+        util.innerHTML = "";
+        for (const [name, r] of Object.entries(snap.resources)) {
+          if (name === "machine" && r.in_use === 0 && (!r.queue || !r.queue.length)) continue;
+          const pct = r.capacity ? Math.min(100, Math.round((r.in_use / r.capacity) * 100)) : 0;
+          const unit = name === "ram" ? "G" : "";
+          const g = document.createElement("div");
+          g.className = "gauge";
+          g.innerHTML =
+            '<div class="g-top"><span>' +
+            name.toUpperCase() +
+            "</span><span><b>" +
+            r.in_use +
+            "</b>/" +
+            r.capacity +
+            unit +
+            "</span></div>" +
+            '<div class="bar"><span style="width:' +
+            pct +
+            "%;background:" +
+            RBAR[name] +
+            '"></span></div>';
+          util.appendChild(g);
+        }
+        document.getElementById("rq-maint").style.display = snap.maintenance ? "" : "none";
 
-  // Signature of the visible row set — when this is unchanged across a refresh we update text
-  // in place instead of rebuilding the DOM, so a hovered row keeps its expanded detail.
-  let lastSig = null;
-  function render() {
-    const snap = SCEN[scenario];
-    const wc = waitingCount(snap), rc = runningCount(snap);
+        list.innerHTML = "";
+        if (rows.length === 0) {
+          list.innerHTML =
+            '<div class="empty">Nothing running or queued — all resources free.</div>';
+        } else {
+          for (const it of rows) list.appendChild(buildRow(it));
+        }
+      }
 
-    // quick-glance: cheap, no hover target — safe to update every tick
-    const runB = document.getElementById('rq-run');
-    runB.textContent = rc;
-    runB.className = 'cbadge run' + (rc === 0 ? ' zero' : '');
-    const waitB = document.getElementById('rq-wait');
-    waitB.textContent = wc;
-    waitB.className = 'cbadge wait' + (wc === 0 ? ' zero' : '');
-    document.getElementById('rq-maint-badge').style.display = snap.maintenance ? '' : 'none';
-
-    if (!popOpen) return;
-
-    const { running, waiting } = flatten(snap);
-    const rows = [...running, ...waiting];
-    const sig = rows.map((it) => it.state + ':' + it.resource + ':' + it.pid + ':' + (it.pos || 0)).join('|') + '@' + scenario;
-    const list = document.getElementById('rq-list');
-    document.getElementById('rq-summary').textContent = rc + ' running · ' + wc + ' waiting';
-
-    if (sig === lastSig) {
-      // same rows as last refresh → only refresh the live "elapsed" text, in place.
-      // No DOM teardown means the row you're hovering stays expanded across the 5s refresh.
-      const spans = list.querySelectorAll('.row .elapsed');
-      rows.forEach((it, i) => { if (spans[i]) spans[i].textContent = elapsedText(it); });
-      return;
-    }
-    lastSig = sig;
-
-    // row set changed → rebuild the popup contents (util strip, maintenance flag, list)
-    const util = document.getElementById('rq-util');
-    util.innerHTML = '';
-    for (const [name, r] of Object.entries(snap.resources)) {
-      if (name === 'machine' && r.in_use === 0 && (!r.queue || !r.queue.length)) continue;
-      const pct = r.capacity ? Math.min(100, Math.round((r.in_use / r.capacity) * 100)) : 0;
-      const unit = name === 'ram' ? 'G' : '';
-      const g = document.createElement('div');
-      g.className = 'gauge';
-      g.innerHTML =
-        '<div class="g-top"><span>' + name.toUpperCase() + '</span><span><b>' + r.in_use + '</b>/' + r.capacity + unit + '</span></div>' +
-        '<div class="bar"><span style="width:' + pct + '%;background:' + RBAR[name] + '"></span></div>';
-      util.appendChild(g);
-    }
-    document.getElementById('rq-maint').style.display = snap.maintenance ? '' : 'none';
-
-    list.innerHTML = '';
-    if (rows.length === 0) {
-      list.innerHTML = '<div class="empty">Nothing running or queued — all resources free.</div>';
-    } else {
-      for (const it of rows) list.appendChild(buildRow(it));
-    }
-  }
-
-  function syncPop() {
-    const open = pinned || hovering;
-    if (open && !popOpen) lastRefresh = Date.now(); // start the 5s refresh clock when it opens
-    popOpen = open;
-    document.getElementById('rq-pop').classList.toggle('show', open);
-    document.getElementById('rq-item').classList.toggle('open', open);
-    if (open) render();
-  }
-  function bindPop() {
-    const wrap = document.getElementById('rq-wrap');
-    // hover opens; because the popup lives inside the wrapper, moving the cursor up into
-    // the popup does not fire mouseleave, so it stays open while you read it.
-    wrap.addEventListener('mouseenter', () => { clearTimeout(closeTimer); hovering = true; syncPop(); });
-    wrap.addEventListener('mouseleave', () => { closeTimer = setTimeout(() => { hovering = false; syncPop(); }, 160); });
-    // click pins it open (survives mouse-out); click again to unpin/close.
-    document.getElementById('rq-item').addEventListener('click', () => {
-      pinned = !pinned;
-      if (!pinned) hovering = false;
-      syncPop();
-    });
-  }
-  function setScenario(s) {
-    scenario = s;
-    for (const id of ['real','busy','idle','maint'])
-      document.getElementById('sc-' + id).classList.toggle('on', id === s);
-    render();
-  }
-
-  // deep-link states for screenshots: ?scenario=real|busy|idle|maint&open=1
-  const params = new URLSearchParams(location.search);
-  const qScenario = params.get('scenario');
-  const qOpen = params.get('open') === '1';
-
-  // live ticking: durations every 1s; simulated popup refresh every 5s.
-  // ?static=1 disables ticking so one-shot screenshot tools don't hang on the animation.
-  if (params.get('static') !== '1') {
-    setInterval(() => {
-      if (popOpen) {
-        const ago = Math.floor((Date.now() - lastRefresh) / 1000);
-        document.getElementById('rq-ago').textContent = 'updated ' + ago + 's ago';
-        if (ago >= 5) { lastRefresh = Date.now(); }
+      function syncPop() {
+        const open = pinned || hovering;
+        if (open && !popOpen) lastRefresh = Date.now(); // start the 5s refresh clock when it opens
+        popOpen = open;
+        document.getElementById("rq-pop").classList.toggle("show", open);
+        document.getElementById("rq-item").classList.toggle("open", open);
+        if (open) render();
+      }
+      function bindPop() {
+        const wrap = document.getElementById("rq-wrap");
+        // hover opens; because the popup lives inside the wrapper, moving the cursor up into
+        // the popup does not fire mouseleave, so it stays open while you read it.
+        wrap.addEventListener("mouseenter", () => {
+          clearTimeout(closeTimer);
+          hovering = true;
+          syncPop();
+        });
+        wrap.addEventListener("mouseleave", () => {
+          closeTimer = setTimeout(() => {
+            hovering = false;
+            syncPop();
+          }, 160);
+        });
+        // click pins it open (survives mouse-out); click again to unpin/close.
+        document.getElementById("rq-item").addEventListener("click", () => {
+          pinned = !pinned;
+          if (!pinned) hovering = false;
+          syncPop();
+        });
+      }
+      function setScenario(s) {
+        scenario = s;
+        for (const id of ["real", "busy", "idle", "maint"])
+          document.getElementById("sc-" + id).classList.toggle("on", id === s);
         render();
       }
-    }, 1000);
-  }
 
-  bindPop();
-  if (params.get('app') === '1') document.body.classList.add('app-only');
-  if (qScenario && SCEN[qScenario]) setScenario(qScenario);
-  if (qOpen) { pinned = true; syncPop(); }
-  render();
-</script>
-</body>
+      // deep-link states for screenshots: ?scenario=real|busy|idle|maint&open=1
+      const params = new URLSearchParams(location.search);
+      const qScenario = params.get("scenario");
+      const qOpen = params.get("open") === "1";
+
+      // live ticking: durations every 1s; simulated popup refresh every 5s.
+      // ?static=1 disables ticking so one-shot screenshot tools don't hang on the animation.
+      if (params.get("static") !== "1") {
+        setInterval(() => {
+          if (popOpen) {
+            const ago = Math.floor((Date.now() - lastRefresh) / 1000);
+            document.getElementById("rq-ago").textContent = "updated " + ago + "s ago";
+            if (ago >= 5) {
+              lastRefresh = Date.now();
+            }
+            render();
+          }
+        }, 1000);
+      }
+
+      bindPop();
+      if (params.get("app") === "1") document.body.classList.add("app-only");
+      if (qScenario && SCEN[qScenario]) setScenario(qScenario);
+      if (qOpen) {
+        pinned = true;
+        syncPop();
+      }
+      render();
+    </script>
+  </body>
 </html>

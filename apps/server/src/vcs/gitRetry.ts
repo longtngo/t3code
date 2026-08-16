@@ -25,7 +25,9 @@ export const isTransientVcsError = (error: {
   // reported as a hard failure and retried by nobody — which is most of the
   // repeated `rev-parse` noise in the log. The reason field carries the same
   // distinction structurally; `detail` is prose and must not be matched on.
-  return error._tag === "GitCommandError" && (error.reason === "timeout" || error.reason === "spawn");
+  return (
+    error._tag === "GitCommandError" && (error.reason === "timeout" || error.reason === "spawn")
+  );
 };
 
 /**

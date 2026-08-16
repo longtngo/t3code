@@ -108,10 +108,7 @@ export function elapsedSeconds(item: ResourceQueueItem, nowMs: number): number {
  * reason; otherwise, if the broker supplied an ETA (remaining), add it to the elapsed time.
  * Undefined when neither is available — the ring then shows nothing.
  */
-export function estimatedTotalSeconds(
-  item: ResourceQueueItem,
-  nowMs: number,
-): number | undefined {
+export function estimatedTotalSeconds(item: ResourceQueueItem, nowMs: number): number | undefined {
   const fromReason = parseEstimateSeconds(item.reason);
   if (fromReason != null) return fromReason;
   if (item.etaSec != null && item.etaSec > 0) return elapsedSeconds(item, nowMs) + item.etaSec;

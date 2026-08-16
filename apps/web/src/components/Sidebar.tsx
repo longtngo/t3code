@@ -1794,8 +1794,9 @@ export default function Sidebar() {
   // derivation and a held copy would go stale the moment the dialog edits the
   // project — a second edit would then be computed from the pre-edit state and
   // silently discard the first.
-  const [projectActionsTargetRef, setProjectActionsTargetRef] =
-    useState<SidebarProjectRef | null>(null);
+  const [projectActionsTargetRef, setProjectActionsTargetRef] = useState<SidebarProjectRef | null>(
+    null,
+  );
   const closeProjectActions = useCallback(() => setProjectActionsTargetRef(null), []);
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
     onCopy: ({ threadId }) => {

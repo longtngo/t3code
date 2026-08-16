@@ -64,7 +64,9 @@ export function QuestionsDetail({ questions }: { questions: ReadonlyArray<WorkEn
                     )}
                   >
                     <span className="font-medium">{option.label}</span>
-                    {selected ? <span className="ml-1.5 text-[10px] text-primary">✓ chosen</span> : null}
+                    {selected ? (
+                      <span className="ml-1.5 text-[10px] text-primary">✓ chosen</span>
+                    ) : null}
                     {option.description ? (
                       <span className="mt-0.5 block text-[11px] opacity-80">
                         {option.description}
@@ -119,7 +121,9 @@ export function CommandDetail({
         ) : output.length === 0 ? (
           <p className="text-sm text-muted-foreground">(empty output)</p>
         ) : (
-          <pre className={cn(CODE_BLOCK_CLASS, "max-h-[45vh]", isError ? "border-destructive/40" : "")}>
+          <pre
+            className={cn(CODE_BLOCK_CLASS, "max-h-[45vh]", isError ? "border-destructive/40" : "")}
+          >
             {output}
           </pre>
         )}
@@ -184,7 +188,10 @@ export function WorkEntryDetailDialog({
   // the redundant description line / changed-files list for those.
   const showCommandDescription = Boolean(entry?.command) && body.kind !== "command";
   const showChangedFiles =
-    entry != null && entry.changedFiles != null && entry.changedFiles.length > 0 && body.kind !== "edit";
+    entry != null &&
+    entry.changedFiles != null &&
+    entry.changedFiles.length > 0 &&
+    body.kind !== "edit";
 
   return (
     <Dialog open={entry !== null} onOpenChange={onOpenChange}>

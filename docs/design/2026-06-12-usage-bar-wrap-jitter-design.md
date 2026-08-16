@@ -76,7 +76,7 @@ restructuring.
 - **JS hysteresis (ResizeObserver + sticky wrap state).** Add a dead-band so the
   layout only re-wraps after crossing the threshold by N px. Solves resize
   flapping but is heavier (observer, state, SSR care) and is the wrong tool:
-  the oscillation here is driven by *data ticks*, not user resizing, and is
+  the oscillation here is driven by _data ticks_, not user resizing, and is
   fully removed once the width stops changing. Rejected as over-engineering;
   keep in reserve if visual verification still shows resize-edge flapping.
 - **Round values more coarsely / drop the `on pace` text.** Reduces but does not
@@ -106,7 +106,7 @@ hysteresis alternative is the documented follow-up.
 
 - **Intermittent GPU segment (APPLY).** `readGpu` (server) degrades to `null` on
   a transient `ioreg` timeout/spawn error, not just on GPU-less hosts. A momentary
-  null currently *unmounts* the whole `gpu` segment (`{hasGpu ? … : null}`) and
+  null currently _unmounts_ the whole `gpu` segment (`{hasGpu ? … : null}`) and
   flips the wrap — a second, real oscillation path. Fix: **latch** "this host has
   a GPU" once any sample reports one; thereafter keep the segment mounted and let
   a transient null render as `—` in the fixed slot (constant width). Genuinely
@@ -118,7 +118,7 @@ hysteresis alternative is the documented follow-up.
   hard ceiling for these metrics), so the box never grows and never clips.
 - **Pace slot sized to `on pace`, not `↑100%` (APPLY).** `on pace` is proportional
   (non-tabular) and wider than the arrow form; the slot is sized to fit `on pace`
-  and the magnitude (`↑9%`…`↑100%`) varies *inside* the fixed slot. Verified in
+  and the magnitude (`↑9%`…`↑100%`) varies _inside_ the fixed slot. Verified in
   the running app.
 - **Extra cost width (APPLY).** `formatCreditsShort` can emit `$N.Nk`; the slot
   is sized generously (fits `$99.9k/$99.9k`). Extra also updates rarely, so it is

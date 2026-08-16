@@ -23,6 +23,7 @@
 ### Task 1: Infinite retry + decouple reconnect display constants
 
 **Files:**
+
 - Modify: `packages/client-runtime/src/reconnectBackoff.ts` (the `DEFAULT_RECONNECT_BACKOFF` literal)
 - Modify: `packages/client-runtime/src/reconnectBackoff.test.ts` (3 inverted assertions)
 - Modify: `apps/web/src/rpc/wsConnectionState.ts:10-14` (decouple `WS_RECONNECT_*`)
@@ -30,6 +31,7 @@
 - Modify: `apps/web/src/components/WebSocketConnectionSurface.tsx:44-50` (`formatReconnectAttemptLabel`, drop `/max`) and line 11 (remove `WS_RECONNECT_MAX_ATTEMPTS` import)
 
 **Interfaces:**
+
 - Produces: `DEFAULT_RECONNECT_BACKOFF.maxRetries === null`; `getReconnectDelayMs(n)` returns a capped `64_000` for all `n` (never `null`); `applyDisconnectState` never reaches `reconnectPhase: "exhausted"` for in-range retries.
 
 - [ ] **Step 1: Update the backoff test to the infinite-retry expectations**
@@ -53,31 +55,38 @@ Expected: PASS.
 - [ ] **Step 5: Decouple the web display constants**
 
 In `apps/web/src/rpc/wsConnectionState.ts`, replace lines 13-14:
+
 ```ts
 export const WS_RECONNECT_MAX_RETRIES = DEFAULT_RECONNECT_BACKOFF.maxRetries!;
 export const WS_RECONNECT_MAX_ATTEMPTS = WS_RECONNECT_MAX_RETRIES + 1;
 ```
+
 with display-decoupled literals (no longer derived from the now-nullable config):
+
 ```ts
 // Display-only: the reconnect UI no longer shows a finite attempt ceiling
 // (retries are unbounded). Kept for back-compat of the status shape.
 export const WS_RECONNECT_MAX_ATTEMPTS = 8;
 ```
+
 Remove the now-unused `WS_RECONNECT_MAX_RETRIES` export and, if `getReconnectDelayMsForRetry`/other code referenced it, confirm via grep there are no remaining importers: `grep -rn 'WS_RECONNECT_MAX_RETRIES' apps/web/src` must return nothing.
 
 - [ ] **Step 6: Simplify the attempt label**
 
 In `apps/web/src/components/WebSocketConnectionSurface.tsx`, change `formatReconnectAttemptLabel` (lines 44-50) to drop the denominator and the clamp:
+
 ```ts
 function formatReconnectAttemptLabel(status: WsConnectionStatus): string {
   return `Attempt ${Math.max(1, status.reconnectAttemptCount)}`;
 }
 ```
+
 Remove `WS_RECONNECT_MAX_ATTEMPTS` from the import on line 11 if it is no longer referenced elsewhere in the file (grep within the file).
 
 - [ ] **Step 7: Fix the exhausted unit test to use an explicit finite config**
 
 In `apps/web/src/rpc/wsConnectionState.test.ts`, the test at ~95-106 ("marks the reconnect cycle as exhausted after the final attempt fails") can no longer reach `exhausted` via the default backoff. Rewrite it to assert the new reality: drive `recordWsConnectionErrored()` a few times and assert the phase stays `"waiting"` with a non-null `nextRetryAt` and a growing `reconnectAttemptCount` — i.e. it never becomes `"exhausted"`. Concretely replace the loop+exhausted assertion with:
+
 ```ts
 recordWsConnectionAttempt("wss://x");
 recordWsConnectionOpened();
@@ -90,6 +99,7 @@ expect(getWsConnectionStatus()).toMatchObject({
 });
 expect(getWsConnectionStatus().nextRetryAt).not.toBeNull();
 ```
+
 (Keep the surrounding `resetWsConnectionStateForTests()` setup.)
 
 - [ ] **Step 8: Run the affected web tests**
@@ -109,10 +119,12 @@ git commit -m "feat(web): never give up reconnecting (infinite backoff) and drop
 ### Task 2: Grace period — silence brief blips
 
 **Files:**
+
 - Modify: `apps/web/src/components/WebSocketConnectionSurface.tsx` (add consts + pure helpers + wire `WebSocketConnectionCoordinator`)
 - Modify: `apps/web/src/components/WebSocketConnectionSurface.logic.test.ts` (tests for the helpers)
 
 **Interfaces:**
+
 - Produces:
   - `WS_OUTAGE_GRACE_MS = 3_000`, `WS_OFFLINE_GRACE_MS = 0`
   - `outageGraceMs(uiState: WsConnectionUiState): number`
@@ -121,6 +133,7 @@ git commit -m "feat(web): never give up reconnecting (infinite backoff) and drop
 - [ ] **Step 1: Write the failing helper tests**
 
 In `apps/web/src/components/WebSocketConnectionSurface.logic.test.ts`, add (the file already imports `makeStatus`; reuse it):
+
 ```ts
 import {
   outageGraceMs,
@@ -171,6 +184,7 @@ Expected: FAIL ("shouldSurfaceOutage is not exported").
 - [ ] **Step 3: Add the consts + pure helpers**
 
 In `apps/web/src/components/WebSocketConnectionSurface.tsx`, near the top (by `FORCED_WS_RECONNECT_DEBOUNCE_MS`, line 16):
+
 ```ts
 export const WS_OUTAGE_GRACE_MS = 3_000;
 export const WS_OFFLINE_GRACE_MS = 0;
@@ -202,33 +216,36 @@ Expected: PASS.
 - [ ] **Step 5: Widen the 1s tick to run during any outage**
 
 In `WebSocketConnectionCoordinator`, the interval effect (lines 223-236) currently only ticks while `reconnectPhase === "waiting" && nextRetryAt !== null`. Change its guard so it also ticks during the silent grace window: run the interval whenever `getWsConnectionUiState(status) !== "connected"`. Replace the early-return condition at the top of that effect:
+
 ```ts
-  useEffect(() => {
-    if (getWsConnectionUiState(status) === "connected") {
-      return;
-    }
-    setNowMs(Date.now());
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(intervalId);
-  }, [status]);
+useEffect(() => {
+  if (getWsConnectionUiState(status) === "connected") {
+    return;
+  }
+  setNowMs(Date.now());
+  const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+  return () => window.clearInterval(intervalId);
+}, [status]);
 ```
 
 - [ ] **Step 6: Add the `outageSurfacedRef` and gate the toast effect**
 
 In `WebSocketConnectionCoordinator`, add a ref next to the others (lines 152-155): `const outageSurfacedRef = useRef(false);`. In the toast effect (lines 270-368), after computing `uiState` and the three `shouldShow*` booleans, compute:
+
 ```ts
-    const isOutage = shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast;
-    const surfaced =
-      isOutage && shouldSurfaceOutage(status, nowMs, outageGraceMs(uiState));
-    if (surfaced) {
-      outageSurfacedRef.current = true;
-    }
+const isOutage = shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast;
+const surfaced = isOutage && shouldSurfaceOutage(status, nowMs, outageGraceMs(uiState));
+if (surfaced) {
+  outageSurfacedRef.current = true;
+}
 ```
+
 Then change the render condition: where the code currently does `if (shouldShowReconnectToast || shouldShowOfflineToast || shouldShowExhaustedToast) { …render toast… } else if (toastIdRef.current) { close }`, replace the leading condition with `if (surfaced)`. Leave the inner add/update toast block (lines 286-336) unchanged — it already reads live `status`/`nowMs`.
 
 - [ ] **Step 7: Gate the success toast on having surfaced, then reset**
 
 In the same effect, the success-toast block (lines 338-364) fires on the transition to `connected`. Wrap its condition to also require `outageSurfacedRef.current`:
+
 ```ts
     if (
       uiState === "connected" &&
@@ -242,6 +259,7 @@ In the same effect, the success-toast block (lines 338-364) fires on the transit
       outageSurfacedRef.current = false;
     }
 ```
+
 (The `outageSurfacedRef` reset on every connected run guarantees the next outage starts un-surfaced.)
 
 - [ ] **Step 8: Run the full file's tests + typecheck**
@@ -261,18 +279,21 @@ git commit -m "feat(web): add a grace window so brief connection blips stay sile
 ### Task 3: Ambient connection indicator
 
 **Files:**
+
 - Create: `apps/web/src/components/sidebar/SidebarConnectionStatus.tsx`
 - Create: `apps/web/src/components/sidebar/sidebarConnectionStatus.logic.ts`
 - Create: `apps/web/src/components/sidebar/sidebarConnectionStatus.logic.test.ts`
 - Modify: `apps/web/src/components/Sidebar.tsx` (mount in `SidebarFooter` ~line 2546 and beside `SidebarTrigger` ~line 2500)
 
 **Interfaces:**
+
 - Consumes: `useWsConnectionStatus`, `getWsConnectionUiState` (`apps/web/src/rpc/wsConnectionState.ts`); `formatConnectionMoment`, `formatRetryCountdown` (export these two from `WebSocketConnectionSurface.tsx` if not already exported).
 - Produces: `connectionDotTone(uiState): { colorClass: string; pulse: boolean; label: string }`; default-exported `<SidebarConnectionStatus />` and a `<SidebarConnectionDot />` compact variant (same component, `compact` prop).
 
 - [ ] **Step 1: Write the failing tone-helper test**
 
 Create `apps/web/src/components/sidebar/sidebarConnectionStatus.logic.test.ts`:
+
 ```ts
 import { describe, expect, it } from "vite-plus/test";
 import { connectionDotTone } from "./sidebarConnectionStatus.logic";
@@ -300,6 +321,7 @@ Expected: FAIL (module not found).
 - [ ] **Step 3: Implement the tone helper**
 
 Create `apps/web/src/components/sidebar/sidebarConnectionStatus.logic.ts`:
+
 ```ts
 import type { WsConnectionUiState } from "../../rpc/wsConnectionState";
 
@@ -337,6 +359,7 @@ In `apps/web/src/components/WebSocketConnectionSurface.tsx`, add `export` to `fo
 - [ ] **Step 6: Implement the component**
 
 Create `apps/web/src/components/sidebar/SidebarConnectionStatus.tsx`:
+
 ```tsx
 import { getWsConnectionUiState, useWsConnectionStatus } from "../../rpc/wsConnectionState";
 import { formatConnectionMoment, formatRetryCountdown } from "../WebSocketConnectionSurface";
@@ -349,11 +372,17 @@ function buildTitle(status: ReturnType<typeof useWsConnectionStatus>, label: str
   }
   const dropped = formatConnectionMoment(status.disconnectedAt);
   const retry =
-    status.nextRetryAt !== null ? ` · retry in ${formatRetryCountdown(status.nextRetryAt, Date.now())}` : "";
+    status.nextRetryAt !== null
+      ? ` · retry in ${formatRetryCountdown(status.nextRetryAt, Date.now())}`
+      : "";
   return `${label}${dropped ? ` since ${dropped}` : ""}${retry}`;
 }
 
-export default function SidebarConnectionStatus({ compact = false }: { readonly compact?: boolean }) {
+export default function SidebarConnectionStatus({
+  compact = false,
+}: {
+  readonly compact?: boolean;
+}) {
   const status = useWsConnectionStatus();
   const tone = connectionDotTone(getWsConnectionUiState(status));
   const dot = (
@@ -364,7 +393,11 @@ export default function SidebarConnectionStatus({ compact = false }: { readonly 
   );
   if (compact) {
     return (
-      <span className="flex items-center" title={buildTitle(status, tone.label)} aria-label={tone.label}>
+      <span
+        className="flex items-center"
+        title={buildTitle(status, tone.label)}
+        aria-label={tone.label}
+      >
         {dot}
       </span>
     );
@@ -402,12 +435,14 @@ git commit -m "feat(web): show an ambient connection-status dot in the sidebar"
 ### Task 4: Offline outbox store + send-disposition helper
 
 **Files:**
+
 - Create: `apps/web/src/rpc/commandOutbox.ts`
 - Create: `apps/web/src/rpc/commandOutbox.test.ts`
 - Modify: `apps/web/src/components/ChatView.logic.ts` (add `decideSendDisposition`)
 - Modify: `apps/web/src/components/ChatView.logic.test.ts` (tests)
 
 **Interfaces:**
+
 - Consumes: `ClientOrchestrationCommand` types from `@t3tools/contracts` (the `dispatchCommand` input union); `isTransportConnectionErrorMessage` from `@t3tools/client-runtime`; `MessageId` from `@t3tools/contracts`.
 - Produces:
   - `commandOutbox.ts`: `isQueueableCommand(cmd): boolean` (true iff `cmd.type === "thread.turn.start"`); a zustand store via `useCommandOutbox`; `enqueueCommand(command, messageId)`; `getQueuedCommands(): readonly QueuedCommand[]`; `clearOutboxForTests()`; `flushOutbox(send): Promise<void>` where `send: (command) => Promise<unknown>`.
@@ -417,6 +452,7 @@ git commit -m "feat(web): show an ambient connection-status dot in the sidebar"
 - [ ] **Step 1: Write failing tests for the disposition helper**
 
 In `apps/web/src/components/ChatView.logic.test.ts`, add:
+
 ```ts
 import { decideSendDisposition, shouldQueueOnError } from "./ChatView.logic";
 
@@ -450,6 +486,7 @@ Expected: FAIL (helpers not exported).
 - [ ] **Step 3: Implement the disposition helpers**
 
 In `apps/web/src/components/ChatView.logic.ts`, add (import the type + classifier at the top):
+
 ```ts
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime";
 import type { WsConnectionUiState } from "../rpc/wsConnectionState";
@@ -474,6 +511,7 @@ Expected: PASS.
 - [ ] **Step 5: Write failing tests for the outbox store**
 
 Create `apps/web/src/rpc/commandOutbox.test.ts`:
+
 ```ts
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -508,7 +546,9 @@ describe("commandOutbox", () => {
     enqueueCommand(turnStart("a"), "m-a" as never);
     enqueueCommand(turnStart("b"), "m-b" as never);
     const sent: string[] = [];
-    await flushOutbox(async (c) => { sent.push(c.commandId); });
+    await flushOutbox(async (c) => {
+      sent.push(c.commandId);
+    });
     expect(sent).toEqual(["a", "b"]);
     expect(getQueuedCommands()).toHaveLength(0);
   });
@@ -527,7 +567,9 @@ describe("commandOutbox", () => {
     enqueueCommand(turnStart("a"), "m-a" as never);
     enqueueCommand(turnStart("b"), "m-b" as never);
     await flushOutbox(
-      async (c) => { if (c.commandId === "a") throw new Error("Thread not found"); },
+      async (c) => {
+        if (c.commandId === "a") throw new Error("Thread not found");
+      },
       { onTerminalError: onTerminal },
     );
     expect(onTerminal).toHaveBeenCalledTimes(1);
@@ -550,6 +592,7 @@ Expected: FAIL (module not found).
 - [ ] **Step 7: Implement the outbox store**
 
 Create `apps/web/src/rpc/commandOutbox.ts`:
+
 ```ts
 import type { MessageId } from "@t3tools/contracts";
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime";
@@ -573,7 +616,9 @@ interface OutboxState {
 
 export const useCommandOutbox = create<OutboxState>(() => ({ queue: [] }));
 
-export function isQueueableCommand(command: { readonly type?: string }): command is QueueableCommand {
+export function isQueueableCommand(command: {
+  readonly type?: string;
+}): command is QueueableCommand {
   return command.type === "thread.turn.start";
 }
 
@@ -642,11 +687,13 @@ git commit -m "feat(web): add in-memory command outbox + send-disposition helper
 ### Task 5: Wire the outbox into ChatView + flush coordinator
 
 **Files:**
+
 - Modify: `apps/web/src/components/ChatView.tsx` (`onSend`: hoist `commandId`, dispatch-or-queue, transport-error catch, queued badge)
 - Create: `apps/web/src/components/OutboxFlushCoordinator.tsx`
 - Modify: `apps/web/src/routes/__root.tsx` (mount the coordinator)
 
 **Interfaces:**
+
 - Consumes: `decideSendDisposition`, `shouldQueueOnError` (Task 4); `enqueueCommand`, `flushOutbox`, `useCommandOutbox`, `isMessageQueued` (Task 4); `getWsConnectionStatus`, `getWsConnectionUiState`, `useWsConnectionStatus` (`wsConnectionState.ts`); `api.orchestration.dispatchCommand` (existing).
 
 - [ ] **Step 1: Hoist `commandId` and build the envelope once**
@@ -656,25 +703,27 @@ In `apps/web/src/components/ChatView.tsx onSend`, next to `const messageIdForSen
 - [ ] **Step 2: Branch dispatch-vs-queue up front**
 
 Replace the `await api.orchestration.dispatchCommand({…inline…})` at line 3329 with a disposition branch. Import `decideSendDisposition`, `shouldQueueOnError` from `./ChatView.logic` and `enqueueCommand` from `../rpc/commandOutbox`, plus `getWsConnectionStatus`, `getWsConnectionUiState` from `../rpc/wsConnectionState`:
+
 ```ts
-      const wsStatus = getWsConnectionStatus();
-      const disposition = decideSendDisposition({
-        hasConnected: wsStatus.hasConnected,
-        uiState: getWsConnectionUiState(wsStatus),
-      });
-      if (disposition === "queue") {
-        enqueueCommand(turnStartCommand, messageIdForSend);
-        markMessageQueued(messageIdForSend); // see Step 4
-        turnStartSucceeded = true; // keep the optimistic bubble; do NOT revert
-      } else {
-        await api.orchestration.dispatchCommand(turnStartCommand);
-        turnStartSucceeded = true;
-      }
+const wsStatus = getWsConnectionStatus();
+const disposition = decideSendDisposition({
+  hasConnected: wsStatus.hasConnected,
+  uiState: getWsConnectionUiState(wsStatus),
+});
+if (disposition === "queue") {
+  enqueueCommand(turnStartCommand, messageIdForSend);
+  markMessageQueued(messageIdForSend); // see Step 4
+  turnStartSucceeded = true; // keep the optimistic bubble; do NOT revert
+} else {
+  await api.orchestration.dispatchCommand(turnStartCommand);
+  turnStartSucceeded = true;
+}
 ```
 
 - [ ] **Step 3: On a transport error, queue instead of reverting (no double-text)**
 
 In the existing `.catch` (lines 3347-3379), add an early branch BEFORE the revert block: if the error is a transport error, enqueue and keep the bubble — skip the draft-restore entirely.
+
 ```ts
     })().catch(async (err: unknown) => {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -698,6 +747,7 @@ In the reconcile effect (lines 2761-2787), when an optimistic message is removed
 - [ ] **Step 6: Create the flush coordinator**
 
 Create `apps/web/src/components/OutboxFlushCoordinator.tsx`:
+
 ```tsx
 import { useEffect, useRef } from "react";
 import { flushOutbox, getQueuedCommands } from "../rpc/commandOutbox";
@@ -716,7 +766,8 @@ export function OutboxFlushCoordinator() {
     if (flushingRef.current) return;
     flushingRef.current = true;
     void flushOutbox(
-      (command) => getPrimaryEnvironmentConnection().api.orchestration.dispatchCommand(command as never),
+      (command) =>
+        getPrimaryEnvironmentConnection().api.orchestration.dispatchCommand(command as never),
       {
         onTerminalError: (queued) => {
           toastManager.add({
@@ -736,6 +787,7 @@ export function OutboxFlushCoordinator() {
   return null;
 }
 ```
+
 (Verify the exact accessor for `dispatchCommand` against `getPrimaryEnvironmentConnection()` in `apps/web/src/environments/runtime`; if the API is reached differently — e.g. `readEnvironmentApi(environmentId)` as in `ChatView.tsx:3388` — use that same accessor. Match the existing call convention.)
 
 - [ ] **Step 7: Mount the coordinator**
@@ -752,6 +804,7 @@ Expected: PASS. (The disposition gate requires `hasConnected && uiState !== "con
 
 Run: `pnpm --filter @t3tools/web typecheck`
 Expected: no errors.
+
 ```bash
 git add apps/web/src/components/ChatView.tsx apps/web/src/components/OutboxFlushCoordinator.tsx apps/web/src/routes/__root.tsx
 git commit -m "feat(web): queue user messages while offline and flush them on reconnect"

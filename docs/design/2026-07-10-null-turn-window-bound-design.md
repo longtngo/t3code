@@ -15,6 +15,7 @@ ships in the frame while counting toward **neither** budget.
 ## Premise validation (Hard Rule 8) — live-measured
 
 Read from source (`ProjectionSnapshotQuery.ts`), not memory:
+
 - `windowTurnPredicate` (subscribe) / `historyTurnPredicate` (backfill) include
   `turn_id IS NULL AND created_at >= boundary` rows in the frame.
 - `toStatsByTurnId` explicitly drops the null-turn bucket ("counts against neither
@@ -25,7 +26,7 @@ Probed `~/.t3/userdata/state.sqlite` — the earlier report's "low risk in pract
 assumption is **refuted**:
 
 | thread     | thread-total null-turn | null-turn **in a 15-turn window** |
-|------------|------------------------|-----------------------------------|
+| ---------- | ---------------------- | --------------------------------- |
 | `50267f76` | 33,426 rows / 13.29 MB | **1,184 rows / 0.48 MB**          |
 | `bf98d038` | 5,739 rows / 2.32 MB   | **1,193 rows / 0.48 MB**          |
 | `310e0e3a` | 5,513 rows / 2.21 MB   | 18 rows / 0.002 MB                |
@@ -40,7 +41,7 @@ the exact unbounded-frame case windowing exists to prevent.
 
 Reserve the window's null-turn content against the budget **up front**, then run the
 existing turn walk with the reduced budget. Because the null-turn actually shipped at
-any stopping point is a *subset* of the reserved lump, the frame is provably bounded.
+any stopping point is a _subset_ of the reserved lump, the frame is provably bounded.
 
 The content predicate ships null-turn rows by `created_at` range: subscribe includes
 `created_at >= B`; a history page includes `created_at ∈ [B, cursor)`, where `B` is the
@@ -53,7 +54,7 @@ that lump `(nullRows, nullBytes)`:
    three content arms (messages `text`+`attachments_json`, activities
    `payload_json`+`summary`, plans `plan_markdown`) widens its predicate to
    `turn_id IN (candidates) OR (turn_id IS NULL AND created_at >= lower
-   [AND created_at < upper])` — the same shape `windowTurnPredicate` /
+[AND created_at < upper])` — the same shape `windowTurnPredicate` /
    `historyTurnPredicate` already use. The two branches are mutually exclusive, so the
    existing `GROUP BY turn_id` yields the per-turn buckets **and** a single
    `turn_id IS NULL` group — the lump — from one scan per table (no new arms, no raw-row
@@ -67,7 +68,7 @@ that lump `(nullRows, nullBytes)`:
 
 3. **Subtract the lump before the walk.** Both callers reduce the budget:
    `accumulateTurnsWithinBudget(turnRows, statsByTurnId, reduce(maxRows, nullLump.rows),
-   reduce(maxBytes, nullLump.bytes))`, where `reduce(undefined, _) = undefined` (no
+reduce(maxBytes, nullLump.bytes))`, where `reduce(undefined, _) = undefined` (no
    bound → stays unbounded, lump not subtracted) and `reduce(n, x) = Math.max(0, n − x)`.
    Subscribe passes no upper; `getThreadHistoryPage` passes `beforeTurn.requestedAt` as
    `nullTurnUpperExclusive`.
@@ -105,7 +106,7 @@ with, and the one extra UNION arm, change. No wire/contract change.
 - **Per-interval attribution** (bucket each null-turn row to the candidate-turn interval
   its `created_at` falls in; fold into that turn's stats so the walk counts it exactly).
   Correct and maximizes initial-window fullness (no over-reserve), but it is an
-  *optimization*, not a correctness requirement — and it costs a new raw-row query
+  _optimization_, not a correctness requirement — and it costs a new raw-row query
   (returning up to ~33k rows under an adversarial large `windowTurns`, which it does not
   bound), a JS bucketing pass, a binary search with a `requestedAt`-tie-break subtlety,
   and an upsert edge for content-less turns that own null-turn rows. Its sole advantage
@@ -115,7 +116,7 @@ with, and the one extra UNION arm, change. No wire/contract change.
   rows. Rejected as complexity unjustified by the data. (Re-openable as a follow-up if
   wire telemetry ever shows initial-window collapse on a heavy-null thread — see below.)
 - **Fold all candidate-span null-turn into a single turn's bucket** (newest or oldest).
-  Newest → same over-reserve as the lump but more code; oldest → *under*-counts on early
+  Newest → same over-reserve as the lump but more code; oldest → _under_-counts on early
   stops (folded into a turn the walk never reaches), leaving the escape open. The lump is
   the simplest form with the newest-fold's safety.
 - **Character length instead of byte length.** Rejected earlier for the turn-stats query
@@ -150,11 +151,11 @@ with, and the one extra UNION arm, change. No wire/contract change.
   Empirically the head bucket is 1–2 rows.
 - **Whole-thread short-circuit (pre-existing, unchanged).** When the walk fits every
   candidate turn under the reduced budget, `resolveWindowBoundary` returns `null` and
-  the caller runs the *unbounded* whole-thread queries, which ship every null-turn row —
-  including any stamped *before* the thread's first turn, which the lump (spanning
+  the caller runs the _unbounded_ whole-thread queries, which ship every null-turn row —
+  including any stamped _before_ the thread's first turn, which the lump (spanning
   `[oldest-candidate.requestedAt, …)`) never reserved. This is the same
   "the thread fits → ship it whole" behavior that predates this change (null-turn was
-  wholly unbounded there before too); the change only makes that path fire *less* often
+  wholly unbounded there before too); the change only makes that path fire _less_ often
   by reserving the lump on the windowed path. Empirically pre-first-turn null-turn is 0
   across the heaviest live threads. Deferred, not fixed in-branch (out of scope, no
   regression).

@@ -20,7 +20,7 @@ Bash `command_execution` went in-flight at 20:22:58 and never returned; the watc
   from `entry.lastEventType ∈ {item.started, item.updated}`
   (`ProviderTurnStallWatchdog.ts:51,241`). But `recordTurnActivity` overwrites `lastEventType` on
   **every** non-ignored event (`ProviderRuntimeIngestion.ts:881`), and `thread.token-usage.updated`
-  is *not* ignored — it landed **1 ms after** the in-flight `item.updated` (20:22:59.182 →
+  is _not_ ignored — it landed **1 ms after** the in-flight `item.updated` (20:22:59.182 →
   .183), erasing the in-flight marker. 16 min later the guard is blind → false trip.
 
 - **B — A wedged turn is unkillable; the stop path deadlocks.** `stopSessionInternal`
@@ -34,7 +34,7 @@ Bash `command_execution` went in-flight at 20:22:58 and never returned; the watc
   the spinner never clears.
 
 - **C — The Stop button never escalates.** `onInterrupt` (`ChatView.tsx:3356`) only dispatches
-  `thread.turn.interrupt` → `query.interrupt()`, a *cooperative* control message the busy
+  `thread.turn.interrupt` → `query.interrupt()`, a _cooperative_ control message the busy
   subprocess can't read mid-tool. There is no fallback to a hard stop.
 
 ## Verified premises (Hard Rule 8)
@@ -44,7 +44,7 @@ Bash `command_execution` went in-flight at 20:22:58 and never returned; the watc
   provider log.
 - **A2 ✓** Foreground-tool itemTypes observed in the stream are exactly
   `{command_execution, file_change, dynamic_tool_call, collab_agent_tool_call}`. `assistant_message`
-  streams via `content.delta` and does **not** emit `item.started`, so tracking open *tool* items
+  streams via `content.delta` and does **not** emit `item.started`, so tracking open _tool_ items
   never masks a genuine mid-generation SDK wedge.
 - **A3 ✓** `recordTurnActivity` (`ProviderRuntimeIngestion.ts:834`) is the single chokepoint that
   builds `TurnActivitySnapshot`; it can carry an open-tool-item set with no new event source.
@@ -55,7 +55,7 @@ Bash `command_execution` went in-flight at 20:22:58 and never returned; the watc
   stdin-EOF → SIGTERM → `kill("SIGKILL")` after 5 s (confirmed in the bundled `sdk.mjs`). So Bug B
   needs no custom spawn — only to stop deadlocking before `close()` runs.
 - **B2 ✓** `close()` is non-blocking (ends stdin, arms timers) and starts the SIGKILL clock
-  regardless of subprocess state — so calling it *first* and bounding the fiber-interrupt is
+  regardless of subprocess state — so calling it _first_ and bounding the fiber-interrupt is
   sufficient to guarantee teardown.
 - **C1 ✓** Once Bug B makes `thread.session.stop` actually terminate and flip the projection, the
   Stop control has a working hard-stop to escalate to.
@@ -65,6 +65,7 @@ Bash `command_execution` went in-flight at 20:22:58 and never returned; the watc
 ### A — track open foreground-tool items, not "last event type"
 
 Add `openToolItemIds: ReadonlySet<string>` to `TurnActivitySnapshot`. In `recordTurnActivity`:
+
 - on `item.started` whose `itemType ∈ FOREGROUND_TOOL_ITEM_TYPES` → add its `itemId`;
 - on `item.completed` (any status) for a tracked `itemId` → remove it;
 - `turn.started` initialises an empty set; terminal types delete the whole entry (unchanged).
@@ -99,13 +100,13 @@ forever when the subprocess is wedged in a tool. Both are fixed in `ClaudeAdapte
    SIGKILL(~5 s) teardown, so it must run first; the `Fiber.interrupt` is now also bounded so it
    can never deadlock on a stream parked in the wedged subprocess's `.next()`. Production evidence
    supports this being a real blocker (the session did not die at the watchdog's first stop, so
-   teardown blocked *before* `close()`), though a faithful unit fake interrupts the parked fiber
+   teardown blocked _before_ `close()`), though a faithful unit fake interrupts the parked fiber
    cleanly, so this part is treated as hardening rather than a separately-reproduced bug.
 
 Once both adapter methods return promptly, the reactor reaches its existing
 `setThreadSession({status:"stopped", activeTurnId:null})` step and the projection flips — so **no
 reactor change is needed**. The design review's rejected reactor-level `timeout`+`ensuring` wrapper
-would also be *less safe* (flipping the projection while teardown still drains risks a
+would also be _less safe_ (flipping the projection while teardown still drains risks a
 projection-vs-provider split-brain). Letting the projection flip only after the adapter finishes is
 simpler and correct.
 
@@ -113,6 +114,7 @@ simpler and correct.
 
 Client-side escalation in the Stop control (`ChatView.tsx onInterrupt`), state held **locally in
 the component** (a `useRef` keyed by thread id) — no new global-store state:
+
 1. First Stop click → dispatch `thread.turn.interrupt` (graceful, unchanged), record that this
    thread was interrupted, and arm a short escalation timer (~6 s).
 2. If the turn is still running (existing running-state signal: `session.status === "running"` /
@@ -120,7 +122,7 @@ the component** (a `useRef` keyed by thread id) — no new global-store state:
    `thread.session.stop` (a real, fast hard-stop via Bug B). Clear the local state/timer when the
    turn ends or the active thread changes.
 
-The auto-timer is deliberate, not speculative: the user's literal complaint is that a *single*
+The auto-timer is deliberate, not speculative: the user's literal complaint is that a _single_
 Stop press did nothing, so a single press must eventually force-stop without requiring a second
 click. The manual second-click path shares the same handler (≈free). Escalation is client-side
 because the trigger ("stop it now") and the running-state both live in the client and the server

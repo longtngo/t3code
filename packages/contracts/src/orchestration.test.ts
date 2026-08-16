@@ -1075,7 +1075,9 @@ describe("project.delete not-empty invariant marker", () => {
   });
 
   it("predicate ignores unrelated dispatch errors", () => {
-    assert.isFalse(isProjectNotEmptyDeleteInvariantMessage("Failed to dispatch orchestration command"));
+    assert.isFalse(
+      isProjectNotEmptyDeleteInvariantMessage("Failed to dispatch orchestration command"),
+    );
     assert.isFalse(
       isProjectNotEmptyDeleteInvariantMessage(
         "Orchestration command invariant failed (project.delete): Project 'x' does not exist for command 'project.delete'.",

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  TEXT_FILE_EXTENSIONS,
-  classifyFileViewerKind,
-  languageForPath,
-} from "./codeFileTypes";
+import { TEXT_FILE_EXTENSIONS, classifyFileViewerKind, languageForPath } from "./codeFileTypes";
 
 describe("classifyFileViewerKind", () => {
   it("classifies html and markdown specially", () => {

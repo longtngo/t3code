@@ -104,10 +104,7 @@ export function SidebarItemRow({
 }) {
   return (
     <div
-      className={cn(
-        "group/row relative flex items-center rounded-lg",
-        selected && "bg-accent/60",
-      )}
+      className={cn("group/row relative flex items-center rounded-lg", selected && "bg-accent/60")}
     >
       <button
         type="button"

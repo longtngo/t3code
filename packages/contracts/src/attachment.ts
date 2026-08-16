@@ -14,9 +14,7 @@ const ATTACHMENT_UPLOAD_DATA_MAX_LENGTH = ATTACHMENT_UPLOAD_MAX_BYTES * 2;
 
 export const AttachmentUploadInput = Schema.Struct({
   threadId: ThreadId,
-  fileName: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(ATTACHMENT_UPLOAD_FILE_NAME_MAX_LENGTH),
-  ),
+  fileName: TrimmedNonEmptyString.check(Schema.isMaxLength(ATTACHMENT_UPLOAD_FILE_NAME_MAX_LENGTH)),
   dataBase64: TrimmedNonEmptyString.check(Schema.isMaxLength(ATTACHMENT_UPLOAD_DATA_MAX_LENGTH)),
 });
 export type AttachmentUploadInput = typeof AttachmentUploadInput.Type;

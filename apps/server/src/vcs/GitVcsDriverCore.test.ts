@@ -16,7 +16,11 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { CheckpointRef, GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  GitCommandError,
+  type ReviewDiffFileContentsInput,
+} from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
 import {
   makeGitVcsDriverCore,
@@ -2040,36 +2044,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     // FULLY-UNTRACKED directory wholesale, so a file-level pathspec exclude is silently ignored.
     // Restore must use `git clean -e` (ignore machinery), which descends and preserves the file
     // while still cleaning small untracked siblings.
-    it.effect("does not delete an oversized untracked file on restore (fully-untracked subtree)", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const checkpoints = yield* getCheckpoints;
-        const fs = yield* FileSystem.FileSystem;
-        const p = yield* Path.Path;
+    it.effect(
+      "does not delete an oversized untracked file on restore (fully-untracked subtree)",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const checkpoints = yield* getCheckpoints;
+          const fs = yield* FileSystem.FileSystem;
+          const p = yield* Path.Path;
 
-        yield* writeSizedFile(cwd, "research/matrices/big.npz", OVER);
+          yield* writeSizedFile(cwd, "research/matrices/big.npz", OVER);
 
-        const ref = cpRef("bound/restore-preserves");
-        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+          const ref = cpRef("bound/restore-preserves");
+          yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
 
-        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
-        assert.notInclude(tree, "research/matrices/big.npz");
+          const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+          assert.notInclude(tree, "research/matrices/big.npz");
 
-        // A small untracked file created after capture — restore SHOULD clean this one.
-        yield* writeTextFile(cwd, "research/matrices/scratch.txt", "junk\n");
+          // A small untracked file created after capture — restore SHOULD clean this one.
+          yield* writeTextFile(cwd, "research/matrices/scratch.txt", "junk\n");
 
-        yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
+          yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
 
-        assert.isTrue(
-          yield* fs.exists(p.join(cwd, "research/matrices/big.npz")),
-          "oversized untracked file must survive restore",
-        );
-        assert.isFalse(
-          yield* fs.exists(p.join(cwd, "research/matrices/scratch.txt")),
-          "small untracked file created after capture must be cleaned by restore",
-        );
-      }),
+          assert.isTrue(
+            yield* fs.exists(p.join(cwd, "research/matrices/big.npz")),
+            "oversized untracked file must survive restore",
+          );
+          assert.isFalse(
+            yield* fs.exists(p.join(cwd, "research/matrices/scratch.txt")),
+            "small untracked file created after capture must be cleaned by restore",
+          );
+        }),
     );
 
     it.effect("captures an untracked file just under the threshold", () =>
@@ -2109,27 +2115,29 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
     // A '[' in the name breaks a naive gitignore `-e` pattern → parent dir removed wholesale.
     // The `-e` pattern must escape gitignore metacharacters.
-    it.effect("skips + preserves an oversized untracked file whose name has a gitignore metachar", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const checkpoints = yield* getCheckpoints;
-        const fs = yield* FileSystem.FileSystem;
-        const p = yield* Path.Path;
+    it.effect(
+      "skips + preserves an oversized untracked file whose name has a gitignore metachar",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const checkpoints = yield* getCheckpoints;
+          const fs = yield* FileSystem.FileSystem;
+          const p = yield* Path.Path;
 
-        yield* writeSizedFile(cwd, "research/big[v2].npz", OVER);
+          yield* writeSizedFile(cwd, "research/big[v2].npz", OVER);
 
-        const ref = cpRef("bound/metachar-name");
-        yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
-        const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
-        assert.notInclude(tree, "research/big[v2].npz");
+          const ref = cpRef("bound/metachar-name");
+          yield* checkpoints.captureCheckpoint({ cwd, checkpointRef: ref });
+          const tree = (yield* git(cwd, ["ls-tree", "-r", "--name-only", ref])).split("\n");
+          assert.notInclude(tree, "research/big[v2].npz");
 
-        yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
-        assert.isTrue(
-          yield* fs.exists(p.join(cwd, "research/big[v2].npz")),
-          "metacharacter-named oversized file must survive restore",
-        );
-      }),
+          yield* checkpoints.restoreCheckpoint({ cwd, checkpointRef: ref });
+          assert.isTrue(
+            yield* fs.exists(p.join(cwd, "research/big[v2].npz")),
+            "metacharacter-named oversized file must survive restore",
+          );
+        }),
     );
 
     it.effect("normal repo with no oversized files behaves as before (plain add + clean)", () =>

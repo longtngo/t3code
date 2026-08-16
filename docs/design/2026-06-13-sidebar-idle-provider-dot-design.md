@@ -43,8 +43,8 @@ Client-only, mechanical extension of the existing status-pill pipeline.
    - `session.status` is not `error` or `closed`,
    - `latestTurn` is null **or** `isLatestTurnSettled(latestTurn, session)` (avoids
      a dot during an in-flight turn when the shell is briefly out of order).
-   Priority: Pending Approval > Awaiting Input > Working/Connecting >
-   Working(background) > Plan Ready > Completed > **Idle**.
+     Priority: Pending Approval > Awaiting Input > Working/Connecting >
+     Working(background) > Plan Ready > Completed > **Idle**.
 4. In `resolveProjectStatusIndicator`, **skip** `Idle` pills so project-level
    aggregates never show a misleading single-provider dot.
 

@@ -502,10 +502,7 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(
-        createInput?.options.env?.HOME,
-        NodePath.join(NodeOS.homedir(), ".claude-work"),
-      );
+      assert.equal(createInput?.options.env?.HOME, NodePath.join(NodeOS.homedir(), ".claude-work"));
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -1147,129 +1144,124 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect(
-    "background tick skips pollAccountUsage when no sessions are active",
-    () => {
-      // RED test: without the sessions.size guard, the poller invokes pollAccountUsage
-      // on every tick regardless of active sessions.  After the fix it must NOT call
-      // pollAccountUsage when sessions.size === 0.
-      return Effect.gen(function* () {
-        const pollCallCount = yield* Ref.make(0);
-        const harness = makeHarness({
-          pollAccountUsage: Effect.gen(function* () {
-            yield* Ref.update(pollCallCount, (n) => n + 1);
-            return null; // null means "no data" — adapter ignores it
-          }),
-          usagePollInterval: Duration.seconds(60),
-        });
-
-        yield* Effect.gen(function* () {
-          // Do NOT start any session — sessions.size stays 0.
-          // Let the background poller fire several times.
-          yield* TestClock.adjust(Duration.seconds(180));
-
-          const count = yield* Ref.get(pollCallCount);
-          // With the guard the poller must have called pollAccountUsage zero times.
-          assert.equal(count, 0, "pollAccountUsage should not be called when no sessions are active");
-        }).pipe(Effect.provide(harness.layer));
+  it.effect("background tick skips pollAccountUsage when no sessions are active", () => {
+    // RED test: without the sessions.size guard, the poller invokes pollAccountUsage
+    // on every tick regardless of active sessions.  After the fix it must NOT call
+    // pollAccountUsage when sessions.size === 0.
+    return Effect.gen(function* () {
+      const pollCallCount = yield* Ref.make(0);
+      const harness = makeHarness({
+        pollAccountUsage: Effect.gen(function* () {
+          yield* Ref.update(pollCallCount, (n) => n + 1);
+          return null; // null means "no data" — adapter ignores it
+        }),
+        usagePollInterval: Duration.seconds(60),
       });
-    },
-  );
 
-  it.effect(
-    "on-demand refreshAccountUsage still polls even when no sessions are active",
-    () => {
-      // The on-demand path (refreshAccountUsageNow) must ALWAYS call pollAccountUsage
-      // regardless of sessions, so a freshly-started session can force a snapshot.
-      return Effect.gen(function* () {
-        const pollCallCount = yield* Ref.make(0);
-        const usageSnapshot = {
-          fiveHour: { utilization: 10, resetsAt: "2026-06-10T00:00:00Z" },
-          sevenDay: { utilization: 5, resetsAt: "2026-06-15T00:00:00Z" },
-          extra: null,
-        };
-        const harness = makeHarness({
-          pollAccountUsage: Effect.gen(function* () {
-            yield* Ref.update(pollCallCount, (n) => n + 1);
-            return usageSnapshot;
-          }),
-          // Use a very long poll interval so the background tick never fires
-          usagePollInterval: Duration.minutes(999),
-        });
+      yield* Effect.gen(function* () {
+        // Do NOT start any session — sessions.size stays 0.
+        // Let the background poller fire several times.
+        yield* TestClock.adjust(Duration.seconds(180));
 
-        yield* Effect.gen(function* () {
-          const adapter = yield* ClaudeAdapter;
-          // Explicitly invoke the on-demand refresh with no sessions active.
-          yield* adapter.refreshAccountUsage();
+        const count = yield* Ref.get(pollCallCount);
+        // With the guard the poller must have called pollAccountUsage zero times.
+        assert.equal(count, 0, "pollAccountUsage should not be called when no sessions are active");
+      }).pipe(Effect.provide(harness.layer));
+    });
+  });
 
-          const count = yield* Ref.get(pollCallCount);
-          assert.equal(count, 1, "on-demand refreshAccountUsage must call pollAccountUsage unconditionally");
-        }).pipe(
-          Effect.provideService(Random.Random, makeDeterministicRandomService()),
-          Effect.provide(harness.layer),
+  it.effect("on-demand refreshAccountUsage still polls even when no sessions are active", () => {
+    // The on-demand path (refreshAccountUsageNow) must ALWAYS call pollAccountUsage
+    // regardless of sessions, so a freshly-started session can force a snapshot.
+    return Effect.gen(function* () {
+      const pollCallCount = yield* Ref.make(0);
+      const usageSnapshot = {
+        fiveHour: { utilization: 10, resetsAt: "2026-06-10T00:00:00Z" },
+        sevenDay: { utilization: 5, resetsAt: "2026-06-15T00:00:00Z" },
+        extra: null,
+      };
+      const harness = makeHarness({
+        pollAccountUsage: Effect.gen(function* () {
+          yield* Ref.update(pollCallCount, (n) => n + 1);
+          return usageSnapshot;
+        }),
+        // Use a very long poll interval so the background tick never fires
+        usagePollInterval: Duration.minutes(999),
+      });
+
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        // Explicitly invoke the on-demand refresh with no sessions active.
+        yield* adapter.refreshAccountUsage();
+
+        const count = yield* Ref.get(pollCallCount);
+        assert.equal(
+          count,
+          1,
+          "on-demand refreshAccountUsage must call pollAccountUsage unconditionally",
         );
-      });
-    },
-  );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  });
 
-  it.effect(
-    "starting a session with an empty cache forks a prompt on-demand poll",
-    () => {
-      // RED-without-fix: with the gated background tick, a session starting while
-      // the usage cache is empty must trigger an on-demand poll at start (not wait
-      // up to a full poll interval). The poll interval here is huge so the only
-      // way pollAccountUsage runs is the session-start fork.
-      return Effect.gen(function* () {
-        const pollCallCount = yield* Ref.make(0);
-        const usageSnapshot = {
-          fiveHour: { utilization: 12, resetsAt: "2026-06-10T00:00:00Z" },
-          sevenDay: { utilization: 6, resetsAt: "2026-06-15T00:00:00Z" },
-          extra: null,
-        };
-        const harness = makeHarness({
-          pollAccountUsage: Effect.gen(function* () {
-            yield* Ref.update(pollCallCount, (n) => n + 1);
-            return usageSnapshot;
-          }),
-          usagePollInterval: Duration.minutes(999),
+  it.effect("starting a session with an empty cache forks a prompt on-demand poll", () => {
+    // RED-without-fix: with the gated background tick, a session starting while
+    // the usage cache is empty must trigger an on-demand poll at start (not wait
+    // up to a full poll interval). The poll interval here is huge so the only
+    // way pollAccountUsage runs is the session-start fork.
+    return Effect.gen(function* () {
+      const pollCallCount = yield* Ref.make(0);
+      const usageSnapshot = {
+        fiveHour: { utilization: 12, resetsAt: "2026-06-10T00:00:00Z" },
+        sevenDay: { utilization: 6, resetsAt: "2026-06-15T00:00:00Z" },
+        extra: null,
+      };
+      const harness = makeHarness({
+        pollAccountUsage: Effect.gen(function* () {
+          yield* Ref.update(pollCallCount, (n) => n + 1);
+          return usageSnapshot;
+        }),
+        usagePollInterval: Duration.minutes(999),
+      });
+
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        // Let the background poller run its first (idle, sessions.size === 0)
+        // iteration and settle into its long sleep BEFORE any session exists —
+        // mirroring a server that has been idle. It must not have polled yet.
+        yield* TestClock.adjust(Duration.seconds(1));
+        assert.equal(yield* Ref.get(pollCallCount), 0, "idle poller must not poll");
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-sonnet-4-5",
+          },
+          runtimeMode: "full-access",
         });
 
-        yield* Effect.gen(function* () {
-          const adapter = yield* ClaudeAdapter;
+        // Let the session-start fork run; far under the poll interval so the
+        // background tick cannot be the cause of any poll.
+        yield* TestClock.adjust(Duration.seconds(1));
 
-          // Let the background poller run its first (idle, sessions.size === 0)
-          // iteration and settle into its long sleep BEFORE any session exists —
-          // mirroring a server that has been idle. It must not have polled yet.
-          yield* TestClock.adjust(Duration.seconds(1));
-          assert.equal(yield* Ref.get(pollCallCount), 0, "idle poller must not poll");
-
-          yield* adapter.startSession({
-            threadId: THREAD_ID,
-            provider: ProviderDriverKind.make("claudeAgent"),
-            modelSelection: {
-              instanceId: ProviderInstanceId.make("claudeAgent"),
-              model: "claude-sonnet-4-5",
-            },
-            runtimeMode: "full-access",
-          });
-
-          // Let the session-start fork run; far under the poll interval so the
-          // background tick cannot be the cause of any poll.
-          yield* TestClock.adjust(Duration.seconds(1));
-
-          const count = yield* Ref.get(pollCallCount);
-          assert.equal(
-            count,
-            1,
-            "a session starting with an empty usage cache must fork exactly one on-demand poll",
-          );
-        }).pipe(
-          Effect.provideService(Random.Random, makeDeterministicRandomService()),
-          Effect.provide(harness.layer),
+        const count = yield* Ref.get(pollCallCount);
+        assert.equal(
+          count,
+          1,
+          "a session starting with an empty usage cache must fork exactly one on-demand poll",
         );
-      });
-    },
-  );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  });
 
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
@@ -2312,9 +2304,9 @@ describe("ClaudeAdapterLive", () => {
 
       // Pre-fix this awaits forever (and, running on the single reactor worker, blocks every later
       // command). Post-fix it is bounded — fork it, advance past the grace, and it must complete.
-      const interruptFiber = yield* adapter.interruptTurn(THREAD_ID, undefined).pipe(
-        Effect.forkChild,
-      );
+      const interruptFiber = yield* adapter
+        .interruptTurn(THREAD_ID, undefined)
+        .pipe(Effect.forkChild);
       yield* TestClock.adjust(Duration.seconds(9));
       // Joins only if interruptTurn returned; pre-fix this hangs (test times out).
       yield* Fiber.join(interruptFiber);
@@ -4660,10 +4652,7 @@ describe("ClaudeAdapterLive", () => {
         const startedCount = events.filter((event) => event.type === "turn.started").length;
 
         assert.equal(startedCount, 2);
-        assert.deepEqual(harness.query.setModelCalls, [
-          "claude-opus-4-6[1m]",
-          "claude-opus-4-6",
-        ]);
+        assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]", "claude-opus-4-6"]);
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
         Effect.provide(harness.layer),

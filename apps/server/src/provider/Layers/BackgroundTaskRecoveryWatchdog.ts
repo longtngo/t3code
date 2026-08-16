@@ -69,7 +69,7 @@ type RecoveryReason = "prior-boot" | "dead-session" | "stale";
 const reasonText: Record<RecoveryReason, string> = {
   "prior-boot": "the server restarted",
   "dead-session": "its session ended",
-  "stale": "it went silent for a long time",
+  stale: "it went silent for a long time",
 };
 
 export interface BackgroundTaskRecoveryWatchdogLiveOptions {
@@ -78,9 +78,7 @@ export interface BackgroundTaskRecoveryWatchdogLiveOptions {
   readonly maxRecoveryAttempts?: number;
 }
 
-const makeBackgroundTaskRecoveryWatchdog = (
-  options?: BackgroundTaskRecoveryWatchdogLiveOptions,
-) =>
+const makeBackgroundTaskRecoveryWatchdog = (options?: BackgroundTaskRecoveryWatchdogLiveOptions) =>
   Effect.gen(function* () {
     const repository = yield* PendingBackgroundTaskRepository;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -90,7 +88,9 @@ const makeBackgroundTaskRecoveryWatchdog = (
 
     const sweepIntervalMs = Math.max(
       1,
-      options?.sweepIntervalMs ?? parsePositiveIntEnv("T3CODE_BG_TASK_RECOVERY_SWEEP_MS") ?? DEFAULT_SWEEP_INTERVAL_MS,
+      options?.sweepIntervalMs ??
+        parsePositiveIntEnv("T3CODE_BG_TASK_RECOVERY_SWEEP_MS") ??
+        DEFAULT_SWEEP_INTERVAL_MS,
     );
     const staleThresholdMs = Math.max(
       1,
@@ -139,9 +139,7 @@ const makeBackgroundTaskRecoveryWatchdog = (
 
       return orchestrationEngine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make(
-          `provider:bg-task-recovery:${primary.taskId}:${input.attempt}`,
-        ),
+        commandId: CommandId.make(`provider:bg-task-recovery:${primary.taskId}:${input.attempt}`),
         threadId: input.threadId,
         message: {
           messageId: MessageId.make(`user:bg-task-recovery:${primary.taskId}:${input.attempt}`),
@@ -341,16 +339,14 @@ const makeBackgroundTaskRecoveryWatchdog = (
         // Success: drop the rows so a successful recovery never accumulates
         // attempts across reboots (the resumed turn re-registers fresh rows).
         for (const task of recoverable) {
-          yield* repository
-            .deleteByTaskId({ taskId: task.taskId })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("background-task-recovery.delete-after-resume-failed", {
-                  taskId: task.taskId,
-                  cause,
-                }),
-              ),
-            );
+          yield* repository.deleteByTaskId({ taskId: task.taskId }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("background-task-recovery.delete-after-resume-failed", {
+                taskId: task.taskId,
+                cause,
+              }),
+            ),
+          );
         }
       }
       // On dispatch failure the rows remain (attempts already bumped); the next

@@ -600,10 +600,7 @@ export function AgentsPanel({
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-2 p-2">
           {backgroundItems.length > 0 ? (
-            <BackgroundProcessesSection
-              items={backgroundItems}
-              onOpen={onOpenBackgroundItem}
-            />
+            <BackgroundProcessesSection items={backgroundItems} onOpen={onOpenBackgroundItem} />
           ) : null}
           {model.workflows.map((group) => (
             <WorkflowSection

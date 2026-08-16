@@ -39,7 +39,7 @@ Add a custom `code` component, `MarkdownCode`, to the react-markdown components 
 
 - **Block vs inline:** fenced/indented code is rendered by the existing `pre`
   handler (which calls `extractCodeBlock` and Shiki). `MarkdownCode` treats a
-  node as *block* when it has a `language-…` className **or** its text contains a
+  node as _block_ when it has a `language-…` className **or** its text contains a
   newline, and renders a transparent native `<code className>…</code>` in that
   case. Inline = neither.
 - `extractCodeBlock` currently gates on `onlyChild.type === "code"`. Because
@@ -56,7 +56,7 @@ Add a custom `code` component, `MarkdownCode`, to the react-markdown components 
     contains a `/`, or is a bare `name.ext`),
   - ends in `.html`/`.htm` → `{ kind: "html" }`, or `.md`/`.markdown` →
     `{ kind: "markdown" }`.
-  Anything else → render the normal inline `<code>`.
+    Anything else → render the normal inline `<code>`.
 
 Config (`cwd`, `environmentId`, `theme`) reaches the module-level `MarkdownCode`
 via a new `ChatMarkdownConfigContext` provided in `ChatMarkdown`. This keeps
@@ -89,6 +89,7 @@ Markdown needs the **file contents** to render formatted. No read-file RPC exist
 `projects.readFile` RPC.
 
 **Backend (`projects.readFile`):** mirrors `writeFile` wiring across:
+
 - `packages/contracts/src/project.ts` — `ProjectReadFileInput { cwd, path }`,
   `ProjectReadFileResult { contents, resolvedPath }`, `ProjectReadFileError`.
 - `packages/contracts/src/rpc.ts` — `WS_METHODS.projectsReadFile`,
@@ -112,9 +113,10 @@ already `shell.openInEditor` any path, open a terminal, and `writeFile`. Gated b
 the read auth scope, capped at 2 MiB, returned as text only.
 
 **Frontend:**
+
 - `apps/web/src/markdownViewerStore.ts` — zustand store
   `{ open, request: { path, cwd, environmentId } | null, openMarkdownViewer(req),
-  closeMarkdownViewer() }` (mirrors `commandPaletteStore`).
+closeMarkdownViewer() }` (mirrors `commandPaletteStore`).
 - `apps/web/src/components/MarkdownFileViewerSidebar.tsx` — subscribes to the
   store; when open, calls `readEnvironmentApi(environmentId).projects.readFile`,
   shows loading/error/empty states, renders contents via `ChatMarkdown` inside a

@@ -15,7 +15,12 @@ import {
 } from "./WorkspaceMembersControl.logic";
 
 const existing = [
-  { id: "m1", path: "/srv/prm_portal_api", title: "prm_portal_api", integrationBranch: "pickup-v2" },
+  {
+    id: "m1",
+    path: "/srv/prm_portal_api",
+    title: "prm_portal_api",
+    integrationBranch: "pickup-v2",
+  },
 ];
 
 describe("normalizeMemberPath", () => {
@@ -75,7 +80,10 @@ describe("validateMemberDraft", () => {
   // so the client must not turn it away.
   it("accepts a home-relative path", () => {
     assert.strictEqual(
-      validateMemberDraft({ path: "~/src/uni/warehouse", integrationBranch: "pickup-v2" }, existing),
+      validateMemberDraft(
+        { path: "~/src/uni/warehouse", integrationBranch: "pickup-v2" },
+        existing,
+      ),
       null,
     );
   });
@@ -89,7 +97,10 @@ describe("validateMemberDraft", () => {
 
   it("rejects a duplicate path", () => {
     assert.strictEqual(
-      validateMemberDraft({ path: "/srv/prm_portal_api", integrationBranch: "pickup-v2" }, existing),
+      validateMemberDraft(
+        { path: "/srv/prm_portal_api", integrationBranch: "pickup-v2" },
+        existing,
+      ),
       "That repository is already attached.",
     );
   });
@@ -239,10 +250,7 @@ describe("resolveBranchOptions", () => {
   });
 
   it("filters on a partial name", () => {
-    assert.deepStrictEqual(resolveBranchOptions(refs, "prm"), [
-      "pickup-v2-prm2.0",
-      "prm",
-    ]);
+    assert.deepStrictEqual(resolveBranchOptions(refs, "prm"), ["pickup-v2-prm2.0", "prm"]);
   });
 
   it("keeps a branch that does not exist yet selectable", () => {

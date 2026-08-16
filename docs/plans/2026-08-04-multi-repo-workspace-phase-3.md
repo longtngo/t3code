@@ -1,6 +1,6 @@
 # Multi-repo workspace — Phase 3: branch lifecycle
 
-Implements the *Branch lifecycle* section of
+Implements the _Branch lifecycle_ section of
 `docs/design/2026-08-04-multi-repo-workspace-design.md`. Phase 3 is the only phase
 that writes to member repositories.
 
@@ -10,13 +10,13 @@ integration branch rather than `main`.
 
 ## Premises, validated before designing
 
-| Premise | Probe | Result |
-|---|---|---|
-| `resolveBaseBranch` consults `branch.<name>.gh-merge-base` first | read `GitManager.ts:1341` | true — it short-circuits before upstream tracking and the provider default |
-| Real member repositories carry a reflog creation record | `git reflog show pickup-v2-prm2.0` in `~/src/uni/uniuni_api_prm` | true — `branch: Created from pickup-v2` |
-| A config write primitive already exists in this codebase | `GitVcsDriverCore.ts:2643` | `createWorktree` already writes `gh-merge-base` via `runGit(["config", key, value])` |
-| Creating a branch at `HEAD` carries uncommitted changes over | `createRef` is `git branch X` then `git switch X`, both at the same commit | true — no checkout happens, so nothing is stashed or lost |
-| A member's current branch is readable without a new git call | `VcsStatusLocalResult.refName` | true — the local status the sweep already loads carries it |
+| Premise                                                          | Probe                                                                      | Result                                                                               |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `resolveBaseBranch` consults `branch.<name>.gh-merge-base` first | read `GitManager.ts:1341`                                                  | true — it short-circuits before upstream tracking and the provider default           |
+| Real member repositories carry a reflog creation record          | `git reflog show pickup-v2-prm2.0` in `~/src/uni/uniuni_api_prm`           | true — `branch: Created from pickup-v2`                                              |
+| A config write primitive already exists in this codebase         | `GitVcsDriverCore.ts:2643`                                                 | `createWorktree` already writes `gh-merge-base` via `runGit(["config", key, value])` |
+| Creating a branch at `HEAD` carries uncommitted changes over     | `createRef` is `git branch X` then `git switch X`, both at the same commit | true — no checkout happens, so nothing is stashed or lost                            |
+| A member's current branch is readable without a new git call     | `VcsStatusLocalResult.refName`                                             | true — the local status the sweep already loads carries it                           |
 
 ## Files
 
@@ -45,13 +45,13 @@ classifyMemberBranch(input: {
 }): "idle" | "cut-needed" | "owned-by-self" | "owned-by-other" | "unmanaged"
 ```
 
-| State | Condition |
-|---|---|
-| `idle` | on the integration branch, clean |
-| `cut-needed` | on the integration branch, dirty |
-| `owned-by-self` | the owner key names this thread |
-| `owned-by-other` | the owner key names a different thread |
-| `unmanaged` | off the integration branch with no owner key, or the branch is unreadable |
+| State            | Condition                                                                 |
+| ---------------- | ------------------------------------------------------------------------- |
+| `idle`           | on the integration branch, clean                                          |
+| `cut-needed`     | on the integration branch, dirty                                          |
+| `owned-by-self`  | the owner key names this thread                                           |
+| `owned-by-other` | the owner key names a different thread                                    |
+| `unmanaged`      | off the integration branch with no owner key, or the branch is unreadable |
 
 ## Task 2 — the base-resolution ladder
 
