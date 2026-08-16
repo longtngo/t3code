@@ -208,8 +208,13 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+          // Mirrors the projector: the failure marker settles with the
+          // regeneration state it belongs to, so it never outlives its attempt.
           ...(event.payload.titleRegeneration !== undefined
-            ? { titleRegeneration: event.payload.titleRegeneration }
+            ? {
+                titleRegeneration: event.payload.titleRegeneration,
+                titleRegenerationFailedAt: event.payload.titleRegenerationFailedAt ?? null,
+              }
             : {}),
           ...(event.payload.modelSelection !== undefined
             ? { modelSelection: event.payload.modelSelection }

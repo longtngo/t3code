@@ -87,6 +87,10 @@ import Migration0044 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMo
 // Upstream's 040 (projection_projects.favicon_path) likewise takes the next free
 // id (45) rather than its filename number.
 import Migration0045 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
+// Fork migration. Its filename continues upstream's 0NN sequence, but the
+// applied id is the next free one (46) — filename numbers and applied ids
+// diverged long ago and must not be reconciled.
+import Migration0046 from "./Migrations/041_ProjectionThreadsTitleRegenerationFailedAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -143,6 +147,7 @@ export const migrationEntries = [
   [43, "ProjectionThreadsPinOrderKey", Migration0043],
   [44, "ProjectionProjectsDefaultThreadEnvMode", Migration0044],
   [45, "ProjectionProjectFaviconPath", Migration0045],
+  [46, "ProjectionThreadsTitleRegenerationFailedAt", Migration0046],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

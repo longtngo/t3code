@@ -37,7 +37,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`) because upstream and the fork both claimed them; the applied ids stay unique because the
 manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified: 42 entries, all ids unique, monotonic, max 43. Id `34` is intentionally burned (an
+Verified 2026-08-16: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the

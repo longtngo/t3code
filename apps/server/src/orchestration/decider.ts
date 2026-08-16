@@ -966,6 +966,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           ...(requestIsCurrent && command.title !== undefined ? { title: command.title } : {}),
           ...(requestIsCurrent ? { titleRegeneration: null } : {}),
+          // Superseded requests stay silent: the same guard as the title, so a
+          // stale attempt cannot report a failure over a newer one.
+          ...(requestIsCurrent && command.failed === true
+            ? { titleRegenerationFailedAt: occurredAt }
+            : {}),
           updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
         },
       };

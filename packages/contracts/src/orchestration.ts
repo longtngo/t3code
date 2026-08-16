@@ -550,6 +550,10 @@ export const OrchestrationThread = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  /** Set when the last regeneration attempt failed; cleared by the next
+      success. Clients report the change, not the value, so a reload never
+      replays an old failure. */
+  titleRegenerationFailedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -614,6 +618,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  /** Set when the last regeneration attempt failed; cleared by the next
+      success. Clients report the change, not the value, so a reload never
+      replays an old failure. */
+  titleRegenerationFailedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -1230,6 +1238,10 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   requestId: CommandId,
   title: Schema.optional(TrimmedNonEmptyString),
+  /** Set when the attempt failed outright, as opposed to finishing with no
+      rename because the title was already right. Only the former is worth
+      telling the user about. */
+  failed: Schema.optional(Schema.Literal(true)),
 });
 
 const InternalOrchestrationCommand = Schema.Union([
@@ -1434,6 +1446,11 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   previousTitle: Schema.optional(TrimmedNonEmptyString),
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  /** When the current regeneration request failed. Never projected to a column:
+      it rides the event so clients can report the failure once, and a reload
+      drops it rather than resurrecting a stale error. A timestamp rather than a
+      flag so a second failure is distinguishable from the first. */
+  titleRegenerationFailedAt: Schema.optional(IsoDateTime),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

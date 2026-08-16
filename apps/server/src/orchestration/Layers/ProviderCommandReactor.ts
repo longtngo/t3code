@@ -1041,6 +1041,10 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly requestId: CommandId;
     readonly title?: string;
+    /** Only set for an attempt that actually failed. The boot sweep clears
+        interrupted requests without it, so a restart clears the spinner
+        without claiming a failure it never observed. */
+    readonly failed?: true;
   }) {
     yield* orchestrationEngine.dispatch({
       type: "thread.title.regeneration.complete",
@@ -1048,6 +1052,7 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       requestId: input.requestId,
       ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.failed === true ? { failed: true as const } : {}),
     });
   });
   const findInterruptedThreadTitleRegenerations = Effect.fn(
@@ -1106,17 +1111,23 @@ const make = Effect.gen(function* () {
           return Effect.logWarning("provider command reactor failed to regenerate thread title", {
             threadId: event.payload.threadId,
             cause: Cause.pretty(cause),
-          }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const));
+          }).pipe(Effect.as({ _tag: "Failed" } as const));
         }),
       );
       if (result._tag === "Superseded") {
         return;
       }
 
+      // "Completed with no title" and "Failed" both leave the title alone, but
+      // only the second is worth telling the user about — the first is the
+      // model correctly deciding the existing title was already right.
       const completion = {
         threadId: event.payload.threadId,
         requestId,
-        ...(result.title !== undefined ? { title: result.title } : {}),
+        ...(result._tag === "Completed" && result.title !== undefined
+          ? { title: result.title }
+          : {}),
+        ...(result._tag === "Failed" ? { failed: true as const } : {}),
       };
       yield* dispatchThreadTitleRegenerationCompletion(completion).pipe(
         Effect.catchCause((cause) => {

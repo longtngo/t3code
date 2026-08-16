@@ -158,6 +158,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./state/title-regeneration-failures": {
+      "types": "./src/state/titleRegenerationFailures.ts",
+      "default": "./src/state/titleRegenerationFailures.ts"
     }
   },
   "scripts": {

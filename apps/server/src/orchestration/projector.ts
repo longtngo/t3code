@@ -507,8 +507,14 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.title !== undefined ? { title: payload.title } : {}),
+            // Any move of the regeneration state — starting a fresh request or
+            // finishing one — also settles the failure marker, so a previous
+            // failure never outlives the attempt that replaces it.
             ...(payload.titleRegeneration !== undefined
-              ? { titleRegeneration: payload.titleRegeneration }
+              ? {
+                  titleRegeneration: payload.titleRegeneration,
+                  titleRegenerationFailedAt: payload.titleRegenerationFailedAt ?? null,
+                }
               : {}),
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }
