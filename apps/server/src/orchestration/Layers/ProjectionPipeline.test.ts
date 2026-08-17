@@ -2870,4 +2870,73 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         ]);
       }),
   );
+
+  it.effect("projects a failed title regeneration onto the thread row", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const modelSelection = {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      };
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-titlefail-project-create"),
+        projectId: ProjectId.make("project-titlefail"),
+        title: "Title Fail Project",
+        workspaceRoot: "/tmp/project-titlefail",
+        defaultModelSelection: modelSelection,
+        createdAt,
+      });
+
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-titlefail-thread-create"),
+        threadId: ThreadId.make("thread-titlefail"),
+        projectId: ProjectId.make("project-titlefail"),
+        title: "Raw first message text",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+
+      const requestId = CommandId.make("cmd-titlefail-request");
+      yield* engine.dispatch({
+        type: "thread.meta.update",
+        commandId: requestId,
+        threadId: ThreadId.make("thread-titlefail"),
+        regenerateTitle: true,
+      });
+
+      yield* engine.dispatch({
+        type: "thread.title.regeneration.complete",
+        commandId: CommandId.make("cmd-titlefail-complete"),
+        threadId: ThreadId.make("thread-titlefail"),
+        requestId,
+        failed: true,
+      });
+
+      // The sidebar reads shells rebuilt from THIS row, not from the event, so a
+      // failure marker that never lands here is invisible everywhere the user
+      // actually triggers a regeneration from.
+      const threadRows = yield* sql<{
+        readonly titleRegenerationFailedAt: string | null;
+        readonly titleRegenerationRequestId: string | null;
+      }>`
+        SELECT
+          title_regeneration_failed_at AS "titleRegenerationFailedAt",
+          title_regeneration_request_id AS "titleRegenerationRequestId"
+        FROM projection_threads
+        WHERE thread_id = 'thread-titlefail'
+      `;
+      assert.strictEqual(threadRows.length, 1);
+      assert.strictEqual(threadRows[0]?.titleRegenerationRequestId, null);
+      assert.notStrictEqual(threadRows[0]?.titleRegenerationFailedAt, null);
+    }),
+  );
 });

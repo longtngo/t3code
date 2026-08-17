@@ -164,6 +164,12 @@ const FOREGROUND_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
   "file_change",
   "dynamic_tool_call",
   "collab_agent_tool_call",
+  // The longest-blocking class in practice, and the one most likely to look like
+  // a wedged turn: an MCP call can legitimately run for minutes with no
+  // interleaved events. Both the Claude and Codex adapters canonicalize MCP tools
+  // to this type, so leaving it out made the guard miss exactly the case it
+  // exists for.
+  "mcp_tool_call",
 ]);
 
 // Backstop against leaked tracker entries. A turn normally clears via a terminal
@@ -194,10 +200,15 @@ function pruneStaleTurnActivity(
 }
 
 // Track foreground tool items that are open (started, not yet completed) so the stall watchdog
-// can tell "blocked on a tool" from "SDK wedged". Add on `item.started` for a tool item, remove on
-// its `item.completed`. Guarded on `itemId` presence (it is `Schema.optional`) — a malformed item
-// event without an id is simply not tracked rather than leaking; any residual id is cleared when
-// the turn's snapshot entry is deleted on its terminal event (or the TTL prune).
+// can tell "blocked on a tool" from "SDK wedged". Add on `item.started` or `item.updated` for a
+// tool item, remove on its `item.completed`. Guarded on `itemId` presence (it is `Schema.optional`)
+// — a malformed item event without an id is simply not tracked rather than leaking; any residual id
+// is cleared when the turn's snapshot entry is deleted on its terminal event (or the TTL prune).
+//
+// `item.updated` counts because the ACP runtime — the sole tool-event source for Cursor and Grok —
+// only ever emits `item.updated` or `item.completed` for a tool call, never `item.started`. Adding
+// on started alone left the set provably empty for those two adapters, so the guard was a no-op
+// there and the watchdog could stop a turn that was legitimately blocked on a tool.
 function nextOpenToolItemIds(
   existing: ReadonlySet<string>,
   event: ProviderRuntimeEvent,
@@ -206,19 +217,46 @@ function nextOpenToolItemIds(
   if (itemId === undefined) {
     return existing;
   }
-  if (event.type === "item.started") {
-    if (!FOREGROUND_TOOL_ITEM_TYPES.has(event.payload.itemType) || existing.has(itemId)) {
-      return existing;
-    }
-    return new Set(existing).add(itemId);
-  }
-  if (event.type === "item.completed") {
-    if (!existing.has(itemId)) {
-      return existing;
-    }
+  const remove = (): ReadonlySet<string> => {
+    if (!existing.has(itemId)) return existing;
     const next = new Set(existing);
     next.delete(itemId);
     return next;
+  };
+
+  if (event.type === "item.completed") {
+    return remove();
+  }
+
+  if (event.type === "item.started" || event.type === "item.updated") {
+    if (!FOREGROUND_TOOL_ITEM_TYPES.has(event.payload.itemType)) {
+      return existing;
+    }
+    // An `item.updated` is only evidence a tool is OPEN when it positively says
+    // so. Absence of a status is not "in progress": `item/commandExecution/
+    // terminalInteraction` on the Codex adapter emits `item.updated` for a
+    // `command_execution` with no status at all, and one arriving after that
+    // item's `item.completed` would have added an id that nothing ever removes.
+    // A permanently-open tool makes the watchdog abstain for the rest of the
+    // turn — the inverse of the bug this tracking exists to fix.
+    //
+    // A terminal status REMOVES rather than merely declining to add, so an
+    // adapter that reports a tool finishing through `item.updated` and never
+    // sends `item.completed` still closes it out. That applies to `item.started`
+    // too, which is unreachable today — every adapter's `item.started` carries
+    // `inProgress` — but a started-and-already-finished item should close rather
+    // than open, whichever event announces it.
+    const status = event.payload.status;
+    if (status !== undefined && status !== "inProgress") {
+      return remove();
+    }
+    if (event.type === "item.updated" && status !== "inProgress") {
+      return existing;
+    }
+    if (existing.has(itemId)) {
+      return existing;
+    }
+    return new Set(existing).add(itemId);
   }
   return existing;
 }

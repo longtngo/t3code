@@ -22,6 +22,11 @@ import { useThreadShells } from "../../state/entities";
 export function useTitleRegenerationFailureAlerts(): void {
   // A thread missing from this map has never been observed, which is what
   // keeps a persisted failure from alerting on first load.
+  // Never pruned, deliberately, and the same on web. Absence means "never
+  // observed" and suppresses the alert, so dropping a thread that left the shell
+  // list — which happens whenever an environment drops out of the catalog — would
+  // silently swallow a failure landing in that window. The growth avoided is one
+  // string per thread ever seen; a missed failure alert is not recoverable.
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 

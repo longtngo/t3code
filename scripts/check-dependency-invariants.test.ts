@@ -68,6 +68,11 @@ it("reports a measurement against its budget when a behavior regresses", () => {
 // effect bump is meant to trip.
 it.effect("the installed dependencies still hold every invariant", () =>
   Effect.gen(function* () {
+    // An empty list produces no failures, so this whole gate passes vacuously the
+    // moment the last entry is retired — and each entry's own `restore` text tells
+    // a maintainer to delete it once upstream fixes the thing. Assert the floor so
+    // "no failures" cannot silently mean "nothing checked".
+    assert.ok(dependencyInvariants.length > 0, "dependencyInvariants must not be empty");
     const failures = yield* checkInvariants(dependencyInvariants);
     assert.deepStrictEqual(failures.map(formatFailure), []);
   }).pipe(Effect.provide(NodeServices.layer)),
@@ -80,6 +85,7 @@ it.effect(
   "the installed effect build does not leak on idle schedule ticks",
   () =>
     Effect.gen(function* () {
+      assert.ok(behaviorInvariants.length > 0, "behaviorInvariants must not be empty");
       const failures = yield* checkBehaviorInvariants(behaviorInvariants);
       assert.deepStrictEqual(failures.map(formatFailure), []);
     }).pipe(Effect.provide(NodeServices.layer)),

@@ -22,6 +22,13 @@ import { shouldReportTitleRegenerationFailure } from "@t3tools/client-runtime/st
 export function useTitleRegenerationFailureToasts(): void {
   // Last value seen per thread. A thread missing from this map has never been
   // observed, which is what keeps hydration silent.
+  //
+  // Deliberately never pruned, unlike the completion-notification hook. Absence
+  // means "never observed" and suppresses the toast, so dropping a thread that
+  // left the shell list — which happens whenever an environment drops out of the
+  // catalog — would silently swallow a failure that lands in that window. The
+  // growth it avoids is one string per thread ever seen, bounded by the user's
+  // thread count; a missed failure notification is not recoverable.
   const seenFailedAt = useRef(new Map<string, string | null>());
   const threads = useThreadShells();
 

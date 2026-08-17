@@ -665,6 +665,119 @@ describe("ProviderRuntimeIngestion", () => {
     expect(activity).toHaveLength(0);
   });
 
+  it("tracks an MCP call, which is the longest-blocking tool the guard must cover", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-mcp-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId("turn-mcp"),
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-mcp-item"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId: asTurnId("turn-mcp"),
+      itemId: asItemId("toolu_mcp"),
+      payload: { itemType: "mcp_tool_call", status: "inProgress" },
+    });
+    await harness.drain();
+    // An MCP call can run for minutes with no interleaved events. Untracked, the
+    // watchdog reads that as a wedged turn and stops a live call.
+    expect([...(await harness.listTurnActivity())[0]!.openToolItemIds]).toEqual(["toolu_mcp"]);
+  });
+
+  it("tracks a tool whose runtime only ever reports it as updated", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-updated-started"),
+      provider: ProviderDriverKind.make("cursor"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId("turn-updated"),
+    });
+    // The ACP runtime backing Cursor and Grok emits item.updated or item.completed
+    // for a tool call and never item.started, so tracking only on started left the
+    // set provably empty for both adapters.
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-updated-item"),
+      provider: ProviderDriverKind.make("cursor"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId: asTurnId("turn-updated"),
+      itemId: asItemId("toolu_acp"),
+      payload: { itemType: "command_execution", status: "inProgress" },
+    });
+    await harness.drain();
+    expect([...(await harness.listTurnActivity())[0]!.openToolItemIds]).toEqual(["toolu_acp"]);
+
+    // An update that already reports a terminal status must not be added: no
+    // item.completed follows one, so the id would never be removed.
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-updated-settled"),
+      provider: ProviderDriverKind.make("cursor"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-updated"),
+      itemId: asItemId("toolu_acp_done"),
+      payload: { itemType: "command_execution", status: "completed" },
+    });
+    await harness.drain();
+    expect([...(await harness.listTurnActivity())[0]!.openToolItemIds]).toEqual(["toolu_acp"]);
+
+    // A terminal update on an id that IS open closes it, so an adapter that
+    // reports the finish through item.updated and never sends item.completed
+    // does not leave the tool open forever.
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-updated-closes"),
+      provider: ProviderDriverKind.make("cursor"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      turnId: asTurnId("turn-updated"),
+      itemId: asItemId("toolu_acp"),
+      payload: { itemType: "command_execution", status: "failed" },
+    });
+    await harness.drain();
+    expect((await harness.listTurnActivity())[0]!.openToolItemIds.size).toBe(0);
+  });
+
+  it("does not open a tool on an update that carries no status at all", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-nostatus-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId("turn-nostatus"),
+    });
+    // The Codex adapter emits exactly this for
+    // item/commandExecution/terminalInteraction: a command_execution update with
+    // no status field. Treating absence as in-progress would add an id after the
+    // command had already completed, and nothing would ever remove it — the
+    // watchdog would then abstain for the rest of the turn.
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-nostatus-item"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId: asTurnId("turn-nostatus"),
+      itemId: asItemId("toolu_terminal"),
+      payload: { itemType: "command_execution" },
+    });
+    await harness.drain();
+    expect((await harness.listTurnActivity())[0]!.openToolItemIds.size).toBe(0);
+  });
+
   it("tracks open foreground-tool items across an interleaved token-usage event", async () => {
     const harness = await createHarness();
 

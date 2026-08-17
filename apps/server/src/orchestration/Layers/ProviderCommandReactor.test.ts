@@ -3142,6 +3142,74 @@ describe("ProviderCommandReactor", () => {
     expect(resolvedActivity).toBeUndefined();
   });
 
+  it("does not resurrect a dead session to tell the agent the user cancelled", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-for-cancel"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    // Deliberately no entry in harness.runtimeSessions: the session died with a
+    // restart, which is exactly when a user finds a stale prompt and dismisses it.
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-approval-requested-cancel"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("activity-approval-requested-cancel"),
+          tone: "approval",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          payload: { requestId: "approval-request-cancel", requestKind: "command" },
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.approval.respond",
+        commandId: CommandId.make("cmd-approval-respond-cancel"),
+        threadId: ThreadId.make("thread-1"),
+        requestId: asApprovalRequestId("approval-request-cancel"),
+        decision: "cancel",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      if (!thread) return false;
+      return thread.activities.some(
+        (activity) => activity.kind === "provider.approval.respond.failed",
+      );
+    });
+
+    // Continuing here would spawn a provider subprocess, resume from the stored
+    // cursor, and start a billed turn whose opening line is "my decision was:
+    // cancel. Please continue." The user's abort must not become new work.
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("surfaces non-resumable provider user-input callbacks as stale failures", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

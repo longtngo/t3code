@@ -192,6 +192,10 @@ function TrustedFileViewContents({ environmentId, absolutePath, className }: Tru
           <ChatMarkdown
             text={contents}
             cwd={directoryOfAbsolutePath(absolutePath)}
+            // No thread here, but the environment is known — without it a file
+            // chip's "Open in new tab" would resolve against the primary
+            // environment and read the wrong machine.
+            fileEnvironmentId={environmentId}
             className="mx-auto max-w-4xl px-6 py-5"
           />
         </ScrollArea>

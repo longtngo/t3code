@@ -10,7 +10,8 @@ import {
 } from "~/components/files/viewerPath";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { cn } from "~/lib/utils";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 /**
@@ -82,13 +83,41 @@ function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: strin
 function ViewerRouteView() {
   const splat = Route.useParams({ select: (params) => params._splat });
   const absolutePath = absolutePathFromViewerSplat(splat);
-  const environmentId = usePrimaryEnvironmentId();
+  // An absolute path is only meaningful together with the machine it lives on.
+  // Opening a file from a thread on a remote environment used to read that path
+  // from the PRIMARY one, which 404s or, worse, silently serves a same-named
+  // local file. The opener passes the thread's environment.
+  //
+  // Falling back to primary is right when no environment was ASKED for (older
+  // links, the single-environment case) but wrong when one was asked for and is
+  // not in the connection catalog — reading a stale link's path off this machine
+  // reproduces the bug this fixes. That case says so instead.
+  //
+  // Gated on `isReady` because the catalog starts empty: opening one of these
+  // links directly, which is exactly what the feature adds, would otherwise flash
+  // "not connected" for every environment before the catalog arrives.
+  const requestedEnvironmentId = Route.useSearch({ select: (search) => search.env });
+  const { isReady, presentationById } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const requestedIsUnknown =
+    isReady &&
+    requestedEnvironmentId !== undefined &&
+    !presentationById.has(requestedEnvironmentId);
+  const environmentId = requestedIsUnknown
+    ? null
+    : (requestedEnvironmentId ?? primaryEnvironmentId);
   const navigate = useNavigate();
   const navigateTo = useCallback(
     (rawPath: string) => {
       const nextSplat = resolveViewerNavigation(rawPath, splat);
       if (nextSplat === null) return;
-      void navigate({ to: "/viewer/$", params: { _splat: nextSplat } });
+      // Keep the environment across address-bar navigation, or the next path
+      // silently resolves against a different machine than the current one.
+      void navigate({
+        to: "/viewer/$",
+        params: { _splat: nextSplat },
+        search: (previous: ViewerSearch) => previous,
+      });
     },
     [navigate, splat],
   );
@@ -118,7 +147,14 @@ function ViewerRouteView() {
   );
 }
 
+/** Which environment's filesystem the splat path should be read from. */
+export interface ViewerSearch {
+  readonly env?: EnvironmentId | undefined;
+}
+
 export const Route = createFileRoute("/viewer/$")({
+  validateSearch: (raw: Record<string, unknown>): ViewerSearch =>
+    typeof raw.env === "string" && raw.env.length > 0 ? { env: raw.env as EnvironmentId } : {},
   beforeLoad: async ({ context }) => {
     if (
       context.authGateState.status !== "authenticated" &&

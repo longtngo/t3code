@@ -27,6 +27,11 @@ describe("mint/resolve", () => {
   });
 
   it("expires a token once its ttl has passed", () => {
+    // Pinned, not just used as an offset: every other assertion here is written
+    // as TTL ± n, so they stay green whether the grant lasts ten minutes or ten
+    // days. The bound is the one thing this module exists to choose.
+    expect(VIEWER_ASSET_TOKEN_TTL_MS).toBe(10 * 60 * 1000);
+
     resetViewerAssetTokens();
     const token = mintViewerAssetToken("/a", NOW);
     expect(resolveViewerAssetGrant(token, NOW + VIEWER_ASSET_TOKEN_TTL_MS - 1)).toBe("/a");

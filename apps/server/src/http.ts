@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import Mime from "@effect/platform-node/Mime";
 import {
   AuthOrchestrationOperateScope,
@@ -440,8 +442,12 @@ const VIEWER_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
  * to execute a script or apply a stylesheet served that way — which is the second
  * reason a multi-file prototype rendered blank. Giving these two their real types
  * is safe in a way `text/html` would not be: neither can be rendered as a document,
- * so the "untrusted bytes must never be parsed as HTML" rule still holds. Anything
- * not listed falls back to `text/plain`.
+ * so the "untrusted bytes must never be parsed as HTML" rule still holds.
+ *
+ * This list is exhaustive, and that is the security property: `classifyViewerAssetPath`
+ * answers `null` for anything not here and the route 404s it. There is deliberately
+ * no `text/plain` fallback — that fallback is what let a hostile document read
+ * arbitrary files under its grant.
  */
 const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -454,6 +460,15 @@ const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
   ".ttf": "font/ttf",
   ".otf": "font/otf",
+  ".wasm": "application/wasm",
+  // Media a prototype legitimately loads. Deliberately no `.txt`/`.csv`/`.md`:
+  // those are shapes a secret actually takes, and the document can already be
+  // handed text it is entitled to through the page itself.
+  ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
+  ".wav": "audio/wav",
+  ".webm": "video/webm",
+  ".webmanifest": "application/manifest+json",
 };
 
 const IMAGE_CONTENT_TYPES: Record<string, string> = {
@@ -466,6 +481,178 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
 };
+
+/** A directory's filesystem identity. Two paths naming one directory share it. */
+export interface DirectoryIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
+/**
+ * Whether a directory may be handed out as a viewer asset grant, decided by
+ * filesystem IDENTITY rather than by comparing path strings.
+ *
+ * A grant covers a whole subtree, so the home directory — or anything above it —
+ * is far too much to give a document that runs script: the extension allow-list
+ * admits every `.json` outside a dot-directory, and on macOS
+ * `~/Library/Application Support` is full of credential JSON. Refusing costs
+ * nothing real: a single-file report at `~/report.html` has no relative assets to
+ * resolve, and a prototype in its own directory still gets a full grant.
+ *
+ * **This used to compare strings, and three review rounds each found another
+ * spelling that defeated it** — case (`/users/me`, because macOS `realpath(3)`
+ * does not canonicalize case), Unicode normalization (NFD against NFC), and
+ * duplicate separators. Each fix folded one more axis and left the next one open,
+ * because the premise was wrong: two paths can name one directory while sharing
+ * no prefix at all. On every macOS Catalina or later,
+ * `/System/Volumes/Data/Users/me` **is** `/Users/me` — same `dev:ino`, and
+ * `realpath` returns it unchanged, since a firmlink is not a symlink. No amount of
+ * folding reaches that, and `/System/Volumes/Data` is the real root of all user
+ * data while not being the string `"/"`.
+ *
+ * So the question is asked of the filesystem instead, in two parts, because an
+ * alias namespace defeats each one alone.
+ *
+ * `homeChain` is home and each of its ancestors up to the root; a grant is refused
+ * when it *is* any of them. That catches the firmlinked home, whose identity is
+ * home's.
+ *
+ * `containsHome` covers the case the chain cannot see. `/System/Volumes/Data` is a
+ * directory in its own right — its inode is not `/`'s — so walking up from home by
+ * name never reaches it, yet it contains all of home. The caller answers this by
+ * joining the grant with home's root-relative path and asking whether that lands
+ * on home's identity: `/System/Volumes/Data` + `Users/me` is home, so refuse;
+ * `/tmp` + `Users/me` does not exist, so allow. No macOS path is hardcoded.
+ *
+ * **What this does NOT cover, stated exactly rather than generally.** The join
+ * tests one candidate, so it only fires on the directory where the alias namespace
+ * reproduces home's whole root-relative path immediately below it. Home sits at
+ * `Volumes/Data/Users/me` under `/System`, not at `Users/me`, so `/System` and
+ * `/System/Volumes` are NOT refused even though they contain home. Both are
+ * `root:wheel` on the sealed read-only system volume, so a document cannot be
+ * planted there without root and SIP disabled, which is why this is recorded
+ * rather than chased — but the earlier claim that "any future alias mount is
+ * covered" was false, and an alias whose grandparent is user-writable would be a
+ * real hole.
+ *
+ * A directory that is merely outside home (`/tmp/build`) stays grantable, which a
+ * strict descendant-of-home test would have broken.
+ *
+ * **Measure this under node, not bun.** `realpath` canonicalizes a firmlink on bun
+ * and returns it unchanged on node; the server runs node. Re-checking with bun
+ * shows the alias collapsing and makes this whole guard look unnecessary.
+ *
+ * `ino` is a JS number while APFS inodes are 64-bit, and the loss is real —
+ * `/System/Volumes/Data` is inode 1152921500311879682 and arrives here as
+ * ...700. It cannot produce a false ALLOW: both sides go through the same
+ * conversion, so two equal inodes always yield two equal numbers. The only
+ * reachable error is over-refusal from a collision between distinct inodes, which
+ * costs a document its grant and serves it inline.
+ */
+export function isGrantableViewerAssetDirectory(
+  grant: DirectoryIdentity,
+  homeChain: ReadonlyArray<DirectoryIdentity>,
+  containsHome: boolean,
+): boolean {
+  if (containsHome) return false;
+  return !homeChain.some((entry) => entry.dev === grant.dev && entry.ino === grant.ino);
+}
+
+/**
+ * The whole grant decision, with the filesystem behind one injected lookup.
+ *
+ * This exists because the interesting part was not the comparison — it was the
+ * ancestor walk, the containment probe, and which side fails open. Those lived in
+ * the route, which has no test, so every bypass in this guard's history was found
+ * by running it against a real machine and none by the suite. Passing `identityOf`
+ * in lets a test drive the real decision over a fake tree that can express the
+ * shape which broke this repeatedly: one directory reachable by two paths.
+ *
+ * `identityOf` returns null for a path it cannot stat, and the three lookups do
+ * NOT all fail the same way — which is the thing to know before editing this.
+ * A null for home or for the grant REFUSES. A null for the containment probe
+ * means "this grant does not contain home", so it ALLOWS, by design: that lookup
+ * asks about a path which usually does not exist. The caller must therefore
+ * supply an identity for every path this asks about; a lookup it forgot to
+ * precompute would read as a legitimate absence rather than as an error.
+ */
+export function resolveViewerAssetGrantDecision(input: {
+  readonly directory: string;
+  readonly homeDirectory: string;
+  readonly identityOf: (path: string) => DirectoryIdentity | null;
+  readonly dirname: (path: string) => string;
+  readonly join: (...segments: ReadonlyArray<string>) => string;
+}): boolean {
+  const { directory, homeDirectory, identityOf, dirname, join } = input;
+
+  const homeIdentity = identityOf(homeDirectory);
+  if (homeIdentity === null) return false;
+
+  const homeChain: Array<DirectoryIdentity> = [];
+  for (let ancestor = homeDirectory; ; ancestor = dirname(ancestor)) {
+    const identity = identityOf(ancestor);
+    if (identity !== null) homeChain.push(identity);
+    if (ancestor === dirname(ancestor)) break;
+  }
+
+  const grantIdentity = identityOf(directory);
+  if (grantIdentity === null) return false;
+
+  const homeFromRoot = homeDirectory.replace(/^\/+/, "");
+  const viaGrant = homeFromRoot.length === 0 ? null : identityOf(join(directory, homeFromRoot));
+  const containsHome =
+    viaGrant !== null && viaGrant.dev === homeIdentity.dev && viaGrant.ino === homeIdentity.ino;
+
+  return isGrantableViewerAssetDirectory(grantIdentity, homeChain, containsHome);
+}
+
+/**
+ * Content type for a file the sandboxed viewer document is allowed to load, or
+ * null when it is not an asset kind — which the asset route answers with a 404.
+ *
+ * `classifyViewerPath` applies this discipline on the `/viewer` side; this is the
+ * same guard for the route `/viewer` redirects INTO, which needs it more. A grant
+ * covers a whole SUBTREE (`isWithinGrantedDirectory` is a prefix test), and the
+ * document reading it runs script under a `sandbox`-only CSP that restricts no
+ * fetch destination — so it has both a read capability and a channel to send what
+ * it reads anywhere.
+ *
+ * Only the portion BELOW the grant is filtered for dot segments, so a prototype
+ * that itself lives under `~/.local/share` still loads its own assets while
+ * nothing can descend into a `.ssh` or `.aws` sibling.
+ *
+ * This NARROWS that capability; it does not remove it. Everything the allow-list
+ * admits is still readable anywhere under the grant — notably every `.json`
+ * outside a dot-directory, and on macOS `~/Library/Application Support` is full of
+ * credential JSON. Two things bound the damage: `isGrantableViewerAssetDirectory`
+ * refuses to mint a grant at or above the home directory, and a prototype's own
+ * directory is a much smaller blast radius. Closing it properly means giving
+ * `VIEWER_CSP` a real `default-src`/`connect-src` so the exfiltration channel does
+ * not exist, which needs verifying in a browser against an opaque origin.
+ *
+ * Callers MUST pass the realpath-resolved path, since that is what gets served,
+ * and MUST have checked `isWithinGrantedDirectory` first — the relative portion is
+ * computed by slicing, which assumes containment.
+ */
+export function classifyViewerAssetPath(
+  directory: string,
+  resolvedPath: string,
+): { readonly contentType: string; readonly isDocument: boolean } | null {
+  const relative = resolvedPath.slice(directory.length);
+  if (relative.split("/").some((segment) => segment.startsWith("."))) return null;
+
+  const lastSlash = resolvedPath.lastIndexOf("/");
+  const lastDot = resolvedPath.lastIndexOf(".");
+  // A dot in a parent segment is not an extension, and a bare filename has none —
+  // slicing on a bare `lastIndexOf` would read the last character as one.
+  const extension = lastDot > lastSlash ? resolvedPath.slice(lastDot).toLowerCase() : "";
+
+  if (HTML_EXTENSIONS.has(extension)) {
+    return { contentType: "text/html; charset=utf-8", isDocument: true };
+  }
+  const contentType = IMAGE_CONTENT_TYPES[extension] ?? VIEWER_ASSET_CONTENT_TYPES[extension];
+  return contentType === undefined ? null : { contentType, isDocument: false };
+}
 
 /**
  * Decode a `/viewer` URL suffix and classify it as a markdown, html, raw-text, or
@@ -630,6 +817,80 @@ export const viewerRouteLayer = HttpRouter.add(
       const directory = yield* documentFileSystem
         .realPath(parentDirectory)
         .pipe(Effect.orElseSucceed(() => parentDirectory));
+      // Home and every ancestor up to the root, by filesystem identity. Comparing
+      // path strings cannot work here: `/System/Volumes/Data/Users/me` IS
+      // `/Users/me` on macOS, sharing no prefix and surviving `realPath` unchanged,
+      // because a firmlink is not a symlink.
+      // Stat every path once, up front: the walk and the containment probe are
+      // synchronous once identities are in hand, which is what lets the decision
+      // live in a testable pure function instead of in this handler.
+      const identityOf = (path: string) =>
+        documentFileSystem.stat(path).pipe(
+          Effect.map((info) =>
+            Option.isSome(info.ino) ? { dev: info.dev, ino: info.ino.value } : null,
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+      const homeDirectory = yield* documentFileSystem
+        .realPath(NodeOS.homedir())
+        .pipe(Effect.orElseSucceed(() => NodeOS.homedir()));
+      const homeFromRoot = homeDirectory.replace(/^\/+/, "");
+      const probePaths = new Set<string>([directory, homeDirectory]);
+      for (let ancestor = homeDirectory; ; ancestor = documentPath.dirname(ancestor)) {
+        probePaths.add(ancestor);
+        if (ancestor === documentPath.dirname(ancestor)) break;
+      }
+      if (homeFromRoot.length > 0) probePaths.add(documentPath.join(directory, homeFromRoot));
+      const identities = new Map<string, { readonly dev: number; readonly ino: number } | null>();
+      for (const probePath of probePaths) {
+        identities.set(probePath, yield* identityOf(probePath));
+      }
+      // `probePaths` is a second, independently maintained copy of the set of
+      // paths the decision asks about. It is correct today, but a lookup added
+      // there without being added here would return `undefined`, and for the
+      // containment probe an absent identity ALLOWS. Distinguishing "not probed"
+      // from "probed and unreadable" turns that future divergence from a silent
+      // fail-open into a refusal.
+      let missedProbe: string | null = null;
+      const grantable = resolveViewerAssetGrantDecision({
+        directory,
+        homeDirectory,
+        identityOf: (path) => {
+          if (!identities.has(path)) {
+            missedProbe = path;
+            return null;
+          }
+          return identities.get(path) ?? null;
+        },
+        dirname: (path) => documentPath.dirname(path),
+        join: (...segments) => documentPath.join(...segments),
+      });
+      if (missedProbe !== null) {
+        yield* Effect.logWarning("viewer asset grant asked about an unprobed path", {
+          path: missedProbe,
+        });
+      }
+      // Too broad to grant: serve the document inline instead, so it still renders
+      // but gets no capability over the tree it happens to sit in. Streamed rather
+      // than echoing `file.value.contents`, which `readTrustedFile` caps at 1MiB —
+      // a self-contained report is exactly the shape that exceeds that, and it
+      // would have been cut mid-tag with no error.
+      if (!grantable || missedProbe !== null) {
+        return yield* HttpServerResponse.file(absolutePath, {
+          status: 200,
+          headers: {
+            ...headers,
+            // `HttpServerResponse.file` drops `contentType` (the platform derives
+            // it from the path), so it is pinned through headers instead.
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": VIEWER_CSP,
+          },
+        }).pipe(
+          // Same funnel the image branch uses: a PlatformError from a file that
+          // vanished between read and open would otherwise escape unhandled.
+          Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })),
+        );
+      }
       const token = mintViewerAssetToken(directory, yield* Clock.currentTimeMillis);
       const encoded = absolutePath.split("/").map(encodeURIComponent).join("/");
       return HttpServerResponse.empty({
@@ -708,12 +969,14 @@ export const viewerAssetRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Asset too large", { status: 413 });
     }
 
-    const extension = resolvedPath.value.slice(resolvedPath.value.lastIndexOf(".")).toLowerCase();
-    const isDocument = HTML_EXTENSIONS.has(extension);
-    const contentType =
-      IMAGE_CONTENT_TYPES[extension] ??
-      VIEWER_ASSET_CONTENT_TYPES[extension] ??
-      (isDocument ? "text/html; charset=utf-8" : "text/plain; charset=utf-8");
+    // Not an asset kind: 404 rather than serving it as text. The grant is a whole
+    // subtree and the reader is a script-enabled document, so "anything under the
+    // token" is far too wide a capability to hand out.
+    const asset = classifyViewerAssetPath(directory, resolvedPath.value);
+    if (asset === null) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const { contentType, isDocument } = asset;
 
     return yield* HttpServerResponse.file(resolvedPath.value, {
       status: 200,

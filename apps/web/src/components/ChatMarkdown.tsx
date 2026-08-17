@@ -15,7 +15,7 @@ import {
   TriangleAlertIcon,
   WrapTextIcon,
 } from "lucide-react";
-import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -124,6 +124,19 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
+  /**
+   * Which machine the absolute paths in this markdown live on, for a surface that
+   * renders it without a thread. Only the file viewer passes it today.
+   *
+   * It feeds "Open in new tab" only. The other file-chip actions — side panel,
+   * open in editor, and the chip's own click — resolve through
+   * `useActiveEnvironmentId`, which tracks the PRIMARY environment and is never
+   * written from a thread or from `?env=`. So without a `threadRef` those still
+   * act on the primary machine while the content beside them may have come from
+   * another one. Narrow today (the viewer is the only such surface) but worth
+   * knowing before adding a second one.
+   */
+  fileEnvironmentId?: EnvironmentId | undefined;
   onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -861,6 +874,7 @@ interface MarkdownFileLinkProps {
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
+  fileEnvironmentId?: EnvironmentId | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInPanel: (workspaceRelativePath: string, line: number | undefined) => void;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
@@ -1167,6 +1181,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   copyMarkdown,
   theme,
   threadRef,
+  fileEnvironmentId,
   onOpen,
   onOpenInPanel,
   onOpenInBrowser,
@@ -1358,16 +1373,27 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   const basename = basenamePathSegment(targetPath);
 
   /**
-   * Open the file through the server's `/viewer` route — a real, refreshable URL,
+   * Open the file through the app's `/viewer` route — a real, refreshable URL,
    * so reloading the tab re-reads the file rather than showing a frozen snapshot.
    * Same-origin, so the tab carries the session cookie; the route additionally
    * trusts genuine loopback requests.
+   *
+   * The origin is deliberately this app's own, unlike `viewerHttpUrl`: this opens
+   * the CLIENT route, which then reads bytes over the environment's own transport.
+   * The environment has to ride along, though, or the route falls back to the
+   * primary one and reads an absolute path off the wrong machine.
    */
   const handleOpenInNewTab = useCallback(() => {
     const { path } = splitPathAndPosition(targetPath);
-    const url = `${window.location.origin}/viewer${path.split("/").map(encodeURIComponent).join("/")}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, [targetPath]);
+    const encoded = path.split("/").map(encodeURIComponent).join("/");
+    const linkEnvironmentId = threadRef?.environmentId ?? fileEnvironmentId;
+    const query = linkEnvironmentId ? `?env=${encodeURIComponent(linkEnvironmentId)}` : "";
+    window.open(
+      `${window.location.origin}/viewer${encoded}${query}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }, [fileEnvironmentId, targetPath, threadRef]);
 
   return (
     <span className="inline-flex max-w-full items-center align-middle">
@@ -1425,7 +1451,12 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         </MenuTrigger>
         <MenuPopup align="end">
           <MenuItem onClick={handleOpenInFilePreview}>View in side panel</MenuItem>
-          {isAbsoluteFilePath(targetPath) ? (
+          {/* Needs a machine to open against, or the tab resolves the path on the
+              primary environment and silently shows the wrong one. A thread
+              supplies it; so does `fileEnvironmentId` for the file viewer, which
+              renders this without a thread. The pull-request body passes neither,
+              so the item stays hidden there rather than being quietly wrong. */}
+          {isAbsoluteFilePath(targetPath) && (threadRef ?? fileEnvironmentId) ? (
             <MenuItem onClick={handleOpenInNewTab}>Open in new tab</MenuItem>
           ) : null}
           <MenuItem onClick={handleOpenInEditor}>Open in editor</MenuItem>
@@ -1451,6 +1482,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
+    previous.fileEnvironmentId === next.fileEnvironmentId &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInPanel === next.onOpenInPanel &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
@@ -1462,6 +1494,7 @@ function ChatMarkdown({
   text,
   cwd,
   threadRef,
+  fileEnvironmentId,
   onTaskListChange,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
@@ -1673,6 +1706,7 @@ function ChatMarkdown({
           copyMarkdown={copyMarkdown}
           theme={resolvedTheme}
           threadRef={threadRef}
+          fileEnvironmentId={fileEnvironmentId}
           onOpen={openInPreferredEditor}
           onOpenInPanel={openFileInPanel}
           onOpenInBrowser={
@@ -1901,6 +1935,7 @@ function ChatMarkdown({
   }, [
     cwd,
     diffThemeName,
+    fileEnvironmentId,
     fileLinkParentSuffixByPath,
     inlineCodeFileLinkMetaByText,
     isStreaming,

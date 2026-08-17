@@ -7,15 +7,34 @@ import * as Stream from "effect/Stream";
 /**
  * Coalesce a long-lived subscription stream into `<= maxBatch`-element batches by
  * **backpressure** — the stack-safe, timer-free replacement for
- * `Stream.groupedWithin`. The twin of
+ * `Stream.groupedWithin`.
+ *
+ * ## Deliberately unwired — do not delete as dead code
+ *
+ * `ws.ts` currently uses `Stream.groupedWithin` at its two shell-coalescing sites,
+ * because effect >= 4.0.0-beta.103 rewrote `stepToBuffer` into a loop and the leak
+ * below is fixed at the pinned version. That safety is a property of the PIN, not
+ * of this repo, so this module is kept ready rather than deleted: if
+ * `scripts/idle-aggregate-probe.ts` regresses on an effect bump, the two call
+ * sites swap back to this without a redesign.
+ *
+ * Swapping is NOT free, which is the other reason it is parked. `groupedWithin`
+ * coalesces on a TIME window; this coalesces on backpressure alone, so a consumer
+ * that keeps up gets size-1 batches — and each batch costs a DB read in
+ * `coalesceShellEvents`. The 50 ms window exists precisely to stop high-frequency
+ * streaming traffic serializing behind those reads. Re-measure that before
+ * switching, not just the idle heap.
+ *
+ * The twin of
  * {@link ./boundedSubscriberStream.boundedSubscriberStream}: same shape (a bounded
  * `Queue` + a scoped forked pump), here to batch rather than to drop-behind.
  *
- * ## Why this exists (the OOM it fixes)
+ * ## Why this exists (the OOM it fixed, on the effect version of the time)
  *
- * `Stream.groupedWithin(n, d)` lowers to effect's `aggregateWithin`, whose
- * internal schedule loop `stepToBuffer` (effect `Stream.js:5887`) is **not
- * stack-safe**: while the subscription is idle, its `Schedule.spaced` tick
+ * Historical, and the reason to keep this ready rather than delete it. On effect
+ * 4.0.0-beta.78, `Stream.groupedWithin(n, d)` lowered to `aggregateWithin`, whose
+ * internal schedule loop `stepToBuffer` (then at effect `Stream.js:5887`) was
+ * **not stack-safe**: while the subscription is idle, its `Schedule.spaced` tick
  * self-recurses inside a `flatMap(() => Effect.never)` + `Pull.catchDone` that
  * never unwinds, pinning +2 continuation frames on the request fiber's `_stack`
  * *per tick, forever*. On `subscribeThread` that was a monotonic ~1.9 GB/hr heap

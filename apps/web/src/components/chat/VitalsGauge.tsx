@@ -556,7 +556,7 @@ export function VitalsGauge(props: {
   // its two window arcs by pace, and pace is a function of how much of the
   // window's clock has elapsed. Leaving it frozen would let the glyph keep
   // showing a severity the panel no longer agrees with.
-  const now = useNow(30_000, true);
+  const now = useNow(30_000);
   const inputs: VitalsGaugeInputs = {
     context: fullnessArc(context?.usedPercentage ?? null),
     fiveHour: windowArc(accountUsage?.fiveHour, FIVE_HOUR_MS, now),
@@ -612,17 +612,21 @@ export function VitalsGauge(props: {
 }
 
 /**
- * Ticking wall-clock (ms) so pace projections advance. Only runs while `active`
- * (the detail popover is open); refreshes immediately on activation.
+ * Ticking wall-clock (ms) so pace projections advance.
+ *
+ * Runs for as long as the gauge is mounted, not just while the detail popover is
+ * open: the glyph colours its two window arcs by pace, so a frozen clock leaves
+ * it showing a severity the panel no longer agrees with. It previously took an
+ * `active` flag whose only caller passed a literal `true`, which made the early
+ * return unreachable and the docstring describe the opposite of the behaviour.
  */
-function useNow(intervalMs: number, active: boolean): number {
+function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!active) return;
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
-  }, [intervalMs, active]);
+  }, [intervalMs]);
   return now;
 }
 

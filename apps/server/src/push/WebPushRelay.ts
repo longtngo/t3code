@@ -391,7 +391,11 @@ const make = Effect.gen(function* () {
       });
 
       if (edges.length > 0) {
-        const subscriptions = yield* pushRepo.list().pipe(Effect.orElseSucceed(() => []));
+        // Deliberately NOT recovered to an empty list: swallowing the failure here
+        // reaches `advanceBaseline` below, which consumes the edge, and a terminal
+        // edge never re-emits — the exact silent drop the comment above forbids.
+        // Letting it fail skips the baseline advance and logs via the outer catch.
+        const subscriptions = yield* pushRepo.list();
         if (subscriptions.length > 0) {
           const environmentId = yield* serverEnvironment.getEnvironmentId;
           const url = `/${environmentId}/${threadId}`;

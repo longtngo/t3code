@@ -45,7 +45,7 @@ import {
   resolveFileDiffPath,
 } from "../../lib/diffRendering";
 import { WorkEntryDetailDialog } from "./WorkEntryDetailDialog";
-import { formatWorkEntryDetail } from "./workEntryDetail.logic";
+import { hasWorkEntryDetail } from "./workEntryDetail.logic";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -2250,8 +2250,10 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const headingWithCount = count > 1 ? `${heading} \u00d7${count}` : heading;
   const displayText = preview ? `${headingWithCount} - ${preview}` : headingWithCount;
   // A row is clickable when its detail modal would have something to show. `detailPayload` is set
-  // for every tool activity, so most rows open a purpose-built (or JSON) detail view.
-  const canOpenDetail = formatWorkEntryDetail(workEntry).kind !== "empty";
+  // for every tool activity, so most rows open a purpose-built (or JSON) detail view. Asked with
+  // the predicate rather than by formatting: building the body here would run a Myers diff per
+  // Edit row and pretty-print payloads up to a megabyte, on every render, and discard it.
+  const canOpenDetail = hasWorkEntryDetail(workEntry);
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&

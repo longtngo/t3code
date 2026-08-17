@@ -229,6 +229,25 @@ function formatToolBody(tool: ToolPayload): WorkEntryDetailBody | null {
 }
 
 /**
+ * Whether {@link formatWorkEntryDetail} would produce anything, without building it.
+ *
+ * The work-log row list needs this to decide whether a row opens a detail modal, and it asks once
+ * per row per render. Answering it by formatting the body costs a full Myers diff for an `Edit`
+ * call, or a pretty-print of a payload that can reach a megabyte, and then throws the result away.
+ *
+ * The two checks below are exhaustive rather than an approximation. A specialized tool body cannot
+ * be the deciding factor: `readToolPayload` only returns non-null when `detailPayload` is a record,
+ * which the payload check already accepts. And a detail string that looks like JSON but does not
+ * parse falls through to the plain-text branch, so any non-blank string qualifies.
+ */
+export function hasWorkEntryDetail(entry: WorkLogEntry): boolean {
+  if (entry.detailPayload != null && typeof entry.detailPayload === "object") {
+    return true;
+  }
+  return typeof entry.detail === "string" && entry.detail.trim().length > 0;
+}
+
+/**
  * Decide how to render a work-log entry's detail. AskUserQuestion / Bash / Edit tool calls get a
  * purpose-built body; everything else prefers the raw structured payload (formatted JSON), then a
  * JSON-looking detail string, then plain text, and finally `empty`.

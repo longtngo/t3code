@@ -400,6 +400,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             archivedAt: payload.archivedAt,
             titleRegeneration: null,
+            titleRegenerationFailedAt: null,
             updatedAt: payload.updatedAt,
           }),
         })),

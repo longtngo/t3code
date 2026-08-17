@@ -645,6 +645,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             archivedAt: event.payload.archivedAt,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
+            // Clears with the rest of the regeneration state: an archived thread
+            // is not carrying a failure the user can act on, and leaving it set
+            // would contradict the settle-together rule the meta-updated handler
+            // documents.
+            titleRegenerationFailedAt: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -792,6 +797,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? {
                   titleRegenerationRequestId: event.payload.titleRegeneration?.requestId ?? null,
                   titleRegenerationStartedAt: event.payload.titleRegeneration?.startedAt ?? null,
+                  // Settles with the regeneration state it describes, so a fresh
+                  // request clears the previous failure. Shells are rebuilt from
+                  // this row, so omitting it here pins the column at NULL and the
+                  // marker never reaches the sidebar.
+                  titleRegenerationFailedAt: event.payload.titleRegenerationFailedAt ?? null,
                 }
               : {}),
             ...(event.payload.modelSelection !== undefined

@@ -3,6 +3,7 @@ import type { WorkLogEntry } from "../../session-logic";
 import {
   extractAskUserQuestionAnswers,
   formatWorkEntryDetail,
+  hasWorkEntryDetail,
   normalizeToolResultContent,
 } from "./workEntryDetail.logic";
 
@@ -17,6 +18,39 @@ function toolEntry(
 ): WorkLogEntry {
   return entry({ detailPayload: { data: { toolName, input, ...(result ? { result } : {}) } } });
 }
+
+describe("hasWorkEntryDetail", () => {
+  // The row list asks only "is this row clickable", so it must not pay for the
+  // body. Building one costs a full Myers diff for an Edit call (measured at
+  // 1-7ms on real payloads) or a pretty-print of a payload up to a megabyte,
+  // per row, per render. The contract is that this agrees with the real
+  // formatter everywhere; the cases below span every branch of it.
+  const cases: ReadonlyArray<readonly [string, WorkLogEntry]> = [
+    ["structured payload", entry({ detailPayload: { a: 1 } })],
+    ["payload and detail together", entry({ detailPayload: { a: 1 }, detail: "text" })],
+    ["plain detail text", entry({ detail: "some flattened text" })],
+    ["json-looking detail string", entry({ detail: '{"a":1}' })],
+    ["detail string that only looks like json", entry({ detail: "{not json" })],
+    ["empty entry", entry()],
+    ["blank detail string", entry({ detail: "   " })],
+    ["null payload", entry({ detailPayload: null })],
+    ["scalar payload", entry({ detailPayload: 42 })],
+    ["array payload", entry({ detailPayload: [1, 2] })],
+    ["Edit tool call", toolEntry("Edit", { file_path: "a.ts", old_string: "a", new_string: "b" })],
+    ["malformed Edit tool call", toolEntry("Edit", { file_path: "a.ts" })],
+    ["Bash tool call", toolEntry("Bash", { command: "ls" })],
+    ["Bash tool call with no command", toolEntry("Bash", {})],
+    ["AskUserQuestion", toolEntry("AskUserQuestion", { questions: [{ question: "Which?" }] })],
+    ["malformed AskUserQuestion", toolEntry("AskUserQuestion", { questions: [] })],
+    ["unknown tool", toolEntry("Grep", { pattern: "x" })],
+  ];
+
+  for (const [name, workEntry] of cases) {
+    it(`agrees with formatWorkEntryDetail for ${name}`, () => {
+      expect(hasWorkEntryDetail(workEntry)).toBe(formatWorkEntryDetail(workEntry).kind !== "empty");
+    });
+  }
+});
 
 describe("formatWorkEntryDetail", () => {
   it("pretty-prints a structured payload as JSON", () => {

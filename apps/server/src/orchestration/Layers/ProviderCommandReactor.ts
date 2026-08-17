@@ -1471,6 +1471,40 @@ const make = Effect.gen(function* () {
     // continuation.
     const hasLiveSession = yield* hasLiveSessionForThread(event.payload.threadId);
     if (!hasLiveSession) {
+      // Only an approval is worth reattaching for. Declining or cancelling is the
+      // user saying "do not proceed", and a stale prompt left over from a restart
+      // is precisely what gets cancelled — so continuing here would spawn a
+      // provider subprocess, resume from the stored cursor, and open a billed turn
+      // with "my decision was: cancel. Please continue." Surface the same
+      // stale-request notice the live-session path uses instead.
+      if (event.payload.decision !== "accept" && event.payload.decision !== "acceptForSession") {
+        // Keyed the same way the continuation path keys its dedupe cache, so a
+        // redelivered decline appends one notice rather than one per delivery.
+        //
+        // Sharing the key also means a decline CLOSES the request id: a later
+        // accept for the same id finds the key set and returns without starting a
+        // turn. That is the behaviour we want — the user already said no, and the
+        // session it would reattach to is gone either way — but it is a property
+        // of the shared namespace rather than an explicit rule, so it is written
+        // down here.
+        const dedupeKey = `approval:${event.payload.requestId}`;
+        const alreadyHandled = yield* Cache.getOption(continuedPendingRequestKeys, dedupeKey).pipe(
+          Effect.map(Option.isSome),
+        );
+        if (alreadyHandled) {
+          return;
+        }
+        yield* Cache.set(continuedPendingRequestKeys, dedupeKey, true);
+        return yield* appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.approval.respond.failed",
+          summary: "Provider approval response failed",
+          detail: stalePendingRequestDetail("approval", event.payload.requestId),
+          turnId: null,
+          createdAt: event.payload.createdAt,
+          requestId: event.payload.requestId,
+        });
+      }
       return yield* continueApproval();
     }
 

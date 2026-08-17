@@ -265,7 +265,16 @@ export interface CoalescedWorkLogRow<E extends CoalescibleWorkEntry> {
 
 /** Signature capturing everything that affects how a work-log row renders.
  *  Two entries with the same signature are visually indistinguishable, so they
- *  can be collapsed into one row with a count without hiding any information. */
+ *  can be collapsed into one row with a count without hiding any information.
+ *
+ *  Joined on NUL because these are free-text fields and the separator has to be
+ *  one they cannot contain. The count of separators is fixed, so merely shifting
+ *  content across a boundary cannot collide — what collides is a field that
+ *  CONTAINS the separator: on a space, `detail: "a b"` with `command: "c"` and
+ *  `detail: "a"` with `command: "b c"` produce the same signature and collapse
+ *  into one row, which is exactly the hiding this is supposed to prevent. The
+ *  changed-file list needs a separator for the same reason: joined on empty,
+ *  `["a", "b"]` and `["ab"]` are indistinguishable. */
 function workLogEntryRenderSignature(entry: CoalescibleWorkEntry): string {
   return [
     normalizeCompactToolLabel(entry.toolTitle ?? entry.label),
@@ -275,8 +284,8 @@ function workLogEntryRenderSignature(entry: CoalescibleWorkEntry): string {
     entry.detail ?? "",
     entry.command ?? "",
     entry.rawCommand ?? "",
-    (entry.changedFiles ?? []).join(""),
-  ].join(" ");
+    (entry.changedFiles ?? []).join("\0"),
+  ].join("\0");
 }
 
 /** Collapse runs of consecutive, visually-identical work-log entries (e.g. a

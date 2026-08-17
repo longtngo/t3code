@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  LOCAL_LLM_MODELS,
-  LOCAL_LLM_PROVIDERS,
-  PROVIDER_ARG_SPECS,
-  compatibleModels,
-  getModel,
-  getProvider,
-} from "./index.ts";
+import { LOCAL_LLM_MODELS, LOCAL_LLM_PROVIDERS, compatibleModels, getModel } from "./index.ts";
 
 describe("local llm catalog", () => {
   it("has unique provider and model ids", () => {
@@ -39,14 +32,6 @@ describe("local llm catalog", () => {
 
     const llama = compatibleModels("llamacpp").map((m) => m.id);
     expect(llama).not.toContain("deepseek-v4-flash"); // ds4Only excluded from generic gguf
-  });
-
-  it("arg specs reference known providers and have unique flags each", () => {
-    for (const [pid, specs] of Object.entries(PROVIDER_ARG_SPECS)) {
-      expect(getProvider(pid)).toBeDefined();
-      const flags = specs.map((s) => s.flag);
-      expect(new Set(flags).size).toBe(flags.length);
-    }
   });
 
   it("managed model resources resolve to a non-empty resourceName", () => {

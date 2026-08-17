@@ -3,7 +3,10 @@ import { describe } from "vite-plus/test";
 
 import {
   assetResponseHeaders,
+  classifyViewerAssetPath,
   classifyViewerPath,
+  isGrantableViewerAssetDirectory,
+  resolveViewerAssetGrantDecision,
   isLocalLoopbackRequest,
   isLoopbackHostname,
   isWaivableLocalRequest,
@@ -157,6 +160,97 @@ describe("classifyViewerPath", () => {
   });
 });
 
+describe("isGrantableViewerAssetDirectory", () => {
+  // Identities, not paths. Every earlier version of this guard compared strings and
+  // was defeated by another spelling of the same directory — case, Unicode
+  // normalization, duplicate separators — until a macOS firmlink showed the premise
+  // was wrong: /System/Volumes/Data/Users/me IS /Users/me, shares no prefix, and
+  // survives realpath unchanged. Verified on a real machine: both report
+  // dev 16777234, ino 302769.
+  const root = { dev: 1, ino: 2 };
+  const users = { dev: 1, ino: 10 };
+  const home = { dev: 1, ino: 20 };
+  const homeChain = [home, users, root];
+
+  it("refuses home and every ancestor of it, however they are spelled", () => {
+    expect(isGrantableViewerAssetDirectory(home, homeChain, false)).toBe(false);
+    expect(isGrantableViewerAssetDirectory(users, homeChain, false)).toBe(false);
+    expect(isGrantableViewerAssetDirectory(root, homeChain, false)).toBe(false);
+    // The firmlink alias resolves to home's identity, so it is refused by the same
+    // check that refuses home — no extra rule, which is the point of the rewrite.
+    expect(isGrantableViewerAssetDirectory({ dev: 1, ino: 20 }, homeChain, false)).toBe(false);
+  });
+
+  it("allows a directory a prototype actually lives in", () => {
+    // Inside home.
+    expect(isGrantableViewerAssetDirectory({ dev: 1, ino: 21 }, homeChain, false)).toBe(true);
+    // Outside home entirely (/tmp/build). A strict descendant-of-home rule would
+    // have refused this; it is grantable because it is not home nor above it.
+    expect(isGrantableViewerAssetDirectory({ dev: 1, ino: 99 }, homeChain, false)).toBe(true);
+    // Same inode number on a different device is a different directory.
+    expect(isGrantableViewerAssetDirectory({ dev: 2, ino: 20 }, homeChain, false)).toBe(true);
+  });
+});
+
+describe("classifyViewerAssetPath", () => {
+  const grant = "/Users/me/proto";
+
+  it("serves the asset kinds a document legitimately loads", () => {
+    expect(classifyViewerAssetPath(grant, `${grant}/app.js`)?.contentType).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(classifyViewerAssetPath(grant, `${grant}/assets/site.css`)?.contentType).toBe(
+      "text/css; charset=utf-8",
+    );
+    expect(classifyViewerAssetPath(grant, `${grant}/img/logo.png`)?.contentType).toBe("image/png");
+    expect(classifyViewerAssetPath(grant, `${grant}/page.html`)).toEqual({
+      contentType: "text/html; charset=utf-8",
+      isDocument: true,
+    });
+  });
+
+  it("refuses the kinds a document has no legitimate use for", () => {
+    // The grant is a whole SUBTREE and the document that reads it runs script under
+    // a sandbox-only CSP that restricts no fetch destination. An unlisted extension
+    // used to fall back to text/plain, so every one of these was readable and
+    // exfiltratable by a hostile document sitting at the top of the tree.
+    expect(classifyViewerAssetPath(grant, `${grant}/notes.txt`)).toBeNull();
+    expect(classifyViewerAssetPath(grant, `${grant}/secret.env`)).toBeNull();
+    expect(classifyViewerAssetPath(grant, `${grant}/id_rsa`)).toBeNull();
+    expect(classifyViewerAssetPath(grant, `${grant}/credentials.pem`)).toBeNull();
+    // No extension at all: `lastIndexOf(".")` must not read a dot from a parent
+    // segment, and must not slice the last character off a bare filename.
+    expect(classifyViewerAssetPath(grant, `${grant}/Makefile`)).toBeNull();
+    expect(classifyViewerAssetPath("/Users/me.dir", "/Users/me.dir/report")).toBeNull();
+  });
+
+  it("refuses dot segments below the grant, which is where credentials live", () => {
+    expect(classifyViewerAssetPath("/Users/me", "/Users/me/.ssh/known_hosts.json")).toBeNull();
+    expect(classifyViewerAssetPath("/Users/me", "/Users/me/.aws/config.json")).toBeNull();
+    expect(classifyViewerAssetPath("/Users/me", "/Users/me/.env.json")).toBeNull();
+  });
+
+  it("still admits non-secret-looking files anywhere under the grant", () => {
+    // Recording the residual, because the allow-list narrows this capability
+    // rather than removing it: a `.json` outside a dot-directory is readable
+    // anywhere below the grant. That is why the grant itself is bounded — see
+    // isGrantableViewerAssetDirectory — and why closing it properly needs a real
+    // CSP rather than a filename filter.
+    expect(
+      classifyViewerAssetPath("/Users/me/proto", "/Users/me/proto/deep/nested/data.json"),
+    ).not.toBeNull();
+  });
+
+  it("allows dot segments in the grant itself, so a document under one still loads", () => {
+    // Only the portion BELOW the grant is filtered: a prototype checked out at
+    // ~/.local/share/proto must still be able to load its own assets.
+    expect(
+      classifyViewerAssetPath("/Users/me/.local/proto", "/Users/me/.local/proto/app.js")
+        ?.contentType,
+    ).toBe("text/javascript; charset=utf-8");
+  });
+});
+
 describe("isWaivableLocalRequest", () => {
   const loopback = { remoteAddress: "127.0.0.1" } as const;
 
@@ -297,5 +391,87 @@ describe("assetResponseHeaders", () => {
       "Cache-Control": "private, max-age=3600",
       "X-Content-Type-Options": "nosniff",
     });
+  });
+});
+
+describe("resolveViewerAssetGrantDecision", () => {
+  // Drives the REAL decision — the ancestor walk, the containment probe, and the
+  // null handling — over a fake filesystem that can express the thing that broke
+  // it four times: one directory reachable by two unrelated paths.
+  //
+  // Every bypass in this guard's history was found by running it against a real
+  // machine, and none by the suite, because the suite only ever exercised the
+  // two-line comparison at the end. This is the shape that could have caught them.
+  const dirname = (path: string) => {
+    const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
+    const cut = trimmed.lastIndexOf("/");
+    return cut <= 0 ? "/" : trimmed.slice(0, cut);
+  };
+  const join = (...segments: ReadonlyArray<string>) => segments.join("/").replace(/\/+/g, "/");
+
+  // "/" and "/Users" and home, plus an alias namespace under "/alias/data" that
+  // reaches the SAME home directory — the firmlink shape.
+  const tree: Record<string, { dev: number; ino: number }> = {
+    "/": { dev: 1, ino: 1 },
+    "/Users": { dev: 1, ino: 2 },
+    "/Users/me": { dev: 1, ino: 3 },
+    "/Users/me/proto": { dev: 1, ino: 4 },
+    "/tmp": { dev: 1, ino: 5 },
+    "/alias": { dev: 1, ino: 6 },
+    "/alias/data": { dev: 1, ino: 7 },
+    "/alias/data/Users": { dev: 1, ino: 2 },
+    "/alias/data/Users/me": { dev: 1, ino: 3 },
+    "/alias/data/Users/me/proto": { dev: 1, ino: 4 },
+  };
+  const decide = (directory: string) =>
+    resolveViewerAssetGrantDecision({
+      directory,
+      homeDirectory: "/Users/me",
+      identityOf: (path) => tree[path] ?? null,
+      dirname,
+      join,
+    });
+
+  it("refuses home, its ancestors, and their aliases", () => {
+    expect(decide("/Users/me")).toBe(false);
+    expect(decide("/Users")).toBe(false);
+    expect(decide("/")).toBe(false);
+    // The alias of home shares home's identity, so the chain catches it.
+    expect(decide("/alias/data/Users/me")).toBe(false);
+    expect(decide("/alias/data/Users")).toBe(false);
+    // The alias ROOT has an identity of its own and appears nowhere in the chain —
+    // this is the one the identity rewrite still granted, caught only by the
+    // containment probe.
+    expect(decide("/alias/data")).toBe(false);
+  });
+
+  it("does NOT cover an alias grandparent, which is the documented residual", () => {
+    // "/alias" contains home too, but the containment probe tests one candidate —
+    // join("/alias", "Users/me") — and home sits at "data/Users/me" below it, so
+    // the probe misses. This is the real /System and /System/Volumes case, which
+    // is judged unexploitable only because those are root-owned on a sealed
+    // read-only volume. Asserted so the docstring's limitation is executable
+    // rather than prose, and so widening the probe later shows up as a failure
+    // here rather than passing unnoticed.
+    expect(decide("/alias")).toBe(true);
+  });
+
+  it("still grants a directory a prototype lives in", () => {
+    expect(decide("/Users/me/proto")).toBe(true);
+    expect(decide("/alias/data/Users/me/proto")).toBe(true);
+    expect(decide("/tmp")).toBe(true);
+  });
+
+  it("refuses when either side cannot be identified, rather than only the grant", () => {
+    expect(decide("/does/not/exist")).toBe(false);
+    expect(
+      resolveViewerAssetGrantDecision({
+        directory: "/Users/me/proto",
+        homeDirectory: "/unreadable",
+        identityOf: (path) => tree[path] ?? null,
+        dirname,
+        join,
+      }),
+    ).toBe(false);
   });
 });

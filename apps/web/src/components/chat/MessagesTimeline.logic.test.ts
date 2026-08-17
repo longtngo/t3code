@@ -1246,6 +1246,28 @@ describe("coalesceRepeatedWorkLogEntries", () => {
     expect(rows.map((r) => r.count)).toEqual([1, 1]);
   });
 
+  it("keeps entries apart when a field contains the separator", () => {
+    // The discriminating shape. The separator count is fixed, so shifting content
+    // across a field boundary can never collide; what collides is a field that
+    // CONTAINS the separator. Joined on a space these two are byte-identical and
+    // one row silently disappears.
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Bash", detail: "a b", command: "c" }),
+      entry({ label: "Bash", detail: "a", command: "b c" }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([1, 1]);
+  });
+
+  it("keeps entries apart when a changed-file list only differs by its boundaries", () => {
+    // Joined on the empty string these two are both "ab", so a two-file entry and
+    // a one-file entry collapse together.
+    const rows = coalesceRepeatedWorkLogEntries([
+      entry({ label: "Edit", changedFiles: ["a", "b"] }),
+      entry({ label: "Edit", changedFiles: ["ab"] }),
+    ]);
+    expect(rows.map((r) => r.count)).toEqual([1, 1]);
+  });
+
   it("treats a trailing 'complete' suffix as the same row", () => {
     // normalizeCompactToolLabel strips it, so "Reading" and "Reading complete"
     // render identically and would otherwise show as two rows.

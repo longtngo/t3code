@@ -886,6 +886,14 @@ describe("nextStopAction", () => {
   it("holds the band exactly at both edges", () => {
     // Pinning the boundaries, because an off-by-one here either resurrects the
     // reflex case or clips the deliberate one.
+    //
+    // The two constants are pinned by value first. Every assertion below is
+    // written as CONSTANT ± n, so widening the window to a minute would leave
+    // them all green while quietly discarding the decay the safety argument in
+    // `nextStopAction` rests on.
+    expect(STOP_ESCALATION_MIN_MS).toBe(500);
+    expect(STOP_ESCALATION_WINDOW_MS).toBe(10_000);
+
     const at = (offset: number) =>
       nextStopAction({
         threadId: "t1",

@@ -131,11 +131,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "auto-open-task-panel",
-    title: "Auto-open task panel",
-    to: "/settings/general",
-  },
-  {
     id: "task-completion-notifications",
     title: "Task completion notifications",
     to: "/settings/general",
