@@ -148,8 +148,8 @@ describe("Resource Queue in the footer row", () => {
     // Zeroes are the common case and must still render — an icon with no counts
     // says nothing, which is the whole reason these are tags and not a bare icon.
     const markup = renderInRow(createElement(SidebarResourceQueue, closedPanel));
-    expect(markup).toContain('title="running (holding a lease)"');
-    expect(markup).toContain('title="waiting (queued)"');
+    expect(markup).toContain('aria-label="0 running (holding a lease)"');
+    expect(markup).toContain('aria-label="0 waiting (queued)"');
   });
 
   it("surfaces the maintenance tag when the broker is draining", () => {
@@ -158,8 +158,8 @@ describe("Resource Queue in the footer row", () => {
     queueState.snapshot = { maintenance: false, running: [], waiting: [], resources: [] };
     const without = renderInRow(createElement(SidebarResourceQueue, closedPanel));
 
-    expect(withMaintenance).toContain('title="broker in maintenance (draining)"');
-    expect(without).not.toContain('title="broker in maintenance (draining)"');
+    expect(withMaintenance).toContain('aria-label="broker in maintenance (draining)"');
+    expect(without).not.toContain('aria-label="broker in maintenance (draining)"');
   });
 
   it("does not carry its old full-width text label into the row", () => {

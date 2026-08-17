@@ -69,33 +69,44 @@ function ModelRow(props: {
             : "Click to load";
 
   return (
-    <button
-      type="button"
-      disabled={!clickable}
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
-        clickable ? "hover:bg-accent" : "cursor-default",
-      )}
-    >
-      {transitional ? (
-        <Loader2Icon className="size-3 shrink-0 animate-spin text-amber-500" />
-      ) : (
-        <span
-          className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])}
-          aria-hidden
-        />
-      )}
-      <span className="min-w-0 flex-1">
-        <span
-          className={cn("block truncate text-xs", status === "offline" && "text-muted-foreground")}
-        >
-          {row.name}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            disabled={!clickable}
+            onClick={onClick}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+              clickable ? "hover:bg-accent" : "cursor-default",
+            )}
+          />
+        }
+      >
+        {transitional ? (
+          <Loader2Icon className="size-3 shrink-0 animate-spin text-amber-500" />
+        ) : (
+          <span
+            className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])}
+            aria-hidden
+          />
+        )}
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn(
+              "block truncate text-xs",
+              status === "offline" && "text-muted-foreground",
+            )}
+          >
+            {row.name}
+          </span>
+          <span className="block truncate text-[10px] text-muted-foreground/60">
+            {rowMeta(row)}
+          </span>
         </span>
-        <span className="block truncate text-[10px] text-muted-foreground/60">{rowMeta(row)}</span>
-      </span>
-    </button>
+      </TooltipTrigger>
+      <TooltipPopup>{title}</TooltipPopup>
+    </Tooltip>
   );
 }
 

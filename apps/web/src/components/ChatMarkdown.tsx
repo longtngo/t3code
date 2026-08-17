@@ -1436,19 +1436,25 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           Electron-only (`readLocalApi`) and so unreachable on web and mobile —
           where a long file path is exactly where these actions are wanted. */}
       <Menu>
-        <MenuTrigger
-          render={
-            <button
-              type="button"
-              className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
-              title={`View options for ${basename}`}
-              aria-label={`View options for ${basename}`}
-              onClick={(event) => event.stopPropagation()}
-            />
-          }
-        >
-          <ChevronDownIcon className="size-3" />
-        </MenuTrigger>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <MenuTrigger
+                render={
+                  <button
+                    type="button"
+                    className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent/70 hover:text-foreground"
+                    aria-label={`View options for ${basename}`}
+                    onClick={(event) => event.stopPropagation()}
+                  />
+                }
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{`View options for ${basename}`}</TooltipPopup>
+        </Tooltip>
         <MenuPopup align="end">
           <MenuItem onClick={handleOpenInFilePreview}>View in side panel</MenuItem>
           {/* Needs a machine to open against, or the tab resolves the path on the

@@ -4,6 +4,7 @@ import namespaceNodeImports from "./rules/namespace-node-imports.ts";
 import noGlobalProcessRuntime from "./rules/no-global-process-runtime.ts";
 import noInlineSchemaCompile from "./rules/no-inline-schema-compile.ts";
 import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-tests.ts";
+import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noUnsafeStreamAggregate from "./rules/no-unsafe-stream-aggregate.ts";
 
 export default definePlugin({
@@ -15,6 +16,7 @@ export default definePlugin({
     "no-global-process-runtime": noGlobalProcessRuntime,
     "no-inline-schema-compile": noInlineSchemaCompile,
     "no-manual-effect-runtime-in-tests": noManualEffectRuntimeInTests,
+    "no-native-title-tooltip": noNativeTitleTooltip,
     "no-unsafe-stream-aggregate": noUnsafeStreamAggregate,
   },
 });

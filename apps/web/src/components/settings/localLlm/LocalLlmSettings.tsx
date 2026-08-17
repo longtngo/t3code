@@ -13,6 +13,7 @@ import {
   getProvider,
 } from "@t3tools/shared/localLlm";
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { formatContext } from "~/lib/llmModels";
 import { usePrimarySettings, useUpdatePrimarySettings } from "~/hooks/useSettings";
 import {
@@ -69,20 +70,26 @@ function GroupedArgsInput(props: {
 
 function EyeToggle(props: { on: boolean; onToggle: () => void; title: string }) {
   return (
-    <button
-      type="button"
-      title={props.title}
-      onClick={(e) => {
-        e.stopPropagation();
-        props.onToggle();
-      }}
-      className={cn(
-        "rounded-md p-1 transition-colors",
-        props.on ? "text-primary" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {props.on ? <EyeIcon className="size-4" /> : <EyeOffIcon className="size-4" />}
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onToggle();
+            }}
+            className={cn(
+              "rounded-md p-1 transition-colors",
+              props.on ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          />
+        }
+      >
+        {props.on ? <EyeIcon className="size-4" /> : <EyeOffIcon className="size-4" />}
+      </TooltipTrigger>
+      <TooltipPopup>{props.title}</TooltipPopup>
+    </Tooltip>
   );
 }
 

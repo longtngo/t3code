@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 
 import { useEnvironment } from "../state/environments";
 import { cn } from "../lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   resolveThreadProviderInstanceId,
   resolveThreadProviderPresentation,
@@ -85,21 +86,27 @@ export function ThreadProviderChip({
   if (!presentation?.initials) return null;
 
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded px-1 py-px text-[8.5px] font-bold tracking-wide tabular-nums",
-        className,
-      )}
-      style={{
-        // Tinted from the accent rather than filled with it: at this size a solid fill would
-        // out-shout the rail it is only meant to annotate.
-        backgroundColor: `${presentation.accentColor}26`,
-        color: presentation.accentColor,
-      }}
-      title={presentation.displayName}
-      aria-hidden="true"
-    >
-      {presentation.initials}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "shrink-0 rounded px-1 py-px text-[8.5px] font-bold tracking-wide tabular-nums",
+              className,
+            )}
+            style={{
+              // Tinted from the accent rather than filled with it: at this size a solid fill would
+              // out-shout the rail it is only meant to annotate.
+              backgroundColor: `${presentation.accentColor}26`,
+              color: presentation.accentColor,
+            }}
+            aria-hidden="true"
+          />
+        }
+      >
+        {presentation.initials}
+      </TooltipTrigger>
+      <TooltipPopup>{presentation.displayName}</TooltipPopup>
+    </Tooltip>
   );
 }

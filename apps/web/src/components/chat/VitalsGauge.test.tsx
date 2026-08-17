@@ -335,12 +335,15 @@ describe("MachineDetailList", () => {
     expect(markup).toContain("3 GB");
   });
 
-  it("draws one bar per core, titled with its own utilization", () => {
+  it("draws one bar per core, labelled with its own utilization", () => {
     const markup = renderToStaticMarkup(<MachineDetailList sample={detailed} />);
 
-    expect(markup).toContain('title="Core 0: 10%"');
-    expect(markup).toContain('title="Core 1: 90%"');
-    expect(markup).toContain('title="Core 2: 45%"');
+    // The hover text moved into a Tooltip popup, which is portalled and only
+    // mounts on hover — so the per-core value rides on the bar's accessible
+    // name, which is where a screen reader could reach it anyway.
+    expect(markup).toContain('aria-label="Core 0: 10%"');
+    expect(markup).toContain('aria-label="Core 1: 90%"');
+    expect(markup).toContain('aria-label="Core 2: 45%"');
   });
 
   it("omits every row the host does not report rather than showing an empty one", () => {

@@ -10,6 +10,7 @@ import {
 } from "~/components/files/viewerPath";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
@@ -51,32 +52,38 @@ function AddressBar({ value, onSubmit }: { value: string; onSubmit: (path: strin
   }, [draft, value, onSubmit]);
 
   return (
-    <input
-      type="text"
-      value={draft}
-      spellCheck={false}
-      autoComplete="off"
-      onChange={(event) => setDraft(event.target.value)}
-      onFocus={(event) => {
-        setEditing(true);
-        event.target.select();
-      }}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          // Blur drives the commit; Enter just relinquishes focus.
-          event.preventDefault();
-          event.currentTarget.blur();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          revertOnBlurRef.current = true;
-          event.currentTarget.blur();
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <input
+            type="text"
+            value={draft}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => setDraft(event.target.value)}
+            onFocus={(event) => {
+              setEditing(true);
+              event.target.select();
+            }}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                // Blur drives the commit; Enter just relinquishes focus.
+                event.preventDefault();
+                event.currentTarget.blur();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                revertOnBlurRef.current = true;
+                event.currentTarget.blur();
+              }
+            }}
+            aria-label="File path"
+            className="min-w-0 flex-1 truncate rounded bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground/90 outline-none hover:bg-muted/60 focus:bg-muted/70 focus:text-foreground"
+          />
         }
-      }}
-      title={value}
-      aria-label="File path"
-      className="min-w-0 flex-1 truncate rounded bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground/90 outline-none hover:bg-muted/60 focus:bg-muted/70 focus:text-foreground"
-    />
+      />
+      <TooltipPopup className="max-w-80">{value}</TooltipPopup>
+    </Tooltip>
   );
 }
 

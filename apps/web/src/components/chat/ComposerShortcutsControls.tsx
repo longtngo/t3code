@@ -187,21 +187,26 @@ export function ComposerShortcutsControls({
     <>
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {shortcuts.map((shortcut) => (
-          <button
-            key={shortcut.id}
-            type="button"
-            disabled={disabled}
-            title={shortcut.text}
-            onClick={() => onInsert(shortcut.text)}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border bg-background px-2.5 py-1 text-[11px] leading-none text-foreground",
-              "hover:border-primary/40 hover:bg-accent",
-              "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:bg-background",
-            )}
-          >
-            <span className="font-semibold text-primary">/</span>
-            {shortcut.label || "shortcut"}
-          </button>
+          <Tooltip key={shortcut.id}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onInsert(shortcut.text)}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border bg-background px-2.5 py-1 text-[11px] leading-none text-foreground",
+                    "hover:border-primary/40 hover:bg-accent",
+                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:bg-background",
+                  )}
+                />
+              }
+            >
+              <span className="font-semibold text-primary">/</span>
+              {shortcut.label || "shortcut"}
+            </TooltipTrigger>
+            <TooltipPopup className="max-w-80">{shortcut.text}</TooltipPopup>
+          </Tooltip>
         ))}
       </div>
       <Tooltip>

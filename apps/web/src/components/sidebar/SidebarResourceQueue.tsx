@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils";
 import { useResourceQueue } from "../../hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   resourceAccent,
   rowProgress,
@@ -63,19 +64,30 @@ function Tag({ label, className }: { label: string; className: string }) {
 function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
   const zero = n === 0;
   return (
-    <span
-      title={kind === "run" ? "running (holding a lease)" : "waiting (queued)"}
-      className={cn(
-        "min-w-[15px] rounded-full px-1 py-px text-center text-[10px] tabular-nums",
-        zero
-          ? "bg-accent font-medium text-muted-foreground"
-          : kind === "run"
-            ? "bg-emerald-500 font-semibold text-emerald-950"
-            : "bg-amber-500 font-semibold text-amber-950",
-      )}
-    >
-      {n}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            // The number alone is the visible content; the accessible name has to
+            // say which count it is, since the tooltip text is only on hover.
+            aria-label={`${String(n)} ${kind === "run" ? "running (holding a lease)" : "waiting (queued)"}`}
+            className={cn(
+              "min-w-[15px] rounded-full px-1 py-px text-center text-[10px] tabular-nums",
+              zero
+                ? "bg-accent font-medium text-muted-foreground"
+                : kind === "run"
+                  ? "bg-emerald-500 font-semibold text-emerald-950"
+                  : "bg-amber-500 font-semibold text-amber-950",
+            )}
+          />
+        }
+      >
+        {n}
+      </TooltipTrigger>
+      <TooltipPopup>
+        {kind === "run" ? "running (holding a lease)" : "waiting (queued)"}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -87,20 +99,23 @@ function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
 function RowProgressBadge({ progress }: { progress: RowProgress }) {
   if (progress.state === "waiting") {
     return (
-      <span className="inline-flex items-center gap-1 align-middle" title="queued — not started">
-        <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0">
-          <circle
-            cx="7"
-            cy="7"
-            r="5"
-            fill="none"
-            strokeWidth="2"
-            strokeDasharray="2 2"
-            className="stroke-muted-foreground/40"
-          />
-        </svg>
-        <span className="text-[10px] text-muted-foreground">queued</span>
-      </span>
+      <Tooltip>
+        <TooltipTrigger render={<span className="inline-flex items-center gap-1 align-middle" />}>
+          <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0">
+            <circle
+              cx="7"
+              cy="7"
+              r="5"
+              fill="none"
+              strokeWidth="2"
+              strokeDasharray="2 2"
+              className="stroke-muted-foreground/40"
+            />
+          </svg>
+          <span className="text-[10px] text-muted-foreground">queued</span>
+        </TooltipTrigger>
+        <TooltipPopup>queued — not started</TooltipPopup>
+      </Tooltip>
     );
   }
   if (progress.pct == null) return null;
@@ -109,33 +124,33 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
   const circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - pct / 100);
   return (
-    <span
-      className="inline-flex items-center gap-1 align-middle"
-      title={`${pct}% of estimated time`}
-    >
-      <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 -rotate-90">
-        <circle
-          cx="7"
-          cy="7"
-          r={r}
-          fill="none"
-          strokeWidth="2"
-          className="stroke-muted-foreground/25"
-        />
-        <circle
-          cx="7"
-          cy="7"
-          r={r}
-          fill="none"
-          strokeWidth="2"
-          strokeLinecap="round"
-          className="stroke-primary"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-        />
-      </svg>
-      <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex items-center gap-1 align-middle" />}>
+        <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 -rotate-90">
+          <circle
+            cx="7"
+            cy="7"
+            r={r}
+            fill="none"
+            strokeWidth="2"
+            className="stroke-muted-foreground/25"
+          />
+          <circle
+            cx="7"
+            cy="7"
+            r={r}
+            fill="none"
+            strokeWidth="2"
+            strokeLinecap="round"
+            className="stroke-primary"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
+      </TooltipTrigger>
+      <TooltipPopup>{pct}% of estimated time</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -339,12 +354,19 @@ export function SidebarResourceQueue({
       >
         <GaugeIcon className="size-3.5" />
         {snapshot?.maintenance ? (
-          <span
-            title="broker in maintenance (draining)"
-            className="rounded-full bg-red-500 px-1 py-px text-[9px] font-semibold text-white"
-          >
-            maint
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  aria-label="broker in maintenance (draining)"
+                  className="rounded-full bg-red-500 px-1 py-px text-[9px] font-semibold text-white"
+                />
+              }
+            >
+              maint
+            </TooltipTrigger>
+            <TooltipPopup>broker in maintenance (draining)</TooltipPopup>
+          </Tooltip>
         ) : null}
         <CountBadge n={running.length} kind="run" />
         <CountBadge n={waiting.length} kind="wait" />
@@ -380,9 +402,12 @@ export function SidebarResourceQueue({
                 return (
                   <div key={r.name} className="min-w-0">
                     <div className="mb-0.5 flex items-baseline justify-between gap-1 text-[10px] text-muted-foreground">
-                      <span className="truncate uppercase" title={r.name}>
-                        {r.name}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger render={<span className="truncate uppercase" />}>
+                          {r.name}
+                        </TooltipTrigger>
+                        <TooltipPopup>{r.name}</TooltipPopup>
+                      </Tooltip>
                       <span className="shrink-0 tabular-nums">
                         <span className="font-semibold text-foreground">{r.inUse}</span>/
                         {r.capacity}

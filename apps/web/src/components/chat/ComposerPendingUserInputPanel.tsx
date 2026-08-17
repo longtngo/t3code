@@ -7,6 +7,7 @@ import {
 } from "../../pendingUserInput";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   describePendingOptionsVisibility,
   PENDING_OPTIONS_MAX_HEIGHT_CLASS,
@@ -206,21 +207,27 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             {questionIndex + 1}/{prompt.questions.length}
           </span>
         ) : null}
-        <button
-          type="button"
-          onClick={() => setIsCollapsed((collapsed) => !collapsed)}
-          aria-expanded={!isCollapsed}
-          aria-controls={optionsListId}
-          aria-label={visibility.toggleLabel}
-          title={visibility.toggleTitle}
-          className="-my-1 ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25"
-        >
-          {isCollapsed ? (
-            <ChevronUpIcon className="size-4" />
-          ) : (
-            <ChevronDownIcon className="size-4" />
-          )}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+                aria-expanded={!isCollapsed}
+                aria-controls={optionsListId}
+                aria-label={visibility.toggleLabel}
+                className="-my-1 ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-secondary-label outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25"
+              />
+            }
+          >
+            {isCollapsed ? (
+              <ChevronUpIcon className="size-4" />
+            ) : (
+              <ChevronDownIcon className="size-4" />
+            )}
+          </TooltipTrigger>
+          <TooltipPopup>{visibility.toggleTitle}</TooltipPopup>
+        </Tooltip>
       </div>
       <p className="text-sm text-foreground/90">{activeQuestion.question}</p>
       {activeQuestion.multiSelect ? (

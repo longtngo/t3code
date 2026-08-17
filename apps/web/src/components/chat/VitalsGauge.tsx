@@ -3,6 +3,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { ChevronRightIcon } from "lucide-react";
@@ -354,21 +355,29 @@ function MachineBlock(props: {
     <div className={BLOCK_CLASS}>
       <div className="flex items-center justify-between gap-2">
         <span className={CAP_CLASS}>Machine</span>
-        <button
-          type="button"
-          onClick={() => onToggle(!enabled)}
-          aria-label={enabled ? "Pause host metrics" : "Resume host metrics"}
-          title={enabled ? "Live — click to pause" : "Paused — click to resume"}
-          className="flex items-center gap-1 rounded-md p-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              enabled && streaming ? "animate-pulse bg-green-500" : "bg-muted-foreground/40",
-            )}
-          />
-          {enabled ? "live" : "paused"}
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={() => onToggle(!enabled)}
+                aria-label={enabled ? "Pause host metrics" : "Resume host metrics"}
+                className="flex items-center gap-1 rounded-md p-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+              />
+            }
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                enabled && streaming ? "animate-pulse bg-green-500" : "bg-muted-foreground/40",
+              )}
+            />
+            {enabled ? "live" : "paused"}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {enabled ? "Live — click to pause" : "Paused — click to resume"}
+          </TooltipPopup>
+        </Tooltip>
       </div>
       {!enabled ? (
         <div className="mt-1.5 text-xs text-muted-foreground">Metrics paused.</div>
@@ -432,14 +441,27 @@ export function MachineDetailList(props: { sample: HostMetricsSample }) {
           </dt>
           <dd className="mt-0.5 flex items-end gap-px" aria-label="Per-core utilization">
             {sample.cpu.perCore.map((corePct, index) => (
-              <span
+              <Tooltip
                 // Cores have no identity beyond their position, and the
                 // list is fixed for the life of the host.
                 key={index}
-                title={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
-                className={cn("w-1 rounded-t-[1px]", SEVERITY_BG[vitalsLevel(clampPct(corePct))])}
-                style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
-              />
+              >
+                <TooltipTrigger
+                  render={
+                    <span
+                      aria-label={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
+                      className={cn(
+                        "w-1 rounded-t-[1px]",
+                        SEVERITY_BG[vitalsLevel(clampPct(corePct))],
+                      )}
+                      style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
+                    />
+                  }
+                />
+                <TooltipPopup>
+                  Core {String(index)}: {String(Math.round(corePct))}%
+                </TooltipPopup>
+              </Tooltip>
             ))}
           </dd>
         </div>
