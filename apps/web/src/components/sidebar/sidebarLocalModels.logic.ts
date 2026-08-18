@@ -1,6 +1,8 @@
 import type { LlmModel, LlmModelsSample, LocalLlmModelConfig } from "@t3tools/contracts";
 import { getModel, getProvider } from "@t3tools/shared/localLlm";
 
+import type { SidebarFooterBadgeTone } from "./sidebarFooterBadge";
+
 export type SidebarModelStatus = "online" | "offline" | "loading" | "stopping" | "error";
 
 export interface SidebarRow {
@@ -67,4 +69,22 @@ export function countOnline(rows: readonly SidebarRow[]): number {
 /** Count of rows in a transitional state (loading/stopping). */
 export function countBusy(rows: readonly SidebarRow[]): number {
   return rows.filter((r) => r.status === "loading" || r.status === "stopping").length;
+}
+
+/**
+ * How the footer badge should read for a given load state.
+ *
+ * The number is always the loaded count — the badge answers "how many models are resident",
+ * and folding a transient loading count into the same digits would make the same "1" mean two
+ * different things. A load in flight shows in the tone instead.
+ */
+export function localModelsBadge(
+  online: number,
+  busy: number,
+): { readonly tone: SidebarFooterBadgeTone; readonly label: string } {
+  const loaded = `${String(online)} local ${online === 1 ? "model" : "models"} loaded`;
+  return {
+    tone: online > 0 ? "active" : busy > 0 ? "pending" : "idle",
+    label: busy > 0 ? `${loaded}, ${String(busy)} loading` : loaded,
+  };
 }

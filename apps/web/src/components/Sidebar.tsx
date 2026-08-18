@@ -136,7 +136,10 @@ import {
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
-import { providerAdvertisesCompact } from "@t3tools/client-runtime/context";
+import {
+  providerAdvertisesCompact,
+  toggleAutoCompactThread,
+} from "@t3tools/client-runtime/context";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   buildBulkTitleRegenerationContextMenuItem,
@@ -777,6 +780,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
+  onToggleAutoCompact: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
   onChangeRequestSnapshot: (
@@ -801,6 +805,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onUnsettle,
     onUnsnooze,
     onUnpin,
+    onToggleAutoCompact,
     openPullRequestsInRightPanel,
     renamingTitle,
     thread,
@@ -1088,6 +1093,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onUnpin(threadRef);
     },
     [onUnpin, threadRef],
+  );
+  const handleAutoCompactClick = useCallback(
+    (event: ReactMouseEvent) => {
+      // Both stopped: the row itself navigates, and the mark sits inside it.
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleAutoCompact(threadRef);
+    },
+    [onToggleAutoCompact, threadRef],
   );
   const handleSnoozePreset = useCallback(
     (preset: SnoozePreset) => {
@@ -1452,17 +1466,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 )
               ) : null}
               {props.isAutoCompactArmed ? (
+                // The mark is also the off switch, mirroring the pin beside it: a state cue
+                // you cannot act on would send the reader to a menu to undo what they can see.
                 <Tooltip>
                   <TooltipTrigger
-                    render={<span className="inline-flex items-center text-muted-foreground/65" />}
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Turn off auto-compact"
+                        onClick={handleAutoCompactClick}
+                        className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                    }
                   >
-                    <FoldVerticalIcon
-                      aria-label="Auto-compact on"
-                      role="img"
-                      className="size-3 shrink-0"
-                    />
+                    <FoldVerticalIcon aria-hidden className="size-3 shrink-0" />
                   </TooltipTrigger>
-                  <TooltipPopup>Auto-compact is on for this thread</TooltipPopup>
+                  <TooltipPopup>Auto-compact is on. Click to turn it off.</TooltipPopup>
                 </Tooltip>
               ) : null}
               {/* The visible state owns this slot's width: status at rest,
@@ -2920,6 +2939,24 @@ export default function Sidebar() {
     [unpinThread],
   );
 
+  /**
+   * Arms or disarms auto-compact for one thread.
+   *
+   * Shared by the row's mark and the context menu so the two cannot disagree: the mark IS the
+   * off switch, and the menu is where a disarmed thread is armed in the first place.
+   */
+  const toggleAutoCompact = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      updateSettings({
+        autoCompactThreads: toggleAutoCompactThread(
+          autoCompactThreadsRef.current,
+          scopedThreadKey(threadRef),
+        ),
+      });
+    },
+    [updateSettings],
+  );
+
   const handlePinnedDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
@@ -3403,18 +3440,9 @@ export default function Sidebar() {
           case "rename":
             startThreadRename(threadRef, thread.title);
             return;
-          case "auto-compact": {
-            // Disarming deletes the key rather than storing `false`, so the record stays the
-            // size of the armed set instead of growing by one entry per thread ever armed.
-            const next = { ...autoCompactThreadsRef.current };
-            if (next[threadKey] === true) {
-              delete next[threadKey];
-            } else {
-              next[threadKey] = true;
-            }
-            updateSettings({ autoCompactThreads: next });
+          case "auto-compact":
+            toggleAutoCompact(threadRef);
             return;
-          }
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
             const result = await updateThreadMetadata({
@@ -3536,6 +3564,7 @@ export default function Sidebar() {
       projectCwdByKey,
       serverConfigs,
       startThreadRename,
+      toggleAutoCompact,
       updateThreadMetadata,
       timestampFormat,
     ],
@@ -4041,6 +4070,7 @@ export default function Sidebar() {
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}
                         onUnpin={attemptUnpin}
+                        onToggleAutoCompact={toggleAutoCompact}
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
                         onChangeRequestSnapshot={setThreadChangeRequestSnapshot}

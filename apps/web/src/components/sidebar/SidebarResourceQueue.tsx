@@ -5,6 +5,7 @@ import type { ResourceQueueItem } from "@t3tools/contracts";
 import { cn } from "../../lib/utils";
 import { useResourceQueue } from "../../hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -71,13 +72,8 @@ function CountBadge({ n, kind }: { n: number; kind: "run" | "wait" }) {
             // The number alone is the visible content; the accessible name has to
             // say which count it is, since the tooltip text is only on hover.
             aria-label={`${String(n)} ${kind === "run" ? "running (holding a lease)" : "waiting (queued)"}`}
-            className={cn(
-              "min-w-[15px] rounded-full px-1 py-px text-center text-[10px] tabular-nums",
-              zero
-                ? "bg-accent font-medium text-muted-foreground"
-                : kind === "run"
-                  ? "bg-emerald-500 font-semibold text-emerald-950"
-                  : "bg-amber-500 font-semibold text-amber-950",
+            className={sidebarFooterBadgeClass(
+              zero ? "idle" : kind === "run" ? "active" : "pending",
             )}
           />
         }

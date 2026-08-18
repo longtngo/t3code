@@ -40,6 +40,15 @@ describe("ComposerContextStripToggle", () => {
     );
   });
 
+  // The row it sits in is the model picker, the runtime-mode picker, and this. All three are
+  // built from the same primitives, and the data attributes those primitives stamp are the
+  // only render-time evidence that this one did not re-specify its own size and tone.
+  it("is built from the shared composer-control primitives", () => {
+    const markup = render({ collapsed: true, worktreeActive: false });
+    expect(markup).toContain("data-composer-control-icon");
+    expect(markup).toContain("data-composer-control-chevron");
+  });
+
   // With no label of its own, the glyph is the only workspace signal left while
   // the strip is closed. Assert the two icons actually differ rather than that
   // some icon rendered: a shared fallback would satisfy a weaker check.

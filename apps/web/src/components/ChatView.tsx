@@ -299,7 +299,6 @@ import {
 import {
   autoCompactStatusText,
   deriveLatestContextWindowSnapshot as deriveAutoCompactSnapshot,
-  shouldShowAutoCompactStatus,
 } from "@t3tools/client-runtime/context";
 import { useAutoCompact } from "../hooks/useAutoCompact";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
@@ -4758,36 +4757,34 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
-  const autoCompactBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    if (activeThreadShell === null) return null;
-    if (
-      !shouldShowAutoCompactStatus({
-        armed: autoCompactArmed,
-        phase: autoCompact.phase,
-        usedPercentage: autoCompactUsedPercentage,
-        thresholdPercent: autoCompactThresholdPercent,
-        cyclesUsed: autoCompact.cyclesUsed,
-        maxCycles: autoCompact.maxCycles,
-      })
-    ) {
-      return null;
-    }
-    return {
-      id: `auto-compact:${activeThreadShell.id}`,
-      variant: "default",
-      icon: <span className="size-1.5 rounded-full bg-foreground" aria-hidden="true" />,
-      title: autoCompactStatusText({
-        phase: autoCompact.phase,
-        usedPercentage: autoCompactUsedPercentage,
-        thresholdPercent: autoCompactThresholdPercent,
-        threadBusy: isWorking || !latestTurnSettled,
-        cyclesUsed: autoCompact.cyclesUsed,
-        maxCycles: autoCompact.maxCycles,
-        lastHold: autoCompact.lastHold,
-      }),
-    };
+  /**
+   * One line describing what auto-compact is about to do, or null when the thread is not armed.
+   *
+   * It reads as a tooltip on the composer's auto-compact control rather than as a banner over
+   * the input: an armed thread says so for its whole life, and a permanent row of text above
+   * the composer is a poor trade for a fact the reader only wants on demand.
+   */
+  /**
+   * The sequence has stopped and needs a message from the user before it will act again —
+   * either it spent its round budget or a compaction freed no room. Kept separate from the
+   * status wording because it is the one part the composer control shows without a hover.
+   */
+  const autoCompactPaused =
+    autoCompactArmed &&
+    (autoCompact.cyclesUsed >= autoCompact.maxCycles ||
+      autoCompact.lastHold === "compaction-ineffective");
+  const autoCompactStatus = useMemo<string | null>(() => {
+    if (!autoCompactArmed) return null;
+    return autoCompactStatusText({
+      phase: autoCompact.phase,
+      usedPercentage: autoCompactUsedPercentage,
+      thresholdPercent: autoCompactThresholdPercent,
+      threadBusy: isWorking || !latestTurnSettled,
+      cyclesUsed: autoCompact.cyclesUsed,
+      maxCycles: autoCompact.maxCycles,
+      lastHold: autoCompact.lastHold,
+    });
   }, [
-    activeThreadShell,
     autoCompact.cyclesUsed,
     autoCompact.lastHold,
     autoCompact.maxCycles,
@@ -4957,7 +4954,6 @@ function ChatViewContent(props: ChatViewProps) {
       item.urgent === true || item.variant === "error" || item.variant === "warning";
     const urgentSystemItems = systemComposerBannerItems.filter(isUrgentSystemItem);
     const calmSystemItems = systemComposerBannerItems.filter((item) => !isUrgentSystemItem(item));
-    const autoCompactItems = autoCompactBannerItem === null ? [] : [autoCompactBannerItem];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
@@ -4974,7 +4970,6 @@ function ChatViewContent(props: ChatViewProps) {
       return [
         ...contestedItems,
         ...urgentSystemItems,
-        ...autoCompactItems,
         ...backgroundLivenessItems,
         ...calmSystemItems,
         ...wokeThreadItems,
@@ -4984,7 +4979,6 @@ function ChatViewContent(props: ChatViewProps) {
     return [
       ...contestedItems,
       ...urgentSystemItems,
-      ...autoCompactItems,
       ...backgroundLivenessItems,
       ...calmSystemItems,
       ...wokeThreadItems,
@@ -5031,7 +5025,6 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
-    autoCompactBannerItem,
     backgroundLivenessBannerItem,
     contestedMembersBannerItem,
     handleRestoreThreadBranch,
@@ -7036,6 +7029,8 @@ function ChatViewContent(props: ChatViewProps) {
                             contextStripCollapsed={contextStripCollapsed}
                             contextStripWorktreeActive={contextStripWorktreeActive}
                             onToggleContextStrip={toggleComposerContextStrip}
+                            autoCompactStatus={autoCompactStatus}
+                            autoCompactPaused={autoCompactPaused}
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}

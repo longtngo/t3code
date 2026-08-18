@@ -42,6 +42,7 @@ vi.mock("../../hooks/useLlmModels", () => ({
   useLlmModelActions: () => ({ pending: new Set<string>(), load: () => {}, unload: () => {} }),
 }));
 
+import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
 import { SidebarLocalModels } from "./SidebarLocalModels";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
 import { SidebarMenu, SidebarProvider } from "../ui/sidebar";
@@ -84,8 +85,11 @@ describe("Local models in the footer row", () => {
   it("keeps its icon and status tag in the row", () => {
     const markup = renderInRow(createElement(SidebarLocalModels, closedPanel));
     expect(markup).toContain('aria-label="Local models"');
-    // The status dot — the tag that makes the control worth glancing at.
-    expect(markup).toContain("size-1.5 rounded-full");
+    // The count badge — the tag that makes the control worth glancing at. Asserted on the
+    // shared footer-badge geometry, so a local restyle that drifts away from Resource Queue
+    // fails here rather than only showing up side by side in the row.
+    expect(markup).toContain(sidebarFooterBadgeClass("idle"));
+    expect(markup).toContain('aria-label="0 local models loaded"');
   });
 
   it("does not carry its old full-width text label into the row", () => {

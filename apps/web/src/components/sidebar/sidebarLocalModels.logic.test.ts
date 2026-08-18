@@ -1,6 +1,10 @@
 import type { LlmModelsSample, LocalLlmModelConfig } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { countOnline, mergeConfigsWithSample } from "./sidebarLocalModels.logic.ts";
+import {
+  countOnline,
+  localModelsBadge,
+  mergeConfigsWithSample,
+} from "./sidebarLocalModels.logic.ts";
 
 const configs: LocalLlmModelConfig[] = [
   {
@@ -67,5 +71,28 @@ describe("mergeConfigsWithSample", () => {
     const rows = mergeConfigsWithSample(configs, null);
     expect(rows.every((r) => r.status === "offline")).toBe(true);
     expect(countOnline(rows)).toBe(0);
+  });
+});
+
+describe("localModelsBadge", () => {
+  it("recedes when nothing is loaded or loading", () => {
+    expect(localModelsBadge(0, 0)).toEqual({ tone: "idle", label: "0 local models loaded" });
+  });
+
+  it("counts loaded models, singular included", () => {
+    expect(localModelsBadge(1, 0).label).toBe("1 local model loaded");
+    expect(localModelsBadge(2, 0).label).toBe("2 local models loaded");
+    expect(localModelsBadge(2, 0).tone).toBe("active");
+  });
+
+  // A load in flight must not be added into the digits: "1" has to mean one resident model
+  // whether or not a second is on its way in.
+  it("shows a load in flight as tone, never as part of the count", () => {
+    expect(localModelsBadge(0, 1)).toEqual({
+      tone: "pending",
+      label: "0 local models loaded, 1 loading",
+    });
+    expect(localModelsBadge(1, 1).tone).toBe("active");
+    expect(localModelsBadge(1, 1).label).toBe("1 local model loaded, 1 loading");
   });
 });

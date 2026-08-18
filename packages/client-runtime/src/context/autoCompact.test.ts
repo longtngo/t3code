@@ -17,7 +17,7 @@ import {
   noteAutoCompactSendFailed,
   providerAdvertisesCompact,
   reconcileAutoCompactBudget,
-  shouldShowAutoCompactStatus,
+  toggleAutoCompactThread,
 } from "./autoCompact.ts";
 
 /** An armed, idle, past-threshold thread: the one case that should act. */
@@ -159,34 +159,27 @@ describe("decideAutoCompact — finishing a sequence", () => {
   });
 });
 
-describe("shouldShowAutoCompactStatus", () => {
-  const base = {
-    armed: true,
-    phase: "idle" as const,
-    usedPercentage: 20,
-    thresholdPercent: 50,
-    cyclesUsed: 0,
-    maxCycles: 3,
-  };
-
-  it("stays hidden for a disarmed thread even mid-sequence", () => {
-    expect(shouldShowAutoCompactStatus({ ...base, armed: false, phase: "compacting" })).toBe(false);
+describe("toggleAutoCompactThread", () => {
+  it("arms a thread that was not in the set", () => {
+    expect(toggleAutoCompactThread({}, "env:thread")).toEqual({ "env:thread": true });
   });
 
-  it("stays hidden while the thread is far from the threshold", () => {
-    expect(shouldShowAutoCompactStatus(base)).toBe(false);
+  // A stored `false` would be indistinguishable from armed to a `!== undefined` reader and
+  // would grow the record by one entry per thread ever armed, so disarming must delete.
+  it("disarms by deleting the key rather than storing false", () => {
+    const next = toggleAutoCompactThread({ "env:thread": true }, "env:thread");
+    expect(next).toEqual({});
+    expect("env:thread" in next).toBe(false);
   });
 
-  it("appears within the approach band", () => {
-    expect(shouldShowAutoCompactStatus({ ...base, usedPercentage: 35 })).toBe(true);
+  it("leaves other threads untouched", () => {
+    expect(toggleAutoCompactThread({ a: true, b: true }, "a")).toEqual({ b: true });
   });
 
-  it("appears whenever a sequence is running", () => {
-    expect(shouldShowAutoCompactStatus({ ...base, phase: "compacting" })).toBe(true);
-  });
-
-  it("appears at the cap regardless of fullness, so the pause is explained", () => {
-    expect(shouldShowAutoCompactStatus({ ...base, usedPercentage: 5, cyclesUsed: 3 })).toBe(true);
+  it("does not mutate the record it was given", () => {
+    const before = { a: true };
+    toggleAutoCompactThread(before, "b");
+    expect(before).toEqual({ a: true });
   });
 });
 

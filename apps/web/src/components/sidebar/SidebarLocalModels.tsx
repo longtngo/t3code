@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CpuIcon, Loader2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatBytes } from "~/lib/hostMetrics";
-import { formatContext, type ModelStatus } from "~/lib/llmModels";
+import { formatContext } from "~/lib/llmModels";
 import { MODEL_DOT_CLASS } from "../llm/modelPresentation";
 import { useLlmModelActions, useLlmModels } from "~/hooks/useLlmModels";
 import { usePrimarySettings } from "~/hooks/useSettings";
@@ -11,8 +11,10 @@ import {
   type SidebarRow,
   countBusy,
   countOnline,
+  localModelsBadge,
   mergeConfigsWithSample,
 } from "./sidebarLocalModels.logic";
+import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -136,7 +138,7 @@ export function SidebarLocalModels({
 
   if (environmentId == null) return null;
 
-  const headerStatus: ModelStatus = online > 0 ? "online" : busy > 0 ? "loading" : "offline";
+  const badge = localModelsBadge(online, busy);
 
   return (
     /*
@@ -160,13 +162,11 @@ export function SidebarLocalModels({
               aria-label="Local models"
             >
               <CpuIcon className="size-3.5" />
-              <span
-                className={cn("size-1.5 rounded-full", MODEL_DOT_CLASS[headerStatus])}
-                aria-hidden
-              />
-              {online > 0 ? (
-                <span className="text-[10px] tabular-nums text-muted-foreground/60">{online}</span>
-              ) : null}
+              {/* Same badge as Resource Queue beside it: the count sits inside the pill and
+                  carries the status as its tone, rather than a dot plus a loose number. */}
+              <span aria-label={badge.label} className={sidebarFooterBadgeClass(badge.tone)}>
+                {online}
+              </span>
             </SidebarMenuButton>
           }
         />

@@ -42,11 +42,11 @@ export function ComposerControlIcon({
   );
 }
 
-export function ComposerControlChevron() {
+export function ComposerControlChevron({ className }: { className?: string | undefined } = {}) {
   return (
     <ChevronDownIcon
       aria-hidden="true"
-      className="-mx-0.5 size-3.5 shrink-0 text-icon-muted"
+      className={cn("-mx-0.5 size-3.5 shrink-0 text-icon-muted", className)}
       data-composer-control-chevron
       strokeWidth={2.25}
     />

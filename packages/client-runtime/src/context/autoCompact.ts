@@ -223,23 +223,22 @@ export function noteAutoCompactCycleComplete(budget: AutoCompactBudget): AutoCom
   return { ...budget, cyclesUsed: budget.cyclesUsed + 1 };
 }
 
-/** Whether the status row should be visible at all, given how close the thread is. */
-export const AUTO_COMPACT_STATUS_VISIBLE_WITHIN = 15;
-
-export function shouldShowAutoCompactStatus(input: {
-  readonly armed: boolean;
-  readonly phase: AutoCompactPhase;
-  readonly usedPercentage: number | null;
-  readonly thresholdPercent: number;
-  readonly cyclesUsed: number;
-  readonly maxCycles: number;
-}): boolean {
-  if (!input.armed) return false;
-  if (input.phase !== "idle") return true;
-  // A thread parked at the cap has stopped acting and must say why, whatever its fullness.
-  if (input.cyclesUsed >= input.maxCycles) return true;
-  if (input.usedPercentage === null) return false;
-  return input.usedPercentage >= input.thresholdPercent - AUTO_COMPACT_STATUS_VISIBLE_WITHIN;
+/**
+ * Arm or disarm one thread within the armed set.
+ *
+ * Disarming deletes the key rather than storing `false`, so the record stays the size of the
+ * armed set instead of growing by one entry for every thread ever armed. Every surface that
+ * offers the switch — both thread menus, the sidebar mark, the composer control — routes
+ * through here, so they cannot drift into writing two different shapes of the same state.
+ */
+export function toggleAutoCompactThread(
+  threads: Readonly<Record<string, boolean>>,
+  threadKey: string,
+): Record<string, boolean> {
+  const next = { ...threads };
+  if (next[threadKey] === true) delete next[threadKey];
+  else next[threadKey] = true;
+  return next;
 }
 
 /**

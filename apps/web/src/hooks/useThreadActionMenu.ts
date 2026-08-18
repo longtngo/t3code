@@ -1,4 +1,5 @@
 import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { toggleAutoCompactThread } from "@t3tools/client-runtime/context";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -227,21 +228,17 @@ export function useThreadActionMenu(input: {
           case "unpin":
             await reportFailure("Failed to unpin thread", () => unpinThread(threadRef));
             return;
-          case "auto-compact": {
+          case "auto-compact":
             // Same toggle as the sidebar row menu, deliberately sharing the settings shape
-            // rather than a second store: both menus render one list, so they must write one
-            // piece of state. Disarming deletes the key to keep the record bounded.
-            const key = scopedThreadKey(threadRef);
-            const current = getClientSettings().autoCompactThreads;
-            const next = { ...current };
-            if (next[key] === true) {
-              delete next[key];
-            } else {
-              next[key] = true;
-            }
-            updateClientSettings({ autoCompactThreads: next });
+            // rather than a second store: every surface renders one list, so they must write
+            // one piece of state.
+            updateClientSettings({
+              autoCompactThreads: toggleAutoCompactThread(
+                getClientSettings().autoCompactThreads,
+                scopedThreadKey(threadRef),
+              ),
+            });
             return;
-          }
           case "rename":
             onStartRename();
             return;
