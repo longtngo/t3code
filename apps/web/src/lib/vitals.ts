@@ -57,6 +57,16 @@ export const SEVERITY_BG: Record<Severity, string> = {
 };
 
 /** Unfilled arc / bar track — matches the context meter's track tint. */
+/**
+ * Centre pip drawn when the open thread is armed for auto-compact.
+ *
+ * Sits inside the innermost ring so it never touches an arc, and reuses the track's own
+ * muted-foreground mix at full strength: the glyph already spends colour on severity, and an
+ * armed thread is a mode, not an alarm.
+ */
+export const VITALS_ARMED_PIP_RADIUS = 2.4;
+export const VITALS_ARMED_PIP_FILL = "var(--color-muted-foreground)";
+
 export const VITALS_TRACK_STROKE =
   "color-mix(in oklab, var(--color-muted-foreground) 24%, transparent)";
 

@@ -1679,44 +1679,6 @@ function AutoSettleDaysInput({
   );
 }
 
-function AutoCompactThresholdInput({
-  value,
-  onCommit,
-}: {
-  value: number;
-  onCommit: (percent: number) => void;
-}) {
-  // Same draft-then-commit shape as the auto-settle field: the box can be emptied mid-edit,
-  // and the setting only moves on a value that is valid on its own.
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
-
-  return (
-    <Input
-      type="number"
-      min={MIN_AUTO_COMPACT_THRESHOLD_PERCENT}
-      max={MAX_AUTO_COMPACT_THRESHOLD_PERCENT}
-      className="w-full sm:w-24"
-      value={draft}
-      onChange={(event) => {
-        setDraft(event.target.value);
-        const parsed = Number(event.target.value);
-        if (
-          Number.isInteger(parsed) &&
-          parsed >= MIN_AUTO_COMPACT_THRESHOLD_PERCENT &&
-          parsed <= MAX_AUTO_COMPACT_THRESHOLD_PERCENT
-        ) {
-          onCommit(parsed);
-        }
-      }}
-      onBlur={() => setDraft(String(value))}
-      aria-label="Percent of the context window before compacting"
-    />
-  );
-}
-
 // The legacy rows sit behind the fold, so a settings-search jump has to
 // expand the section before its target can mount and scroll.
 const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
@@ -1824,6 +1786,13 @@ function LegacyFeaturesSection() {
 export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const autoCompactRatio =
+    (settings.autoCompactThresholdPercent - MIN_AUTO_COMPACT_THRESHOLD_PERCENT) /
+    (MAX_AUTO_COMPACT_THRESHOLD_PERCENT - MIN_AUTO_COMPACT_THRESHOLD_PERCENT);
+  const autoCompactSliderStyle = {
+    "--settings-slider-progress": `${autoCompactRatio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - autoCompactRatio}rem`,
+  } as CSSProperties;
 
   // Per-device Web Push toggle. Push works only in the deployed web PWA (a service
   // worker + secure context) — never Electron or dev — and needs a server VAPID key.
@@ -2083,10 +2052,35 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <AutoCompactThresholdInput
-              value={settings.autoCompactThresholdPercent}
-              onCommit={(percent) => updateSettings({ autoCompactThresholdPercent: percent })}
-            />
+            <div className="flex w-full items-center gap-3 sm:w-52">
+              <output
+                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                htmlFor="auto-compact-threshold"
+              >
+                {settings.autoCompactThresholdPercent}%
+              </output>
+              <input
+                aria-label="Compact threads at"
+                className="settings-slider min-w-0 flex-1"
+                id="auto-compact-threshold"
+                max={MAX_AUTO_COMPACT_THRESHOLD_PERCENT}
+                min={MIN_AUTO_COMPACT_THRESHOLD_PERCENT}
+                onChange={(event) => {
+                  const percent = Number(event.currentTarget.value);
+                  if (
+                    Number.isInteger(percent) &&
+                    percent >= MIN_AUTO_COMPACT_THRESHOLD_PERCENT &&
+                    percent <= MAX_AUTO_COMPACT_THRESHOLD_PERCENT
+                  ) {
+                    updateSettings({ autoCompactThresholdPercent: percent });
+                  }
+                }}
+                step={5}
+                style={autoCompactSliderStyle}
+                type="range"
+                value={settings.autoCompactThresholdPercent}
+              />
+            </div>
           }
         />
 

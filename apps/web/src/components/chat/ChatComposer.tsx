@@ -1,3 +1,4 @@
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type {
   ApprovalRequestId,
   EnvironmentId,
@@ -406,6 +407,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   environmentId: EnvironmentId;
+  autoCompactArmed: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeAccountUsage: AccountUsageView | null;
   activeThreadProviderDisplayName: string | null;
@@ -442,6 +444,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         accountUsage={props.activeAccountUsage}
         providerDisplayName={props.activeThreadProviderDisplayName}
         modelDisplayName={props.activeThreadModelDisplayName}
+        autoCompactArmed={props.autoCompactArmed}
       />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
@@ -891,6 +894,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
+  // Armed state is a per-thread client setting; the gauge shows it as a centre pip so the
+  // composer says "this thread compacts itself" without adding a control to the footer.
+  const autoCompactArmed =
+    activeThreadId !== null &&
+    settings.autoCompactThreads[scopedThreadKey(scopeThreadRef(environmentId, activeThreadId))] ===
+      true;
+
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
@@ -3048,6 +3058,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   accountUsage={activeAccountUsage}
                   providerDisplayName={activeThreadProviderDisplayName}
                   modelDisplayName={activeThreadModelDisplayName}
+                  autoCompactArmed={autoCompactArmed}
                 />
                 {phase === "running" ? (
                   // The composer footer is not rendered at all while collapsed,
@@ -3462,6 +3473,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   environmentId={environmentId}
+                  autoCompactArmed={autoCompactArmed}
                   activeContextWindow={activeContextWindow}
                   activeAccountUsage={activeAccountUsage}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}

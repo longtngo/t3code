@@ -67,6 +67,25 @@ describe("VitalsGaugeIcon", () => {
     expect(countPaths(markup)).toBe(12);
   });
 
+  it("draws the armed pip only when the thread is armed for auto-compact", () => {
+    // The composer's only signal that this thread compacts itself: a centre pip inside the
+    // innermost ring. Absence must be just as reliable as presence, or a disarmed thread
+    // would look armed.
+    const disarmed = renderToStaticMarkup(<VitalsGaugeIcon inputs={NO_ARCS} />);
+    const armed = renderToStaticMarkup(<VitalsGaugeIcon inputs={NO_ARCS} autoCompactArmed />);
+    expect(disarmed).not.toContain("<circle");
+    expect(armed).toContain("<circle");
+  });
+
+  it("keeps the armed pip clear of the innermost ring", () => {
+    // A pip that overlaps an arc reads as part of the gauge rather than a mode.
+    const armed = renderToStaticMarkup(<VitalsGaugeIcon inputs={NO_ARCS} autoCompactArmed />);
+    const r = Number(/<circle[^>]*r="([0-9.]+)"/.exec(armed)?.[1]);
+    // Inner ring radius 7.6 with stroke 3 leaves its inner edge at 6.1.
+    expect(r).toBeGreaterThan(0);
+    expect(r).toBeLessThan(7.6 - 3 / 2);
+  });
+
   it("omits the fill path for a null metric (track only)", () => {
     const markup = renderToStaticMarkup(<VitalsGaugeIcon inputs={NO_ARCS} />);
     // 6 tracks, no fills.

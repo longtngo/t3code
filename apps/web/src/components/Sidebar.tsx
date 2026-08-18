@@ -48,6 +48,7 @@ import {
   ClockIcon,
   CopyIcon,
   EllipsisIcon,
+  FoldVerticalIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -741,6 +742,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the descriptor is not loaded. Pinning itself lives in the context menu.
   pinningSupported: boolean;
   isPinned: boolean;
+  /** This thread compacts itself once its context passes the threshold. */
+  isAutoCompactArmed: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
   // sortable bag applied to the card root so the whole card drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
@@ -1447,6 +1450,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     className="size-3 shrink-0 text-muted-foreground/65"
                   />
                 )
+              ) : null}
+              {props.isAutoCompactArmed ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="inline-flex items-center text-muted-foreground/65" />}
+                  >
+                    <FoldVerticalIcon
+                      aria-label="Auto-compact on"
+                      role="img"
+                      className="size-3 shrink-0"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup>Auto-compact is on for this thread</TooltipPopup>
+                </Tooltip>
               ) : null}
               {/* The visible state owns this slot's width: status at rest,
                   actions on hover/keyboard focus or while the popover is open. Keeping
@@ -3972,6 +3989,11 @@ export default function Sidebar() {
                             .threadPinning === true
                         }
                         isPinned={section === "pinned"}
+                        isAutoCompactArmed={
+                          autoCompactThreads[
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+                          ] === true
+                        }
                         sortable={sortable}
                         snoozeWakeLabelText={
                           section === "snoozed" && thread.snoozedUntil != null
