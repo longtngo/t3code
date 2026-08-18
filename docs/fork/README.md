@@ -34,10 +34,10 @@ Concentrated in `apps/server` (179) and `apps/web` (134).
 
 `apps/server/src/persistence/Migrations.ts` maps each migration file to an **explicit applied
 id**, and the two deliberately diverge. Several filename numbers appear twice (`033`, `037`,
-`038`) because upstream and the fork both claimed them; the applied ids stay unique because the
-manifest assigns upstream's migration the next free id rather than its filename number.
+`038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
+the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-16: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
+Verified 2026-08-18: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
