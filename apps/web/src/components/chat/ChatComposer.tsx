@@ -237,7 +237,7 @@ import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
-} from "../../lib/contextWindow";
+} from "@t3tools/client-runtime/context";
 import { type AccountUsageView, deriveLatestAccountUsage } from "../../lib/vitals";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";

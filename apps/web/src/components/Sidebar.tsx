@@ -135,6 +135,7 @@ import {
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
+import { providerAdvertisesCompact } from "@t3tools/client-runtime/context";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   buildBulkTitleRegenerationContextMenuItem,
@@ -1743,6 +1744,8 @@ export default function Sidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
+  const autoCompactThreads = useClientSettings((s) => s.autoCompactThreads);
+  const autoCompactThresholdPercent = useClientSettings((s) => s.autoCompactThresholdPercent);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
@@ -2508,6 +2511,13 @@ export default function Sidebar() {
   );
   const settledThreadKeysRef = useRef(settledThreadKeys);
   settledThreadKeysRef.current = settledThreadKeys;
+  // Read through refs in the menu callback for the same reason as the sets above: the menu
+  // is built at click time, and adding these to the callback deps would rebuild it on every
+  // settings write.
+  const autoCompactThreadsRef = useRef(autoCompactThreads);
+  autoCompactThreadsRef.current = autoCompactThreads;
+  const autoCompactThresholdRef = useRef(autoCompactThresholdPercent);
+  autoCompactThresholdRef.current = autoCompactThresholdPercent;
   const snoozedThreadKeys = useMemo(
     () =>
       new Set(
@@ -3290,6 +3300,12 @@ export default function Sidebar() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
+        // Support is read from the commands the provider advertises, not a driver allowlist,
+        // so the switch appears exactly where `/compact` would actually work.
+        const threadProvider = serverConfigs
+          .get(thread.environmentId)
+          ?.providers.find((entry) => entry.instanceId === thread.modelSelection.instanceId);
+        const supportsAutoCompact = providerAdvertisesCompact(threadProvider?.slashCommands);
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
@@ -3306,11 +3322,14 @@ export default function Sidebar() {
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
+              isAutoCompactArmed: autoCompactThreadsRef.current[threadKey] === true,
+              autoCompactThresholdPercent: autoCompactThresholdRef.current,
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                autoCompact: supportsAutoCompact,
               },
               snoozePresets,
             }),
@@ -3367,6 +3386,18 @@ export default function Sidebar() {
           case "rename":
             startThreadRename(threadRef, thread.title);
             return;
+          case "auto-compact": {
+            // Disarming deletes the key rather than storing `false`, so the record stays the
+            // size of the armed set instead of growing by one entry per thread ever armed.
+            const next = { ...autoCompactThreadsRef.current };
+            if (next[threadKey] === true) {
+              delete next[threadKey];
+            } else {
+              next[threadKey] = true;
+            }
+            updateSettings({ autoCompactThreads: next });
+            return;
+          }
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
             const result = await updateThreadMetadata({

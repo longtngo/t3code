@@ -22,10 +22,12 @@ import {
   type EnvironmentIdentificationMode,
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
+  MAX_AUTO_COMPACT_THRESHOLD_PERCENT,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_TERMINAL_FONT_SIZE,
+  MIN_AUTO_COMPACT_THRESHOLD_PERCENT,
   MIN_CODE_FONT_SIZE,
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
@@ -506,6 +508,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
+        : []),
+      ...(settings.autoCompactThresholdPercent !==
+      DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent
+        ? ["Compact threads at"]
         : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
@@ -1673,6 +1679,44 @@ function AutoSettleDaysInput({
   );
 }
 
+function AutoCompactThresholdInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (percent: number) => void;
+}) {
+  // Same draft-then-commit shape as the auto-settle field: the box can be emptied mid-edit,
+  // and the setting only moves on a value that is valid on its own.
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      type="number"
+      min={MIN_AUTO_COMPACT_THRESHOLD_PERCENT}
+      max={MAX_AUTO_COMPACT_THRESHOLD_PERCENT}
+      className="w-full sm:w-24"
+      value={draft}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const parsed = Number(event.target.value);
+        if (
+          Number.isInteger(parsed) &&
+          parsed >= MIN_AUTO_COMPACT_THRESHOLD_PERCENT &&
+          parsed <= MAX_AUTO_COMPACT_THRESHOLD_PERCENT
+        ) {
+          onCommit(parsed);
+        }
+      }}
+      onBlur={() => setDraft(String(value))}
+      aria-label="Percent of the context window before compacting"
+    />
+  );
+}
+
 // The legacy rows sit behind the fold, so a settings-search jump has to
 // expand the section before its target can mount and scroll.
 const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
@@ -2019,6 +2063,32 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("auto-compact-threshold")}
+          title="Compact threads at"
+          description="Percent of the context window used before an armed thread compacts itself and carries on. Turn it on per thread from the thread menu."
+          resetAction={
+            settings.autoCompactThresholdPercent !==
+            DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent ? (
+              <SettingResetButton
+                label="auto-compact threshold"
+                onClick={() =>
+                  updateSettings({
+                    autoCompactThresholdPercent:
+                      DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <AutoCompactThresholdInput
+              value={settings.autoCompactThresholdPercent}
+              onCommit={(percent) => updateSettings({ autoCompactThresholdPercent: percent })}
+            />
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("time-format")}

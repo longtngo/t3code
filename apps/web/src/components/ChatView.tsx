@@ -254,6 +254,7 @@ import {
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readProviderAdvertisesCompact,
   useProject,
   useProjects,
   useThread,
@@ -295,6 +296,12 @@ import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
 } from "./ThreadStatusIndicators";
+import {
+  autoCompactStatusText,
+  deriveLatestContextWindowSnapshot as deriveAutoCompactSnapshot,
+  shouldShowAutoCompactStatus,
+} from "@t3tools/client-runtime/context";
+import { useAutoCompact } from "../hooks/useAutoCompact";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   contestedMembersKey,
@@ -4311,6 +4318,49 @@ function ChatViewContent(props: ChatViewProps) {
   // partition (same shell, same capability gate, same PR auto-settle input)
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+
+  // Auto-compact: arm per thread, act only when the thread is idle and past the threshold.
+  // Reads its own inputs rather than reusing the composer's, so the sequence does not depend
+  // on the composer being mounted.
+  const autoCompactThreadsSetting = useClientSettings((s) => s.autoCompactThreads);
+  const autoCompactThresholdPercent = useClientSettings((s) => s.autoCompactThresholdPercent);
+  const autoCompactArmed =
+    activeThreadRef !== null &&
+    autoCompactThreadsSetting[scopedThreadKey(activeThreadRef)] === true;
+  const autoCompactUsedPercentage = useMemo(
+    () =>
+      deriveAutoCompactSnapshot(activeThread?.activities ?? EMPTY_ACTIVITIES)?.usedPercentage ??
+      null,
+    [activeThread?.activities],
+  );
+  const autoCompactSupported = useMemo(
+    () =>
+      activeThreadEnvironmentId && activeThreadShell
+        ? readProviderAdvertisesCompact(
+            activeThreadEnvironmentId,
+            activeThreadShell.modelSelection.instanceId,
+          )
+        : false,
+    [activeThreadEnvironmentId, activeThreadShell],
+  );
+  const autoCompact = useAutoCompact({
+    environmentId: activeThreadEnvironmentId ?? null,
+    threadId: activeThreadShell?.id ?? null,
+    armed: autoCompactArmed,
+    thresholdPercent: autoCompactThresholdPercent,
+    usedPercentage: autoCompactUsedPercentage,
+    threadBusy: isWorking || !latestTurnSettled,
+    sessionReady: activeThreadShell?.session?.status === "ready",
+    archived: activeThreadShell?.archivedAt != null,
+    hasPendingApprovals: activeThreadShell?.hasPendingApprovals === true,
+    hasPendingUserInput: activeThreadShell?.hasPendingUserInput === true,
+    hasActionableProposedPlan: activeThreadShell?.hasActionableProposedPlan === true,
+    hasComposerDraft: false,
+    providerSupportsCompact: autoCompactSupported,
+    latestUserMessageAt: activeThreadShell?.latestUserMessageAt ?? null,
+    runtimeMode,
+    interactionMode,
+  });
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
   const activeThreadPr = resolveDisplayedThreadPr({
@@ -4708,6 +4758,46 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  const autoCompactBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (activeThreadShell === null) return null;
+    if (
+      !shouldShowAutoCompactStatus({
+        armed: autoCompactArmed,
+        phase: autoCompact.phase,
+        usedPercentage: autoCompactUsedPercentage,
+        thresholdPercent: autoCompactThresholdPercent,
+        cyclesUsed: autoCompact.cyclesUsed,
+        maxCycles: autoCompact.maxCycles,
+      })
+    ) {
+      return null;
+    }
+    return {
+      id: `auto-compact:${activeThreadShell.id}`,
+      variant: "default",
+      icon: <span className="size-1.5 rounded-full bg-foreground" aria-hidden="true" />,
+      title: autoCompactStatusText({
+        phase: autoCompact.phase,
+        usedPercentage: autoCompactUsedPercentage,
+        thresholdPercent: autoCompactThresholdPercent,
+        threadBusy: isWorking || !latestTurnSettled,
+        cyclesUsed: autoCompact.cyclesUsed,
+        maxCycles: autoCompact.maxCycles,
+        lastHold: autoCompact.lastHold,
+      }),
+    };
+  }, [
+    activeThreadShell,
+    autoCompact.cyclesUsed,
+    autoCompact.lastHold,
+    autoCompact.maxCycles,
+    autoCompact.phase,
+    autoCompactArmed,
+    autoCompactThresholdPercent,
+    autoCompactUsedPercentage,
+    isWorking,
+    latestTurnSettled,
+  ]);
   const backgroundLivenessBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (activeBackgroundLiveness === null || !activeThread) {
       return null;
@@ -4867,6 +4957,7 @@ function ChatViewContent(props: ChatViewProps) {
       item.urgent === true || item.variant === "error" || item.variant === "warning";
     const urgentSystemItems = systemComposerBannerItems.filter(isUrgentSystemItem);
     const calmSystemItems = systemComposerBannerItems.filter((item) => !isUrgentSystemItem(item));
+    const autoCompactItems = autoCompactBannerItem === null ? [] : [autoCompactBannerItem];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
@@ -4883,6 +4974,7 @@ function ChatViewContent(props: ChatViewProps) {
       return [
         ...contestedItems,
         ...urgentSystemItems,
+        ...autoCompactItems,
         ...backgroundLivenessItems,
         ...calmSystemItems,
         ...wokeThreadItems,
@@ -4892,6 +4984,7 @@ function ChatViewContent(props: ChatViewProps) {
     return [
       ...contestedItems,
       ...urgentSystemItems,
+      ...autoCompactItems,
       ...backgroundLivenessItems,
       ...calmSystemItems,
       ...wokeThreadItems,
@@ -4938,6 +5031,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    autoCompactBannerItem,
     backgroundLivenessBannerItem,
     contestedMembersBannerItem,
     handleRestoreThreadBranch,

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ContextWindowSnapshot } from "~/lib/contextWindow";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/context";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import type { AccountUsageView } from "~/lib/vitals";
 import { FIVE_HOUR_MS, SEVERITY_STROKE, fullnessArc, vitalsLevel, windowArc } from "~/lib/vitals";

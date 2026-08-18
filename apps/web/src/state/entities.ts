@@ -1,3 +1,4 @@
+import { providerAdvertisesCompact } from "@t3tools/client-runtime/context";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentProject,
@@ -230,6 +231,23 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSettlement === true
   );
+}
+
+/**
+ * Whether the provider backing a thread can compact on request.
+ *
+ * Read from the commands the provider advertises rather than a driver allowlist, so a
+ * provider that gains or loses `/compact` is handled without a code change here.
+ */
+export function readProviderAdvertisesCompact(
+  environmentId: EnvironmentId,
+  instanceId: string,
+): boolean {
+  const provider = appAtomRegistry
+    .get(environmentServerConfigsAtom)
+    .get(environmentId)
+    ?.providers.find((entry) => entry.instanceId === instanceId);
+  return providerAdvertisesCompact(provider?.slashCommands);
 }
 
 /** Whether the environment's server understands thread.snooze/unsnooze.

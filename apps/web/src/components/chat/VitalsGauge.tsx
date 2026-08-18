@@ -4,7 +4,10 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import {
+  type ContextWindowSnapshot,
+  formatContextWindowTokens,
+} from "@t3tools/client-runtime/context";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { ChevronRightIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
