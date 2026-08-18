@@ -122,6 +122,17 @@ export const LOCAL_LLM_MODELS: readonly ModelCatalogEntry[] = [
     note: "Fastest at top quality (133 d_tps, PLD-on).",
   },
   {
+    id: "Qwen3.8-27B-MLX-Serve-4bit",
+    name: "Qwen3.8 27B",
+    format: "mlx",
+    resourceName: "Qwen3.8-27B-MLX-Serve-4bit",
+    quant: "4-bit",
+    moe: false,
+    maxContext: 262144,
+    approxBytes: GiB(17),
+    note: "Local coding model. Best grounding, but prefill is 901 t/s against the 35B's 5629.",
+  },
+  {
     id: "gemma-4-26b-a4b-it-4bit",
     name: "Gemma 4 26B A4B",
     format: "mlx",

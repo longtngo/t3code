@@ -195,12 +195,12 @@ happens, but that it happens _before_ the user is blocked, while the thread is i
 "Mobile" here means **the web app in a mobile viewport**, which is the surface this ships on.
 The React Native app is a separate codebase and is out of scope.
 
-| Surface              | Arming                        | Status row     | Acts |
-| -------------------- | ----------------------------- | -------------- | ---- |
-| Web, wide            | thread menu                   | above composer | yes  |
-| Web, mobile viewport | thread menu, by tapping title | above composer | yes  |
-| Desktop              | inherits web                  | inherits web   | yes  |
-| React Native app     | out of scope                  | —              | —    |
+| Surface              | Arming                        | Disarming                      | Status         | Acts |
+| -------------------- | ----------------------------- | ------------------------------ | -------------- | ---- |
+| Web, wide            | thread menu                   | sidebar mark, composer control | on the control | yes  |
+| Web, mobile viewport | thread menu, by tapping title | sidebar mark, composer control | on the control | yes  |
+| Desktop              | inherits web                  | inherits web                   | inherits web   | yes  |
+| React Native app     | out of scope                  | —                              | —              | —    |
 
 Nothing in this feature is desktop-only by construction: direction C was chosen partly because
 it adds no composer-footer chrome, and the footer already collapses at 620px. The arm control
@@ -209,20 +209,40 @@ menu from a title button (`openMenuFromTitle`), and the browser gets a rendered 
 `showContextMenuFallback` rather than a native one. The sidebar row's right-click path is
 additional, not the only way in.
 
-Two real limits in a narrow viewport, both worth knowing:
+### Update 2026-08-18 — the status row became a control
 
-- **The banner stack shows only `items[0]`.** The rest expand on `group-hover` /
-  `group-focus-within` and are `pointer-events-none` until they do, so a touch user cannot
-  reach them. The status row is ordered directly after the contested/urgent banners, so it is
-  `items[0]` whenever none of those are present — but while an urgent banner is up, the
-  auto-compact status is not visible on touch. The sequence still runs; only its narration is
-  hidden.
+The banner above the composer is gone. It was a permanent row of text for a fact the reader
+wants on demand, and it could not be acted on. Two marks carry the state instead, and **both
+are the off switch**:
+
+- the sidebar row's `FoldVerticalIcon`, built like the unpin button beside it;
+- `ComposerAutoCompactControl`, to the right of the prompt-shortcut gear, rendered only while
+  the thread is armed.
+
+Arming is unchanged: the thread menu, in both places it opens.
+
+The status wording moved onto those controls' **accessible name**, not only their tooltip.
+A tooltip popup is portalled, which makes it invisible to a static render _and_ unreachable on
+touch — the exact narrow-viewport limit the old banner-stack note below described, in a new
+form. Putting it on `aria-label` is what keeps the mobile web view able to read it.
+
+One state genuinely needed to stay visible without a hover: a **stopped** sequence (round
+budget spent, or a compaction that freed no room), because nothing else announces it. The
+composer control renders amber in that state, carrying `data-auto-compact-paused`.
+
+Two limits remain in a narrow viewport:
+
+- **The composer control is inside the prompt-shortcut row**, which is not rendered while the
+  composer is collapsed on a phone, nor during an approval or a pending question. The armed
+  state is still visible there (the gauge's centre pip); the off switch is the sidebar mark or
+  the thread menu.
 - **The menu's own affordance is hover-gated.** The chevron beside the thread title is
   `opacity-0` until `group-hover`, so on touch the title does not advertise that it opens a
   menu. Pre-existing, and not changed here, but it is how a phone user discovers arming.
 
-Status text wraps rather than truncates (`AlertTitle` sets no truncation), so the longest
-string stays readable when narrow.
+The banner-stack limit that used to be recorded here — only `items[0]` is visible, and the rest
+are `pointer-events-none` until hover — no longer applies to this feature, since it no longer
+puts anything in that stack.
 
 `ClientSettings` are localStorage-only, so arming is **per device**: a thread armed on a
 desktop browser is not armed in a phone browser. This is coherent for a client-driven actor —
