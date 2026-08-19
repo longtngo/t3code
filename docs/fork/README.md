@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-11, against `origin/main`: **271 files added, 207 modified, 1 deleted.**
-Concentrated in `apps/server` (179) and `apps/web` (134).
+As of 2026-08-19, against `origin/main`: **302 files added, 243 modified, 3 deleted.**
+Concentrated in `apps/server` (194) and `apps/web` (162).
 
 ## Invariants a merge must not break
 
@@ -37,7 +37,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-18: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
+Verified 2026-08-19: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
@@ -93,6 +93,12 @@ comm -23 <(git show "$MB:$f" | sort -u) <(git show "personal:$f" | sort -u) \
 
 This is what caught the ClaudeAdapter steering test below, which the conflict presented as an
 ordinary upstream addition.
+
+The three deletions counted in Surface above are the fork's largest one: upstream's
+`ContextWindowMeter.tsx`, `.logic.ts`, and `.logic.test.ts` are gone, replaced by the fork's
+composer vitals gauge. They come back only if upstream _modifies_ one of them: git then raises a
+modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
+the former call site recording why.
 
 ### 5. A mid-turn send queues; it does not steer
 
