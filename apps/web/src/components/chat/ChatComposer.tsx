@@ -44,6 +44,7 @@ import {
   buildFilePathInsertion,
   shouldUseLocalFilePath,
 } from "../../composer-logic";
+import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
@@ -3312,7 +3313,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           : noProviderAvailable
                             ? "Enable a provider in Settings to send a message"
                             : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
+                              ? DISCONNECTED_COMPOSER_PLACEHOLDER
                               : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
