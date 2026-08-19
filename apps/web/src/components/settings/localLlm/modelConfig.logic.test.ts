@@ -66,7 +66,10 @@ describe("newModelConfig", () => {
 });
 
 describe("onProviderChange / onModelChange", () => {
-  it("resets to a compatible model and clamps ctx on provider change", () => {
+  // Every catalog model is mlx since ds4 was retired, so a gguf provider has nothing to switch
+  // to. Building the config anyway would leave `modelId: ""`, which fails validation and
+  // discards the whole localLlm patch on save — so the switch is refused outright.
+  it("refuses a provider change with no compatible model, leaving the config untouched", () => {
     const start = {
       id: "c1",
       name: "C",
@@ -75,10 +78,21 @@ describe("onProviderChange / onModelChange", () => {
       visible: true,
       contextWindow: 163840,
     } as never;
-    const next = onProviderChange(start, "ds4");
-    expect(next.providerId).toBe("ds4");
-    expect(next.modelId).toBe("deepseek-v4-flash");
-    expect(next.contextWindow).toBe(163840); // ds4 model max
+    expect(onProviderChange(start, "llamacpp")).toEqual(start);
+  });
+
+  it("keeps a same-provider switch working and clamps ctx to the new model", () => {
+    const start = {
+      id: "c1",
+      name: "C",
+      providerId: "mlx-serve",
+      modelId: "Qwen3.6-35B-A3B-4bit",
+      visible: true,
+      contextWindow: 262144,
+    } as never;
+    const next = onProviderChange(start, "mlx-serve");
+    expect(next.providerId).toBe("mlx-serve");
+    expect(next.contextWindow).toBeLessThanOrEqual(163840);
   });
 
   it("clamps ctx when switching to a smaller model", () => {

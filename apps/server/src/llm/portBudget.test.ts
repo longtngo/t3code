@@ -5,8 +5,10 @@ describe("portBudget", () => {
   it("mlx range starts at 8765", () =>
     expect(providerPortRange("mlx-serve")).toEqual({ min: 8765, max: 8799 }));
 
-  it("ds4 range starts at 8000", () =>
-    expect(providerPortRange("ds4")).toEqual({ min: 8000, max: 8034 }));
+  // An id the catalog does not know (a retired engine still named in an old settings file)
+  // falls back to the mlx window rather than throwing. The launch itself still refuses it.
+  it("falls back to the mlx window for an unknown provider", () =>
+    expect(providerPortRange("ds4")).toEqual({ min: 8765, max: 8799 }));
 
   it("assigns the first free port", () =>
     expect(assignPort("mlx-serve", new Set([8765, 8766]))).toBe(8767));

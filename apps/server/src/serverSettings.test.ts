@@ -742,7 +742,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const cfg = next.localLlm.models.find((m) => m.modelId === "gemma-4-12B-it-4bit");
       assert.isDefined(cfg);
       assert.deepEqual(cfg?.argsOverride, ["--kv-quant 8"]);
-      assert.isTrue(next.localLlm.providers.ds4?.visible);
+      // The legacy ds4 block is read and dropped: the engine is retired and absent from the
+      // catalog, so a provider override naming it would resolve to nothing.
+      assert.isUndefined(next.localLlm.providers.ds4);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

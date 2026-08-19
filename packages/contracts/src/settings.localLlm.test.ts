@@ -38,10 +38,10 @@ describe("LocalLlmSettings", () => {
 
   it("defaults provider.visible and model.visible to true", () => {
     const s = decode({
-      providers: { ds4: {} },
-      models: [{ id: "c2", name: "X", providerId: "ds4", modelId: "deepseek-v4-flash" }],
+      providers: { llamacpp: {} },
+      models: [{ id: "c2", name: "X", providerId: "llamacpp", modelId: "some-model" }],
     });
-    expect(s.providers.ds4!.visible).toBe(true);
+    expect(s.providers.llamacpp!.visible).toBe(true);
     expect(s.models[0]!.visible).toBe(true);
   });
 });

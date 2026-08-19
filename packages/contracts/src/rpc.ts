@@ -300,7 +300,7 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
 
-  // Local-model manager actions (mlx-serve / ds4 load & unload)
+  // Local-model manager actions (mlx-serve load & unload)
   llmServeLoad: "llmServe.load",
   llmServeUnload: "llmServe.unload",
 
@@ -1176,7 +1176,7 @@ export const LlmModel = Schema.Struct({
   /** Failure detail when `status === "error"`. */
   loadError: Schema.optional(Schema.String),
   /** Owning local engine (display/labelling only; load resolves the engine server-side). */
-  engine: Schema.optional(Schema.Literals(["mlx-serve", "ds4"])),
+  engine: Schema.optional(Schema.Literals(["mlx-serve"])),
 });
 export type LlmModel = typeof LlmModel.Type;
 

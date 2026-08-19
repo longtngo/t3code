@@ -10,7 +10,7 @@ import { getModel, getProvider } from "@t3tools/shared/localLlm";
 
 import { expandHomePath } from "../pathExpansion.ts";
 
-export type ManagedEngineId = "mlx-serve" | "ds4";
+export type ManagedEngineId = "mlx-serve";
 
 /** Catalog provider merged with the user's per-provider overrides. */
 export interface ResolvedProvider {
@@ -21,7 +21,6 @@ export interface ResolvedProvider {
   readonly port: number;
   readonly binaryPath?: string | undefined;
   readonly modelsDir?: string | undefined;
-  readonly cwdFromBinary?: boolean | undefined;
   /** Grouped tokens (e.g. "--reasoning-budget 0"). */
   readonly defaultArgs: readonly string[];
   readonly baseUrl: string;
@@ -32,7 +31,6 @@ export interface ResolvedLaunch {
   readonly engineId: ManagedEngineId;
   readonly executable: string;
   readonly args: readonly string[];
-  readonly cwd?: string | undefined;
   readonly host: string;
   readonly port: number;
   readonly modelPath: string;
@@ -77,22 +75,44 @@ export function resolveProvider(
     port,
     binaryPath: ov.binaryPath ?? cat.binaryPath,
     modelsDir: ov.modelsDir ?? cat.modelsDir,
-    cwdFromBinary: cat.cwdFromBinary,
     defaultArgs: ov.defaultArgs ?? cat.defaultArgs,
     baseUrl: ov.baseUrl ?? `http://${host}:${port}`,
   };
 }
 
-const CTX_FLAG: Record<ManagedEngineId, string> = {
-  "mlx-serve": "--ctx-size",
-  ds4: "--ctx",
-};
+/** The flag mlx-serve takes for the context window; owned by the config's context slider. */
+const CTX_FLAG = "--ctx-size";
+
+/**
+ * The launch args for a config, before the port and model flags are added.
+ *
+ * An explicit `argsOverride` replaces everything: someone who typed a command line means it.
+ * Otherwise the provider's defaults are extended with the model's own, which is how a model
+ * that needs a specific flag to perform (Qwen3.8 and `--mtp-depth 2`) gets it without every
+ * config having to re-type the provider defaults alongside it. A model default is skipped when
+ * its flag is already present, so the provider layer stays the one that wins on conflict.
+ */
+export function launchArgs(
+  config: LocalLlmModelConfig,
+  providerDefaults: readonly string[],
+  modelDefaults: readonly string[] | undefined,
+): string[] {
+  if (config.argsOverride) return splitGroupedArgs(config.argsOverride);
+  const flat = splitGroupedArgs(providerDefaults);
+  for (const grouped of modelDefaults ?? []) {
+    const tokens = splitGroupedArgs([grouped]);
+    const flag = tokens[0];
+    if (flag === undefined || flat.includes(flag)) continue;
+    flat.push(...tokens);
+  }
+  return flat;
+}
 
 /**
  * Resolve a model config into a concrete managed launch, or an error describing
  * why it can't be launched (unknown provider/model, external provider, missing
  * models dir). The context slider owns the engine's ctx flag: when
- * `contextWindow` is set and the override args don't already carry it, it is
+ * `contextWindow` is set and the resolved args don't already carry it, it is
  * appended. Pure — performs no filesystem access.
  */
 export function resolveLaunch(
@@ -120,27 +140,19 @@ export function resolveLaunch(
     ? expandHomePath(config.modelPathOverride)
     : NodePath.join(expandHomePath(prov.modelsDir as string), model.resourceName);
 
-  const flat = splitGroupedArgs(config.argsOverride ?? prov.defaultArgs);
-  const ctxFlag = CTX_FLAG[engineId];
-  if (config.contextWindow != null && !flat.includes(ctxFlag)) {
-    flat.push(ctxFlag, String(config.contextWindow));
+  const flat = launchArgs(config, prov.defaultArgs, model.defaultArgs);
+  if (config.contextWindow != null && !flat.includes(CTX_FLAG)) {
+    flat.push(CTX_FLAG, String(config.contextWindow));
   }
 
   const executable = expandHomePath(prov.binaryPath);
   const portArgs = ["--host", prov.host, "--port", String(port)];
-  const args =
-    engineId === "mlx-serve"
-      ? ["--serve", ...flat, ...portArgs, "--model", modelPath]
-      : [...flat, ...portArgs, "-m", modelPath];
-
-  const cwd =
-    prov.cwdFromBinary && executable.includes("/") ? NodePath.dirname(executable) : undefined;
+  const args = ["--serve", ...flat, ...portArgs, "--model", modelPath];
 
   return {
     engineId,
     executable,
     args,
-    cwd,
     host: prov.host,
     port,
     modelPath,

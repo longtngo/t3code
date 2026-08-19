@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { migrateLocalModels } from "./migration.ts";
 
 describe("migrateLocalModels", () => {
-  it("maps modelsDir/defaultArgs/ramBudget and ds4 enabled->visible", () => {
+  it("maps modelsDir/defaultArgs/ramBudget onto the mlx-serve provider", () => {
     const out = migrateLocalModels({
       modelsDir: "~/llm/models",
       ramBudgetBytes: 42,
@@ -19,8 +19,9 @@ describe("migrateLocalModels", () => {
     expect(out.ramBudgetBytes).toBe(42);
     expect(out.providers["mlx-serve"]!.modelsDir).toBe("~/llm/models");
     expect(out.providers["mlx-serve"]!.defaultArgs).toEqual(["--reasoning-budget 0"]);
-    expect(out.providers.ds4!.visible).toBe(true);
-    expect(out.providers.ds4!.binaryPath).toBe("~/x/ds4-server");
+    // ds4 is retired and absent from the catalog, so its legacy block must not become a
+    // provider override — that would name a provider nothing can resolve.
+    expect(out.providers.ds4).toBeUndefined();
   });
 
   it("seeds a model config from a perModel key matching a catalog resourceName", () => {
@@ -47,7 +48,10 @@ describe("migrateLocalModels", () => {
     expect(out.models.some((m) => m.modelId === "unknown-dir")).toBe(false);
   });
 
-  it("seeds a ds4 model config from ds4.perModel", () => {
+  // A settings file written before ds4 was retired still carries its block. Migrating it would
+  // produce configs pointing at a provider and a model that no longer exist, which surface as
+  // "Unknown local LLM provider" the first time someone clicks load. Dropped instead.
+  it("drops the retired ds4 block rather than migrating it", () => {
     const out = migrateLocalModels({
       modelsDir: "~/llm/models",
       ramBudgetBytes: 0,
@@ -61,9 +65,7 @@ describe("migrateLocalModels", () => {
         perModel: { "ds4flash.gguf": { args: ["--quality"] } },
       },
     } as never);
-    const cfg = out.models.find((m) => m.modelId === "deepseek-v4-flash");
-    expect(cfg).toBeDefined();
-    expect(cfg!.providerId).toBe("ds4");
-    expect(cfg!.argsOverride).toEqual(["--quality"]);
+    expect(out.models).toEqual([]);
+    expect(Object.keys(out.providers)).toEqual(["mlx-serve"]);
   });
 });

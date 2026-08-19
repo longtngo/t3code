@@ -156,7 +156,7 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
             reason: `${launch.engineId} binary not found: ${launch.executable}`,
           });
         }
-        // Fail fast with a friendly message when the model resource (mlx dir / ds4 GGUF) is
+        // Fail fast with a friendly message when the model resource (the mlx dir) is
         // missing, instead of spawning a process that crashes or never becomes reachable.
         if (!NodeFS.existsSync(launch.modelPath)) {
           return yield* new LlmServeError({
@@ -174,7 +174,6 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
               shell: false,
               stdout: "ignore",
               stderr: "ignore",
-              ...(launch.cwd != null ? { cwd: launch.cwd } : {}),
             }),
           )
           .pipe(

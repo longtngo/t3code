@@ -135,7 +135,7 @@ export function buildSample(
       configName: config.name,
       modelId: config.modelId,
       managed: prov?.managed ?? false,
-      ...(prov?.managed ? { engine: config.providerId as "mlx-serve" | "ds4" } : {}),
+      ...(prov?.managed ? { engine: config.providerId as "mlx-serve" } : {}),
       ...(cat?.approxBytes != null ? { sizeBytes: cat.approxBytes } : {}),
       ...(cat?.quant != null ? { quantization: cat.quant } : {}),
       ...(cat?.moe != null ? { isMoe: cat.moe } : {}),

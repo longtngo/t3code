@@ -1,14 +1,14 @@
 // Build-time catalog of local LLM providers, models, and per-provider CLI flags.
 //
 // Curated by hand from the local-LLM providers runbook and the live
-// `mlx-serve --help` / `ds4-server --help`. This is the single source of truth:
-// t3code no longer auto-detects providers or scans the filesystem for models.
+// `mlx-serve --help`. This is the single source of truth: t3code no longer
+// auto-detects providers or scans the filesystem for models.
 export type LocalLlmFormat = "mlx" | "gguf" | "safetensors";
 
 export interface ProviderCatalogEntry {
   readonly id: string;
   readonly name: string;
-  /** Can t3code spawn/kill this server? Only mlx-serve and ds4. */
+  /** Can t3code spawn/kill this server? Only mlx-serve. */
   readonly managed: boolean;
   readonly format: LocalLlmFormat;
   readonly host: string;
@@ -17,8 +17,6 @@ export interface ProviderCatalogEntry {
   readonly binaryPath?: string;
   /** managed: default directory holding model resources. */
   readonly modelsDir?: string;
-  /** managed: spawn cwd = dirname(binary) (ds4 resolves Metal shaders there). */
-  readonly cwdFromBinary?: boolean;
   /** Runbook-recommended launch args, as grouped tokens (e.g. "--reasoning-budget 0"). */
   readonly defaultArgs: readonly string[];
   readonly note: string;
@@ -34,8 +32,12 @@ export interface ModelCatalogEntry {
   readonly moe?: boolean;
   readonly maxContext: number;
   readonly approxBytes: number;
-  /** A GGUF that only ds4-server should serve (excluded from generic gguf servers). */
-  readonly ds4Only?: boolean;
+  /**
+   * Launch flags this model needs to perform, appended to the provider's own (grouped
+   * tokens). For a flag that matters per model rather than per engine — the provider default
+   * cannot carry it without applying it to every model the engine serves.
+   */
+  readonly defaultArgs?: readonly string[];
   readonly note?: string;
 }
 
@@ -53,19 +55,6 @@ export const LOCAL_LLM_PROVIDERS: readonly ProviderCatalogEntry[] = [
     modelsDir: "~/llm/models",
     defaultArgs: ["--reasoning-budget 0"],
     note: "Apple Silicon, primary. One model per process/port. PLD default ON (26.6.8+).",
-  },
-  {
-    id: "ds4",
-    name: "DeepSeek V4 engine (ds4)",
-    managed: true,
-    format: "gguf",
-    host: "127.0.0.1",
-    defaultPort: 8000,
-    binaryPath: "ds4-server",
-    modelsDir: "~/ds4/gguf",
-    cwdFromBinary: true,
-    defaultArgs: [],
-    note: "Offline frontier. Loads one GGUF via -m; cwd pinned to binary dir (Metal shaders).",
   },
   {
     id: "vllm",
@@ -130,6 +119,10 @@ export const LOCAL_LLM_MODELS: readonly ModelCatalogEntry[] = [
     moe: false,
     maxContext: 262144,
     approxBytes: GiB(17),
+    // Measured n=3: +45.7% decode (24.59 -> 35.82 tps) at identical grounding. Pinned rather
+    // than left to the engine because the default depth is bimodal — identical cells produced
+    // 14.13 and 37.71 tps, so the unpinned number is not a number.
+    defaultArgs: ["--mtp-depth 2"],
     note: "Local coding model. Best grounding, but prefill is 901 t/s against the 35B's 5629.",
   },
   {
@@ -153,18 +146,6 @@ export const LOCAL_LLM_MODELS: readonly ModelCatalogEntry[] = [
     maxContext: 131072,
     approxBytes: GiB(10),
     note: "Lightweight, low RAM (~34 d_tps).",
-  },
-  {
-    id: "deepseek-v4-flash",
-    name: "DeepSeek V4 Flash",
-    format: "gguf",
-    resourceName: "ds4flash.gguf",
-    quant: "GGUF",
-    moe: true,
-    maxContext: 163840,
-    approxBytes: GiB(91),
-    ds4Only: true,
-    note: "Offline frontier capability.",
   },
 ];
 
@@ -197,11 +178,9 @@ export function firstFreePort(providerId: string, taken: ReadonlySet<number>): n
   return null;
 }
 
-/** Catalog models a provider can serve: same format; ds4 takes only its dedicated GGUF. */
+/** Catalog models a provider can serve: those in the provider's own format. */
 export function compatibleModels(providerId: string): readonly ModelCatalogEntry[] {
   const p = getProvider(providerId);
   if (!p) return [];
-  return LOCAL_LLM_MODELS.filter(
-    (m) => m.format === p.format && (p.id === "ds4" ? !!m.ds4Only : !m.ds4Only),
-  );
+  return LOCAL_LLM_MODELS.filter((m) => m.format === p.format);
 }

@@ -566,7 +566,7 @@ describe("serverSettings helpers", () => {
       ...DEFAULT_SERVER_SETTINGS,
       localLlm: {
         ramBudgetBytes: 0,
-        providers: { "mlx-serve": { visible: true, modelsDir: "~/m" }, ds4: { visible: false } },
+        providers: { "mlx-serve": { visible: true, modelsDir: "~/m" }, ollama: { visible: false } },
         models: [
           { id: "a", name: "A", providerId: "mlx-serve", modelId: "x", visible: true },
           { id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true },
@@ -577,15 +577,15 @@ describe("serverSettings helpers", () => {
     const next = applyServerSettingsPatch(current, {
       localLlm: {
         ramBudgetBytes: 0,
-        providers: { "mlx-serve": { visible: true } }, // dropped modelsDir + the ds4 override
+        providers: { "mlx-serve": { visible: true } }, // dropped modelsDir + the ollama override
         models: [{ id: "b", name: "B", providerId: "mlx-serve", modelId: "y", visible: true }], // deleted "a"
       },
     } as never).localLlm;
 
-    // A deep merge would keep model "a", leave the array shape corrupt, and keep ds4/modelsDir.
+    // A deep merge would keep model "a", leave the array shape corrupt, and keep ollama/modelsDir.
     expect(Array.isArray(next.models)).toBe(true);
     expect(next.models.map((m) => m.id)).toEqual(["b"]);
     expect(next.providers["mlx-serve"]!.modelsDir).toBeUndefined();
-    expect(next.providers.ds4).toBeUndefined();
+    expect(next.providers.ollama).toBeUndefined();
   });
 });

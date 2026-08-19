@@ -29,39 +29,32 @@ function groupArgs(flat: readonly string[]): string[] {
 /**
  * Migrate the deprecated `localModels` settings into the new `localLlm` shape.
  *
- * - provider-level fields (modelsDir / defaultArgs / ds4.*) become catalog
- *   provider overrides; `ds4.enabled` becomes `ds4` provider visibility.
+ * - provider-level fields (modelsDir / defaultArgs) become catalog provider overrides.
  * - each `perModel` key that matches a catalog model `resourceName` seeds a
  *   model config carrying its arg overrides; non-catalog keys are dropped.
+ *
+ * The legacy shape also carried a `ds4` block. That engine is retired and gone from the
+ * catalog, so its models no longer match anything and its provider override would name a
+ * provider that does not exist — the block is read and dropped rather than migrated.
  */
 export function migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSettings {
   const byResource = new Map(LOCAL_LLM_MODELS.map((m) => [m.resourceName, m]));
   const models: LocalLlmModelConfig[] = [];
   let n = 0;
 
-  const seedFrom = (
-    perModel:
-      | Readonly<Record<string, { readonly args?: readonly string[] | undefined }>>
-      | undefined,
-  ) => {
-    for (const [key, v] of Object.entries(perModel ?? {})) {
-      const m = byResource.get(key);
-      if (!m) continue; // non-catalog keys dropped
-      if (models.some((c) => c.modelId === m.id)) continue; // de-dupe across both maps
-      models.push({
-        id: `mig-${++n}`,
-        name: m.name,
-        providerId: m.ds4Only ? "ds4" : "mlx-serve",
-        modelId: m.id,
-        contextWindow: m.maxContext,
-        visible: true,
-        argsOverride: v.args ? groupArgs(v.args) : undefined,
-      });
-    }
-  };
-
-  seedFrom(legacy.perModel);
-  seedFrom(legacy.ds4?.perModel);
+  for (const [key, v] of Object.entries(legacy.perModel ?? {})) {
+    const m = byResource.get(key);
+    if (!m) continue; // non-catalog keys dropped
+    models.push({
+      id: `mig-${++n}`,
+      name: m.name,
+      providerId: "mlx-serve",
+      modelId: m.id,
+      contextWindow: m.maxContext,
+      visible: true,
+      argsOverride: v.args ? groupArgs(v.args) : undefined,
+    });
+  }
 
   return {
     ramBudgetBytes: legacy.ramBudgetBytes ?? 0,
@@ -70,12 +63,6 @@ export function migrateLocalModels(legacy: LocalModelsSettings): LocalLlmSetting
         visible: true,
         modelsDir: legacy.modelsDir,
         defaultArgs: legacy.defaultArgs ? groupArgs(legacy.defaultArgs) : undefined,
-      },
-      ds4: {
-        visible: legacy.ds4?.enabled ?? false,
-        binaryPath: legacy.ds4?.binaryPath,
-        modelsDir: legacy.ds4?.modelsDir,
-        defaultArgs: legacy.ds4?.defaultArgs ? groupArgs(legacy.ds4.defaultArgs) : undefined,
       },
     } as LocalLlmSettings["providers"],
     models,

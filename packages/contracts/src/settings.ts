@@ -585,7 +585,9 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
  * port range is a fixed internal constant.
  */
 /**
- * ds4 / DeepSeek V4 Flash engine config. Models are single GGUF *files* discovered by
+ * ds4 / DeepSeek V4 Flash engine config. HISTORICAL — the engine is retired and absent from
+ * the model catalog. The schema stays so a settings file written before the retirement still
+ * decodes; `migrateLocalModels` reads the block and drops it. Models are single GGUF *files* discovered by
  * globbing `*.gguf` in `modelsDir`; loading spawns `ds4-server -m <file> --host <loopback>
  * --port <auto>` with `defaultArgs` (plus any per-model `args`). Disabled by default so a
  * vanilla checkout / CI never globs a non-existent dir or spawns anything.
@@ -628,10 +630,9 @@ export const LocalModelsSettings = Schema.Struct({
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /**
-   * Optional second local-model engine: ds4 / DeepSeek V4 Flash (`ds4-server`, an
-   * OpenAI-compatible HTTP server serving a single GGUF *file* via `-m`). Defaults are
-   * generic and `enabled:false` — a shared package must not bake a personal filesystem
-   * layout into a cross-fork default. Enable + point at real paths in the live settings.
+   * HISTORICAL: a second local-model engine, ds4 / DeepSeek V4 Flash. Retired — it is gone
+   * from the model catalog, so `migrateLocalModels` reads this block and drops it. Kept in
+   * the schema only so a settings file written before the retirement still decodes.
    */
   ds4: Ds4Settings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
@@ -663,8 +664,8 @@ export type LocalLlmProviderConfig = typeof LocalLlmProviderConfig.Type;
  * A user-created pairing of a catalog model with a catalog provider. Drives both
  * the sidebar load/unload list and the Providers-tab env-var presets. `port` is a
  * stable per-config port for managed engines (one model per port) so status can be
- * re-probed across restarts; `argsOverride` overrides the provider defaults for
- * this config only; `contextWindow` owns the engine's `--ctx-size`/`--ctx` flag.
+ * re-probed across restarts; `argsOverride` replaces BOTH the provider defaults and the
+ * model's own catalog defaults for this config only; `contextWindow` owns `--ctx-size`.
  */
 export const LocalLlmModelConfig = Schema.Struct({
   id: TrimmedNonEmptyString,

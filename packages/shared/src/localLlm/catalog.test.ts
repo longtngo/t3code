@@ -9,11 +9,18 @@ describe("local llm catalog", () => {
     expect(new Set(mids).size).toBe(mids.length);
   });
 
-  it("marks only mlx-serve and ds4 as managed", () => {
+  it("marks only mlx-serve as managed", () => {
     const managed = LOCAL_LLM_PROVIDERS.filter((p) => p.managed)
       .map((p) => p.id)
       .sort();
-    expect(managed).toEqual(["ds4", "mlx-serve"]);
+    expect(managed).toEqual(["mlx-serve"]);
+  });
+
+  // ds4 and its GGUF were retired and deleted from the machine. Left in the catalog they are
+  // dead dropdown entries that resolve to a binary and a file nobody has.
+  it("no longer carries the retired ds4 engine or its model", () => {
+    expect(LOCAL_LLM_PROVIDERS.some((p) => p.id === "ds4")).toBe(false);
+    expect(getModel("deepseek-v4-flash")).toBeUndefined();
   });
 
   it("every model format has at least one provider", () => {
@@ -22,16 +29,13 @@ describe("local llm catalog", () => {
     }
   });
 
-  it("compatibleModels matches by format and respects ds4Only", () => {
+  it("compatibleModels matches on format", () => {
     const mlx = compatibleModels("mlx-serve").map((m) => m.id);
     expect(mlx).toContain("Qwen3.6-35B-A3B-4bit");
-    expect(mlx).not.toContain("deepseek-v4-flash");
-
-    const ds4 = compatibleModels("ds4").map((m) => m.id);
-    expect(ds4).toEqual(["deepseek-v4-flash"]);
-
-    const llama = compatibleModels("llamacpp").map((m) => m.id);
-    expect(llama).not.toContain("deepseek-v4-flash"); // ds4Only excluded from generic gguf
+    // Every catalog model is mlx today, so assert the filter by its negative too: an unknown
+    // provider yields nothing, and a gguf provider finds no mlx model.
+    expect(compatibleModels("llamacpp")).toEqual([]);
+    expect(compatibleModels("nope")).toEqual([]);
   });
 
   // The catalog is hand-curated and its numbers are what the config UI presents as the model's
@@ -47,10 +51,12 @@ describe("local llm catalog", () => {
     // Dense, unlike its 35B A3B sibling — the config has no expert keys at all.
     expect(qwen38?.moe).toBe(false);
     expect(compatibleModels("mlx-serve").map((m) => m.id)).toContain("Qwen3.8-27B-MLX-Serve-4bit");
+    // The flag it cannot perform without; see resolveLaunch for how it layers on the provider's.
+    expect(qwen38?.defaultArgs).toEqual(["--mtp-depth 2"]);
   });
 
   it("managed model resources resolve to a non-empty resourceName", () => {
     for (const m of LOCAL_LLM_MODELS) expect(m.resourceName.length).toBeGreaterThan(0);
-    expect(getModel("deepseek-v4-flash")?.resourceName).toBe("ds4flash.gguf");
+    expect(getModel("Qwen3.6-35B-A3B-4bit")?.resourceName).toBe("Qwen3.6-35B-A3B-4bit");
   });
 });
