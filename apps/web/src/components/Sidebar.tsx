@@ -48,7 +48,6 @@ import {
   ClockIcon,
   CopyIcon,
   EllipsisIcon,
-  FoldVerticalIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -136,10 +135,6 @@ import {
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
-import {
-  providerAdvertisesCompact,
-  toggleAutoCompactThread,
-} from "@t3tools/client-runtime/context";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   buildBulkTitleRegenerationContextMenuItem,
@@ -745,8 +740,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the descriptor is not loaded. Pinning itself lives in the context menu.
   pinningSupported: boolean;
   isPinned: boolean;
-  /** This thread compacts itself once its context passes the threshold. */
-  isAutoCompactArmed: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
   // sortable bag applied to the card root so the whole card drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
@@ -780,7 +773,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
-  onToggleAutoCompact: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
   onChangeRequestSnapshot: (
@@ -805,7 +797,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onUnsettle,
     onUnsnooze,
     onUnpin,
-    onToggleAutoCompact,
     openPullRequestsInRightPanel,
     renamingTitle,
     thread,
@@ -1093,15 +1084,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onUnpin(threadRef);
     },
     [onUnpin, threadRef],
-  );
-  const handleAutoCompactClick = useCallback(
-    (event: ReactMouseEvent) => {
-      // Both stopped: the row itself navigates, and the mark sits inside it.
-      event.preventDefault();
-      event.stopPropagation();
-      onToggleAutoCompact(threadRef);
-    },
-    [onToggleAutoCompact, threadRef],
   );
   const handleSnoozePreset = useCallback(
     (preset: SnoozePreset) => {
@@ -1465,25 +1447,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   />
                 )
               ) : null}
-              {props.isAutoCompactArmed ? (
-                // The mark is also the off switch, mirroring the pin beside it: a state cue
-                // you cannot act on would send the reader to a menu to undo what they can see.
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label="Turn off auto-compact"
-                        onClick={handleAutoCompactClick}
-                        className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      />
-                    }
-                  >
-                    <FoldVerticalIcon aria-hidden className="size-3 shrink-0" />
-                  </TooltipTrigger>
-                  <TooltipPopup>Auto-compact is on. Click to turn it off.</TooltipPopup>
-                </Tooltip>
-              ) : null}
               {/* The visible state owns this slot's width: status at rest,
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
@@ -1780,8 +1743,6 @@ export default function Sidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
-  const autoCompactThreads = useClientSettings((s) => s.autoCompactThreads);
-  const autoCompactThresholdPercent = useClientSettings((s) => s.autoCompactThresholdPercent);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
@@ -2547,13 +2508,6 @@ export default function Sidebar() {
   );
   const settledThreadKeysRef = useRef(settledThreadKeys);
   settledThreadKeysRef.current = settledThreadKeys;
-  // Read through refs in the menu callback for the same reason as the sets above: the menu
-  // is built at click time, and adding these to the callback deps would rebuild it on every
-  // settings write.
-  const autoCompactThreadsRef = useRef(autoCompactThreads);
-  autoCompactThreadsRef.current = autoCompactThreads;
-  const autoCompactThresholdRef = useRef(autoCompactThresholdPercent);
-  autoCompactThresholdRef.current = autoCompactThresholdPercent;
   const snoozedThreadKeys = useMemo(
     () =>
       new Set(
@@ -2937,24 +2891,6 @@ export default function Sidebar() {
       })();
     },
     [unpinThread],
-  );
-
-  /**
-   * Arms or disarms auto-compact for one thread.
-   *
-   * Shared by the row's mark and the context menu so the two cannot disagree: the mark IS the
-   * off switch, and the menu is where a disarmed thread is armed in the first place.
-   */
-  const toggleAutoCompact = useCallback(
-    (threadRef: ScopedThreadRef) => {
-      updateSettings({
-        autoCompactThreads: toggleAutoCompactThread(
-          autoCompactThreadsRef.current,
-          scopedThreadKey(threadRef),
-        ),
-      });
-    },
-    [updateSettings],
   );
 
   const handlePinnedDragEnd = useCallback(
@@ -3354,12 +3290,6 @@ export default function Sidebar() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
-        // Support is read from the commands the provider advertises, not a driver allowlist,
-        // so the switch appears exactly where `/compact` would actually work.
-        const threadProvider = serverConfigs
-          .get(thread.environmentId)
-          ?.providers.find((entry) => entry.instanceId === thread.modelSelection.instanceId);
-        const supportsAutoCompact = providerAdvertisesCompact(threadProvider?.slashCommands);
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
@@ -3376,14 +3306,11 @@ export default function Sidebar() {
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
-              isAutoCompactArmed: autoCompactThreadsRef.current[threadKey] === true,
-              autoCompactThresholdPercent: autoCompactThresholdRef.current,
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
-                autoCompact: supportsAutoCompact,
               },
               snoozePresets,
             }),
@@ -3439,9 +3366,6 @@ export default function Sidebar() {
             return;
           case "rename":
             startThreadRename(threadRef, thread.title);
-            return;
-          case "auto-compact":
-            toggleAutoCompact(threadRef);
             return;
           case "regenerate-title": {
             if (isRegeneratingTitle) return;
@@ -3564,7 +3488,6 @@ export default function Sidebar() {
       projectCwdByKey,
       serverConfigs,
       startThreadRename,
-      toggleAutoCompact,
       updateThreadMetadata,
       timestampFormat,
     ],
@@ -4018,11 +3941,6 @@ export default function Sidebar() {
                             .threadPinning === true
                         }
                         isPinned={section === "pinned"}
-                        isAutoCompactArmed={
-                          autoCompactThreads[
-                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
-                          ] === true
-                        }
                         sortable={sortable}
                         snoozeWakeLabelText={
                           section === "snoozed" && thread.snoozedUntil != null
@@ -4070,7 +3988,6 @@ export default function Sidebar() {
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}
                         onUnpin={attemptUnpin}
-                        onToggleAutoCompact={toggleAutoCompact}
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
                         onChangeRequestSnapshot={setThreadChangeRequestSnapshot}

@@ -51,20 +51,6 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 );
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
-// Auto-compact threshold. The band is deliberately narrow: below 20% compaction throws away
-// context that is still cheap to keep, and above 90% the provider's own compaction has usually
-// already run, which is the wait this feature exists to avoid.
-export const MIN_AUTO_COMPACT_THRESHOLD_PERCENT = 20;
-export const MAX_AUTO_COMPACT_THRESHOLD_PERCENT = 90;
-export const AutoCompactThresholdPercent = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_AUTO_COMPACT_THRESHOLD_PERCENT,
-    maximum: MAX_AUTO_COMPACT_THRESHOLD_PERCENT,
-  }),
-);
-export type AutoCompactThresholdPercent = typeof AutoCompactThresholdPercent.Type;
-export const DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT: AutoCompactThresholdPercent = 50;
-
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -257,16 +243,6 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  // Percent of the context window at which an armed thread compacts itself. Global, because
-  // the number is a preference about how much headroom to keep, not a property of a thread.
-  autoCompactThresholdPercent: AutoCompactThresholdPercent.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT)),
-  ),
-  // Threads the user has armed, keyed by thread id. Disarming deletes the key rather than
-  // storing `false`, so the record stays the size of the armed set instead of growing forever.
-  autoCompactThreads: Schema.Record(TrimmedNonEmptyString, Schema.Boolean).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -1057,8 +1033,6 @@ export const ClientSettingsPatch = Schema.Struct({
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
-  autoCompactThresholdPercent: Schema.optionalKey(AutoCompactThresholdPercent),
-  autoCompactThreads: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, Schema.Boolean)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

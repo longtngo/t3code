@@ -254,7 +254,6 @@ import {
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
-  readProviderAdvertisesCompact,
   useProject,
   useProjects,
   useThread,
@@ -296,11 +295,6 @@ import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
 } from "./ThreadStatusIndicators";
-import {
-  autoCompactStatusText,
-  deriveLatestContextWindowSnapshot as deriveAutoCompactSnapshot,
-} from "@t3tools/client-runtime/context";
-import { useAutoCompact } from "../hooks/useAutoCompact";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   contestedMembersKey,
@@ -4317,49 +4311,6 @@ function ChatViewContent(props: ChatViewProps) {
   // partition (same shell, same capability gate, same PR auto-settle input)
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
-
-  // Auto-compact: arm per thread, act only when the thread is idle and past the threshold.
-  // Reads its own inputs rather than reusing the composer's, so the sequence does not depend
-  // on the composer being mounted.
-  const autoCompactThreadsSetting = useClientSettings((s) => s.autoCompactThreads);
-  const autoCompactThresholdPercent = useClientSettings((s) => s.autoCompactThresholdPercent);
-  const autoCompactArmed =
-    activeThreadRef !== null &&
-    autoCompactThreadsSetting[scopedThreadKey(activeThreadRef)] === true;
-  const autoCompactUsedPercentage = useMemo(
-    () =>
-      deriveAutoCompactSnapshot(activeThread?.activities ?? EMPTY_ACTIVITIES)?.usedPercentage ??
-      null,
-    [activeThread?.activities],
-  );
-  const autoCompactSupported = useMemo(
-    () =>
-      activeThreadEnvironmentId && activeThreadShell
-        ? readProviderAdvertisesCompact(
-            activeThreadEnvironmentId,
-            activeThreadShell.modelSelection.instanceId,
-          )
-        : false,
-    [activeThreadEnvironmentId, activeThreadShell],
-  );
-  const autoCompact = useAutoCompact({
-    environmentId: activeThreadEnvironmentId ?? null,
-    threadId: activeThreadShell?.id ?? null,
-    armed: autoCompactArmed,
-    thresholdPercent: autoCompactThresholdPercent,
-    usedPercentage: autoCompactUsedPercentage,
-    threadBusy: isWorking || !latestTurnSettled,
-    sessionReady: activeThreadShell?.session?.status === "ready",
-    archived: activeThreadShell?.archivedAt != null,
-    hasPendingApprovals: activeThreadShell?.hasPendingApprovals === true,
-    hasPendingUserInput: activeThreadShell?.hasPendingUserInput === true,
-    hasActionableProposedPlan: activeThreadShell?.hasActionableProposedPlan === true,
-    hasComposerDraft: false,
-    providerSupportsCompact: autoCompactSupported,
-    latestUserMessageAt: activeThreadShell?.latestUserMessageAt ?? null,
-    runtimeMode,
-    interactionMode,
-  });
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
   const activeThreadPr = resolveDisplayedThreadPr({
@@ -4757,44 +4708,6 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
-  /**
-   * One line describing what auto-compact is about to do, or null when the thread is not armed.
-   *
-   * It reads as a tooltip on the composer's auto-compact control rather than as a banner over
-   * the input: an armed thread says so for its whole life, and a permanent row of text above
-   * the composer is a poor trade for a fact the reader only wants on demand.
-   */
-  /**
-   * The sequence has stopped and needs a message from the user before it will act again —
-   * either it spent its round budget or a compaction freed no room. Kept separate from the
-   * status wording because it is the one part the composer control shows without a hover.
-   */
-  const autoCompactPaused =
-    autoCompactArmed &&
-    (autoCompact.cyclesUsed >= autoCompact.maxCycles ||
-      autoCompact.lastHold === "compaction-ineffective");
-  const autoCompactStatus = useMemo<string | null>(() => {
-    if (!autoCompactArmed) return null;
-    return autoCompactStatusText({
-      phase: autoCompact.phase,
-      usedPercentage: autoCompactUsedPercentage,
-      thresholdPercent: autoCompactThresholdPercent,
-      threadBusy: isWorking || !latestTurnSettled,
-      cyclesUsed: autoCompact.cyclesUsed,
-      maxCycles: autoCompact.maxCycles,
-      lastHold: autoCompact.lastHold,
-    });
-  }, [
-    autoCompact.cyclesUsed,
-    autoCompact.lastHold,
-    autoCompact.maxCycles,
-    autoCompact.phase,
-    autoCompactArmed,
-    autoCompactThresholdPercent,
-    autoCompactUsedPercentage,
-    isWorking,
-    latestTurnSettled,
-  ]);
   const backgroundLivenessBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (activeBackgroundLiveness === null || !activeThread) {
       return null;
@@ -7029,8 +6942,6 @@ function ChatViewContent(props: ChatViewProps) {
                             contextStripCollapsed={contextStripCollapsed}
                             contextStripWorktreeActive={contextStripWorktreeActive}
                             onToggleContextStrip={toggleComposerContextStrip}
-                            autoCompactStatus={autoCompactStatus}
-                            autoCompactPaused={autoCompactPaused}
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}

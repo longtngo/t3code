@@ -1,5 +1,4 @@
 import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { toggleAutoCompactThread } from "@t3tools/client-runtime/context";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -28,14 +27,13 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
-  readProviderAdvertisesCompact,
   readThreadShell,
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
-import { getClientSettings, useClientSettings, useUpdateClientSettings } from "./useSettings";
+import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -80,7 +78,6 @@ export function useThreadActionMenu(input: {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const updateClientSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
@@ -124,10 +121,6 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
-          autoCompact: readProviderAdvertisesCompact(
-            threadRef.environmentId,
-            thread.modelSelection.instanceId,
-          ),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -149,9 +142,6 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
-          isAutoCompactArmed:
-            getClientSettings().autoCompactThreads[scopedThreadKey(threadRef)] === true,
-          autoCompactThresholdPercent: getClientSettings().autoCompactThresholdPercent,
           supports,
           snoozePresets,
         });
@@ -227,17 +217,6 @@ export function useThreadActionMenu(input: {
             return;
           case "unpin":
             await reportFailure("Failed to unpin thread", () => unpinThread(threadRef));
-            return;
-          case "auto-compact":
-            // Same toggle as the sidebar row menu, deliberately sharing the settings shape
-            // rather than a second store: every surface renders one list, so they must write
-            // one piece of state.
-            updateClientSettings({
-              autoCompactThreads: toggleAutoCompactThread(
-                getClientSettings().autoCompactThreads,
-                scopedThreadKey(threadRef),
-              ),
-            });
             return;
           case "rename":
             onStartRename();

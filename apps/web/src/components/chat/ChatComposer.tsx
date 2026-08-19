@@ -1,4 +1,3 @@
-import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type {
   ApprovalRequestId,
   EnvironmentId,
@@ -50,7 +49,6 @@ import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
-import { ComposerAutoCompactControl } from "./ComposerAutoCompactControl";
 import { ComposerShortcutsControls } from "./ComposerShortcutsControls";
 import {
   type ComposerImageAttachment,
@@ -239,13 +237,11 @@ import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
-  toggleAutoCompactThread,
-} from "@t3tools/client-runtime/context";
+} from "../../lib/contextWindow";
 import { type AccountUsageView, deriveLatestAccountUsage } from "../../lib/vitals";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { useUpdateClientSettings } from "../../hooks/useSettings";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 
 const runtimeModeConfig: Record<
@@ -410,7 +406,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   environmentId: EnvironmentId;
-  autoCompactArmed: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeAccountUsage: AccountUsageView | null;
   activeThreadProviderDisplayName: string | null;
@@ -447,7 +442,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         accountUsage={props.activeAccountUsage}
         providerDisplayName={props.activeThreadProviderDisplayName}
         modelDisplayName={props.activeThreadModelDisplayName}
-        autoCompactArmed={props.autoCompactArmed}
       />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
@@ -548,14 +542,6 @@ export interface ChatComposerProps {
   contextStripCollapsed: boolean;
   contextStripWorktreeActive: boolean;
   onToggleContextStrip: () => void;
-
-  /**
-   * What auto-compact is about to do on this thread, or null when it is not armed. The
-   * composer owns the armed flag itself (it is a client setting); this is only the wording.
-   */
-  autoCompactStatus: string | null;
-  /** The sequence has stopped and will not resume until the user sends something. */
-  autoCompactPaused: boolean;
 
   // Session phase
   phase: SessionPhase;
@@ -676,8 +662,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     contextStripCollapsed,
     contextStripWorktreeActive,
     onToggleContextStrip,
-    autoCompactStatus,
-    autoCompactPaused,
     phase,
     isConnecting,
     isSendBusy,
@@ -907,23 +891,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
-  // Armed state is a per-thread client setting. The gauge shows it as a centre pip, and the
-  // control above the input is the off switch — the way in stays the thread menu.
-  const autoCompactThreadKey =
-    activeThreadId === null ? null : scopedThreadKey(scopeThreadRef(environmentId, activeThreadId));
-  const autoCompactArmed =
-    autoCompactThreadKey !== null && settings.autoCompactThreads[autoCompactThreadKey] === true;
-  const updateClientSettings = useUpdateClientSettings();
-  const disarmAutoCompact = useCallback(() => {
-    if (autoCompactThreadKey === null) return;
-    updateClientSettings({
-      autoCompactThreads: toggleAutoCompactThread(
-        settings.autoCompactThreads,
-        autoCompactThreadKey,
-      ),
-    });
-  }, [autoCompactThreadKey, settings.autoCompactThreads, updateClientSettings]);
-
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
@@ -3081,7 +3048,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   accountUsage={activeAccountUsage}
                   providerDisplayName={activeThreadProviderDisplayName}
                   modelDisplayName={activeThreadModelDisplayName}
-                  autoCompactArmed={autoCompactArmed}
                 />
                 {phase === "running" ? (
                   // The composer footer is not rendered at all while collapsed,
@@ -3309,14 +3275,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onInsert={handleInsertShortcut}
                     disabled={!canInsertComposerText}
                   />
-                  {/* Right of the shortcuts gear, so the two settings-shaped controls read
-                      as one group and the chips keep the whole left of the row. */}
-                  <ComposerAutoCompactControl
-                    armed={autoCompactArmed}
-                    paused={autoCompactPaused}
-                    status={autoCompactStatus}
-                    onDisarm={disarmAutoCompact}
-                  />
                 </div>
               )}
 
@@ -3504,7 +3462,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   environmentId={environmentId}
-                  autoCompactArmed={autoCompactArmed}
                   activeContextWindow={activeContextWindow}
                   activeAccountUsage={activeAccountUsage}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}

@@ -16,7 +16,6 @@ export type ThreadActionMenuId =
   | `snooze:${string}`
   | "unsnooze"
   | "rename"
-  | "auto-compact"
   | "regenerate-title"
   | "mark-unread"
   | "copy-path"
@@ -32,10 +31,6 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
-  /** Whether this thread compacts itself once its context passes the threshold. */
-  readonly isAutoCompactArmed: boolean;
-  /** Threshold shown in the label, so arming states what it will do. */
-  readonly autoCompactThresholdPercent: number;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
   readonly supports: {
@@ -43,12 +38,6 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
-    /**
-     * The connected provider advertises a `compact` command. Threads on a provider that
-     * cannot compact on request omit the item entirely rather than offering a switch that
-     * would only ever hold.
-     */
-    readonly autoCompact: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
@@ -103,18 +92,6 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "rename", label: "Rename thread" },
-    // Label carries the state, as the pin and settle items do: the menu contract has no
-    // checked flag. Off shows the threshold so arming says what it is about to do.
-    ...(state.supports.autoCompact
-      ? [
-          state.isAutoCompactArmed
-            ? { id: "auto-compact" as const, label: "Turn off auto-compact" }
-            : {
-                id: "auto-compact" as const,
-                label: `Auto-compact at ${state.autoCompactThresholdPercent}%`,
-              },
-        ]
-      : []),
     ...(state.supports.titleRegeneration
       ? [
           {

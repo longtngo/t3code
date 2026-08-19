@@ -22,12 +22,10 @@ import {
   type EnvironmentIdentificationMode,
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
-  MAX_AUTO_COMPACT_THRESHOLD_PERCENT,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_TERMINAL_FONT_SIZE,
-  MIN_AUTO_COMPACT_THRESHOLD_PERCENT,
   MIN_CODE_FONT_SIZE,
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
@@ -508,10 +506,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
-        : []),
-      ...(settings.autoCompactThresholdPercent !==
-      DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent
-        ? ["Compact threads at"]
         : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
@@ -1786,13 +1780,6 @@ function LegacyFeaturesSection() {
 export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const autoCompactRatio =
-    (settings.autoCompactThresholdPercent - MIN_AUTO_COMPACT_THRESHOLD_PERCENT) /
-    (MAX_AUTO_COMPACT_THRESHOLD_PERCENT - MIN_AUTO_COMPACT_THRESHOLD_PERCENT);
-  const autoCompactSliderStyle = {
-    "--settings-slider-progress": `${autoCompactRatio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - autoCompactRatio}rem`,
-  } as CSSProperties;
 
   // Per-device Web Push toggle. Push works only in the deployed web PWA (a service
   // worker + secure context) — never Electron or dev — and needs a server VAPID key.
@@ -2032,57 +2019,6 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
-
-        <SettingsRow
-          {...searchableSetting("auto-compact-threshold")}
-          title="Compact threads at"
-          description="Percent of the context window used before an armed thread compacts itself and carries on. Turn it on per thread from the thread menu."
-          resetAction={
-            settings.autoCompactThresholdPercent !==
-            DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent ? (
-              <SettingResetButton
-                label="auto-compact threshold"
-                onClick={() =>
-                  updateSettings({
-                    autoCompactThresholdPercent:
-                      DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdPercent,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-3 sm:w-52">
-              <output
-                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
-                htmlFor="auto-compact-threshold"
-              >
-                {settings.autoCompactThresholdPercent}%
-              </output>
-              <input
-                aria-label="Compact threads at"
-                className="settings-slider min-w-0 flex-1"
-                id="auto-compact-threshold"
-                max={MAX_AUTO_COMPACT_THRESHOLD_PERCENT}
-                min={MIN_AUTO_COMPACT_THRESHOLD_PERCENT}
-                onChange={(event) => {
-                  const percent = Number(event.currentTarget.value);
-                  if (
-                    Number.isInteger(percent) &&
-                    percent >= MIN_AUTO_COMPACT_THRESHOLD_PERCENT &&
-                    percent <= MAX_AUTO_COMPACT_THRESHOLD_PERCENT
-                  ) {
-                    updateSettings({ autoCompactThresholdPercent: percent });
-                  }
-                }}
-                step={5}
-                style={autoCompactSliderStyle}
-                type="range"
-                value={settings.autoCompactThresholdPercent}
-              />
-            </div>
-          }
-        />
 
         <SettingsRow
           {...searchableSetting("time-format")}

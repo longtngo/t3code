@@ -4,10 +4,7 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  type ContextWindowSnapshot,
-  formatContextWindowTokens,
-} from "@t3tools/client-runtime/context";
+import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { ChevronRightIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
@@ -28,8 +25,6 @@ import {
   GAUGE_RINGS,
   GAUGE_STROKE_WIDTH,
   GAUGE_VIEWBOX,
-  VITALS_ARMED_PIP_FILL,
-  VITALS_ARMED_PIP_RADIUS,
   paceDiffLabel,
   rightHalfArc,
   SEVEN_DAY_MS,
@@ -93,12 +88,7 @@ export interface VitalsGaugeInputs {
  * resources (CPU / GPU / memory); the halves never touch. Arc sweep is fullness,
  * color is severity.
  */
-export function VitalsGaugeIcon(props: {
-  inputs: VitalsGaugeInputs;
-  size?: number;
-  /** Draw the centre pip: this thread compacts itself once it passes the threshold. */
-  autoCompactArmed?: boolean | undefined;
-}) {
+export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: number }) {
   const { context, fiveHour, sevenDay, cpu, gpu, mem } = props.inputs;
   const size = props.size ?? 20;
   return (
@@ -116,14 +106,6 @@ export function VitalsGaugeIcon(props: {
       <HalfArc r={GAUGE_RINGS.middle} arc={gpu} />
       <HalfArc r={GAUGE_RINGS.inner} arc={sevenDay} mirror />
       <HalfArc r={GAUGE_RINGS.inner} arc={mem} />
-      {props.autoCompactArmed ? (
-        <circle
-          cx={GAUGE_VIEWBOX / 2}
-          cy={GAUGE_VIEWBOX / 2}
-          r={VITALS_ARMED_PIP_RADIUS}
-          fill={VITALS_ARMED_PIP_FILL}
-        />
-      ) : null}
     </svg>
   );
 }
@@ -140,7 +122,6 @@ function ContextBlock(props: {
   usage: ContextWindowSnapshot;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
-  autoCompactArmed?: boolean | undefined;
 }) {
   const { usage, modelDisplayName } = props;
   const pct = readingPct(usage.usedPercentage ?? 0);
@@ -188,11 +169,6 @@ function ContextBlock(props: {
           {formatContextWindowTokens(usage.usedTokens)} tokens
         </div>
       )}
-      {props.autoCompactArmed ? (
-        <div className="mt-2 text-pretty text-[11px] font-medium text-muted-foreground">
-          Auto-compact is on for this thread.
-        </div>
-      ) : null}
       {usage.compactsAutomatically ? (
         <div className="mt-2 text-pretty text-[11px] font-medium text-muted-foreground/70">
           {props.providerDisplayName ?? "It"} automatically compacts its context when needed.
@@ -558,7 +534,6 @@ export function VitalsDetail(props: {
   providerDisplayName?: string | null | undefined;
   /** Selected model for this thread, named beside the window size. */
   modelDisplayName?: string | null | undefined;
-  autoCompactArmed?: boolean | undefined;
 }) {
   const { context, accountUsage, host, now, timestampFormat } = props;
   const hasWindows = Boolean(
@@ -574,7 +549,6 @@ export function VitalsDetail(props: {
           usage={context}
           providerDisplayName={props.providerDisplayName}
           modelDisplayName={props.modelDisplayName}
-          autoCompactArmed={props.autoCompactArmed}
         />
       ) : null}
       {hasWindows && accountUsage ? (
@@ -596,7 +570,6 @@ export function VitalsGauge(props: {
   host: VitalsHost;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
-  autoCompactArmed?: boolean | undefined;
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
@@ -634,11 +607,7 @@ export function VitalsGauge(props: {
             aria-label={describeInputs(inputs)}
           >
             <span className="flex size-6 items-center justify-center">
-              <VitalsGaugeIcon
-                inputs={inputs}
-                size={24}
-                autoCompactArmed={props.autoCompactArmed}
-              />
+              <VitalsGaugeIcon inputs={inputs} size={24} />
             </span>
           </button>
         }
@@ -694,7 +663,6 @@ export function VitalsGaugeConnected(props: {
   accountUsage: AccountUsageView | null;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
-  autoCompactArmed?: boolean | undefined;
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
@@ -705,7 +673,6 @@ export function VitalsGaugeConnected(props: {
       host={{ sample, streaming, enabled, onToggle: setEnabled }}
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
-      autoCompactArmed={props.autoCompactArmed}
     />
   );
 }

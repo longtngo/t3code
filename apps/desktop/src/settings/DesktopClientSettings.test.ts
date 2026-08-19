@@ -13,8 +13,6 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
-  autoCompactThresholdPercent: 50,
-  autoCompactThreads: {},
   composerContextStripCollapsed: false,
   composerShortcuts: [],
   browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
