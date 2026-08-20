@@ -4,8 +4,9 @@ import {
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -120,16 +121,44 @@ function T3Wordmark() {
   );
 }
 
-export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+function SidebarUtilityItem({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <SidebarMenuItem className="shrink-0">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+              {icon}
+            </SidebarMenuButton>
+          }
+        />
+        <TooltipPopup side="top">{label}</TooltipPopup>
+      </Tooltip>
+    </SidebarMenuItem>
+  );
+}
+
+export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
+  const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile } = useSidebar();
   const currentFooterPage = useLocation({
     select: (location) =>
-      location.pathname === "/usage"
-        ? "usage"
-        : location.pathname === "/pull-requests"
-          ? "pull-requests"
-          : null,
+      /^\/settings(?:\/|$)/.test(location.pathname)
+        ? "settings"
+        : location.pathname === "/usage"
+          ? "usage"
+          : location.pathname === "/pull-requests"
+            ? "pull-requests"
+            : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -160,8 +189,12 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
+    if (canGoBack) {
+      window.history.back();
+      return;
+    }
     void navigate({ to: "/" });
-  }, [closeMobileSidebar, navigate]);
+  }, [canGoBack, closeMobileSidebar, navigate]);
 
   const [openFooterPanel, setOpenFooterPanel] = useState<SidebarFooterPanel | null>(null);
   const setFooterPanelOpen = useCallback((panel: SidebarFooterPanel, open: boolean) => {
@@ -194,98 +227,74 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [openFooterPanel]);
 
   return (
+    /* This wrapper is the positioning context for the two fork-only panels in the row
+       below. Their trigger items opt out of `relative`, so each panel draws at exactly
+       footer width above the whole row instead of against its own ~40px button — correct
+       on the 16rem desktop sidebar and the wider mobile drawer alike, with no width
+       arithmetic.
+
+       The row wraps: five controls plus the Electron update pill do not always fit 240px,
+       and wrapping to a second line beats overflowing or shrinking the badges past
+       legibility. */
+    <div className="relative" ref={footerRowRef}>
+      <SidebarMenu className="flex-row flex-wrap items-center">
+        {currentFooterPage ? (
+          <SidebarMenuItem className="min-w-0 flex-1">
+            <SidebarMenuButton onClick={handleBackClick}>
+              <ArrowLeftIcon />
+              <span>Back</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          <>
+            <SidebarUtilityItem
+              icon={<SettingsIcon />}
+              label="Settings"
+              onClick={handleSettingsClick}
+            />
+            {pullRequestsSupported ? (
+              <SidebarUtilityItem
+                icon={<GitPullRequestIcon />}
+                label="Pull Requests"
+                onClick={handlePullRequestsClick}
+              />
+            ) : null}
+            <SidebarUtilityItem
+              icon={<ChartNoAxesColumnIcon />}
+              label="Usage"
+              onClick={handleUsageClick}
+            />
+          </>
+        )}
+        {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
+            Usage are navigation, so "Back" rightly replaces them once you are on one of
+            those pages. These two are live status readouts — hiding them there would be a
+            silent capability loss for no gain. `SidebarUpdatePill` below sits outside for
+            the same reason.
+
+            Their open state lives in this component rather than in each panel: both anchor
+            to the wrapper above with identical insets, so two open panels would occupy the
+            same box. */}
+        <SidebarLocalModels
+          isOpen={openFooterPanel === "models"}
+          onOpenChange={(open) => setFooterPanelOpen("models", open)}
+        />
+        <SidebarResourceQueue
+          isOpen={openFooterPanel === "queue"}
+          onOpenChange={(open) => setFooterPanelOpen("queue", open)}
+        />
+        <SidebarUpdatePill />
+      </SidebarMenu>
+    </div>
+  );
+});
+
+export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+  return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      {/* This wrapper is the positioning context for the two fork-only panels
-          in the row below. Their trigger items opt out of `relative`, so each
-          panel draws at exactly footer width above the whole row instead of
-          against its own ~40px button — correct on the 16rem desktop sidebar
-          and the wider mobile drawer alike, with no width arithmetic.
-
-          The row wraps: five controls plus the Electron update pill do not
-          always fit 240px, and wrapping to a second line beats overflowing or
-          shrinking the badges past legibility. */}
-      <div className="relative" ref={footerRowRef}>
-        <SidebarMenu className="flex-row flex-wrap items-center">
-          {currentFooterPage ? (
-            <SidebarMenuItem className="min-w-0 flex-1">
-              <SidebarMenuButton onClick={handleBackClick}>
-                <ArrowLeftIcon />
-                <span>Back</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ) : (
-            <>
-              <SidebarMenuItem className="shrink-0">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        aria-label="Settings"
-                        onClick={handleSettingsClick}
-                        size="icon"
-                      >
-                        <SettingsIcon />
-                      </SidebarMenuButton>
-                    }
-                  />
-                  <TooltipPopup side="top">Settings</TooltipPopup>
-                </Tooltip>
-              </SidebarMenuItem>
-              {pullRequestsSupported ? (
-                <SidebarMenuItem className="shrink-0">
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <SidebarMenuButton
-                          aria-label="Pull Requests"
-                          onClick={handlePullRequestsClick}
-                          size="icon"
-                        >
-                          <GitPullRequestIcon />
-                        </SidebarMenuButton>
-                      }
-                    />
-                    <TooltipPopup side="top">Pull Requests</TooltipPopup>
-                  </Tooltip>
-                </SidebarMenuItem>
-              ) : null}
-              <SidebarMenuItem className="shrink-0">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
-                        <ChartNoAxesColumnIcon />
-                      </SidebarMenuButton>
-                    }
-                  />
-                  <TooltipPopup side="top">Usage</TooltipPopup>
-                </Tooltip>
-              </SidebarMenuItem>
-            </>
-          )}
-          {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull
-              Requests and Usage are navigation, so "Back" rightly replaces them
-              once you are on one of those pages. These two are live status
-              readouts — hiding them there would be a silent capability loss for
-              no gain. `SidebarUpdatePill` below sits outside for the same
-              reason.
-
-              Their open state lives here rather than in each component: both
-              panels anchor to the wrapper above with identical insets, so two
-              open panels would occupy the same box. */}
-          <SidebarLocalModels
-            isOpen={openFooterPanel === "models"}
-            onOpenChange={(open) => setFooterPanelOpen("models", open)}
-          />
-          <SidebarResourceQueue
-            isOpen={openFooterPanel === "queue"}
-            onOpenChange={(open) => setFooterPanelOpen("queue", open)}
-          />
-          <SidebarUpdatePill />
-        </SidebarMenu>
-      </div>
+      <SidebarUtilityMenu />
     </SidebarFooter>
   );
 });

@@ -1133,6 +1133,7 @@ export default function FilePreviewPanel({
                 selectedPath={treeCwd === cwd ? relativePath : null}
                 selectedPathRevealId={revealRequestId}
                 onOpenFile={openFileFromTree}
+                {...(relativePath && !isImage ? { onRefreshSelectedFile: file.refresh } : {})}
               />
             </div>
           </aside>

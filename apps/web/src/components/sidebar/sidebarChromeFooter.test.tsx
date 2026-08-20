@@ -22,6 +22,9 @@ const locationState = vi.hoisted(() => ({ pathname: "/" }));
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => () => {},
+  // Upstream #7153 moved this footer into `SidebarUtilityMenu`, which asks the router
+  // whether Back has anywhere to go before falling back to "/".
+  useCanGoBack: () => false,
   useLocation: ({ select }: { select: (location: { pathname: string }) => unknown }) =>
     select({ pathname: locationState.pathname }),
   Link: () => null,

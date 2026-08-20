@@ -34,6 +34,7 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useClientSettings } from "../hooks/useSettings";
 import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
 import { useTitleRegenerationFailureToasts } from "../hooks/useTitleRegenerationFailureToasts";
+import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -150,6 +151,7 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
         {primaryEnvironmentAuthenticated ? <TitleRegenerationFailureToasts /> : null}
+        {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
