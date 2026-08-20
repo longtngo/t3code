@@ -25,7 +25,7 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-19, against `origin/main`: **302 files added, 243 modified, 3 deleted.**
+As of 2026-08-20, against `origin/main`: **302 files added, 243 modified, 3 deleted.**
 Concentrated in `apps/server` (194) and `apps/web` (162).
 
 ## Invariants a merge must not break
@@ -37,7 +37,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-19: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
+Verified 2026-08-20: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
@@ -67,7 +67,7 @@ bump, re-pin it to the new version.
 Upstream renamed the old `Sidebar.tsx` to `LegacySidebar.tsx` and promoted the v2 content into
 `Sidebar.tsx`, **swapping which one is the default**. Today `Sidebar.tsx` renders by default and
 `LegacySidebar.tsx` is opt-in behind the `legacySidebarEnabled` client setting
-(`useSettings.ts:275`). Before that merge it was the other way round.
+(`useSettings.ts:288`). Before that merge it was the other way round.
 
 Git is rename-blind during a merge, so fork edits to both files were presented **inverted** —
 v1 edits pointed at v2 content, v2 edits stranded in a deleted file. Resolving the conflicts as
@@ -100,6 +100,28 @@ composer vitals gauge. They come back only if upstream _modifies_ one of them: g
 modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
 the former call site recording why.
 
+Two more in-file deletions, each with a comment where the code used to sit, both re-presented as
+ordinary upstream additions by the 17th reconcile:
+
+- `MessagesTimeline.tsx` drops `buildToolCallExpandedBody`, `workEntryRawCommand` and
+  `stopRowToggle`. The fork opens a work-entry's detail in a modal instead of an inline expanded
+  body, so all three would be unused. Upstream still has them and still calls them.
+- `ComposerPendingUserInputPanel.tsx` drops upstream's `Collapsible` wrapper (fork commit
+  `a02c9e405`) for a bounded, kept-mounted options list that survives a collapse with its scroll
+  position and keeps `aria-controls` resolvable. Upstream keeps restyling its own version, so this
+  file conflicts on every reconcile that touches it; the resolution is the fork's.
+
+### 4b. Send-blocked and environment-unavailable are different states
+
+`ComposerPrimaryActions` takes both `isEnvironmentUnavailable` and `isSendBlocked`. Upstream has
+only the first and folds the second into it. They are not the same: unavailable means the send is
+**queued** and the button stays live ("Queue message to send on reconnect"), while blocked (no
+provider, no project) is a hard stop. A merge that takes upstream's combined
+`isEnvironmentUnavailable={environmentUnavailable !== null || noProviderAvailable || projectSelectionRequired}`
+compiles only until the required `isSendBlocked` prop is noticed missing, and would make a merely
+disconnected composer read as permanently dead. Both call sites in `ChatComposer.tsx` need the
+split. The 17th reconcile lost it at both and the line sweep caught it, not the type checker.
+
 ### 5. A mid-turn send queues; it does not steer
 
 Upstream's Claude adapter treats a second `sendTurn` while a turn is running as a **steer** — the
@@ -113,6 +135,19 @@ mid-turn sendTurn"_ asserts a behaviour this adapter no longer has, and fails ag
 (`steeredTurn.turnId !== turn.turnId`). It is deliberately absent, with a comment where it used to
 sit. A reconcile that "restores" it — it reads exactly like an upstream addition inside a
 conflict — reintroduces a guaranteed red test.
+
+### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
+
+Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
+`SettingsSidebarNav`. The fork's two footer-only panels (`SidebarLocalModels`,
+`SidebarResourceQueue`), their shared open state, and the `relative` row wrapper they anchor to
+now live **inside that component**, not in `SidebarChromeFooter`, which is a bare
+`<SidebarUtilityMenu />`. Keeping them out of it would have hidden them on the settings page,
+which is the one surface upstream added.
+
+`sidebarChromeFooter.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
+router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
+with anything about panels. Add the export; the test's subject still applies.
 
 ### 6. Two project entry points in the sidebar, on purpose
 
