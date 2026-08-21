@@ -1599,7 +1599,21 @@ const make = Effect.gen(function* () {
 
     const now = event.payload.createdAt;
     if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+      // Best effort: a provider that cannot be stopped (dead process, closed
+      // transport) must not take this handler down with it, or the session-set
+      // below never runs and the thread stays stuck in its old status.
+      yield* providerService.stopSession({ threadId: thread.id }).pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: thread.id,
+            kind: "provider.session.stop.failed",
+            summary: "Provider session stop failed",
+            detail: Cause.pretty(cause),
+            turnId: null,
+            createdAt: now,
+          }),
+        ),
+      );
     }
 
     yield* setThreadSession({
