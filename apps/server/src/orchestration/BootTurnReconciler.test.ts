@@ -1,13 +1,31 @@
 import {
+  CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   type OrchestrationCommand,
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
+  ProjectId,
+  ProviderInstanceId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { it as itEffect } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
+
+import { ServerConfig } from "../config.ts";
+import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
+import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "./ThreadPlanProgress.ts";
 
 import { ProviderSessionDirectoryPersistenceError } from "../provider/Errors.ts";
 import {
@@ -20,6 +38,7 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
 const NOW = "2026-06-23T12:00:00.000Z";
+const LATER = "2026-06-23T18:30:00.000Z";
 
 const shell = (
   id: string,
@@ -99,6 +118,26 @@ describe("planBootReconciliation", () => {
     for (const command of commands) {
       expect(command.createdAt).toBe(NOW);
     }
+  });
+
+  // Command ids are keyed into a receipt table that is never pruned, and the
+  // engine replays an accepted receipt instead of deciding. A thread-scoped id
+  // therefore reconciles a thread once ever; every later boot silently no-ops.
+  it("mints a fresh command id per boot so a later boot is not deduped away", () => {
+    const first = planBootReconciliation([shell("t1", "running", "turn-1")], NOW);
+    const second = planBootReconciliation([shell("t1", "running", "turn-1")], LATER);
+    expect(second).toHaveLength(first.length);
+    for (const [index, command] of second.entries()) {
+      expect(command.commandId).not.toBe(first[index]?.commandId);
+    }
+  });
+
+  // The other half of the invariant: within one boot the ids must stay stable,
+  // so a genuine retry of the same reconciliation still dedupes.
+  it("keeps command ids stable within a single boot", () => {
+    const a = planBootReconciliation([shell("t1", "running", "turn-1")], NOW);
+    const b = planBootReconciliation([shell("t1", "running", "turn-1")], NOW);
+    expect(b.map((command) => command.commandId)).toEqual(a.map((command) => command.commandId));
   });
 });
 
@@ -198,4 +237,116 @@ describe("reconcileInterruptedTurnsOnBoot binding resilience", () => {
       expect(written.resumeCursor).toBe("cursor-keep");
     }
   });
+});
+
+/**
+ * The stubbed engine above cannot catch a receipt collision — it has no receipt
+ * table, so it can never dedupe and is green by construction. This exercises the
+ * real engine over a real receipt repository across two boots, which is the only
+ * arrangement in which the bug is visible: a thread reconciled on one boot and
+ * orphaned again must still reconcile on the next.
+ */
+const PROJECT = ProjectId.make("project-boot-reconcile");
+const THREAD = ThreadId.make("thread-boot-reconcile");
+const MODEL = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" };
+
+const bootReconcileLayer = Layer.mergeAll(
+  OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provide(OrchestrationProjectionPipelineLive),
+  ),
+  OrchestrationProjectionSnapshotQueryLive,
+).pipe(
+  Layer.provide(ThreadBackgroundLiveness.layer),
+  Layer.provide(ThreadPlanProgress.layer),
+  Layer.provide(OrchestrationEventStoreLive),
+  Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+  Layer.provide(RepositoryIdentityResolver.layer),
+  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-boot-reconcile-test-" })),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+/** Put the thread back into the orphaned state a hard restart leaves behind. */
+const orphan = (turnId: string, at: string): OrchestrationCommand => ({
+  type: "thread.session.set",
+  commandId: CommandId.make(`orphan-${turnId}`),
+  threadId: THREAD,
+  session: {
+    threadId: THREAD,
+    status: "running",
+    providerName: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: "full-access",
+    activeTurnId: TurnId.make(turnId),
+    lastError: null,
+    updatedAt: at,
+  },
+  createdAt: at,
+});
+
+itEffect.layer(bootReconcileLayer)("reconcileInterruptedTurnsOnBoot across boots", (it) => {
+  it.effect("clears the spinner again on a later boot of an already-reconciled thread", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const query = yield* ProjectionSnapshotQuery;
+
+      const currentSession = Effect.gen(function* () {
+        const snapshot = yield* query.getShellSnapshot();
+        return snapshot.threads.find((entry) => entry.id === THREAD)?.session ?? null;
+      });
+
+      /** One boot: plan from the live shell state and dispatch what it produces. */
+      const reconcileAt = (at: string) =>
+        Effect.gen(function* () {
+          const session = yield* currentSession;
+          const commands = planBootReconciliation(
+            [{ id: THREAD, session } as OrchestrationThreadShell],
+            at,
+          );
+          for (const command of commands) {
+            yield* engine.dispatch(command);
+          }
+        });
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-boot-reconcile-project"),
+        projectId: PROJECT,
+        title: "Boot Reconcile",
+        workspaceRoot: "/tmp/project-boot-reconcile",
+        defaultModelSelection: MODEL,
+        createdAt: NOW,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-boot-reconcile-thread"),
+        threadId: THREAD,
+        projectId: PROJECT,
+        title: "Boot Reconcile",
+        modelSelection: MODEL,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: NOW,
+      });
+
+      // Boot 1: orphaned by a restart, then reconciled.
+      yield* engine.dispatch(orphan("turn-1", NOW));
+      expect((yield* currentSession)?.status).toBe("running");
+      yield* reconcileAt(NOW);
+      expect((yield* currentSession)?.status).toBe("stopped");
+      expect((yield* currentSession)?.activeTurnId).toBeNull();
+
+      // Boot 2: the same thread is orphaned again. A thread-scoped command id
+      // already has an accepted receipt by now, so the engine would replay it
+      // and leave the session running.
+      yield* engine.dispatch(orphan("turn-2", LATER));
+      expect((yield* currentSession)?.status).toBe("running");
+      yield* reconcileAt(LATER);
+      expect((yield* currentSession)?.status).toBe("stopped");
+      expect((yield* currentSession)?.activeTurnId).toBeNull();
+    }),
+  );
 });

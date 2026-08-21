@@ -9,8 +9,12 @@
  *
  * At the point this runs (a startup phase before the reactors begin) the
  * freshly-booted process owns ZERO live sessions, so any thread still in a live
- * session status is by definition orphaned from the previous process — no
- * boot-id bookkeeping required. We dispatch the same clean terminal state the
+ * session status is by definition orphaned from the previous process — deciding
+ * *whether* to reconcile needs no boot-id bookkeeping. The command ids do: they
+ * are keyed into a receipt table that is never pruned, and the engine replays an
+ * accepted receipt instead of deciding, so a thread-scoped id would reconcile a
+ * given thread once ever and silently no-op every later boot. Hence the boot
+ * timestamp in each id. We dispatch the same clean terminal state the
  * reactor's stop path produces (`status:"stopped", activeTurnId:null`) plus a
  * turn interrupt for history, synchronously (engine dispatch applies the
  * projection in-transaction) — no reactor, and no attempt to signal a dead
@@ -66,7 +70,7 @@ export function planBootReconciliation(
     }
     commands.push({
       type: "thread.session.set",
-      commandId: CommandId.make(`boot-reconcile:${thread.id}:session`),
+      commandId: CommandId.make(`boot-reconcile:${nowIso}:${thread.id}:session`),
       threadId: thread.id,
       session: {
         threadId: thread.id,
@@ -85,7 +89,7 @@ export function planBootReconciliation(
     if (session.activeTurnId !== null) {
       commands.push({
         type: "thread.turn.interrupt",
-        commandId: CommandId.make(`boot-reconcile:${thread.id}:turn`),
+        commandId: CommandId.make(`boot-reconcile:${nowIso}:${thread.id}:turn`),
         threadId: thread.id,
         turnId: session.activeTurnId,
         createdAt: nowIso,
