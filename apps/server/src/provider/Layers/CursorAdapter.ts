@@ -147,8 +147,10 @@ interface CursorSessionContext {
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   /** Number of sendTurn prompts currently in flight or being prepared.
-   * >0 means a turn is actively running, so a new sendTurn is a steer that
-   * continues it, and only the last remaining prompt settles the turn. */
+   * >0 means a turn is actively running, so a new sendTurn reuses that turn's
+   * id and only the last remaining prompt settles the turn. The agent does not
+   * see the second prompt while the first runs: AcpSessionRuntime serializes
+   * every prompt behind a semaphore. This is turn accounting, not steering. */
   promptsInFlight: number;
   stopped: boolean;
 }
@@ -1007,9 +1009,11 @@ export function makeCursorAdapter(
     const sendTurn: CursorAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        // A sendTurn while a prompt is in flight is a steer: the agent folds
-        // the new prompt into the ongoing work, so the active turn id is
-        // reused instead of opening a new turn.
+        // A sendTurn while a prompt is in flight reuses the active turn id
+        // rather than opening a new turn. The prompt itself is HELD, not folded
+        // into the running work - AcpSessionRuntime.prompt takes a serialization
+        // permit, so the agent receives it only once the running prompt
+        // resolves. Only the turn accounting treats the two as one turn.
         const steeringTurnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
         const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
         // Count this prompt immediately so a superseded in-flight prompt

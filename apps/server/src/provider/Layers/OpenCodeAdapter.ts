@@ -1440,9 +1440,12 @@ export function makeOpenCodeAdapter(
 
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
       const context = yield* ensureSessionContext(sessions, input.threadId);
-      // A sendTurn while a turn is active is a steer: OpenCode queues the
-      // prompt into the busy session and the work continues as one turn, so
-      // the active turn id is reused instead of opening a new turn.
+      // A sendTurn while a turn is active reuses the active turn id rather
+      // than opening a new turn, so the two are accounted as one turn. Unlike
+      // the ACP adapters, nothing here serializes the prompts (see the "no
+      // per-thread Semaphore" notes above), so what the OpenCode server does
+      // with a prompt sent into a busy session is its behaviour, not an
+      // invariant this adapter enforces.
       const steeringTurnId = context.activeTurnId;
       const turnId = steeringTurnId ?? TurnId.make(`opencode-turn-${yield* randomUUIDv4}`);
       const modelSelection =

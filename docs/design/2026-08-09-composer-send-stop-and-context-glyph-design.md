@@ -53,15 +53,20 @@ My original table grepped the other adapters for `pendingTurns` / `drainNextPend
 "queued follow-up". Those are **Claude-private identifiers**; zero hits was guaranteed and proved
 nothing. It was a tautological measurement, and I built the whole provider gate on it.
 
-What the adapters actually do with a concurrent send (verified):
+What the adapters actually do with a concurrent send (re-verified 2026-08-21):
 
-| adapter                        | behaviour                                                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `ClaudeAdapter.ts:4637`        | queues FIFO, drains on completion                                                                             |
-| `CursorAdapter.ts:1004-1008`   | **steers** — folds the prompt into the running turn, reuses the turn id (tested: `CursorAdapter.test.ts:253`) |
-| `GrokAdapter.ts:925-939`       | **steers**, under `withThreadLock`                                                                            |
-| `OpenCodeAdapter.ts:1425-1429` | **steers** — OpenCode queues into the busy session                                                            |
-| `CodexAdapter.ts`              | no `activeTurnId` at all (0 hits); forwards to the session runtime                                            |
+| adapter                   | behaviour                                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ClaudeAdapter.ts:297`    | FIFO queue of turns received while one is running, drained on completion                                                                                                                              |
+| `CursorAdapter.ts:1010`   | **holds** — `AcpSessionRuntime.prompt` takes a serialization permit, so the agent sees the second prompt only after the first resolves; the turn id is reused, which is turn accounting, not steering |
+| `GrokAdapter.ts:116`      | **holds** — same permit, plus this adapter's own per-thread lock                                                                                                                                      |
+| `OpenCodeAdapter.ts:1446` | reuses the turn id; nothing here serializes the prompts, so the concurrent-send behaviour is OpenCode's, not enforced by us                                                                           |
+| `CodexAdapter.ts`         | no `activeTurnId` at all; forwards to the session runtime, which reports a real per-turn `turn/started`                                                                                               |
+
+An earlier version of this table described Cursor, Grok and OpenCode as
+"steering" — folding the new prompt into the running turn. That is wrong and
+cost a later investigation most of a session: the prompt is held, and only the
+turn id is shared.
 
 Every provider has a defined concurrent-send path. There is nothing to protect against.
 

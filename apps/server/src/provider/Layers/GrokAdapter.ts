@@ -113,8 +113,11 @@ interface GrokSessionContext {
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
   interruptedTurnIds: Set<TurnId>;
   /** Number of sendTurn prompts currently in flight or being prepared.
-   * >0 means a turn is actively running, so a new sendTurn is a steer that
-   * continues it, and only the last remaining prompt settles the turn. */
+   * >0 means a turn is actively running, so a new sendTurn reuses that turn's
+   * id and only the last remaining prompt settles the turn. The agent does not
+   * see the second prompt while the first runs - it is held by this adapter's
+   * per-thread lock and again by AcpSessionRuntime's permit. Turn accounting,
+   * not steering. */
   promptsInFlight: number;
   currentModelId: string | undefined;
   stopped: boolean;
@@ -928,9 +931,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           input.threadId,
           Effect.gen(function* () {
             const ctx = yield* requireSession(input.threadId);
-            // A sendTurn while a prompt is in flight is a steer: the agent
-            // folds the new prompt into the ongoing work, so the active turn
-            // id is reused instead of opening a new turn.
+            // A sendTurn while a prompt is in flight reuses the active turn id
+            // rather than opening a new turn. The prompt is HELD, not folded
+            // into the running work: this thread lock plus AcpSessionRuntime's
+            // permit mean the agent sees it only once the first one resolves.
             const steeringTurnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
             const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
             // Count this prompt immediately so a superseded in-flight prompt
