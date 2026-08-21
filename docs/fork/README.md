@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-20, against `origin/main`: **302 files added, 243 modified, 3 deleted.**
-Concentrated in `apps/server` (194) and `apps/web` (162).
+As of 2026-08-21, against `origin/main`: **302 files added, 244 modified, 4 deleted.**
+Concentrated in `apps/server` (196) and `apps/web` (162).
 
 ## Invariants a merge must not break
 
@@ -37,7 +37,7 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-20: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
+Verified 2026-08-21: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
