@@ -152,6 +152,9 @@ interface CursorSessionContext {
    * see the second prompt while the first runs: AcpSessionRuntime serializes
    * every prompt behind a semaphore. This is turn accounting, not steering. */
   promptsInFlight: number;
+  /** Bumped by every interrupt. A turn whose preparation started before the
+   * bump has been cancelled and must not reach the agent. */
+  cancelGeneration: number;
   stopped: boolean;
 }
 
@@ -862,6 +865,7 @@ export function makeCursorAdapter(
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
             promptsInFlight: 0,
+            cancelGeneration: 0,
             stopped: false,
           };
 
@@ -1009,6 +1013,10 @@ export function makeCursorAdapter(
     const sendTurn: CursorAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        // Captured before any preparation work: applying session configuration
+        // and reading attachments below both issue real I/O, and a Stop landing
+        // in that window must not let this prompt through.
+        const cancelGenerationAtRequest = ctx.cancelGeneration;
         // A sendTurn while a prompt is in flight reuses the active turn id
         // rather than opening a new turn. The prompt itself is HELD, not folded
         // into the running work - AcpSessionRuntime.prompt takes a serialization
@@ -1105,15 +1113,21 @@ export function makeCursorAdapter(
             });
           }
 
-          const result = yield* ctx.acp
-            .prompt({
-              prompt: promptParts,
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
-              ),
-            );
+          // Substituting the response the agent would have produced, rather
+          // than returning early, keeps the turn record, session update,
+          // completion gate and in-flight decrement below running unchanged.
+          const result =
+            ctx.cancelGeneration !== cancelGenerationAtRequest
+              ? { stopReason: "cancelled" as const }
+              : yield* ctx.acp
+                  .prompt({
+                    prompt: promptParts,
+                  })
+                  .pipe(
+                    Effect.mapError((error) =>
+                      mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                    ),
+                  );
 
           const turnRecord = ctx.turns.find((turn) => turn.id === turnId);
           if (turnRecord) {
@@ -1162,6 +1176,7 @@ export function makeCursorAdapter(
     const interruptTurn: CursorAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        ctx.cancelGeneration += 1;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         yield* Effect.ignore(

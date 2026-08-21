@@ -148,24 +148,32 @@ const makeResolveCursorSettings = Effect.gen(function* () {
   );
 });
 
-const cursorAdapterTestLayer = it.layer(
-  Layer.effect(
-    CursorAdapter,
-    Effect.gen(function* () {
-      const cursorConfig = decodeCursorSettings({});
-      const resolveSettings = yield* makeResolveCursorSettings;
-      return yield* makeCursorAdapter(cursorConfig, { resolveSettings });
+const cursorAdapterLayer = Layer.effect(
+  CursorAdapter,
+  Effect.gen(function* () {
+    const cursorConfig = decodeCursorSettings({});
+    const resolveSettings = yield* makeResolveCursorSettings;
+    return yield* makeCursorAdapter(cursorConfig, { resolveSettings });
+  }),
+).pipe(
+  Layer.provideMerge(ServerSettingsService.layerTest()),
+  Layer.provideMerge(
+    ServerConfig.layerTest(process.cwd(), {
+      prefix: "t3code-cursor-adapter-test-",
     }),
-  ).pipe(
-    Layer.provideMerge(ServerSettingsService.layerTest()),
-    Layer.provideMerge(
-      ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3code-cursor-adapter-test-",
-      }),
-    ),
-    Layer.provideMerge(NodeServices.layer),
   ),
+  Layer.provideMerge(NodeServices.layer),
 );
+
+const cursorAdapterTestLayer = it.layer(cursorAdapterLayer);
+
+// A second block on the LIVE clock. Most tests here drive the mock agent from
+// in-process state and are happy under the TestClock, but a test that waits on
+// the agent's own stdio needs real time to pass - the child cannot see virtual
+// time. Kept separate so the TestClock tests above are untouched.
+const cursorAdapterLiveClockTestLayer = it.layer(cursorAdapterLayer, {
+  excludeTestServices: true,
+});
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
@@ -329,6 +337,10 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
+  // A Stop can land while sendTurn is still PREPARING: applying the requested
+  // session configuration issues real I/O before the prompt goes out. Without
+  // a guard the prompt is sent afterwards, so the message the user cancelled
+  // reaches the agent anyway and a turn they stopped starts running.
   it.effect("closes the ACP child process when a session stops", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
@@ -1529,5 +1541,85 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       // they wait on virtual time that never advances, and a regression would
       // hang until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
+  );
+});
+
+cursorAdapterLiveClockTestLayer("CursorAdapterLive (live clock)", (it) => {
+  it.effect("does not send a turn that was cancelled while it was still preparing", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-cancel-preparing-thread");
+
+      const logDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-cancel-prepare-")),
+      );
+      const requestLogPath = NodePath.join(logDir, "requests.log");
+      // Holds session/set_config_option open, which is the window the interrupt
+      // below has to land in.
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({
+          T3_ACP_SET_CONFIG_OPTION_DELAY_MS: "800",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const readLog = Effect.promise(() =>
+        NodeFSP.readFile(requestLogPath, "utf8").catch(() => ""),
+      );
+      const countRequests = (method: string) =>
+        Effect.map(readLog, (log) => log.split(method).length - 1);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      const configRequestsAfterStart = yield* countRequests("session/set_config_option");
+
+      // "composer-2" is a value the mock advertises for its `model` config
+      // option and differs from the session's "default". Both halves matter:
+      // AcpSessionRuntime skips the RPC entirely when the cached value already
+      // matches, and a model id it does not advertise never reaches this path.
+      const turnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "cancel me before this is sent",
+          attachments: [],
+          modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" },
+        })
+        .pipe(Effect.forkChild);
+
+      // Wait until the agent has RECEIVED the turn's set_config_option. The log
+      // is written at the raw incoming stage, before the handler sleeps, so
+      // this proves sendTurn is past its cancel-generation capture and has not
+      // yet prompted.
+      yield* Effect.gen(function* () {
+        for (let attempt = 0; attempt < 1500; attempt += 1) {
+          if ((yield* countRequests("session/set_config_option")) > configRequestsAfterStart) {
+            return;
+          }
+          yield* Effect.sleep("10 millis");
+        }
+        throw new Error("Timed out waiting for the turn's session/set_config_option.");
+      });
+
+      yield* adapter.interruptTurn(threadId);
+      yield* Fiber.join(turnFiber);
+
+      const log = yield* readLog;
+      // Not `toBe(0)` on a bare count: on failure the log itself is the
+      // evidence, and vitest swallows console output from this file.
+      assert.equal(
+        log.split("session/prompt").length - 1,
+        0,
+        `session/prompt must not reach the agent. Requests seen:\n${log}`,
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
   );
 });

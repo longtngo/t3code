@@ -37,6 +37,9 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
+// Holds session/set_config_option open so a test can land an interrupt while an
+// adapter is still preparing a turn, before it reaches session/prompt.
+const setConfigOptionDelayMs = Number(process.env.T3_ACP_SET_CONFIG_OPTION_DELAY_MS ?? "0");
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
@@ -402,6 +405,9 @@ const program = Effect.gen(function* () {
         return yield* Effect.sync(() => {
           process.exit(7);
         });
+      }
+      if (setConfigOptionDelayMs > 0) {
+        yield* Effect.sleep(`${setConfigOptionDelayMs} millis`);
       }
       if (failSetConfigOption) {
         return yield* AcpError.AcpRequestError.invalidParams(
