@@ -31,7 +31,7 @@ import {
   changeRequestAutoSettles,
   effectiveSettled,
   effectiveSnoozed,
-  hasWaitingUserMessage,
+  waitingUserMessageIds as waitingUserMessageIdsOf,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -393,6 +393,9 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+
+/** Stable identity so the memo below does not churn on threads with none. */
+const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -4402,14 +4405,13 @@ function ChatViewContent(props: ChatViewProps) {
    * outbox would otherwise take the label from the one the provider is
    * actually holding.
    */
-  const waitingUserMessageId = useMemo(() => {
-    if (activeThreadShell === null || !hasWaitingUserMessage(activeThreadShell)) return null;
-    for (let index = displayServerMessages.length - 1; index >= 0; index -= 1) {
-      const message = displayServerMessages[index];
-      if (message?.role === "user") return message.id;
-    }
-    return null;
-  }, [activeThreadShell, displayServerMessages]);
+  const waitingUserMessageIds = useMemo(
+    () =>
+      activeThreadShell === null
+        ? EMPTY_WAITING_MESSAGE_IDS
+        : waitingUserMessageIdsOf(activeThreadShell, displayServerMessages),
+    [activeThreadShell, displayServerMessages],
+  );
   const activeComposerTasksProgress =
     activeLatestTurn !== null && !latestTurnSettled
       ? (activeThreadShell?.planProgress ?? null)
@@ -6967,7 +6969,7 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                waitingUserMessageId={waitingUserMessageId}
+                waitingUserMessageIds={waitingUserMessageIds}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}

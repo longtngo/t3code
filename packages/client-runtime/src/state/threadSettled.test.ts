@@ -12,6 +12,7 @@ import {
   changeRequestAutoSettles,
   effectiveSettled,
   hasQueuedTurnStart,
+  waitingUserMessageIds,
   hasWaitingUserMessage,
   threadLastActivityAt,
   type ChangeRequestStateLike,
@@ -703,5 +704,80 @@ describe("hasWaitingUserMessage", () => {
 
   it("ignores an unparseable message timestamp", () => {
     expect(hasWaitingUserMessage(midTurnShell({ latestUserMessageAt: "not-a-date" }))).toBe(false);
+  });
+});
+
+describe("waitingUserMessageIds", () => {
+  const TURN_AT = "2026-04-09T12:00:00.000Z";
+  const ACTIVE_TURN = TurnId.make("turn-1");
+
+  /** A thread whose turn-1 is genuinely running, as while it holds messages. */
+  function runningShell(overrides?: { readonly providerName?: string | null }) {
+    const base = makeShell({ activityAt: TURN_AT, sessionStatus: "running" });
+    return {
+      ...base,
+      latestUserMessageAt: TURN_AT,
+      latestTurn: base.latestTurn === null ? null : { ...base.latestTurn, turnId: ACTIVE_TURN },
+      session:
+        base.session === null
+          ? null
+          : {
+              ...base.session,
+              activeTurnId: ACTIVE_TURN,
+              // makeShell defaults to "Codex"; the live projection only ever
+              // stores lowercase provider names (claudeAgent/codex/cursor).
+              providerName: overrides?.providerName ?? "claudeAgent",
+            },
+    } as unknown as Parameters<typeof waitingUserMessageIds>[0];
+  }
+
+  const message = (id: string, role: string, createdAt: string) => ({ id, role, createdAt });
+
+  it("labels every message held behind the running turn, not only the newest", () => {
+    const ids = waitingUserMessageIds(runningShell(), [
+      message("m1", "user", TURN_AT),
+      message("m2", "user", "2026-04-09T12:00:30.000Z"),
+      message("m3", "user", "2026-04-09T12:01:00.000Z"),
+    ]);
+    expect([...ids].sort()).toEqual(["m2", "m3"]);
+  });
+
+  it("excludes the message that started the turn", () => {
+    const ids = waitingUserMessageIds(runningShell(), [message("m1", "user", TURN_AT)]);
+    expect(ids.size).toBe(0);
+  });
+
+  it("ignores assistant messages sent during the turn", () => {
+    const ids = waitingUserMessageIds(runningShell(), [
+      message("a1", "assistant", "2026-04-09T12:00:30.000Z"),
+      message("m2", "user", "2026-04-09T12:00:30.000Z"),
+    ]);
+    expect([...ids]).toEqual(["m2"]);
+  });
+
+  it("labels nothing on a provider that reuses the running turn", () => {
+    const ids = waitingUserMessageIds(runningShell({ providerName: "cursor" }), [
+      message("m2", "user", "2026-04-09T12:00:30.000Z"),
+    ]);
+    expect(ids.size).toBe(0);
+  });
+
+  it("labels nothing when no turn is in flight", () => {
+    const base = makeShell({ activityAt: TURN_AT, sessionStatus: "running" });
+    const idle = {
+      ...base,
+      session: base.session === null ? null : { ...base.session, activeTurnId: null },
+    } as unknown as Parameters<typeof waitingUserMessageIds>[0];
+    expect(
+      waitingUserMessageIds(idle, [message("m2", "user", "2026-04-09T12:00:30.000Z")]).size,
+    ).toBe(0);
+  });
+
+  it("skips a message with an unparseable timestamp", () => {
+    const ids = waitingUserMessageIds(runningShell(), [
+      message("bad", "user", "not-a-date"),
+      message("m2", "user", "2026-04-09T12:00:30.000Z"),
+    ]);
+    expect([...ids]).toEqual(["m2"]);
   });
 });

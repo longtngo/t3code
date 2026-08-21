@@ -1167,7 +1167,7 @@ describe("waiting user message", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        waitingUserMessageId={MessageId.make("message-1")}
+        waitingUserMessageIds={new Set([MessageId.make("message-1")])}
         timelineEntries={[buildUserTimelineEntry("also check the mobile build")]}
       />,
     );
@@ -1186,11 +1186,31 @@ describe("waiting user message", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        waitingUserMessageId={MessageId.make("message-1")}
+        waitingUserMessageIds={new Set([MessageId.make("message-1")])}
         timelineEntries={[first, second]}
       />,
     );
     expect(markup.split(WAITING_LABEL).length - 1).toBe(1);
+  });
+
+  it("labels every held message when a turn is holding more than one", () => {
+    // The whole point of the set: two messages sent during one turn are both
+    // waiting, and labelling only the newest leaves the earlier one looking
+    // delivered.
+    const first = buildUserTimelineEntry("first");
+    const second = {
+      ...buildUserTimelineEntry("second"),
+      id: "entry-2",
+      message: { ...buildUserTimelineEntry("second").message, id: MessageId.make("message-2") },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        waitingUserMessageIds={new Set([MessageId.make("message-1"), MessageId.make("message-2")])}
+        timelineEntries={[first, second]}
+      />,
+    );
+    expect(markup.split(WAITING_LABEL).length - 1).toBe(2);
   });
 
   it("does not label a message that is not the held one", () => {
@@ -1199,7 +1219,7 @@ describe("waiting user message", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        waitingUserMessageId={MessageId.make("some-other-message")}
+        waitingUserMessageIds={new Set([MessageId.make("some-other-message")])}
         timelineEntries={[buildUserTimelineEntry("also check the mobile build")]}
       />,
     );

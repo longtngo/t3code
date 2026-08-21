@@ -104,6 +104,8 @@ import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 
+const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
+
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   includeOrderedLists: Platform.OS === "android",
 } as const;
@@ -155,7 +157,7 @@ export interface ThreadFeedProps {
    * The user message the provider is holding behind the running turn. Every
    * provider already holds a mid-turn send; none of them says so.
    */
-  readonly waitingUserMessageId?: MessageId | null;
+  readonly waitingUserMessageIds?: ReadonlySet<string>;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
@@ -804,7 +806,7 @@ function renderFeedEntry(
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
-    readonly waitingUserMessageId: MessageId | null;
+    readonly waitingUserMessageIds: ReadonlySet<string>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
@@ -923,7 +925,7 @@ function renderFeedEntry(
               );
             })}
           </View>
-          {props.waitingUserMessageId === message.id ? (
+          {props.waitingUserMessageIds.has(message.id) ? (
             <Text className="mt-1 font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
               Waiting for the current turn to finish
             </Text>
@@ -1809,7 +1811,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         expandedWorkRows,
         terminalAssistantMessageIds,
         unsettledTurnId,
-        waitingUserMessageId: props.waitingUserMessageId ?? null,
+        waitingUserMessageIds: props.waitingUserMessageIds ?? EMPTY_WAITING_MESSAGE_IDS,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
@@ -1829,7 +1831,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       terminalAssistantMessageIds,
       unsettledTurnId,
-      props.waitingUserMessageId,
+      props.waitingUserMessageIds,
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,

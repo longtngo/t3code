@@ -167,32 +167,82 @@ const PROVIDERS_THAT_OPEN_A_HELD_TURN: ReadonlySet<string> = new Set(["claudeAge
  * demonstrably running and its completion is what clears this — real holds run
  * to a p90 of 36 minutes, far past any grace window, and are still waiting.
  */
-export function hasWaitingUserMessage(
-  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn" | "session">,
-): boolean {
-  if (shell.latestUserMessageAt == null) return false;
+export type WaitingMessageShell = Pick<
+  OrchestrationThreadShell,
+  "latestUserMessageAt" | "latestTurn" | "session"
+>;
+
+/** The slice of a message these rules need. */
+export interface WaitingMessageLike {
+  readonly id: string;
+  readonly role: string;
+  readonly createdAt: string;
+}
+
+/**
+ * The instant the running turn last advanced. Any user message strictly newer
+ * than this is being held behind that turn. `null` when nothing can be held —
+ * no turn in flight, a provider that never opens a distinct turn, or a
+ * `latestTurn` that has drifted off the active one.
+ *
+ * All-null turn timestamps yield -Infinity, so every message counts as newer,
+ * and an unparseable one yields NaN, so none do. Both match the per-candidate
+ * comparison this replaced.
+ */
+function runningTurnAdvancedAtMs(shell: WaitingMessageShell): number | null {
   const session = shell.session;
   // A turn must actually be in flight: without an active turn the message is
   // either being worked on or is hasQueuedTurnStart's case, not this one.
-  if (session == null || session.activeTurnId == null) return false;
-  if (session.status !== "running" && session.status !== "starting") return false;
+  if (session == null || session.activeTurnId == null) return null;
+  if (session.status !== "running" && session.status !== "starting") return null;
   if (session.providerName == null || !PROVIDERS_THAT_OPEN_A_HELD_TURN.has(session.providerName)) {
-    return false;
+    return null;
   }
-  const messageAt = Date.parse(shell.latestUserMessageAt);
-  if (Number.isNaN(messageAt)) return false;
   const turn = shell.latestTurn;
   // `latestTurn` and the session's active turn can genuinely diverge: a
   // `thread.turn-diff-completed` for the PREVIOUS turn lands asynchronously
   // behind a git diff and rewrites `latestTurnId` unconditionally, regressing
   // it to that older, completed turn. Comparing against it would then label the
   // message the agent is working on right now as "waiting", for the whole turn.
-  if (turn === null || turn.turnId !== session.activeTurnId) return false;
-  // Strictly newer than every timestamp on the running turn — the message that
-  // STARTED that turn shares its requestedAt and must not flag itself.
-  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
-    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
+  if (turn === null || turn.turnId !== session.activeTurnId) return null;
+  // The message that STARTED the turn shares its requestedAt, so the comparison
+  // against this is strict and that message never flags itself.
+  return Math.max(
+    ...[turn.requestedAt, turn.startedAt, turn.completedAt].map((candidate) =>
+      candidate == null ? Number.NEGATIVE_INFINITY : Date.parse(candidate),
+    ),
   );
+}
+
+export function hasWaitingUserMessage(shell: WaitingMessageShell): boolean {
+  if (shell.latestUserMessageAt == null) return false;
+  const advancedAt = runningTurnAdvancedAtMs(shell);
+  if (advancedAt === null) return false;
+  const messageAt = Date.parse(shell.latestUserMessageAt);
+  if (Number.isNaN(messageAt)) return false;
+  return messageAt > advancedAt;
+}
+
+const NO_WAITING_MESSAGES: ReadonlySet<string> = new Set();
+
+/**
+ * Every user message the running turn is holding, not just the newest — two
+ * messages sent during one turn are both waiting, and labelling only the last
+ * leaves the earlier one looking delivered.
+ */
+export function waitingUserMessageIds(
+  shell: WaitingMessageShell,
+  messages: ReadonlyArray<WaitingMessageLike>,
+): ReadonlySet<string> {
+  const advancedAt = runningTurnAdvancedAtMs(shell);
+  if (advancedAt === null) return NO_WAITING_MESSAGES;
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "user") continue;
+    const createdAt = Date.parse(message.createdAt);
+    if (!Number.isNaN(createdAt) && createdAt > advancedAt) ids.add(message.id);
+  }
+  return ids.size === 0 ? NO_WAITING_MESSAGES : ids;
 }
 
 /**

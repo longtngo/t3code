@@ -1,4 +1,6 @@
-import { hasWaitingUserMessage } from "@t3tools/client-runtime/state/thread-settled";
+import { waitingUserMessageIds as waitingUserMessageIdsOf } from "@t3tools/client-runtime/state/thread-settled";
+
+const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo } from "react";
 
@@ -100,15 +102,13 @@ export function useThreadComposerState() {
    * `latestUserMessageAt` lives only there, not on the thread detail the feed
    * is built from.
    */
-  const waitingUserMessageId = useMemo(() => {
-    if (selectedThreadShell === null || !hasWaitingUserMessage(selectedThreadShell)) return null;
-    const messages = selectedThreadDetail?.messages ?? [];
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message?.role === "user") return message.id;
-    }
-    return null;
-  }, [selectedThreadDetail, selectedThreadShell]);
+  const waitingUserMessageIds = useMemo(
+    () =>
+      selectedThreadShell === null
+        ? EMPTY_WAITING_MESSAGE_IDS
+        : waitingUserMessageIdsOf(selectedThreadShell, selectedThreadDetail?.messages ?? []),
+    [selectedThreadDetail, selectedThreadShell],
+  );
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -312,7 +312,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
-    waitingUserMessageId,
+    waitingUserMessageIds,
     selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,

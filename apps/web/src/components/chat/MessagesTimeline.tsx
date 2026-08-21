@@ -12,6 +12,9 @@ import {
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 
+/** Stable identity so the default does not remount rows. */
+const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
+
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
@@ -147,7 +150,7 @@ interface TimelineRowSharedState {
    * provider already holds a mid-turn send and runs it afterwards; without
    * this the bubble is indistinguishable from one being worked on.
    */
-  waitingUserMessageId: MessageId | null;
+  waitingUserMessageIds: ReadonlySet<string>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -226,7 +229,7 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   /** Display-only, defaulted like the other optional presentation props. */
-  waitingUserMessageId?: MessageId | null;
+  waitingUserMessageIds?: ReadonlySet<string>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -272,7 +275,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
-  waitingUserMessageId = null,
+  waitingUserMessageIds = EMPTY_WAITING_MESSAGE_IDS,
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
@@ -521,7 +524,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
-      waitingUserMessageId,
+      waitingUserMessageIds,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -538,7 +541,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
-      waitingUserMessageId,
+      waitingUserMessageIds,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1072,7 +1075,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {/* Always visible, unlike the hover row below: a message that looks
           delivered but is actually waiting is the whole defect. Static — no
           spinner, no pulse, per the repo's no-repainting-animation rule. */}
-      {ctx.waitingUserMessageId === row.message.id && (
+      {ctx.waitingUserMessageIds.has(row.message.id) && (
         <p className="flex max-w-[80%] items-center gap-1.5 pe-1 text-muted-foreground text-xs">
           <TimerIcon className="size-3 shrink-0" aria-hidden="true" />
           Waiting for the current turn to finish
