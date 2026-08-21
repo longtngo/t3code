@@ -63,7 +63,7 @@ describe("projectThreadAwareness", () => {
         session: {
           threadId: "thread-1" as ThreadId,
           status: "running",
-          providerName: "Codex",
+          providerName: "codex",
           runtimeMode: "full-access",
           activeTurnId: "turn-1" as TurnId,
           lastError: null,
@@ -84,7 +84,7 @@ describe("projectThreadAwareness", () => {
         session: {
           threadId: "thread-1" as ThreadId,
           status: "running",
-          providerName: "Codex",
+          providerName: "codex",
           runtimeMode: "full-access",
           activeTurnId: "turn-1" as TurnId,
           lastError: null,
@@ -101,6 +101,62 @@ describe("projectThreadAwareness", () => {
       deepLink: "/threads/env-1/thread-1",
     });
   });
+
+  // `session.providerName` carries the driver kind the server stores
+  // (`claudeAgent`, `codex`), never a label - and this detail line is read on a
+  // phone, so it has to be spelled the way a person would.
+  it.each([
+    ["claudeAgent", "Claude is active."],
+    ["codex", "Codex is active."],
+    ["cursor", "Cursor is active."],
+    ["grok", "Grok is active."],
+    ["opencode", "OpenCode is active."],
+  ])("labels a running %s session with its display name", (providerName, expected) => {
+    const state = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({
+        session: {
+          threadId: "thread-1" as ThreadId,
+          status: "running",
+          providerName,
+          runtimeMode: "full-access",
+          activeTurnId: "turn-1" as TurnId,
+          lastError: null,
+          updatedAt: NOW,
+        },
+      }),
+    });
+
+    expect(state?.detail).toBe(expected);
+  });
+
+  // Driver kinds are an open set and the field itself is only a non-empty
+  // string, so two kinds of name arrive without a display name: a valid
+  // third-party slug, and a value that is not a slug at all. Both keep what
+  // they came with rather than dropping the detail line.
+  it.each([["acme-agent"], ["Legacy Agent 9"]])(
+    "keeps %s as-is when it has no display name",
+    (providerName) => {
+      const state = projectThreadAwareness({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: thread({
+          session: {
+            threadId: "thread-1" as ThreadId,
+            status: "running",
+            providerName,
+            runtimeMode: "full-access",
+            activeTurnId: "turn-1" as TurnId,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      });
+
+      expect(state?.detail).toBe(`${providerName} is active.`);
+    },
+  );
 
   it("projects completed turns as completed even when teardown settled them as interrupted", () => {
     const finishedTurn = {
@@ -142,7 +198,7 @@ describe("projectThreadAwareness", () => {
         session: {
           threadId: "thread-1" as ThreadId,
           status: "ready",
-          providerName: "Codex",
+          providerName: "codex",
           runtimeMode: "full-access",
           activeTurnId: null,
           lastError: null,
@@ -162,7 +218,7 @@ describe("projectThreadAwareness", () => {
         session: {
           threadId: "thread-1" as ThreadId,
           status: "error",
-          providerName: "Codex",
+          providerName: "codex",
           runtimeMode: "full-access",
           activeTurnId: null,
           lastError: "Provider process exited.",

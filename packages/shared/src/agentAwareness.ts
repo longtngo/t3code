@@ -4,6 +4,7 @@ import type {
   OrchestrationThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, isProviderDriverKind } from "@t3tools/contracts";
 
 export type AgentAwarenessPhase =
   | "starting"
@@ -135,6 +136,20 @@ function headlineForPhase(phase: AgentAwarenessPhase): string {
   }
 }
 
+/**
+ * How a provider is named to a person. `session.providerName` carries the
+ * driver kind the server stores (`claudeAgent`), which is an identifier, not a
+ * label - and this text is read on a phone lock screen. Driver kinds are an
+ * open set, so an unrecognised third-party driver keeps its own slug, the same
+ * fallback the provider settings panel uses.
+ */
+function providerLabel(providerName: string): string {
+  if (!isProviderDriverKind(providerName)) {
+    return providerName;
+  }
+  return PROVIDER_DISPLAY_NAMES[providerName] ?? providerName;
+}
+
 function detailForPhase(
   phase: AgentAwarenessPhase,
   thread: ProjectThreadAwarenessInput["thread"],
@@ -146,7 +161,7 @@ function detailForPhase(
     return "Review the completed task.";
   }
   if (phase === "running" && thread.session?.providerName) {
-    return `${thread.session.providerName} is active.`;
+    return `${providerLabel(thread.session.providerName)} is active.`;
   }
   return undefined;
 }
