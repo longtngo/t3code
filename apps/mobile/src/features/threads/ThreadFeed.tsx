@@ -151,6 +151,11 @@ export interface ThreadFeedProps {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
+  /**
+   * The user message the provider is holding behind the running turn. Every
+   * provider already holds a mid-turn send; none of them says so.
+   */
+  readonly waitingUserMessageId?: MessageId | null;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
@@ -799,6 +804,7 @@ function renderFeedEntry(
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
+    readonly waitingUserMessageId: MessageId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
@@ -917,6 +923,11 @@ function renderFeedEntry(
               );
             })}
           </View>
+          {props.waitingUserMessageId === message.id ? (
+            <Text className="mt-1 font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+              Waiting for the current turn to finish
+            </Text>
+          ) : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
@@ -1798,6 +1809,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         expandedWorkRows,
         terminalAssistantMessageIds,
         unsettledTurnId,
+        waitingUserMessageId: props.waitingUserMessageId ?? null,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
@@ -1817,6 +1829,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       terminalAssistantMessageIds,
       unsettledTurnId,
+      props.waitingUserMessageId,
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,

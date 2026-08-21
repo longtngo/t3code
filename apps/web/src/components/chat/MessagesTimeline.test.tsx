@@ -1159,3 +1159,60 @@ describe("work log coalescing (rendered)", () => {
     expect(markup).not.toContain("×1");
   });
 });
+
+describe("waiting user message", () => {
+  const WAITING_LABEL = "Waiting for the current turn to finish";
+
+  it("labels the held message, and only that message", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        waitingUserMessageId={MessageId.make("message-1")}
+        timelineEntries={[buildUserTimelineEntry("also check the mobile build")]}
+      />,
+    );
+    expect(markup).toContain(WAITING_LABEL);
+  });
+
+  it("labels only the matching row when several user messages are shown", () => {
+    // A single-entry render cannot tell "matches the id" apart from "labels
+    // the last user row", which is the bug this guards.
+    const first = buildUserTimelineEntry("first");
+    const second = {
+      ...buildUserTimelineEntry("second"),
+      id: "entry-2",
+      message: { ...buildUserTimelineEntry("second").message, id: MessageId.make("message-2") },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        waitingUserMessageId={MessageId.make("message-1")}
+        timelineEntries={[first, second]}
+      />,
+    );
+    expect(markup.split(WAITING_LABEL).length - 1).toBe(1);
+  });
+
+  it("does not label a message that is not the held one", () => {
+    // Inverted control: without this, a label rendered unconditionally would
+    // still satisfy the positive assertion above.
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        waitingUserMessageId={MessageId.make("some-other-message")}
+        timelineEntries={[buildUserTimelineEntry("also check the mobile build")]}
+      />,
+    );
+    expect(markup).not.toContain(WAITING_LABEL);
+  });
+
+  it("does not label anything when nothing is held", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("also check the mobile build")]}
+      />,
+    );
+    expect(markup).not.toContain(WAITING_LABEL);
+  });
+});

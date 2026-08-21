@@ -138,6 +138,64 @@ export function hasQueuedTurnStart(
 }
 
 /**
+ * Providers that open a DISTINCT turn for a message held during a running
+ * turn, so the shell changes shape when the agent picks it up.
+ *
+ * Per-adapter decision, required because the label must stop being true:
+ * - `claudeAgent` — holds in `pendingTurns` and drains via `startTurnNow`,
+ *   which emits a fresh `turn.started`. The label clears. Included.
+ * - `codex` — its app-server queues and reports a real per-turn
+ *   `turn/started`, mapped straight through. The label clears. Included.
+ * - `cursor`, `grok`, `opencode` — reuse the running turn's id and gate
+ *   `turn.started` behind `steeringTurnId === undefined`, so no new turn is
+ *   ever announced. Nothing would clear the label until the whole merged turn
+ *   ended, leaving it lying while the agent was already working on the
+ *   message. Excluded until those adapters open a turn of their own.
+ */
+const PROVIDERS_THAT_OPEN_A_HELD_TURN: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
+
+/**
+ * A user message being held until the turn currently in flight finishes.
+ *
+ * The message is already in the transcript — the decider persists it before
+ * the adapter is ever called — so without this it looks identical to one being
+ * worked on.
+ *
+ * Deliberately unbounded, unlike {@link hasQueuedTurnStart}. That predicate
+ * covers a message NO turn has adopted, where a failed start would read as
+ * pending work forever, so it needs the adoption grace window. Here a turn is
+ * demonstrably running and its completion is what clears this — real holds run
+ * to a p90 of 36 minutes, far past any grace window, and are still waiting.
+ */
+export function hasWaitingUserMessage(
+  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn" | "session">,
+): boolean {
+  if (shell.latestUserMessageAt == null) return false;
+  const session = shell.session;
+  // A turn must actually be in flight: without an active turn the message is
+  // either being worked on or is hasQueuedTurnStart's case, not this one.
+  if (session == null || session.activeTurnId == null) return false;
+  if (session.status !== "running" && session.status !== "starting") return false;
+  if (session.providerName == null || !PROVIDERS_THAT_OPEN_A_HELD_TURN.has(session.providerName)) {
+    return false;
+  }
+  const messageAt = Date.parse(shell.latestUserMessageAt);
+  if (Number.isNaN(messageAt)) return false;
+  const turn = shell.latestTurn;
+  // `latestTurn` and the session's active turn can genuinely diverge: a
+  // `thread.turn-diff-completed` for the PREVIOUS turn lands asynchronously
+  // behind a git diff and rewrites `latestTurnId` unconditionally, regressing
+  // it to that older, completed turn. Comparing against it would then label the
+  // message the agent is working on right now as "waiting", for the whole turn.
+  if (turn === null || turn.turnId !== session.activeTurnId) return false;
+  // Strictly newer than every timestamp on the running turn — the message that
+  // STARTED that turn shares its requestedAt and must not flag itself.
+  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
+    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
+  );
+}
+
+/**
  * A thread may be settled only when none of effectiveSettled's activity
  * blockers hold. This is deliberately the same list: anything the partition
  * refuses to CLASSIFY as settled must also be refused as a settle TARGET.

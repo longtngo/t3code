@@ -12,6 +12,7 @@ import {
   changeRequestAutoSettles,
   effectiveSettled,
   hasQueuedTurnStart,
+  hasWaitingUserMessage,
   threadLastActivityAt,
   type ChangeRequestStateLike,
 } from "./threadSettled.ts";
@@ -584,5 +585,123 @@ describe("canSettle", () => {
     });
     expect(canSettle(blocked, { now: NOW })).toBe(false);
     expect(effectiveSettled(blocked, { now: NOW, autoSettleAfterDays: 3 })).toBe(false);
+  });
+});
+
+describe("hasWaitingUserMessage", () => {
+  const TURN_AT = "2026-04-09T12:00:00.000Z";
+  const SENT_MID_TURN = "2026-04-09T12:00:30.000Z";
+  const ACTIVE_TURN = TurnId.make("turn-1");
+
+  /**
+   * A thread whose turn is genuinely running, with a user message sent after
+   * that turn started — the shape a provider produces while holding a message
+   * behind the turn in flight.
+   */
+  function midTurnShell(overrides?: {
+    readonly activeTurnId?: TurnId | null;
+    readonly status?: "starting" | "running";
+    readonly completedAt?: string | null;
+    readonly providerName?: string | null;
+    readonly latestTurnId?: TurnId;
+    readonly latestUserMessageAt?: string | null;
+  }) {
+    const base = makeShell({ activityAt: TURN_AT, sessionStatus: overrides?.status ?? "running" });
+    return {
+      ...base,
+      latestUserMessageAt:
+        overrides?.latestUserMessageAt === undefined
+          ? SENT_MID_TURN
+          : overrides.latestUserMessageAt,
+      latestTurn:
+        base.latestTurn === null
+          ? null
+          : {
+              ...base.latestTurn,
+              turnId: overrides?.latestTurnId ?? ACTIVE_TURN,
+              state: "running" as const,
+              startedAt: TURN_AT,
+              completedAt: overrides?.completedAt ?? null,
+            },
+      session:
+        base.session === null
+          ? null
+          : {
+              ...base.session,
+              providerName:
+                overrides?.providerName === undefined ? "claudeAgent" : overrides.providerName,
+              activeTurnId:
+                overrides?.activeTurnId === undefined ? ACTIVE_TURN : overrides.activeTurnId,
+            },
+    };
+  }
+
+  it("flags a message held while a turn is running", () => {
+    expect(hasWaitingUserMessage(midTurnShell())).toBe(true);
+  });
+
+  it("flags it while the session is still starting", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ status: "starting" }))).toBe(true);
+  });
+
+  it("does not expire — a held message outlives any grace window", () => {
+    // Bounded by the turn ending, not by a clock: measured holds reach a p90
+    // of 36 minutes, far past QUEUED_TURN_START_GRACE_MS, and are still waiting.
+    const longHeld = midTurnShell({ latestUserMessageAt: "2026-04-09T12:00:01.000Z" });
+    expect(hasWaitingUserMessage(longHeld)).toBe(true);
+  });
+
+  it("clears once no turn is active", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ activeTurnId: null }))).toBe(false);
+  });
+
+  it("clears once the running turn reports a completion", () => {
+    // Separate from the active-turn gate above, which would short-circuit and
+    // leave this comparison untested.
+    const completed = midTurnShell({ completedAt: "2026-04-09T12:05:00.000Z" });
+    expect(hasWaitingUserMessage(completed)).toBe(false);
+  });
+
+  it("refuses when latestTurn is not the turn that is actually running", () => {
+    // thread.turn-diff-completed for the PREVIOUS turn rewrites latestTurnId
+    // unconditionally and asynchronously, regressing it to an older completed
+    // turn. Without this gate the message being worked on reads as waiting.
+    const regressed = midTurnShell({ latestTurnId: TurnId.make("turn-0") });
+    expect(hasWaitingUserMessage(regressed)).toBe(false);
+  });
+
+  it.each(["cursor", "grok", "opencode"])(
+    "refuses on %s, which reuses the running turn and never announces a new one",
+    (providerName) => {
+      expect(hasWaitingUserMessage(midTurnShell({ providerName }))).toBe(false);
+    },
+  );
+
+  it.each(["claudeAgent", "codex"])(
+    "flags on %s, which opens a turn of its own",
+    (providerName) => {
+      expect(hasWaitingUserMessage(midTurnShell({ providerName }))).toBe(true);
+    },
+  );
+
+  it("refuses when the provider is unknown", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ providerName: null }))).toBe(false);
+  });
+
+  it("does not flag an ordinary send on a thread with no session", () => {
+    const idle = { ...makeShell({ activityAt: TURN_AT }), latestUserMessageAt: SENT_MID_TURN };
+    expect(hasWaitingUserMessage(idle)).toBe(false);
+  });
+
+  it("does not flag the message that started the running turn", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ latestUserMessageAt: TURN_AT }))).toBe(false);
+  });
+
+  it("ignores a thread with no user message", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ latestUserMessageAt: null }))).toBe(false);
+  });
+
+  it("ignores an unparseable message timestamp", () => {
+    expect(hasWaitingUserMessage(midTurnShell({ latestUserMessageAt: "not-a-date" }))).toBe(false);
   });
 });

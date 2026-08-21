@@ -60,6 +60,7 @@ import {
   SearchIcon,
   SquarePenIcon,
   TerminalIcon,
+  TimerIcon,
   Undo2Icon,
   WrenchIcon,
   XIcon,
@@ -141,6 +142,12 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  /**
+   * The user message being held behind the running turn, if any. Every
+   * provider already holds a mid-turn send and runs it afterwards; without
+   * this the bubble is indistinguishable from one being worked on.
+   */
+  waitingUserMessageId: MessageId | null;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -218,6 +225,8 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
+  /** Display-only, defaulted like the other optional presentation props. */
+  waitingUserMessageId?: MessageId | null;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -263,6 +272,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
+  waitingUserMessageId = null,
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
@@ -511,6 +521,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      waitingUserMessageId,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -527,6 +538,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      waitingUserMessageId,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1057,6 +1069,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      {/* Always visible, unlike the hover row below: a message that looks
+          delivered but is actually waiting is the whole defect. Static — no
+          spinner, no pulse, per the repo's no-repainting-animation rule. */}
+      {ctx.waitingUserMessageId === row.message.id && (
+        <p className="flex max-w-[80%] items-center gap-1.5 pe-1 text-muted-foreground text-xs">
+          <TimerIcon className="size-3 shrink-0" aria-hidden="true" />
+          Waiting for the current turn to finish
+        </p>
+      )}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>

@@ -31,6 +31,7 @@ import {
   changeRequestAutoSettles,
   effectiveSettled,
   effectiveSnoozed,
+  hasWaitingUserMessage,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -4391,6 +4392,24 @@ function ChatViewContent(props: ChatViewProps) {
   // partition (same shell, same capability gate, same PR auto-settle input)
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  /**
+   * The message the provider is holding behind the running turn. Derived from
+   * the shell because `latestUserMessageAt` lives only there, not on the
+   * thread detail.
+   *
+   * Scans the SERVER messages, not the rendered timeline: the timeline appends
+   * optimistic and offline-outbox bubbles, so a message still sitting in the
+   * outbox would otherwise take the label from the one the provider is
+   * actually holding.
+   */
+  const waitingUserMessageId = useMemo(() => {
+    if (activeThreadShell === null || !hasWaitingUserMessage(activeThreadShell)) return null;
+    for (let index = displayServerMessages.length - 1; index >= 0; index -= 1) {
+      const message = displayServerMessages[index];
+      if (message?.role === "user") return message.id;
+    }
+    return null;
+  }, [activeThreadShell, displayServerMessages]);
   const activeComposerTasksProgress =
     activeLatestTurn !== null && !latestTurnSettled
       ? (activeThreadShell?.planProgress ?? null)
@@ -6948,6 +6967,7 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                waitingUserMessageId={waitingUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
