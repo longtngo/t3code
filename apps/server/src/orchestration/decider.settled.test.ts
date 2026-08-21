@@ -68,7 +68,7 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
   return {
     threadId: ThreadId.make("thread-1"),
     status,
-    providerName: "Codex",
+    providerName: "codex",
     runtimeMode: "full-access",
     activeTurnId: null,
     lastError: null,

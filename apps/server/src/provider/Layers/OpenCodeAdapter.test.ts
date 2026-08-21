@@ -756,10 +756,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("steers a running turn instead of opening a new one on mid-turn sendTurn", () =>
+  it.effect("counts a mid-turn sendTurn as the same turn instead of opening a new one", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-steer");
+      const threadId = asThreadId("thread-mid-turn-send");
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("opencode"),
         threadId,
@@ -775,9 +775,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
       });
 
-      // Steer: OpenCode queues the prompt into the busy session, so the
-      // active turn id is reused instead of opening a new turn.
-      const steeredTurn = yield* adapter.sendTurn({
+      // The prompt goes into the busy session and the active turn id is
+      // reused, so the two are accounted as one turn. What the OpenCode server
+      // does with it is its behaviour, not an invariant this adapter enforces.
+      const secondSendTurn = yield* adapter.sendTurn({
         threadId,
         input: "actually run 15",
         modelSelection: {
@@ -785,7 +786,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           model: "openai/gpt-5",
         },
       });
-      NodeAssert.equal(String(steeredTurn.turnId), String(turn.turnId));
+      NodeAssert.equal(String(secondSendTurn.turnId), String(turn.turnId));
 
       const sessions = yield* adapter.listSessions();
       const session = sessions.find((entry) => entry.threadId === threadId);
@@ -795,10 +796,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("keeps the running turn when a steer prompt fails", () =>
+  it.effect("keeps the running turn when a mid-turn prompt fails", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-steer-failure");
+      const threadId = asThreadId("thread-mid-turn-send-failure");
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("opencode"),
         threadId,
@@ -814,7 +815,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
       });
 
-      runtimeMock.state.promptAsyncError = new Error("steer failed");
+      runtimeMock.state.promptAsyncError = new Error("second prompt failed");
       const error = yield* adapter
         .sendTurn({
           threadId,
@@ -826,7 +827,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         })
         .pipe(Effect.flip);
 
-      // The original turn keeps running — only the steer prompt failed.
+      // The original turn keeps running - only the second prompt failed.
       NodeAssert.equal(error._tag, "ProviderAdapterRequestError");
       const sessions = yield* adapter.listSessions();
       const session = sessions.find((entry) => entry.threadId === threadId);

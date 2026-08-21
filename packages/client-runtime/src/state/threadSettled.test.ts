@@ -162,7 +162,7 @@ function makeShell(input: {
         : {
             threadId,
             status: input.sessionStatus,
-            providerName: "Codex",
+            providerName: "codex",
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: null,
@@ -396,7 +396,7 @@ describe("effectiveSettled", () => {
       session: {
         threadId: queued.id,
         status: "starting",
-        providerName: "Codex",
+        providerName: "codex",
         runtimeMode: "full-access",
         activeTurnId: null,
         lastError: null,
@@ -472,7 +472,7 @@ describe("hasQueuedTurnStart", () => {
       session: {
         threadId: failed.id,
         status: "error" as const,
-        providerName: "Codex",
+        providerName: "codex",
         runtimeMode: "full-access" as const,
         activeTurnId: null,
         lastError: "boom",

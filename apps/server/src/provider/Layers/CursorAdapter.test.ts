@@ -250,13 +250,14 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
-  it.effect("steers a running turn instead of opening a new one on mid-turn sendTurn", () =>
+  it.effect("counts a held mid-turn sendTurn as the same turn instead of opening a new one", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
       const settings = yield* ServerSettingsService;
-      const threadId = ThreadId.make("cursor-steer-thread");
+      const threadId = ThreadId.make("cursor-held-send-thread");
 
-      // Keep the first prompt in flight long enough for the steer to land.
+      // Keep the first prompt in flight long enough for the second send to land
+      // while it is still running.
       const wrapperPath = yield* Effect.promise(() =>
         makeMockAgentWrapper({ T3_ACP_PROMPT_DELAY_MS: "1500" }),
       );
@@ -301,8 +302,10 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         throw new Error("Timed out waiting for the first prompt to be in flight.");
       });
 
-      // Steer: a second sendTurn while the first prompt is still in flight
-      // continues the same turn.
+      // A second sendTurn while the first prompt is still in flight is HELD by
+      // the runtime's prompt semaphore, not folded into the running work. Only
+      // the turn accounting treats the two as one turn, which is what this
+      // asserts.
       const steeredTurn = yield* adapter.sendTurn({
         threadId,
         input: "actually run 15",

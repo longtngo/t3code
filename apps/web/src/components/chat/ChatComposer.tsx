@@ -1356,7 +1356,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabling it while disconnected would leave no way to queue a message.
   const collapsedComposerPrimaryActionDisabled =
     // `phase === "running"` deliberately absent: every adapter has a defined
-    // concurrent-send path (Claude queues FIFO, Cursor/Grok/OpenCode steer), and
+    // concurrent-send path (Claude queues FIFO, Cursor/Grok/OpenCode hold the
+    // prompt behind a serialization permit), and
     // the collapsed row is the only composer a phone shows by default. Leaving
     // it here made queueing a follow-up impossible on the surface where it is
     // most useful, and left a permanently dead button beside Stop.

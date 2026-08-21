@@ -41,7 +41,7 @@ function makeShell(input: {
         : {
             threadId,
             status: input.sessionStatus,
-            providerName: "Codex",
+            providerName: "codex",
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: input.sessionStatus === "error" ? "boom" : null,

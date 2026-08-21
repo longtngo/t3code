@@ -460,7 +460,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           session: {
             threadId,
             status: "running",
-            providerName: "Codex",
+            providerName: "codex",
             runtimeMode: "full-access",
             activeTurnId: "turn-1" as TurnId,
             lastError: null,
@@ -621,7 +621,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           session: {
             threadId,
             status: "running",
-            providerName: "Codex",
+            providerName: "codex",
             runtimeMode: "full-access",
             activeTurnId: "turn-1" as TurnId,
             lastError: null,

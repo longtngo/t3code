@@ -697,7 +697,7 @@ describe("resolveSidebarThreadStatus", () => {
   const session = {
     threadId: ThreadId.make("thread-1"),
     status: "running" as const,
-    providerName: "Codex",
+    providerName: "codex",
     providerInstanceId: ProviderInstanceId.make("codex"),
     runtimeMode: DEFAULT_RUNTIME_MODE,
     activeTurnId: "turn-1" as never,
@@ -1034,7 +1034,7 @@ describe("resolveWorkingStartedAt", () => {
   const session = {
     threadId: ThreadId.make("thread-1"),
     status: "running" as const,
-    providerName: "Codex",
+    providerName: "codex",
     providerInstanceId: ProviderInstanceId.make("codex"),
     runtimeMode: DEFAULT_RUNTIME_MODE,
     activeTurnId: "turn-1" as never,
@@ -1108,7 +1108,7 @@ describe("resolveThreadStatusPill", () => {
     session: {
       threadId: ThreadId.make("thread-1"),
       status: "running" as const,
-      providerName: "Codex",
+      providerName: "codex",
       providerInstanceId: ProviderInstanceId.make("codex"),
       runtimeMode: DEFAULT_RUNTIME_MODE,
       activeTurnId: "turn-1" as never,

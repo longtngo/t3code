@@ -134,7 +134,7 @@ describe("resolveThreadListV2Status", () => {
       session: {
         threadId: ThreadId.make("t"),
         status: "running",
-        providerName: "Codex",
+        providerName: "codex",
         providerInstanceId: ProviderInstanceId.make("codex"),
         runtimeMode: "full-access",
         activeTurnId: null,

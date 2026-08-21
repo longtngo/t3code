@@ -318,8 +318,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     // Send stays mounted beside Stop rather than being replaced by it, so the
     // control never moves between idle and running. Every adapter has a defined
     // concurrent-send path — Claude queues the follow-up FIFO
-    // (`ClaudeAdapter.ts:4637`), Cursor/Grok/OpenCode steer it into the running
-    // turn — so this is not gated on the provider.
+    // (`ClaudeAdapter.ts:4637`), Cursor/Grok/OpenCode hold it behind their
+    // prompt serialization permit and count it as the running turn — so this is
+    // not gated on the provider.
     //
     // Do NOT "simplify" this by deleting the branch and falling through to the
     // default Send: `showPlanFollowUpPrompt` is only unreachable while running
