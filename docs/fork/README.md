@@ -149,6 +149,35 @@ which is the one surface upstream added.
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
 with anything about panels. Add the export; the test's subject still applies.
 
+### 5c. Boot reconciliation is the fork's, and it owns the directory binding too
+
+Upstream `#7719` added `reconcileProviderSessions` — a `provider-sessions.reconcile` startup phase
+that settles a restart-orphaned session to **`error`** and cleans its `ProviderSessionDirectory`
+binding. The fork already had `reconcileInterruptedTurnsOnBoot` (`BootTurnReconciler.ts`), running
+in an **earlier** phase, which settles the same sessions to **`stopped`** — the same clean resting
+state the reactor's stop path produces — and also dispatches `thread.turn.interrupt` for history.
+
+Measured on the 18th reconcile: with both present the fork's phase ran first and its `stopped` won,
+so upstream's status decision never took effect while its binding cleanup did. Two halves of one
+concern split across two phases, with the visible half silently dead.
+
+Resolved by **porting upstream's binding cleanup into the fork's reconciler and deleting
+`reconcileProviderSessions`** (a `FORK:` note sits where it was, and its startup phase is gone).
+The fork's version is now the superset: it covers `idle`/`ready` as well as `starting`/`running`,
+interrupts the turn, settles to `stopped`, and clears the binding's `status` /
+`runtimePayload.activeTurnId` while `upsert`'s merge preserves `resumeCursor` and every other
+payload key.
+
+Upstream's `serverRuntimeStartup.reconcile.test.ts` was deleted with it — its two remaining cases
+tested upstream's `listSessions()` gate, which this fork does not have (its phase runs before any
+session is live, so it assumes zero). The behaviour is covered end-to-end by
+`orphanedProviderSessionStartup.integration.test.ts`, whose two `sessionStatus` expectations are
+retargeted to `stopped` with a comment. That test is the guard: disabling the binding block leaves
+`bindingStatus: "running"` and a stale `activeTurnId`, verified 2026-08-21.
+
+**A reconcile that restores upstream's `error` semantics, or reinstates the
+`provider-sessions.reconcile` phase, is reverting a deliberate decision.**
+
 ### 6. Two project entry points in the sidebar, on purpose
 
 Upstream `#5923`/`#5768` moved project settings to a `/projects/$projectKey` route and repurposed

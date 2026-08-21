@@ -25,7 +25,9 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -103,6 +105,7 @@ export const reconcileInterruptedTurnsOnBoot = Effect.fn("reconcileInterruptedTu
   function* () {
     const engine = yield* OrchestrationEngineService;
     const query = yield* ProjectionSnapshotQuery;
+    const directory = yield* ProviderSessionDirectory;
     const snapshot = yield* query.getShellSnapshot();
     const nowIso = DateTime.formatIso(yield* DateTime.now);
     const commands = planBootReconciliation(snapshot.threads, nowIso);
@@ -115,6 +118,33 @@ export const reconcileInterruptedTurnsOnBoot = Effect.fn("reconcileInterruptedTu
         Effect.catchCause((cause) =>
           Effect.logWarning("boot.turns-reconcile.dispatch-failed", {
             commandType: command.type,
+            threadId: command.threadId,
+            cause,
+          }),
+        ),
+      );
+      if (command.type !== "thread.session.set") {
+        continue;
+      }
+      // The projection above clears the spinner; this clears the *directory*
+      // binding the next resume reads. Without it the binding keeps the dead
+      // process's `status` and a stale `runtimePayload.activeTurnId`, so a
+      // resume attaches to a turn that no longer exists. `upsert` merges
+      // runtimePayload, so the rest of it (and `resumeCursor`, which is what
+      // makes the resume possible at all) survives untouched.
+      yield* Effect.gen(function* () {
+        const binding = yield* directory.getBinding(command.threadId);
+        if (Option.isNone(binding)) {
+          return;
+        }
+        yield* directory.upsert({
+          ...binding.value,
+          status: "stopped",
+          runtimePayload: { activeTurnId: null },
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("boot.turns-reconcile.binding-failed", {
             threadId: command.threadId,
             cause,
           }),

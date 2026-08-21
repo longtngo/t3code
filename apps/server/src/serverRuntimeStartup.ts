@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -33,6 +34,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -298,6 +301,13 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.annotateSpans({ "startup.phase": phase }),
     Effect.withSpan(`server.startup.${phase}`),
   );
+
+// FORK: upstream's `reconcileProviderSessions` (#7719) was removed here.
+// It is unreachable in this fork: `turns.reconcile` runs earlier and clears
+// every status its filter matches on (starting/running/activeTurnId), so it
+// found zero orphans and its directory-binding cleanup never ran. That
+// cleanup now lives in `reconcileInterruptedTurnsOnBoot`, which keeps the
+// fork's `stopped` resting state instead of upstream's `error`.
 
 interface StartupOptions {
   readonly activate?: Effect.Effect<void>;
