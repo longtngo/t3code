@@ -228,6 +228,61 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  // A second prompt sent while one is running parks on the runtime's prompt
+  // serialization semaphore, having executed none of the body that registers it
+  // as the active prompt. Cancelling therefore cannot see it, and interrupting
+  // the running prompt releases the permit and sends the parked one to the
+  // agent — the user presses Stop and their held message runs anyway.
+  it.effect("cancels a prompt still waiting behind the running one", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      const running = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "hang forever" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const held = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "held behind the first" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* TestClock.adjust("500 millis");
+      yield* runtime.cancel;
+
+      expect(yield* Fiber.join(running)).toMatchObject({ stopReason: "cancelled" });
+      expect(yield* Fiber.join(held)).toMatchObject({ stopReason: "cancelled" });
+
+      // The stopReason alone would still pass if the prompt were reported as
+      // cancelled *and* sent anyway. What must be true is that the agent never
+      // saw it: exactly one session/prompt reached the wire.
+      const promptsSent = requestEvents.filter(
+        (event) => event.method === "session/prompt" && event.status === "started",
+      );
+      expect(promptsSent).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: {
+              T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+            },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("releases a fully silent prompt when session/cancel is requested", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
