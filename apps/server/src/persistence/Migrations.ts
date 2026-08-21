@@ -91,6 +91,7 @@ import Migration0045 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 // applied id is the next free one (46) — filename numbers and applied ids
 // diverged long ago and must not be reconciled.
 import Migration0046 from "./Migrations/041_ProjectionThreadsTitleRegenerationFailedAt.ts";
+import Migration0047 from "./Migrations/042_DropUnusedCommandReceiptIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -148,6 +149,7 @@ export const migrationEntries = [
   [44, "ProjectionProjectsDefaultThreadEnvMode", Migration0044],
   [45, "ProjectionProjectFaviconPath", Migration0045],
   [46, "ProjectionThreadsTitleRegenerationFailedAt", Migration0046],
+  [47, "DropUnusedCommandReceiptIndexes", Migration0047],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
