@@ -1135,3 +1135,133 @@ describe("orchestration projector", () => {
     }),
   );
 });
+
+/**
+ * The projector is the read model the decider consults, and it derives turn end
+ * from session status rather than from turn lifecycle events. A cancelled turn
+ * normalizes to "cancelled", which is not "failed", so ProviderRuntimeIngestion
+ * maps it to session status "ready" - which the projector settles as
+ * "completed". The SQL projection and the client reducer both record
+ * "interrupted" for the same turn.
+ */
+describe("orchestration projector turn state", () => {
+  const CREATED = "2026-02-23T08:00:00.000Z";
+  const STARTED = "2026-02-23T08:00:05.000Z";
+  const INTERRUPTED = "2026-02-23T08:00:30.000Z";
+  const SETTLED = "2026-02-23T08:00:31.000Z";
+
+  const threadCreated = (sequence: number) =>
+    makeEvent({
+      sequence,
+      type: "thread.created",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: CREATED,
+      commandId: "cmd-create",
+      payload: {
+        threadId: "thread-1",
+        projectId: "project-1",
+        title: "demo",
+        modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5.3-codex" },
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: CREATED,
+        updatedAt: CREATED,
+      },
+    });
+
+  const sessionSet = (sequence: number, status: string, activeTurnId: string | null, at: string) =>
+    makeEvent({
+      sequence,
+      type: "thread.session-set",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: at,
+      commandId: `cmd-session-${sequence}`,
+      payload: {
+        threadId: "thread-1",
+        session: {
+          threadId: "thread-1",
+          status,
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId,
+          lastError: null,
+          updatedAt: at,
+        },
+      },
+    });
+
+  const interruptRequested = (sequence: number, turnId: string) =>
+    makeEvent({
+      sequence,
+      type: "thread.turn-interrupt-requested",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: INTERRUPTED,
+      commandId: `cmd-interrupt-${turnId}`,
+      payload: { threadId: "thread-1", turnId, createdAt: INTERRUPTED },
+    });
+
+  /** A thread with turn-1 running, the state every case here starts from. */
+  const runningTurn = Effect.gen(function* () {
+    const created = yield* projectEvent(createEmptyReadModel(CREATED), threadCreated(1));
+    return yield* projectEvent(created, sessionSet(2, "running", "turn-1", STARTED));
+  });
+
+  effectIt.effect("records an interrupted turn as interrupted, not completed", () =>
+    Effect.gen(function* () {
+      const interrupted = yield* projectEvent(yield* runningTurn, interruptRequested(3, "turn-1"));
+      expect(interrupted.threads[0]?.latestTurn?.state).toBe("interrupted");
+
+      // The session-set that follows must not relabel it. The settle path only
+      // touches a still-"running" turn, which is also why the interrupt has to
+      // stamp completedAt itself - otherwise it would stay null forever.
+      const settled = yield* projectEvent(interrupted, sessionSet(4, "ready", null, SETTLED));
+      expect(settled.threads[0]?.latestTurn?.state).toBe("interrupted");
+      expect(settled.threads[0]?.latestTurn?.completedAt).not.toBeNull();
+    }),
+  );
+
+  effectIt.effect("ignores an interrupt for a turn that is not the latest", () =>
+    Effect.gen(function* () {
+      const other = yield* projectEvent(yield* runningTurn, interruptRequested(3, "turn-999"));
+      expect(other.threads[0]?.latestTurn?.state).toBe("running");
+    }),
+  );
+
+  // A "missing" checkpoint is a placeholder awaiting a real git capture, which
+  // this same file already guards against elsewhere - it is not evidence that
+  // the turn was interrupted. The client reducer maps it to "completed".
+  effectIt.effect("treats a placeholder checkpoint as a completed turn", () =>
+    Effect.gen(function* () {
+      const settled = yield* projectEvent(
+        yield* runningTurn,
+        sessionSet(3, "ready", null, SETTLED),
+      );
+      const diffed = yield* projectEvent(
+        settled,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: SETTLED,
+          commandId: "cmd-diff",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "ref-1",
+            status: "missing",
+            files: [],
+            assistantMessageId: null,
+            completedAt: SETTLED,
+          },
+        }),
+      );
+      expect(diffed.threads[0]?.latestTurn?.state).toBe("completed");
+    }),
+  );
+});

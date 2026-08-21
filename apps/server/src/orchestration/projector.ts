@@ -34,6 +34,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnInterruptRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -42,7 +43,10 @@ const MAX_THREAD_CHECKPOINTS = 500;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
-  if (status === "missing") return "interrupted" as const;
+  // A placeholder awaiting a real git capture, not evidence the turn was
+  // interrupted - see the guard on thread.turn-diff-completed below, which
+  // already treats "missing" as a placeholder. The client reducer agrees.
+  if (status === "missing") return "completed" as const;
   return "completed" as const;
 }
 
@@ -714,6 +718,39 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             proposedPlans,
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.turn-interrupt-requested":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadTurnInterruptRequestedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        if (payload.turnId === undefined) {
+          return nextBase;
+        }
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const latestTurn = thread?.latestTurn ?? null;
+        if (!thread || latestTurn === null || latestTurn.turnId !== payload.turnId) {
+          return nextBase;
+        }
+        // The session-set that follows settles a turn only while it is still
+        // "running", so this must stamp the end timestamps itself — otherwise
+        // marking it interrupted here would leave completedAt null forever.
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            latestTurn: {
+              ...latestTurn,
+              state: "interrupted",
+              startedAt: latestTurn.startedAt ?? payload.createdAt,
+              completedAt: latestTurn.completedAt ?? payload.createdAt,
+            },
             updatedAt: event.occurredAt,
           }),
         };
