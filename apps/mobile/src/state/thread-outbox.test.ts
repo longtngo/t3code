@@ -43,6 +43,30 @@ function queuedMessage(input: {
   };
 }
 
+/** A queued message shaped for the delivery-action tests. */
+function deliverySubject(input: {
+  readonly isCreation: boolean;
+  readonly createdAt?: string;
+}): QueuedThreadMessage {
+  const base = queuedMessage({
+    messageId: "message-delivery",
+    createdAt: input.createdAt ?? "2026-01-01T00:00:00.000Z",
+  });
+  return input.isCreation
+    ? {
+        ...base,
+        creation: {
+          projectId: ProjectId.make("project-1"),
+          workspaceMode: "local",
+          branch: null,
+          worktreePath: null,
+        },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        text: "queued task",
+      }
+    : base;
+}
+
 describe("thread outbox", () => {
   it("groups messages by scoped thread and preserves creation order", () => {
     const later = queuedMessage({
@@ -461,32 +485,29 @@ describe("thread outbox", () => {
   it("only removes a missing-thread message after shell synchronization is live", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("wait");
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("remove");
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("send");
   });
@@ -498,22 +519,20 @@ describe("thread outbox", () => {
   it("sends existing-thread messages whenever connected, and waits when not", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("send");
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: false,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("wait");
   });
@@ -521,44 +540,40 @@ describe("thread outbox", () => {
   it("sends queued creations once connected and live, removing already-created ones", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: true,
+        message: deliverySubject({ isCreation: true, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
     // simply not be visible yet — sending now could duplicate the thread.
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: true,
+        message: deliverySubject({ isCreation: true, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("wait");
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: true,
+        message: deliverySubject({ isCreation: true, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("send");
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: true,
+        message: deliverySubject({ isCreation: true, createdAt: "2026-01-01T00:00:00.000Z" }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:01.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:01.000Z"),
       }),
     ).toBe("remove");
   });
@@ -576,21 +591,16 @@ describe("thread outbox", () => {
     expect(MAX_QUEUED_TURN_AGE_MS).toBe(12 * 60 * 60 * 1000);
 
     const queuedAt = "2026-01-01T00:00:00.000Z";
-    const justInside = new Date(
-      Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS - 1_000,
-    ).toISOString();
-    const justOutside = new Date(
-      Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS + 1_000,
-    ).toISOString();
+    const justInside = Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS - 1_000;
+    const justOutside = Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS + 1_000;
 
-    const action = (nowIso: string) =>
+    const action = (nowMs: number) =>
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: queuedAt }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: queuedAt,
-        nowIso,
+        nowMs,
       });
 
     // Positive control: the same call sends while the turn is fresh, so
@@ -606,12 +616,11 @@ describe("thread outbox", () => {
   it("never retires a queued pending task, however old", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: true,
+        message: deliverySubject({ isCreation: true, createdAt: "2020-01-01T00:00:00.000Z" }),
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "2020-01-01T00:00:00.000Z",
-        nowIso: "2026-01-01T00:00:00.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:00.000Z"),
       }),
     ).toBe("send");
   });
@@ -621,12 +630,11 @@ describe("thread outbox", () => {
   it("keeps a queued turn whose timestamp cannot be parsed", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
-        isCreation: false,
+        message: deliverySubject({ isCreation: false, createdAt: "not-a-date" }),
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        createdAt: "not-a-date",
-        nowIso: "2026-01-01T00:00:00.000Z",
+        nowMs: Date.parse("2026-01-01T00:00:00.000Z"),
       }),
     ).toBe("send");
   });

@@ -159,10 +159,9 @@ export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
  * An unparsable or future timestamp is treated as fresh: dropping the user's
  * message is the destructive answer, so it is never the fallback.
  */
-function isQueuedTurnExpired(createdAt: string, nowIso: string): boolean {
+function isQueuedTurnExpired(createdAt: string, nowMs: number): boolean {
   const createdMs = Date.parse(createdAt);
-  const nowMs = Date.parse(nowIso);
-  if (!Number.isFinite(createdMs) || !Number.isFinite(nowMs)) {
+  if (!Number.isFinite(createdMs)) {
     return false;
   }
   return nowMs - createdMs > MAX_QUEUED_TURN_AGE_MS;
@@ -179,21 +178,27 @@ function isQueuedTurnExpired(createdAt: string, nowIso: string): boolean {
  * the turn ends, so connectivity and thread existence are the whole decision.
  */
 export function resolveThreadOutboxDeliveryAction(input: {
-  readonly isCreation: boolean;
+  /**
+   * The message itself rather than fields copied off it: the age bound and the
+   * creation exemption must describe the message actually being delivered, and
+   * a caller cannot pass one message's age with another's creation flag.
+   */
+  readonly message: QueuedThreadMessage;
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly createdAt: string;
-  readonly nowIso: string;
+  /** Injectable only so tests can control it; the drain never passes it. */
+  readonly nowMs?: number;
 }): ThreadOutboxDeliveryAction {
-  if (!input.isCreation && isQueuedTurnExpired(input.createdAt, input.nowIso)) {
+  const isCreation = input.message.creation !== undefined;
+  if (!isCreation && isQueuedTurnExpired(input.message.createdAt, input.nowMs ?? Date.now())) {
     // Deliberately not applied to a creation: a pending task is listed on the
     // home screen and can be edited, and editing keeps the original createdAt
     // so its command id stays stable. Expiring those would delete work the
     // user can still see, and would count an edit made today as months old.
     return "remove";
   }
-  if (input.isCreation) {
+  if (isCreation) {
     // A pending task creates its thread on delivery. If the thread already
     // exists the creation command went through and only cleanup remains.
     if (input.threadExists) {
