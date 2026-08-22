@@ -92,6 +92,12 @@ import Migration0045 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 // diverged long ago and must not be reconciled.
 import Migration0046 from "./Migrations/041_ProjectionThreadsTitleRegenerationFailedAt.ts";
 import Migration0047 from "./Migrations/042_DropUnusedCommandReceiptIndexes.ts";
+// Upstream's 041 (auth_sessions client connection columns, #7774) arrives after
+// the fork already deployed ids 33-47, so it takes the next free id (48) rather
+// than its filename number. Its 041 filename collides with the fork's own
+// 041_ProjectionThreadsTitleRegenerationFailedAt (id 46); filenames are free to
+// repeat, applied ids are not.
+import Migration0048 from "./Migrations/041_AuthSessionClientConnection.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -150,6 +156,7 @@ export const migrationEntries = [
   [45, "ProjectionProjectFaviconPath", Migration0045],
   [46, "ProjectionThreadsTitleRegenerationFailedAt", Migration0046],
   [47, "DropUnusedCommandReceiptIndexes", Migration0047],
+  [48, "AuthSessionClientConnection", Migration0048],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -158,6 +158,7 @@ export interface ThreadFeedProps {
    * provider already holds a mid-turn send; none of them says so.
    */
   readonly waitingUserMessageIds?: ReadonlySet<string>;
+  readonly submittedMessageId: MessageId | null;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
@@ -1559,12 +1560,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     transitionEndFollow({ type: "reset" });
   }, [clearUserScrollSettle, feedThreadKey, transitionEndFollow]);
   useEffect(() => {
-    if (props.anchorMessageId !== null) {
+    if (props.submittedMessageId !== null) {
       clearUserScrollSettle();
       userScrollSessionRef.current = false;
       transitionEndFollow({ type: "reset" });
     }
-  }, [clearUserScrollSettle, props.anchorMessageId, transitionEndFollow]);
+  }, [clearUserScrollSettle, props.submittedMessageId, transitionEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1613,7 +1614,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       resolveChatListAnchoredEndSpace(
         presentedFeed,
         props.anchorMessageId,
-        (entry) => (entry.type === "message" ? entry.id : null),
+        (entry) => (entry.type === "message" && entry.message.role === "user" ? entry.id : null),
         { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
       ),
     [presentedFeed, props.anchorMessageId, anchorTopInset],

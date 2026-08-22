@@ -1,4 +1,5 @@
 import type {
+  OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
@@ -56,6 +57,7 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  origin: OrchestrationClientOrigin | undefined;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
   /** See `OrchestrationDispatchOptions.singleUseCommandId`. */
@@ -215,7 +217,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
-        const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
+        const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        // Stamp the dispatching client's origin onto every event the command
+        // produced. The decider stays pure; attribution is an engine concern.
+        const eventBases =
+          envelope.origin === undefined
+            ? plannedEvents
+            : plannedEvents.map((planned) => ({
+                ...planned,
+                metadata: { ...planned.metadata, origin: envelope.origin },
+              }));
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
@@ -393,6 +404,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, {
         command,
+        origin: options?.origin,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
         singleUseCommandId: options?.singleUseCommandId === true,

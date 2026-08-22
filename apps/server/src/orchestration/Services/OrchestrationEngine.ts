@@ -10,7 +10,11 @@
  *
  * @module OrchestrationEngineService
  */
-import type { OrchestrationCommand, OrchestrationEvent } from "@t3tools/contracts";
+import type {
+  OrchestrationClientOrigin,
+  OrchestrationCommand,
+  OrchestrationEvent,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -38,6 +42,12 @@ import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
  */
 export interface OrchestrationDispatchOptions {
   readonly singleUseCommandId?: boolean;
+
+  /**
+   * Which client connection dispatched this command, stamped into the metadata
+   * of every event it produces.
+   */
+  readonly origin?: OrchestrationClientOrigin;
 }
 
 export interface OrchestrationEngineShape {
@@ -60,6 +70,9 @@ export interface OrchestrationEngineShape {
    * Dispatch a validated orchestration command.
    *
    * @param command - Valid orchestration command.
+   * @param options - Per-dispatch options: the client origin (surface/app
+   *   version) stamped into every event the command produces, and the
+   *   single-use-id opt-out described on `OrchestrationDispatchOptions`.
    * @returns Effect containing the sequence of the persisted event.
    *
    * Dispatch is serialized through an internal queue and deduplicated via
