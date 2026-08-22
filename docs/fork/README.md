@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-21, against `origin/main`: **302 files added, 244 modified, 4 deleted.**
-Concentrated in `apps/server` (196) and `apps/web` (162).
+As of 2026-08-22, against `origin/main`: **304 files added, 261 modified, 4 deleted.**
+Concentrated in `apps/server` (206) and `apps/web` (162).
 
 ## Invariants a merge must not break
 
@@ -37,8 +37,14 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-21: 45 entries, all ids unique, monotonic, max 46. Id `34` is intentionally burned (an
+Verified 2026-08-22: 47 entries, all ids unique, monotonic, max 48. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
+
+A migration's **test** carries this too. Upstream's `041_AuthSessionClientConnection.test.ts`
+ran `toMigrationInclusive: 40` then `41` — its filename numbers — and found no columns, which is
+how the 19th reconcile noticed. Retarget such a test to the fork's applied ids rather than
+deleting it, and give it a control asserting the column is absent at the previous id, or it
+passes whether or not the renumbering is right.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
@@ -119,8 +125,9 @@ only the first and folds the second into it. They are not the same: unavailable 
 provider, no project) is a hard stop. A merge that takes upstream's combined
 `isEnvironmentUnavailable={environmentUnavailable !== null || noProviderAvailable || projectSelectionRequired}`
 compiles only until the required `isSendBlocked` prop is noticed missing, and would make a merely
-disconnected composer read as permanently dead. Both call sites in `ChatComposer.tsx` need the
-split. The 17th reconcile lost it at both and the line sweep caught it, not the type checker.
+disconnected composer read as permanently dead. All three call sites in `ChatComposer.tsx` need
+the split, plus the prop pass-through above them (four `isSendBlocked=` occurrences in total).
+The 17th reconcile lost it and the line sweep caught it, not the type checker.
 
 ### 5. A mid-turn send queues; it does not steer
 
