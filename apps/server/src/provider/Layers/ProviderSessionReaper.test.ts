@@ -2,7 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type OrchestrationCommand,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   RuntimeTaskId,
   ThreadId,
@@ -66,8 +65,6 @@ async function waitFor(
 const drainFibers = Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow, {
   discard: true,
 });
-
-const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
 
 function makeReadModel(
   threads: ReadonlyArray<{
@@ -261,7 +258,12 @@ describe("ProviderSessionReaper", () => {
                 ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
                 : Option.none(),
             ),
-          getThreadSessionById: () => Effect.die("unused"),
+          getThreadSessionById: (threadId) => {
+            const session = input.readModel.threads.find(
+              (thread) => thread.id === threadId,
+            )?.session;
+            return Effect.succeed(session ? Option.some(session) : Option.none());
+          },
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
           searchThreads: () => Effect.succeed({ matches: [] }),
@@ -273,6 +275,77 @@ describe("ProviderSessionReaper", () => {
     runtime = ManagedRuntime.make(layer);
     return { dispatchStop, dispatchedCommands, stoppedThreadIds, layer };
   }
+
+  // `ProviderService.stopSession` only marks the binding stopped AFTER the
+  // adapter stop succeeds, so a failed stop leaves a live binding behind while
+  // the projection already says "stopped". The reaper re-selects that binding
+  // every sweep forever. Dispatching for it cannot help - the command handler
+  // skips the provider precisely because the session reads "stopped" - but the
+  // unconditional session write still lands, so each pass burned two durable
+  // orchestration events for a thread nothing could fix.
+  it("does not dispatch for a binding whose session already reads stopped", async () => {
+    const stuckThreadId = ThreadId.make("thread-reaper-stuck");
+    const liveThreadId = ThreadId.make("thread-reaper-live");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: stuckThreadId,
+          session: {
+            threadId: stuckThreadId,
+            status: "stopped",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+        {
+          id: liveThreadId,
+          session: {
+            threadId: liveThreadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    for (const threadId of [stuckThreadId, liveThreadId]) {
+      await runtime!.runPromise(
+        repository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: null,
+          adapterKey: "claudeAgent",
+          runtimeMode: "full-access",
+          status: "running",
+          lastSeenAt: "2026-04-14T00:00:00.000Z",
+          resumeCursor: { opaque: `resume-${threadId}` },
+          runtimePayload: null,
+        }),
+      );
+    }
+
+    await startReaper();
+
+    // Positive control: both bindings are equally stale and idle, so the live
+    // one being reaped proves the sweep reached the stuck one and passed it
+    // over, rather than simply not having got there yet.
+    await waitFor(() => harness.stoppedThreadIds.has(liveThreadId));
+    expect(harness.dispatchStop.mock.calls.map(([request]) => request.threadId)).toEqual([
+      liveThreadId,
+    ]);
+    expect(harness.stoppedThreadIds.has(stuckThreadId)).toBe(false);
+  });
 
   it("reaps stale persisted sessions without active turns", async () => {
     const threadId = ThreadId.make("thread-reaper-stale");

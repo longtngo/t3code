@@ -145,6 +145,28 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         // handler stops the provider AND writes the session projection; a bare
         // `stopSession` stopped the subprocess and left the projection saying
         // the session was still live, which every client then reads as truth.
+        // `ProviderService.stopSession` marks the binding stopped only after
+        // the adapter stop succeeds, so a failed stop leaves a live binding
+        // whose session projection already reads "stopped". Dispatching for it
+        // cannot help - the command handler skips the provider for exactly
+        // that reason - and the session write below it would still land, so
+        // every sweep would burn two durable events on a thread nothing here
+        // can fix. Skip it, and say so once per sweep so it is diagnosable.
+        const projectedSession = Option.getOrNull(
+          yield* projectionSnapshotQuery
+            .getThreadSessionById(binding.threadId)
+            .pipe(Effect.catchCause(() => Effect.succeedNone)),
+        );
+        if (projectedSession?.status === "stopped") {
+          yield* Effect.logWarning("provider.session.reaper.binding-outlived-session", {
+            threadId: binding.threadId,
+            provider: binding.provider,
+            bindingStatus: binding.status,
+            idleDurationMs,
+          });
+          continue;
+        }
+
         const reaped = yield* Effect.gen(function* () {
           const createdAt = yield* nowIso;
           yield* orchestrationEngine.dispatch({
