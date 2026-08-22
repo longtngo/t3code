@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   OrchestrationEngineService,
+  type OrchestrationDispatchOptions,
   type OrchestrationEngineShape,
 } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -198,6 +199,7 @@ describe("ProviderSessionReaper", () => {
     // dispatch, and a "stop failed" case is a dispatch that fails.
     let dispatchSequence = 0;
     const dispatchedCommands: Array<OrchestrationCommand> = [];
+    const dispatchedOptions: Array<OrchestrationDispatchOptions | undefined> = [];
     const dispatchStop = vi.fn((request: { readonly threadId: ThreadId }) =>
       input.stopDispatchImplementation
         ? input.stopDispatchImplementation(request)
@@ -209,7 +211,8 @@ describe("ProviderSessionReaper", () => {
     );
     const orchestrationEngine = {
       readEvents: () => Effect.die("unused"),
-      dispatch: (command: OrchestrationCommand) => {
+      dispatch: (command: OrchestrationCommand, options?: OrchestrationDispatchOptions) => {
+        dispatchedOptions.push(options);
         // Recorded before the type narrowing so a test can assert on a command
         // the reaper should never send. Rejecting here instead would be
         // swallowed by the reaper's own `catchCause` and read as a pass.
@@ -273,7 +276,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { dispatchStop, dispatchedCommands, stoppedThreadIds, layer };
+    return { dispatchStop, dispatchedCommands, dispatchedOptions, stoppedThreadIds, layer };
   }
 
   // `ProviderService.stopSession` only marks the binding stopped AFTER the
@@ -399,6 +402,9 @@ describe("ProviderSessionReaper", () => {
 
     expect(harness.dispatchStop.mock.calls[0]?.[0]).toEqual({ threadId });
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
+    // The command id carries a fresh uuid and is stored nowhere, so its
+    // receipt could never be read back; writing one is pure growth.
+    expect(harness.dispatchedOptions).toEqual([{ singleUseCommandId: true }]);
   });
 
   it("does not reap a stale session whose thread has an in-flight background task", async () => {

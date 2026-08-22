@@ -21,6 +21,7 @@ import {
 import * as TerminalManager from "../../terminal/Manager.ts";
 import {
   OrchestrationEngineService,
+  type OrchestrationDispatchOptions,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
@@ -79,6 +80,7 @@ describe("ThreadDeletionReactor", () => {
 
   interface Recorded {
     readonly dispatched: Array<OrchestrationCommand>;
+    readonly dispatchedOptions: Array<OrchestrationDispatchOptions | undefined>;
     readonly closedTerminals: Array<string>;
     readonly clearedTaskThreadIds: Array<string>;
   }
@@ -92,9 +94,10 @@ describe("ThreadDeletionReactor", () => {
 
     const engine = Layer.succeed(OrchestrationEngineService, {
       readEvents: () => Effect.die(new Error("unused")),
-      dispatch: (command: OrchestrationCommand) =>
+      dispatch: (command: OrchestrationCommand, options?: OrchestrationDispatchOptions) =>
         Effect.sync(() => {
           recorded.dispatched.push(command);
+          recorded.dispatchedOptions.push(options);
           return { sequence: recorded.dispatched.length };
         }),
       streamDomainEvents: Stream.fromIterable(events),
@@ -162,6 +165,7 @@ describe("ThreadDeletionReactor", () => {
     Effect.gen(function* () {
       const recorded: Recorded = {
         dispatched: [],
+        dispatchedOptions: [],
         closedTerminals: [],
         clearedTaskThreadIds: [],
       };
@@ -187,6 +191,9 @@ describe("ThreadDeletionReactor", () => {
       expect(
         recorded.dispatched.map((command) => (command as { threadId?: string }).threadId),
       ).toEqual([threadId]);
+      // The command id carries a fresh uuid and is stored nowhere, so its
+      // receipt could never be read back; writing one is pure growth.
+      expect(recorded.dispatchedOptions).toEqual([{ singleUseCommandId: true }]);
     }),
   );
 

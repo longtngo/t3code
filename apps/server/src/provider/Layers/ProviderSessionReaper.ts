@@ -169,12 +169,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         const reaped = yield* Effect.gen(function* () {
           const createdAt = yield* nowIso;
-          yield* orchestrationEngine.dispatch({
-            type: "thread.session.stop",
-            commandId: yield* commandId("reap"),
-            threadId: binding.threadId,
-            createdAt,
-          });
+          yield* orchestrationEngine.dispatch(
+            {
+              type: "thread.session.stop",
+              commandId: yield* commandId("reap"),
+              threadId: binding.threadId,
+              createdAt,
+            },
+            // The id carries a fresh uuid and is stored nowhere, so it can
+            // never recur and its receipt could never be read back.
+            { singleUseCommandId: true },
+          );
         }).pipe(
           Effect.tap(() =>
             Effect.logInfo("provider.session.reaped", {

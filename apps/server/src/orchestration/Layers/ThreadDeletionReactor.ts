@@ -55,12 +55,17 @@ const make = Effect.gen(function* () {
       effect: Effect.gen(function* () {
         const createdAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
         const uuid = yield* crypto.randomUUIDv4;
-        yield* orchestrationEngine.dispatch({
-          type: "thread.session.stop",
-          commandId: CommandId.make(`thread-deletion:stop:${uuid}`),
-          threadId,
-          createdAt,
-        });
+        yield* orchestrationEngine.dispatch(
+          {
+            type: "thread.session.stop",
+            commandId: CommandId.make(`thread-deletion:stop:${uuid}`),
+            threadId,
+            createdAt,
+          },
+          // The id carries a fresh uuid and is stored nowhere, so it can never
+          // recur and its receipt could never be read back.
+          { singleUseCommandId: true },
+        );
       }),
       message: "thread deletion cleanup skipped provider session stop",
       threadId,
