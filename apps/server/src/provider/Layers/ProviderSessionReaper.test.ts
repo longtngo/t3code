@@ -1,11 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  type OrchestrationCommand,
   ProjectId,
-  ThreadId,
-  TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
   RuntimeTaskId,
+  ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -18,6 +19,10 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
@@ -26,9 +31,11 @@ import {
 } from "../../persistence/Services/PendingBackgroundTask.ts";
 import { ProviderSessionRuntimeRepository } from "../../persistence/ProviderSessionRuntime.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
-import { ProviderValidationError } from "../Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  type OrchestrationDispatchError,
+} from "../../orchestration/Errors.ts";
 import { ProviderSessionReaper } from "../Services/ProviderSessionReaper.ts";
-import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import { makeProviderSessionReaperLive } from "./ProviderSessionReaper.ts";
 
@@ -156,9 +163,9 @@ describe("ProviderSessionReaper", () => {
 
   async function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
-    readonly stopSessionImplementation?: (input: {
+    readonly stopDispatchImplementation?: (input: {
       readonly threadId: ThreadId;
-    }) => ReturnType<ProviderServiceShape["stopSession"]>;
+    }) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError>;
     /** Thread ids that should report an in-flight background task (reaper guard). */
     readonly pendingTaskThreadIds?: ReadonlyArray<ThreadId>;
   }) {
@@ -188,41 +195,37 @@ describe("ProviderSessionReaper", () => {
       deleteByThreadId: () => Effect.void,
     });
     const stoppedThreadIds = new Set<ThreadId>();
-    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
-      (request) =>
-        (input.stopSessionImplementation
-          ? input.stopSessionImplementation(request)
-          : Effect.sync(() => {
-              stoppedThreadIds.add(request.threadId);
-            })) as ReturnType<ProviderServiceShape["stopSession"]>,
+    // The reaper no longer touches the provider: it dispatches
+    // `thread.session.stop`, and the command handler is what stops the
+    // subprocess and writes the session projection. So the observable is the
+    // dispatch, and a "stop failed" case is a dispatch that fails.
+    let dispatchSequence = 0;
+    const dispatchedCommands: Array<OrchestrationCommand> = [];
+    const dispatchStop = vi.fn((request: { readonly threadId: ThreadId }) =>
+      input.stopDispatchImplementation
+        ? input.stopDispatchImplementation(request)
+        : Effect.sync(() => {
+            stoppedThreadIds.add(request.threadId);
+            dispatchSequence += 1;
+            return { sequence: dispatchSequence };
+          }),
     );
-
-    const providerService: ProviderServiceShape = {
-      startSession: () => unsupported(),
-      sendTurn: () => unsupported(),
-      interruptTurn: () => unsupported(),
-      respondToRequest: () => unsupported(),
-      respondToUserInput: () => unsupported(),
-      stopSession,
-      listSessions: () => Effect.succeed([]),
-      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
-      getInstanceInfo: (instanceId) => {
-        const driverKind = ProviderDriverKind.make(String(instanceId));
-        return Effect.succeed({
-          instanceId,
-          driverKind,
-          displayName: undefined,
-          enabled: true,
-          continuationIdentity: {
-            driverKind,
-            continuationKey: `${driverKind}:instance:${instanceId}`,
-          },
-        });
+    const orchestrationEngine = {
+      readEvents: () => Effect.die("unused"),
+      dispatch: (command: OrchestrationCommand) => {
+        // Recorded before the type narrowing so a test can assert on a command
+        // the reaper should never send. Rejecting here instead would be
+        // swallowed by the reaper's own `catchCause` and read as a pass.
+        dispatchedCommands.push(command);
+        if (command.type !== "thread.session.stop") {
+          return Effect.succeed({ sequence: 0 });
+        }
+        return dispatchStop({ threadId: command.threadId });
       },
-      rollbackConversation: () => unsupported(),
-      refreshAccountUsage: () => Effect.void,
-      streamEvents: Stream.empty,
-    };
+      streamDomainEvents: Stream.empty,
+      subscribeDomainEvents: Effect.die("unused"),
+      latestSequence: Effect.succeed(0),
+    } as unknown as OrchestrationEngineShape;
 
     const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
       Layer.provide(SqlitePersistenceMemory),
@@ -237,7 +240,7 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
       Layer.provideMerge(pendingBackgroundTaskRepositoryMock),
-      Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+      Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
@@ -268,7 +271,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds, layer };
+    return { dispatchStop, dispatchedCommands, stoppedThreadIds, layer };
   }
 
   it("reaps stale persisted sessions without active turns", async () => {
@@ -312,9 +315,16 @@ describe("ProviderSessionReaper", () => {
 
     await startReaper();
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    await waitFor(() => harness.dispatchStop.mock.calls.length === 1);
 
-    expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({ threadId });
+    // The contract this fix exists for: the reaper asks the orchestration
+    // command to stop the session rather than stopping the provider itself,
+    // because only the command path also writes the session projection.
+    expect(harness.dispatchedCommands.map((command) => command.type)).toEqual([
+      "thread.session.stop",
+    ]);
+
+    expect(harness.dispatchStop.mock.calls[0]?.[0]).toEqual({ threadId });
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
   });
 
@@ -358,7 +368,7 @@ describe("ProviderSessionReaper", () => {
 
     // Let the (immediate) first sweep run, then confirm the guard held.
     await Effect.runPromise(Effect.sleep("150 millis"));
-    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.dispatchStop.mock.calls.length).toBe(0);
     expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
   });
 
@@ -403,7 +413,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
 
     await runtime!.runPromise(Effect.sleep("150 millis"));
-    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.dispatchStop.mock.calls.length).toBe(0);
     expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
   });
 
@@ -446,7 +456,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
 
     await runtime!.runPromise(Effect.sleep("150 millis"));
-    expect(harness.stopSession.mock.calls.length).toBe(0);
+    expect(harness.dispatchStop.mock.calls.length).toBe(0);
     expect(harness.stoppedThreadIds.has(threadId)).toBe(false);
   });
 
@@ -493,7 +503,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
     await Effect.runPromise(drainFibers);
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatchStop).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
   });
@@ -541,7 +551,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
     await Effect.runPromise(drainFibers);
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatchStop).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
   });
@@ -588,7 +598,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
     await Effect.runPromise(drainFibers);
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatchStop).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
   });
@@ -635,7 +645,7 @@ describe("ProviderSessionReaper", () => {
     await startReaper();
     await Effect.runPromise(drainFibers);
 
-    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.dispatchStop).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
   });
@@ -671,15 +681,15 @@ describe("ProviderSessionReaper", () => {
           },
         },
       ]),
-      stopSessionImplementation: (request) =>
+      stopDispatchImplementation: (request) =>
         request.threadId === failedThreadId
           ? Effect.fail(
-              new ProviderValidationError({
-                operation: "ProviderSessionReaper.test",
-                issue: "simulated stop failure",
+              new OrchestrationCommandInvariantError({
+                commandType: "thread.session.stop",
+                detail: "simulated stop failure",
               }),
             )
-          : Effect.void,
+          : Effect.succeed({ sequence: 1 }),
     });
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
@@ -718,9 +728,9 @@ describe("ProviderSessionReaper", () => {
 
     await startReaper();
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+    await waitFor(() => harness.dispatchStop.mock.calls.length === 2);
 
-    expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
+    expect(harness.dispatchStop.mock.calls.map(([request]) => request.threadId)).toEqual([
       failedThreadId,
       reapedThreadId,
     ]);
@@ -757,10 +767,10 @@ describe("ProviderSessionReaper", () => {
           },
         },
       ]),
-      stopSessionImplementation: (request) =>
+      stopDispatchImplementation: (request) =>
         request.threadId === defectThreadId
           ? Effect.die(new Error("simulated stop defect"))
-          : Effect.void,
+          : Effect.succeed({ sequence: 1 }),
     });
     const repository = await runtime!.runPromise(
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
@@ -799,9 +809,9 @@ describe("ProviderSessionReaper", () => {
 
     await startReaper();
 
-    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+    await waitFor(() => harness.dispatchStop.mock.calls.length === 2);
 
-    expect(harness.stopSession.mock.calls.map(([request]) => request.threadId)).toEqual([
+    expect(harness.dispatchStop.mock.calls.map(([request]) => request.threadId)).toEqual([
       defectThreadId,
       reapedThreadId,
     ]);

@@ -1,9 +1,12 @@
+import { CommandId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Crypto from "effect/Crypto";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
@@ -13,10 +16,11 @@ import {
   type ProviderSessionReaperShape,
 } from "../Services/ProviderSessionReaper.ts";
 import { forkParked } from "../../serverActivation.ts";
-import { ProviderService } from "../Services/ProviderService.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const DISPATCH_TIMEOUT = Duration.seconds(30);
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
@@ -25,7 +29,8 @@ export interface ProviderSessionReaperLiveOptions {
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
   Effect.gen(function* () {
-    const providerService = yield* ProviderService;
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    const crypto = yield* Crypto.Crypto;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
@@ -35,6 +40,11 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+
+    const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
+    const commandId = (tag: string) =>
+      crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`reaper:${tag}:${uuid}`)));
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
@@ -131,7 +141,19 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
+        // Dispatch rather than calling the provider directly. The command
+        // handler stops the provider AND writes the session projection; a bare
+        // `stopSession` stopped the subprocess and left the projection saying
+        // the session was still live, which every client then reads as truth.
+        const reaped = yield* Effect.gen(function* () {
+          const createdAt = yield* nowIso;
+          yield* orchestrationEngine.dispatch({
+            type: "thread.session.stop",
+            commandId: yield* commandId("reap"),
+            threadId: binding.threadId,
+            createdAt,
+          });
+        }).pipe(
           Effect.tap(() =>
             Effect.logInfo("provider.session.reaped", {
               threadId: binding.threadId,
@@ -141,6 +163,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             }),
           ),
           Effect.as(true),
+          Effect.timeout(DISPATCH_TIMEOUT),
           Effect.catchCause((cause) =>
             Effect.logWarning("provider.session.reaper.stop-failed", {
               threadId: binding.threadId,
