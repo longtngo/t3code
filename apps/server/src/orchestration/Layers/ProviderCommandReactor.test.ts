@@ -3513,6 +3513,94 @@ describe("ProviderCommandReactor", () => {
     ).toBeUndefined();
   });
 
+  // A thread can exist with NO session row: `thread.create` writes one only
+  // once a session is set, and `thread.session.stop` is accepted regardless,
+  // because the command's only precondition is that the thread exists. The
+  // handler's session write below the guard is unconditional, so it used to
+  // invent a "stopped" session for a provider that was never started. That
+  // became load-bearing when background components started dispatching this
+  // command instead of calling the provider directly - thread deletion would
+  // mint one of these rows for every deleted thread that never ran an agent.
+  it("neither stops a provider nor invents a session for a thread that never had one", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const sessionless = ThreadId.make("thread-never-started");
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-sessionless"),
+        threadId: sessionless,
+        projectId: asProjectId("project-1"),
+        title: "Never started",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-sessionless"),
+        threadId: sessionless,
+        createdAt: now,
+      }),
+    );
+
+    // Positive control, and the only sound way to wait on a handler that is
+    // meant to leave no trace: the reactor consumes events in order, so a
+    // LATER stop reaching the provider proves the earlier one was processed.
+    // Without it both assertions below would also pass if the reactor had
+    // simply not got there yet.
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-control"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-control"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+
+    // Kills `session?.status !== "stopped"`: with no row that reads
+    // `undefined !== "stopped"`, which is true, and the provider gets a stop
+    // for a session it never opened.
+    expect(
+      harness.stopSession.mock.calls.map((call) => (call[0] as { threadId?: ThreadId }).threadId),
+    ).toEqual([ThreadId.make("thread-1")]);
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === sessionless);
+    expect(thread).toBeDefined();
+    // The behaviour half: no session row conjured out of nothing.
+    expect(thread?.session ?? null).toBeNull();
+  });
+
   // The stopSession call was uncaught, so a provider that failed to stop took
   // the whole handler down with it - and the session-set to "stopped" that
   // follows never ran, leaving the thread visibly stuck in its old status with

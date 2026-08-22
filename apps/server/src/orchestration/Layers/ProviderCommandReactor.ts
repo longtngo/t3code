@@ -1600,7 +1600,17 @@ const make = Effect.gen(function* () {
     const session = Option.getOrNull(yield* projectionSnapshotQuery.getThreadSessionById(threadId));
 
     const now = event.payload.createdAt;
-    if (session && session.status !== "stopped") {
+    if (!session) {
+      // No session row means no provider was ever started for this thread, so
+      // there is nothing to stop and nothing to correct. Returning matters
+      // because the session write below is unconditional: without this it
+      // invents a "stopped" session for a provider that never ran, and the
+      // background components that dispatch this command - thread deletion,
+      // the idle reaper - would mint one per thread they clean up.
+      return;
+    }
+
+    if (session.status !== "stopped") {
       // Best effort: a provider that cannot be stopped (dead process, closed
       // transport) must not take this handler down with it, or the session-set
       // below never runs and the thread stays stuck in its old status.
@@ -1623,13 +1633,13 @@ const make = Effect.gen(function* () {
       session: {
         threadId,
         status: "stopped",
-        providerName: session?.providerName ?? null,
-        ...(session?.providerInstanceId !== undefined
+        providerName: session.providerName ?? null,
+        ...(session.providerInstanceId !== undefined
           ? { providerInstanceId: session.providerInstanceId }
           : {}),
-        runtimeMode: session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: session.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
-        lastError: session?.lastError ?? null,
+        lastError: session.lastError ?? null,
         updatedAt: now,
       },
       createdAt: now,
