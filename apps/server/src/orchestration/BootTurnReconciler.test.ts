@@ -189,6 +189,7 @@ describe("reconcileInterruptedTurnsOnBoot binding resilience", () => {
       } as unknown as OrchestrationEngineService["Service"]),
       Effect.provideService(ProjectionSnapshotQuery, {
         getShellSnapshot: () => Effect.succeed({ threads }),
+        getArchivedShellSnapshot: () => Effect.succeed({ threads: [] }),
       } as unknown as ProjectionSnapshotQuery["Service"]),
       Effect.provideService(ProviderSessionDirectory, directory),
       Effect.map(() => dispatched),
@@ -349,4 +350,80 @@ itEffect.layer(bootReconcileLayer)("reconcileInterruptedTurnsOnBoot across boots
       expect((yield* currentSession)?.activeTurnId).toBeNull();
     }),
   );
+});
+
+// Archiving a thread requests a session stop, but for three months every one of
+// those stops was dropped, leaving 62 archived threads permanently claiming a
+// live session. Nothing swept them up: this reconciler reads only the
+// navigation snapshot, which filters archived rows at the SQL level, so 104
+// boot reconciliations ran without ever seeing them.
+describe("reconcileInterruptedTurnsOnBoot archived coverage", () => {
+  const runWith = (input: {
+    readonly active: ReadonlyArray<OrchestrationThreadShell>;
+    readonly archived: ReadonlyArray<OrchestrationThreadShell>;
+  }) => {
+    const dispatched: OrchestrationCommand[] = [];
+    return reconcileInterruptedTurnsOnBoot().pipe(
+      Effect.provideService(OrchestrationEngineService, {
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+      } as unknown as OrchestrationEngineService["Service"]),
+      Effect.provideService(ProjectionSnapshotQuery, {
+        getShellSnapshot: () => Effect.succeed({ threads: input.active }),
+        getArchivedShellSnapshot: () => Effect.succeed({ threads: input.archived }),
+      } as unknown as ProjectionSnapshotQuery["Service"]),
+      Effect.provideService(ProviderSessionDirectory, {
+        getBinding: () => Effect.succeed(Option.none()),
+        upsert: () => Effect.void,
+        getProvider: () => Effect.die("unused"),
+        listThreadIds: () => Effect.die("unused"),
+        listBindings: () => Effect.die("unused"),
+      } as ProviderSessionDirectoryShape),
+      Effect.map(() => dispatched),
+      Effect.runPromise,
+    );
+  };
+
+  it("settles an archived thread's live session", async () => {
+    const dispatched = await runWith({
+      active: [],
+      archived: [shell("thread-archived", "ready", null)],
+    });
+    expect(
+      dispatched
+        .filter((command) => command.type === "thread.session.set")
+        .map((command) => command.threadId),
+    ).toEqual(["thread-archived"]);
+  });
+
+  it("settles active and archived threads in one pass", async () => {
+    const dispatched = await runWith({
+      active: [shell("thread-active", "running", "turn-1")],
+      archived: [shell("thread-archived", "ready", null)],
+    });
+    expect(
+      dispatched
+        .filter((command) => command.type === "thread.session.set")
+        .map((command) => command.threadId),
+    ).toEqual(["thread-active", "thread-archived"]);
+    // The archived thread had no active turn, so only the live one is
+    // interrupted - proving both lists go through the same planner rather than
+    // the archived one being appended blindly.
+    expect(
+      dispatched
+        .filter((command) => command.type === "thread.turn.interrupt")
+        .map((command) => command.threadId),
+    ).toEqual(["thread-active"]);
+  });
+
+  it("leaves an archived thread whose session is already resting alone", async () => {
+    const dispatched = await runWith({
+      active: [],
+      archived: [shell("thread-archived", "stopped", null)],
+    });
+    expect(dispatched).toHaveLength(0);
+  });
 });

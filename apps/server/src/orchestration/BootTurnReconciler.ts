@@ -9,8 +9,10 @@
  *
  * At the point this runs (a startup phase before the reactors begin) the
  * freshly-booted process owns ZERO live sessions, so any thread still in a live
- * session status is by definition orphaned from the previous process — deciding
- * *whether* to reconcile needs no boot-id bookkeeping. The command ids do: they
+ * session status is by definition orphaned from the previous process —
+ * archived and deleted ones included, which is why this reads the archive
+ * snapshot too — and deciding *whether* to reconcile needs no boot-id
+ * bookkeeping. The command ids do: they
  * are keyed into a receipt table that is never pruned, and the engine replays an
  * accepted receipt instead of deciding, so a thread-scoped id would reconcile a
  * given thread once ever and silently no-op every later boot. Hence the boot
@@ -110,9 +112,20 @@ export const reconcileInterruptedTurnsOnBoot = Effect.fn("reconcileInterruptedTu
     const engine = yield* OrchestrationEngineService;
     const query = yield* ProjectionSnapshotQuery;
     const directory = yield* ProviderSessionDirectory;
-    const snapshot = yield* query.getShellSnapshot();
+    // Two reads, because the navigation snapshot filters archived and deleted
+    // threads at the SQL level and an orphaned session does not care whether
+    // its thread is still navigable. Without the second one an archived
+    // thread's session is stuck in a live status for good: unarchiving it
+    // brings the stale status back, and nothing else writes the projection.
+    const [snapshot, archivedSnapshot] = yield* Effect.all([
+      query.getShellSnapshot(),
+      query.getArchivedShellSnapshot(),
+    ]);
     const nowIso = DateTime.formatIso(yield* DateTime.now);
-    const commands = planBootReconciliation(snapshot.threads, nowIso);
+    const commands = planBootReconciliation(
+      [...snapshot.threads, ...archivedSnapshot.threads],
+      nowIso,
+    );
     const reconciledThreads = commands.filter((c) => c.type === "thread.session.set").length;
     if (reconciledThreads === 0) {
       return 0;
