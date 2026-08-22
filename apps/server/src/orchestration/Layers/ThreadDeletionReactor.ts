@@ -1,12 +1,13 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import { CommandId, type OrchestrationEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -40,13 +41,27 @@ export const logCleanupCauseUnlessInterrupted = <R, E>({
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
-  const providerService = yield* ProviderService;
+  const crypto = yield* Crypto.Crypto;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
 
+  // Dispatched, not called directly on `ProviderService`: the command stops
+  // the provider AND writes the session projection. Stopping the provider by
+  // itself left every deleted thread with a session row still claiming to be
+  // live, and nothing ever corrected it - `thread.deleted` is a soft delete
+  // and the session row has no cascade.
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
     logCleanupCauseUnlessInterrupted({
-      effect: providerService.stopSession({ threadId }),
+      effect: Effect.gen(function* () {
+        const createdAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+        const uuid = yield* crypto.randomUUIDv4;
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.make(`thread-deletion:stop:${uuid}`),
+          threadId,
+          createdAt,
+        });
+      }),
       message: "thread deletion cleanup skipped provider session stop",
       threadId,
     });
