@@ -314,6 +314,8 @@ export function useThreadOutboxDrain(): void {
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
+        createdAt: nextQueuedMessage.createdAt,
+        nowIso: new Date().toISOString(),
       });
       if (deliveryAction === "wait") {
         continue;

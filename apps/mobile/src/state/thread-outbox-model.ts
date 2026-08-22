@@ -24,6 +24,13 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
+/**
+ * How long a queued turn stays deliverable. Matches the web outbox so both
+ * clients make the same promise; the durable queue here makes it matter more,
+ * because a mobile queue survives restarts and OS upgrades indefinitely.
+ */
+export const MAX_QUEUED_TURN_AGE_MS = 12 * 60 * 60 * 1000;
+
 const QueuedThreadCreationSchema = Schema.Struct({
   projectId: ProjectId,
   // Snapshot of the project's display metadata so a pending task stays
@@ -149,6 +156,19 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
 
 /**
+ * An unparsable or future timestamp is treated as fresh: dropping the user's
+ * message is the destructive answer, so it is never the fallback.
+ */
+function isQueuedTurnExpired(createdAt: string, nowIso: string): boolean {
+  const createdMs = Date.parse(createdAt);
+  const nowMs = Date.parse(nowIso);
+  if (!Number.isFinite(createdMs) || !Number.isFinite(nowMs)) {
+    return false;
+  }
+  return nowMs - createdMs > MAX_QUEUED_TURN_AGE_MS;
+}
+
+/**
  * Decides what the drain pass does with the next queued message.
  *
  * Deliberately blind to whether the thread is mid-turn. A send that lands while
@@ -163,7 +183,16 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
+  readonly createdAt: string;
+  readonly nowIso: string;
 }): ThreadOutboxDeliveryAction {
+  if (!input.isCreation && isQueuedTurnExpired(input.createdAt, input.nowIso)) {
+    // Deliberately not applied to a creation: a pending task is listed on the
+    // home screen and can be edited, and editing keeps the original createdAt
+    // so its command id stays stable. Expiring those would delete work the
+    // user can still see, and would count an edit made today as months old.
+    return "remove";
+  }
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
     // exists the creation command went through and only cleanup remains.

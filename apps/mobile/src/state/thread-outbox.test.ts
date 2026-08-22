@@ -15,6 +15,7 @@ import {
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
+  MAX_QUEUED_TURN_AGE_MS,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
@@ -464,6 +465,8 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("wait");
     expect(
@@ -472,6 +475,8 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("remove");
     expect(
@@ -480,6 +485,8 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("send");
   });
@@ -495,6 +502,8 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("send");
     expect(
@@ -503,6 +512,8 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("wait");
   });
@@ -514,6 +525,8 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -524,6 +537,8 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("wait");
     expect(
@@ -532,6 +547,8 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("send");
     expect(
@@ -540,8 +557,78 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:01.000Z",
       }),
     ).toBe("remove");
+  });
+
+  // The mobile outbox had no age bound of any kind, while web retires queued
+  // turns after MAX_QUEUED_TURN_AGE_MS. Mobile's queue is durable on disk and
+  // only ever removed on successful delivery, so a turn queued on a plane
+  // months ago would still be delivered verbatim into a thread that had moved
+  // on. It carries its original createdAt, so the agent could not tell either.
+  it("retires a queued turn once it is older than the age bound", () => {
+    // Pinned literally, not derived: every other assertion here computes its
+    // timestamps FROM the constant, so they hold just as well if the bound
+    // becomes twelve milliseconds or twelve years. Web's equivalent test has
+    // exactly that gap - it never imports its own constant.
+    expect(MAX_QUEUED_TURN_AGE_MS).toBe(12 * 60 * 60 * 1000);
+
+    const queuedAt = "2026-01-01T00:00:00.000Z";
+    const justInside = new Date(
+      Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS - 1_000,
+    ).toISOString();
+    const justOutside = new Date(
+      Date.parse(queuedAt) + MAX_QUEUED_TURN_AGE_MS + 1_000,
+    ).toISOString();
+
+    const action = (nowIso: string) =>
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        createdAt: queuedAt,
+        nowIso,
+      });
+
+    // Positive control: the same call sends while the turn is fresh, so
+    // "remove" below is the age doing the work and not the other inputs.
+    expect(action(justInside)).toBe("send");
+    expect(action(justOutside)).toBe("remove");
+  });
+
+  // Pending tasks are the one thing in this queue the user can see and edit,
+  // and editing deliberately preserves the original createdAt so the command
+  // id stays stable. Expiring them would silently delete work still listed on
+  // the home screen, and re-date the ones the user had just touched.
+  it("never retires a queued pending task, however old", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: true,
+        threadExists: false,
+        shellStatus: "live",
+        environmentConnected: true,
+        createdAt: "2020-01-01T00:00:00.000Z",
+        nowIso: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toBe("send");
+  });
+
+  // An unparsable timestamp must not read as "infinitely old" and silently
+  // eat the turn.
+  it("keeps a queued turn whose timestamp cannot be parsed", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        createdAt: "not-a-date",
+        nowIso: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toBe("send");
   });
 
   it("round-trips queued creations and gates incomplete ones from sending", () => {
