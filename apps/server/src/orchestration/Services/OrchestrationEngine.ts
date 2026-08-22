@@ -22,6 +22,24 @@ import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
  */
+/**
+ * Per-dispatch options.
+ *
+ * `singleUseCommandId` asserts that this command's id contains freshly
+ * generated randomness and is not stored anywhere durable, so the same id can
+ * never arrive twice. The engine then skips the receipt entirely - both the
+ * lookup and the write - because a receipt that can never be read back is pure
+ * cost. Provider-runtime ingestion mints such ids for every provider event and
+ * accounted for 98.5% of a real 2.08M-row receipt table.
+ *
+ * Pass it ONLY for an id you mint fresh per dispatch. Setting it on an id that
+ * is deterministic, or that a client or a durable table can replay, silently
+ * turns off exactly-once for that command.
+ */
+export interface OrchestrationDispatchOptions {
+  readonly singleUseCommandId?: boolean;
+}
+
 export interface OrchestrationEngineShape {
   /**
    * Replay persisted orchestration events from an exclusive sequence cursor.
@@ -49,6 +67,7 @@ export interface OrchestrationEngineShape {
    */
   readonly dispatch: (
     command: OrchestrationCommand,
+    options?: OrchestrationDispatchOptions,
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**

@@ -366,6 +366,46 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  // The engine skips the command receipt for everything this file dispatches,
+  // which is only safe because these ids cannot recur. That freshness is added
+  // by `dispatchWithFreshCommandId`, not by the callers - remove the uuid it
+  // appends and one provider event's two activities go out under one id, which
+  // is the same shape of mistake as handing the flag a durable id.
+  it("gives every command it dispatches a distinct id, even within one event", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "task.progress",
+      eventId: asEventId("evt-fan-out"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:05:00.000Z",
+      // `typedUsage` alongside a status is what splits one event into a
+      // progress activity and a usage activity, so this dispatches twice.
+      payload: {
+        taskId: RuntimeTaskId.make("task-fan-out"),
+        description: "Agent",
+        summary: "Working",
+        typedUsage: { totalTokens: 4_200, toolUses: 7 },
+        status: "running",
+      },
+    });
+    await harness.drain();
+
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0, 1000))),
+    );
+    const base = "provider:evt-fan-out:thread-activity-append";
+    const commandIds = events
+      .map((event) => event.commandId)
+      .filter((commandId) => typeof commandId === "string" && commandId.startsWith(`${base}:`));
+
+    // Positive control: the two dispatches happened at all, and under the
+    // expected name - otherwise "all distinct" would hold vacuously over zero.
+    expect(commandIds).toHaveLength(2);
+    expect(new Set(commandIds).size).toBe(2);
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

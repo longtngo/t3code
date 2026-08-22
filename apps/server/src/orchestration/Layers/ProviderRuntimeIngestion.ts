@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  type OrchestrationCommand,
   EventId,
   MessageId,
   type OrchestrationEvent,
@@ -1136,9 +1137,31 @@ const make = Effect.gen(function* () {
   const pendingBackgroundTaskRepository = yield* PendingBackgroundTaskRepository;
   const { bootId } = yield* RuntimeBootId;
   const serverSettingsService = yield* ServerSettingsService;
+  /** Names the command; `dispatchWithFreshCommandId` makes it unique. */
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
+    CommandId.make(`provider:${event.eventId}:${tag}`);
+
+  /**
+   * Dispatches a command under a one-shot id, so the engine can skip its
+   * receipt. Ingestion receipts were 98.5% of a real 2.08M-row receipt table
+   * and not one of them was ever read back: nothing here persists a command id,
+   * so none of them can arrive twice.
+   *
+   * The freshness is created HERE rather than trusted from the caller - the id
+   * it is handed only names the command, and this appends the randomness that
+   * makes it unique. A caller in this file therefore cannot hand over a
+   * replayable id even by accident, which matters because sibling
+   * `provider:`-prefixed ids elsewhere (`provider:bg-task-recovery:...`) are
+   * deterministic and DO depend on their receipt for exactly-once.
+   */
+  const dispatchWithFreshCommandId = (command: OrchestrationCommand) =>
     crypto.randomUUIDv4.pipe(
-      Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
+      Effect.flatMap((uuid) =>
+        orchestrationEngine.dispatch(
+          { ...command, commandId: CommandId.make(`${command.commandId}:${uuid}`) },
+          { singleUseCommandId: true },
+        ),
+      ),
     );
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
@@ -1460,9 +1483,9 @@ const make = Effect.gen(function* () {
         return false;
       }
 
-      yield* orchestrationEngine.dispatch({
+      yield* dispatchWithFreshCommandId({
         type: "thread.message.assistant.delta",
-        commandId: yield* providerCommandId(input.event, input.commandTag),
+        commandId: providerCommandId(input.event, input.commandTag),
         threadId: input.threadId,
         messageId: input.messageId,
         delta: bufferedText,
@@ -1527,9 +1550,9 @@ const make = Effect.gen(function* () {
       const hasRenderableText = hasRenderableAssistantText(text);
 
       if (hasRenderableText) {
-        yield* orchestrationEngine.dispatch({
+        yield* dispatchWithFreshCommandId({
           type: "thread.message.assistant.delta",
-          commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
+          commandId: providerCommandId(input.event, input.finalDeltaCommandTag),
           threadId: input.threadId,
           messageId: input.messageId,
           delta: text,
@@ -1539,9 +1562,9 @@ const make = Effect.gen(function* () {
       }
 
       if (input.hasProjectedMessage || hasRenderableText) {
-        yield* orchestrationEngine.dispatch({
+        yield* dispatchWithFreshCommandId({
           type: "thread.message.assistant.complete",
-          commandId: yield* providerCommandId(input.event, input.commandTag),
+          commandId: providerCommandId(input.event, input.commandTag),
           threadId: input.threadId,
           messageId: input.messageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
@@ -1615,9 +1638,9 @@ const make = Effect.gen(function* () {
       }
 
       const existingPlan = findProposedPlanById(input.threadProposedPlans, input.planId);
-      yield* orchestrationEngine.dispatch({
+      yield* dispatchWithFreshCommandId({
         type: "thread.proposed-plan.upsert",
-        commandId: yield* providerCommandId(input.event, "proposed-plan-upsert"),
+        commandId: providerCommandId(input.event, "proposed-plan-upsert"),
         threadId: input.threadId,
         proposedPlan: {
           id: input.planId,
@@ -1780,11 +1803,10 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const commandUuid = yield* crypto.randomUUIDv4;
-      yield* orchestrationEngine.dispatch({
+      yield* dispatchWithFreshCommandId({
         type: "thread.proposed-plan.upsert",
         commandId: CommandId.make(
-          `provider:source-proposed-plan-implemented:${implementationThreadId}:${commandUuid}`,
+          `provider:source-proposed-plan-implemented:${implementationThreadId}`,
         ),
         threadId: sourceThread.id,
         proposedPlan: {
@@ -1910,34 +1932,29 @@ const make = Effect.gen(function* () {
         "Continue the work that was waiting on this task.",
       ].join("\n");
 
-      yield* orchestrationEngine
-        .dispatch({
-          type: "thread.turn.start",
-          commandId: yield* providerCommandId(event, "task-completed-wakeup"),
-          threadId: thread.id,
-          message: {
-            messageId: MessageId.make(`user:task-wakeup:${event.eventId}`),
-            role: "user",
-            text: wakeText,
-            attachments: [],
-          },
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          createdAt: input.createdAt,
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              "provider runtime ingestion failed to wake thread for completed task",
-              {
-                eventId: event.eventId,
-                threadId: thread.id,
-                taskId: event.payload.taskId,
-                cause: Cause.pretty(cause),
-              },
-            ),
-          ),
-        );
+      yield* dispatchWithFreshCommandId({
+        type: "thread.turn.start",
+        commandId: providerCommandId(event, "task-completed-wakeup"),
+        threadId: thread.id,
+        message: {
+          messageId: MessageId.make(`user:task-wakeup:${event.eventId}`),
+          role: "user",
+          text: wakeText,
+          attachments: [],
+        },
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: input.createdAt,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider runtime ingestion failed to wake thread for completed task", {
+            eventId: event.eventId,
+            threadId: thread.id,
+            taskId: event.payload.taskId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
     },
   );
 
@@ -2092,9 +2109,9 @@ const make = Effect.gen(function* () {
             );
           }
 
-          yield* orchestrationEngine.dispatch({
+          yield* dispatchWithFreshCommandId({
             type: "thread.session.set",
-            commandId: yield* providerCommandId(event, "thread-session-set"),
+            commandId: providerCommandId(event, "thread-session-set"),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -2140,9 +2157,9 @@ const make = Effect.gen(function* () {
         if (assistantDeliveryMode === "buffered") {
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (spillChunk.length > 0) {
-            yield* orchestrationEngine.dispatch({
+            yield* dispatchWithFreshCommandId({
               type: "thread.message.assistant.delta",
-              commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
+              commandId: providerCommandId(event, "assistant-delta-buffer-spill"),
               threadId: thread.id,
               messageId: assistantMessageId,
               delta: spillChunk,
@@ -2151,9 +2168,9 @@ const make = Effect.gen(function* () {
             });
           }
         } else {
-          yield* orchestrationEngine.dispatch({
+          yield* dispatchWithFreshCommandId({
             type: "thread.message.assistant.delta",
-            commandId: yield* providerCommandId(event, "assistant-delta"),
+            commandId: providerCommandId(event, "assistant-delta"),
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
@@ -2346,9 +2363,9 @@ const make = Effect.gen(function* () {
           : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
 
         if (shouldApplyRuntimeError) {
-          yield* orchestrationEngine.dispatch({
+          yield* dispatchWithFreshCommandId({
             type: "thread.session.set",
-            commandId: yield* providerCommandId(event, "runtime-error-session-set"),
+            commandId: providerCommandId(event, "runtime-error-session-set"),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -2369,9 +2386,9 @@ const make = Effect.gen(function* () {
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
         if (canReplaceThreadTitle(thread.title)) {
-          yield* orchestrationEngine.dispatch({
+          yield* dispatchWithFreshCommandId({
             type: "thread.meta.update",
-            commandId: yield* providerCommandId(event, "thread-meta-update"),
+            commandId: providerCommandId(event, "thread-meta-update"),
             threadId: thread.id,
             title: event.payload.name,
           });
@@ -2398,9 +2415,9 @@ const make = Effect.gen(function* () {
             const assistantMessageId = MessageId.make(
               `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
             );
-            yield* orchestrationEngine.dispatch({
+            yield* dispatchWithFreshCommandId({
               type: "thread.turn.diff.complete",
-              commandId: yield* providerCommandId(event, "thread-turn-diff-complete"),
+              commandId: providerCommandId(event, "thread-turn-diff-complete"),
               threadId: thread.id,
               turnId,
               completedAt: now,
@@ -2503,17 +2520,13 @@ const make = Effect.gen(function* () {
 
       const activities = runtimeEventToActivities(event, taskTitle);
       yield* Effect.forEach(activities, (activity) =>
-        providerCommandId(event, "thread-activity-append").pipe(
-          Effect.flatMap((commandId) =>
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId,
-              threadId: thread.id,
-              activity,
-              createdAt: activity.createdAt,
-            }),
-          ),
-        ),
+        dispatchWithFreshCommandId({
+          type: "thread.activity.append",
+          commandId: providerCommandId(event, "thread-activity-append"),
+          threadId: thread.id,
+          activity,
+          createdAt: activity.createdAt,
+        }),
       ).pipe(Effect.asVoid);
 
       if (event.type === "task.completed") {

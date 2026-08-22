@@ -58,6 +58,8 @@ interface CommandEnvelope {
   command: OrchestrationCommand;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
+  /** See `OrchestrationDispatchOptions.singleUseCommandId`. */
+  singleUseCommandId: boolean;
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
@@ -163,9 +165,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           "orchestration.aggregate_id": aggregateRef.aggregateId,
         });
 
-        const existingReceipt = yield* commandReceiptRepository.getByCommandId({
-          commandId: envelope.command.commandId,
-        });
+        // A single-use id cannot recur, so a receipt for it can never be read
+        // back - skipping the lookup as well as the write saves an index probe
+        // per provider event, not just a row.
+        const existingReceipt = yield* envelope.singleUseCommandId
+          ? Effect.succeedNone
+          : commandReceiptRepository.getByCommandId({
+              commandId: envelope.command.commandId,
+            });
         if (Option.isSome(existingReceipt)) {
           // A receipt only proves this exact command was handled. Replaying it
           // for a command aimed at another aggregate would report success for
@@ -230,15 +237,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 });
               }
 
-              yield* commandReceiptRepository.upsert({
-                commandId: envelope.command.commandId,
-                aggregateKind: lastSavedEvent.aggregateKind,
-                aggregateId: lastSavedEvent.aggregateId,
-                acceptedAt: lastSavedEvent.occurredAt,
-                resultSequence: lastSavedEvent.sequence,
-                status: "accepted",
-                error: null,
-              });
+              if (!envelope.singleUseCommandId) {
+                yield* commandReceiptRepository.upsert({
+                  commandId: envelope.command.commandId,
+                  aggregateKind: lastSavedEvent.aggregateKind,
+                  aggregateId: lastSavedEvent.aggregateId,
+                  acceptedAt: lastSavedEvent.occurredAt,
+                  resultSequence: lastSavedEvent.sequence,
+                  status: "accepted",
+                  error: null,
+                });
+              }
 
               return {
                 committedEvents,
@@ -322,7 +331,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               ),
             );
 
-            if (isOrchestrationCommandInvariantError(error)) {
+            // Same reasoning as the accepted receipt: unreadable, so unwritten.
+            // A rejected receipt is also a permanent poison pill for its id,
+            // which is a thing to hand out only when the id can actually recur.
+            if (isOrchestrationCommandInvariantError(error) && !envelope.singleUseCommandId) {
               yield* commandReceiptRepository
                 .upsert({
                   commandId: envelope.command.commandId,
@@ -376,13 +388,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
 
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
+  const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, {
         command,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
+        singleUseCommandId: options?.singleUseCommandId === true,
       });
       return yield* Deferred.await(result);
     });

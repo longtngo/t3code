@@ -1,6 +1,7 @@
 import {
   CheckpointRef,
   CommandId,
+  EventId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ProjectId,
@@ -19,6 +20,8 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { describe, expect, it } from "vite-plus/test";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -60,17 +63,33 @@ async function createOrchestrationSystem() {
     Layer.provide(ThreadBackgroundLiveness.layer),
     Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
   const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+  const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
+  const receipts = await runtime.runPromise(Effect.service(OrchestrationCommandReceiptRepository));
   return {
     engine,
+    sql,
+    receipts,
+    receiptCount: async (commandId: string) => {
+      const rows = await runtime.runPromise(
+        sql`SELECT COUNT(*) AS n FROM orchestration_command_receipts WHERE command_id = ${commandId}`,
+      );
+      return Number((rows[0] as { n: number }).n);
+    },
+    receiptStatus: async (commandId: string) => {
+      const rows = await runtime.runPromise(
+        sql`SELECT status FROM orchestration_command_receipts WHERE command_id = ${commandId}`,
+      );
+      return rows.length === 0 ? null : (rows[0] as { status: string }).status;
+    },
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
@@ -1330,6 +1349,309 @@ describe("OrchestrationEngine", () => {
     const readModel = await system.readModel();
     const thread = readModel.threads.find((candidate) => candidate.id === "thread-retry");
     expect(thread?.messages.filter((message) => message.role === "user")).toHaveLength(1);
+
+    await system.dispose();
+  });
+
+  // Ingestion mints a fresh uuid into every command id it sends and stores that
+  // id nowhere, so the receipt written for it could never be read back - those
+  // receipts were 98.5% of a real 2.08M-row table.
+  //
+  // States the price out loud: with the flag, the same command id is decided
+  // twice. That is only safe for an id that cannot recur - if this ever starts
+  // looking acceptable for a client-supplied or table-derived id, the flag is
+  // being misused. The three tests below check the receipt rows themselves;
+  // "not deduped" alone would also be true if only the lookup were skipped.
+  it("decides a single-use command id twice, because nothing dedupes it", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-single-use-project"),
+        projectId: asProjectId("project-single-use-twice"),
+        title: "Single Use Twice",
+        workspaceRoot: "/tmp/project-single-use-twice",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-single-use-thread"),
+        threadId: ThreadId.make("thread-single-use"),
+        projectId: asProjectId("project-single-use-twice"),
+        title: "single use",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const activity = {
+      type: "thread.activity.append",
+      commandId: CommandId.make("provider:event-2:thread-activity-append:uuid-2"),
+      threadId: ThreadId.make("thread-single-use"),
+      activity: {
+        id: EventId.make("activity-single-use"),
+        tone: "info",
+        kind: "provider.note",
+        summary: "note",
+        payload: null,
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    } as const;
+
+    const first = await system.run(engine.dispatch(activity, { singleUseCommandId: true }));
+    const second = await system.run(engine.dispatch(activity, { singleUseCommandId: true }));
+    expect(second.sequence).toBeGreaterThan(first.sequence);
+
+    const defaulted = {
+      ...activity,
+      commandId: CommandId.make("provider:event-3:thread-activity-append:uuid-3"),
+      activity: { ...activity.activity, id: EventId.make("activity-defaulted") },
+    } as const;
+    const firstDefaulted = await system.run(engine.dispatch(defaulted));
+    const secondDefaulted = await system.run(engine.dispatch(defaulted));
+    expect(secondDefaulted.sequence).toBe(firstDefaulted.sequence);
+
+    await system.dispose();
+  });
+
+  // The three tests below read the receipt rows directly, because dedup
+  // behaviour alone cannot distinguish a skipped lookup from a skipped write -
+  // and the write is what the change exists for. Each carries a positive
+  // control (the default arm) so a query that reported nothing would be caught.
+  it("skips the receipt write for a single-use command id", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-rw-project"),
+        projectId: asProjectId("project-rw"),
+        title: "RW",
+        workspaceRoot: "/tmp/project-rw",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-rw-thread"),
+        threadId: ThreadId.make("thread-rw"),
+        projectId: asProjectId("project-rw"),
+        title: "rw",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const mkActivity = (commandId: string, activityId: string) =>
+      ({
+        type: "thread.activity.append",
+        commandId: CommandId.make(commandId),
+        threadId: ThreadId.make("thread-rw"),
+        activity: {
+          id: EventId.make(activityId),
+          tone: "info",
+          kind: "provider.note",
+          summary: "note",
+          payload: null,
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }) as const;
+
+    const singleUseId = "provider:event-rw-1:thread-activity-append:uuid-rw-1";
+    await system.run(
+      engine.dispatch(mkActivity(singleUseId, "act-rw-1"), {
+        singleUseCommandId: true,
+      }),
+    );
+    // Kills "keep the write, skip only the lookup".
+    expect(await system.receiptCount(singleUseId)).toBe(0);
+
+    const defaultedId = "provider:event-rw-2:thread-activity-append:uuid-rw-2";
+    await system.run(engine.dispatch(mkActivity(defaultedId, "act-rw-2")));
+    // Positive control: the same query DOES report a hit when a receipt exists.
+    expect(await system.receiptCount(defaultedId)).toBe(1);
+
+    await system.dispose();
+  });
+
+  it("skips the receipt lookup for a single-use command id", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-lu-project"),
+        projectId: asProjectId("project-lu"),
+        title: "LU",
+        workspaceRoot: "/tmp/project-lu",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-lu-thread"),
+        threadId: ThreadId.make("thread-lu"),
+        projectId: asProjectId("project-lu"),
+        title: "lu",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const plant = (commandId: string) =>
+      system.run(
+        system.receipts.upsert({
+          commandId: CommandId.make(commandId),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-lu"),
+          acceptedAt: createdAt,
+          resultSequence: 999_999,
+          status: "accepted",
+          error: null,
+        }),
+      );
+
+    const mkActivity = (commandId: string, activityId: string) =>
+      ({
+        type: "thread.activity.append",
+        commandId: CommandId.make(commandId),
+        threadId: ThreadId.make("thread-lu"),
+        activity: {
+          id: EventId.make(activityId),
+          tone: "info",
+          kind: "provider.note",
+          summary: "note",
+          payload: null,
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }) as const;
+
+    const plantedSingleUse = "provider:planted-1:thread-activity-append:uuid-lu-1";
+    await plant(plantedSingleUse);
+    const singleUse = await system.run(
+      engine.dispatch(mkActivity(plantedSingleUse, "act-lu-1"), { singleUseCommandId: true }),
+    );
+    // Kills "keep the lookup, skip only the write": a live lookup would have
+    // short-circuited to the planted 999_999 without deciding.
+    expect(singleUse.sequence).not.toBe(999_999);
+
+    const plantedDefault = "provider:planted-2:thread-activity-append:uuid-lu-2";
+    await plant(plantedDefault);
+    const defaulted = await system.run(engine.dispatch(mkActivity(plantedDefault, "act-lu-2")));
+    // Positive control: the lookup is real and IS consulted without the flag.
+    expect(defaulted.sequence).toBe(999_999);
+
+    await system.dispose();
+  });
+
+  it("writes a rejected receipt for a durable id and none for a single-use id", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-rej-project"),
+        projectId: asProjectId("project-rej"),
+        title: "Rej",
+        workspaceRoot: "/tmp/project-rej",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-rej-thread"),
+        threadId: ThreadId.make("thread-rej"),
+        projectId: asProjectId("project-rej"),
+        title: "rej",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    // project.delete with a live thread and force !== true is an invariant error.
+    const mkDelete = (commandId: string) =>
+      ({
+        type: "project.delete",
+        commandId: CommandId.make(commandId),
+        projectId: asProjectId("project-rej"),
+        deletedAt: createdAt,
+      }) as const;
+
+    const durableId = "cmd-rej-durable";
+    await expect(system.run(engine.dispatch(mkDelete(durableId)))).rejects.toThrow();
+    // Kills "invert the rejected guard": a durable id MUST keep its poison pill.
+    expect(await system.receiptStatus(durableId)).toBe("rejected");
+
+    const singleUseId = "provider:event-rej:project-delete:uuid-rej";
+    await expect(
+      system.run(engine.dispatch(mkDelete(singleUseId), { singleUseCommandId: true })),
+    ).rejects.toThrow();
+    // Kills "drop the rejected guard": a single-use id must write nothing.
+    expect(await system.receiptStatus(singleUseId)).toBe(null);
 
     await system.dispose();
   });
