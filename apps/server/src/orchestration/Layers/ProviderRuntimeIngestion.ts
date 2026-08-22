@@ -493,6 +493,7 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   for (const key of [
     "taskType",
     "agentId",
+    "subagentOwned",
     "title",
     "role",
     "model",
@@ -1925,11 +1926,25 @@ const make = Effect.gen(function* () {
       }
 
       const statusLabel = event.payload.status === "failed" ? "failed" : "completed";
+      // A task launched by one of the thread's own subagents settles on the
+      // same session stream as the main agent's own background work, so both
+      // land here. Only the wording differs, and it has to: the closing line
+      // below asserts the thread was waiting on this task, which for a
+      // subagent's task is false. Told that, agents spend a turn establishing
+      // the task is not theirs ("isn't one of mine - no output file in this
+      // session's task directory"). Told the truth, the same wake is useful -
+      // it is how a coordinator follows work it delegated, and it arrives while
+      // the subagent is still running, so nothing else reports it.
+      const subagentOwned = event.payload.subagentOwned === true;
       const wakeText = [
-        `Background task ${event.payload.taskId} ${statusLabel}.`,
+        subagentOwned
+          ? `Background task ${event.payload.taskId}, launched by one of your subagents, ${statusLabel}.`
+          : `Background task ${event.payload.taskId} ${statusLabel}.`,
         ...(event.payload.summary ? [`Summary: ${event.payload.summary}`] : []),
         ...(event.payload.outputFile ? [`Output file: ${event.payload.outputFile}`] : []),
-        "Continue the work that was waiting on this task.",
+        subagentOwned
+          ? "This is progress on work you delegated; nothing of yours is blocked on it."
+          : "Continue the work that was waiting on this task.",
       ].join("\n");
 
       yield* dispatchWithFreshCommandId({

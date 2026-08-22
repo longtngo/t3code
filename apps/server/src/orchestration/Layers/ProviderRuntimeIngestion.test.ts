@@ -4122,6 +4122,86 @@ describe("ProviderRuntimeIngestion", () => {
     expect(wakeMessage?.text).toContain("Build exited with code 1");
   });
 
+  it("tells the agent when a woken task belongs to one of its subagents", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Same event shape as the parent-owned case below; only the ownership
+    // stamp differs, so any difference in the message is caused by the stamp.
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-subagent"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-foreign-1",
+        status: "completed",
+        summary: "Run mutants M01-M07",
+        subagentOwned: true,
+      },
+    });
+
+    const foreignThread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "user:task-wakeup:evt-bg-task-subagent",
+      ),
+    );
+    const foreign = foreignThread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "user:task-wakeup:evt-bg-task-subagent",
+    );
+    expect(foreign?.text).toContain(
+      "Background task bash-foreign-1, launched by one of your subagents, completed.",
+    );
+    expect(foreign?.text).toContain("Run mutants M01-M07");
+    // The false premise is the whole defect: told this, agents spend a turn
+    // proving the task is not theirs.
+    expect(foreign?.text).not.toContain("Continue the work that was waiting on this task.");
+    expect(foreign?.text).toContain("nothing of yours is blocked on it");
+
+    // Positive control: an unstamped completion still wakes with the original
+    // wording, so the assertions above cannot pass by the message being empty
+    // or the wake being suppressed.
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-own"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-own-1",
+        status: "completed",
+        summary: "Run mutants M01-M07",
+      },
+    });
+
+    const ownThread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) => message.id === "user:task-wakeup:evt-bg-task-own",
+      ),
+    );
+    const own = ownThread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.id === "user:task-wakeup:evt-bg-task-own",
+    );
+    expect(own?.text).toContain("Background task bash-own-1 completed.");
+    expect(own?.text).toContain("Continue the work that was waiting on this task.");
+    expect(own?.text).not.toContain("launched by one of your subagents");
+
+    // The stamp must also land on the persisted activity row. Nothing in the
+    // wake path reads it there, so only this assertion holds the allowlist
+    // entry in place - and the post-deploy check reads the classifier's own
+    // verdict off these rows rather than re-deriving it.
+    const activityFor = (eventId: string) =>
+      ownThread.activities.find((activity: ProviderRuntimeTestActivity) => activity.id === eventId);
+    expect(activityFor("evt-bg-task-subagent")).toMatchObject({
+      kind: "task.completed",
+      payload: { taskId: "bash-foreign-1", subagentOwned: true },
+    });
+    expect(activityFor("evt-bg-task-own")?.payload).not.toHaveProperty("subagentOwned");
+  });
+
   it("does not wake a thread for turn-scoped or stopped task completions", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

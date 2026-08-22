@@ -5567,6 +5567,261 @@ describe("thinkingTokensDisplayBucket", () => {
     );
   });
 
+  // Task ownership. The SDK's task_started carries no owner, so a subagent's
+  // background shell is indistinguishable on the wire from the main agent's.
+  // What separates them is whether THIS session streamed the launching tool.
+  // Each arm below differs from its neighbour in exactly one input.
+  const emitToolBlock = (
+    harness: ReturnType<typeof makeHarness>,
+    input: {
+      readonly index: number;
+      readonly toolUseId: string;
+      readonly parentToolUseId: string | null;
+    },
+  ) => {
+    harness.query.emit({
+      type: "stream_event",
+      session_id: "sdk-session",
+      uuid: `stream-${input.toolUseId}`,
+      parent_tool_use_id: input.parentToolUseId,
+      event: {
+        type: "content_block_start",
+        index: input.index,
+        content_block: { type: "tool_use", id: input.toolUseId, name: "Bash", input: {} },
+      },
+    } as unknown as SDKMessage);
+  };
+
+  const emitTaskStarted = (
+    harness: ReturnType<typeof makeHarness>,
+    input: { readonly taskId: string; readonly taskType: string; readonly toolUseId?: string },
+  ) => {
+    harness.query.emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: input.taskId,
+      description: input.taskId,
+      task_type: input.taskType,
+      ...(input.toolUseId ? { tool_use_id: input.toolUseId } : {}),
+      uuid: `${input.taskId}-uuid`,
+      session_id: "sdk-session",
+    } as unknown as SDKMessage);
+  };
+
+  const ownershipOf = (events: ReadonlyArray<ProviderRuntimeEvent>, taskId: string) => {
+    const started = events.find(
+      (event) => event.type === "task.started" && String(event.payload.taskId) === taskId,
+    );
+    assert.ok(started, `no task.started for ${taskId}`);
+    return started.type === "task.started" ? started.payload.subagentOwned : undefined;
+  };
+
+  const runOwnershipScenario = (
+    take: number,
+    scenario: (harness: ReturnType<typeof makeHarness>) => void,
+  ) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const taskEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.started"),
+        Stream.take(take),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      scenario(harness);
+      return Array.from(yield* Fiber.join(taskEventsFiber));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  };
+
+  it.effect(
+    "a background task whose launching tool this session never streamed is subagent-owned",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* runOwnershipScenario(3, (harness) => {
+          // A subagent is live, so there is somebody else the task could belong to.
+          emitTaskStarted(harness, { taskId: "agent-1", taskType: "local_agent" });
+          // Parent-owned control: its tool block came through this session.
+          emitToolBlock(harness, { index: 0, toolUseId: "tool-main", parentToolUseId: null });
+          emitTaskStarted(harness, {
+            taskId: "bash-main",
+            taskType: "local_bash",
+            toolUseId: "tool-main",
+          });
+          // Foreign: the launcher is named but was never streamed here.
+          emitTaskStarted(harness, {
+            taskId: "bash-sub",
+            taskType: "local_bash",
+            toolUseId: "tool-never-seen",
+          });
+        });
+
+        assert.equal(ownershipOf(events, "bash-sub"), true);
+        // Positive control in the same run: the classifier still says "mine"
+        // for a task launched by a tool this session did stream, while the same
+        // subagent is live. Without this the assertion above would also pass if
+        // everything were marked foreign.
+        assert.equal(ownershipOf(events, "bash-main"), undefined);
+      }),
+  );
+
+  it.effect("a main-agent fan-out of sibling agents is not misread as subagent-owned", () =>
+    Effect.gen(function* () {
+      // Both Agent launches arrive without a tool_use_id. Classifying on
+      // liveness alone would call the second one foreign because the first is
+      // already live - the shape this repo's own interruptTurn test emits.
+      const events = yield* runOwnershipScenario(2, (harness) => {
+        emitTaskStarted(harness, { taskId: "agent-a", taskType: "local_agent" });
+        emitTaskStarted(harness, { taskId: "agent-b", taskType: "local_agent" });
+      });
+
+      assert.equal(ownershipOf(events, "agent-a"), undefined);
+      assert.equal(ownershipOf(events, "agent-b"), undefined);
+    }),
+  );
+
+  it.effect("ownership is decided once and survives a task_started re-announcement", () =>
+    Effect.gen(function* () {
+      // A re-announced task_started arrives without its tool_use_id. Recomputing
+      // would flip a parent-owned task to foreign the moment a subagent is live.
+      const events = yield* runOwnershipScenario(3, (harness) => {
+        emitToolBlock(harness, { index: 0, toolUseId: "tool-main", parentToolUseId: null });
+        emitTaskStarted(harness, {
+          taskId: "bash-main",
+          taskType: "local_bash",
+          toolUseId: "tool-main",
+        });
+        emitTaskStarted(harness, { taskId: "agent-1", taskType: "local_agent" });
+        emitTaskStarted(harness, { taskId: "bash-main", taskType: "local_bash" });
+      });
+
+      const reannounced = events.filter(
+        (event) => event.type === "task.started" && String(event.payload.taskId) === "bash-main",
+      );
+      assert.equal(reannounced.length, 2);
+      for (const event of reannounced) {
+        assert.equal(
+          event.type === "task.started" ? event.payload.subagentOwned : "missing",
+          undefined,
+        );
+      }
+    }),
+  );
+
+  it.effect("a re-announced subagent task keeps its ownership instead of reverting", () =>
+    Effect.gen(function* () {
+      // The other direction of the same guard, and the one that needs it: a
+      // foreign task re-announced without its tool_use_id would otherwise fall
+      // through to "parent-owned" and get the false-premise wording on its
+      // second announcement. Two task ids do this in real data.
+      const events = yield* runOwnershipScenario(3, (harness) => {
+        emitTaskStarted(harness, { taskId: "agent-1", taskType: "local_agent" });
+        emitTaskStarted(harness, {
+          taskId: "bash-sub",
+          taskType: "local_bash",
+          toolUseId: "tool-never-seen",
+        });
+        emitTaskStarted(harness, { taskId: "bash-sub", taskType: "local_bash" });
+      });
+
+      const reannouncedForeign = events.filter(
+        (event) => event.type === "task.started" && String(event.payload.taskId) === "bash-sub",
+      );
+      assert.equal(reannouncedForeign.length, 2);
+      for (const event of reannouncedForeign) {
+        assert.equal(event.type === "task.started" ? event.payload.subagentOwned : "missing", true);
+      }
+    }),
+  );
+
+  it.effect("an unseen launcher with no subagent running stays parent-owned", () =>
+    Effect.gen(function* () {
+      // Fail-open. After a restart the seen-tool set is empty, so every
+      // launcher looks unseen; with no agent-flavoured task in flight there is
+      // nobody else the task could belong to, and guessing "foreign" would
+      // rewrite a real background task's wake into a delegation notice.
+      const events = yield* runOwnershipScenario(1, (harness) => {
+        emitTaskStarted(harness, {
+          taskId: "bash-orphan",
+          taskType: "local_bash",
+          toolUseId: "tool-never-seen",
+        });
+      });
+
+      assert.equal(ownershipOf(events, "bash-orphan"), undefined);
+    }),
+  );
+
+  it.effect("task.completed repeats the ownership stamp, which is where the wake reads it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const completedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.completed"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+
+      emitTaskStarted(harness, { taskId: "agent-1", taskType: "local_agent" });
+      emitToolBlock(harness, { index: 0, toolUseId: "tool-main", parentToolUseId: null });
+      emitTaskStarted(harness, {
+        taskId: "bash-main",
+        taskType: "local_bash",
+        toolUseId: "tool-main",
+      });
+      emitTaskStarted(harness, {
+        taskId: "bash-sub",
+        taskType: "local_bash",
+        toolUseId: "tool-never-seen",
+      });
+      for (const taskId of ["bash-sub", "bash-main"]) {
+        harness.query.emit({
+          type: "system",
+          subtype: "task_notification",
+          task_id: taskId,
+          status: "completed",
+          summary: "done",
+          uuid: `${taskId}-done`,
+          session_id: "sdk-session",
+        } as unknown as SDKMessage);
+      }
+
+      const completed = Array.from(yield* Fiber.join(completedFiber));
+      const ownershipAt = (taskId: string) => {
+        const event = completed.find(
+          (candidate) =>
+            candidate.type === "task.completed" && String(candidate.payload.taskId) === taskId,
+        );
+        assert.ok(event, `no task.completed for ${taskId}`);
+        return event.type === "task.completed" ? event.payload.subagentOwned : undefined;
+      };
+
+      // The stamp is set on task_started; the terminal row is what the wake
+      // gate actually reads, so it has to be repeated there.
+      assert.equal(ownershipAt("bash-sub"), true);
+      assert.equal(ownershipAt("bash-main"), undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("interruptTurn settles every acknowledged live task before interrupting", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

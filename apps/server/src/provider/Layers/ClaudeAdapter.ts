@@ -27,6 +27,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type ClaudeSettings,
+  classifyTaskAgentKind,
   EventId,
   type ProviderApprovalDecision,
   ProviderDriverKind,
@@ -265,8 +266,15 @@ interface ClaudeTaskAgentState {
   workflowName: string | undefined;
   skipTranscript: boolean;
   runHandles: TaskRunHandles | undefined;
-  /** Set when this task was launched from inside a subagent. */
+  /** Set when this task was launched from inside a subagent AND we could name
+   * which one. Usually absent even for subagent-owned tasks - see
+   * `subagentOwned`. */
   owningAgentId: string | undefined;
+  /** True when the launching tool never appeared in this session's own stream,
+   * i.e. the task belongs to a subagent rather than the main agent. Sticky:
+   * recorded once at the first task_started and never recomputed, because a
+   * re-announced task arrives without its tool_use_id and would otherwise flip. */
+  subagentOwned: boolean | undefined;
   /** Seeded from the launching tool's input; refined by the subagent's own
    * assistant snapshots (authoritative API model). */
   model: string | undefined;
@@ -292,6 +300,19 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
+  /**
+   * Every tool_use id this session has emitted a content block for, retained
+   * ACROSS turns - unlike `inFlightTools`, which is cleared at every turn
+   * result. Task ownership is decided by membership here, so a map that
+   * forgets on turn boundaries would call every out-of-turn task foreign.
+   *
+   * Bounded because a long-lived session would otherwise grow it without end.
+   * The cap only has to span one launch: measured over 1,730 real launches,
+   * the number of tool blocks between a tool and its own task_started is p50 0,
+   * p99 1, max 1 - so 512 is roughly 500x headroom. Do not lower it without
+   * re-measuring; an eviction turns a main-agent task into a foreign one.
+   */
+  readonly seenToolUseIds: Set<string>;
   readonly claudeTasks: Map<string, ClaudeTaskState>;
   /**
    * FIFO queue of user turns received while a turn was already running. Drained
@@ -1064,6 +1085,72 @@ function agentIdForParentToolUse(
   return undefined;
 }
 
+const SEEN_TOOL_USE_ID_CAP = 512;
+
+/** Bounded insertion-ordered set: drops the oldest id once the cap is hit. */
+function rememberToolUseId(seen: Set<string>, toolUseId: string): void {
+  if (seen.has(toolUseId)) {
+    return;
+  }
+  if (seen.size >= SEEN_TOOL_USE_ID_CAP) {
+    const oldest = seen.values().next();
+    if (!oldest.done) {
+      seen.delete(oldest.value);
+    }
+  }
+  seen.add(toolUseId);
+}
+
+/**
+ * Whether any agent-flavoured task is running right now. Used as the tie-break
+ * when a task names a launching tool this session never saw: with no subagent
+ * in flight there is nobody else it could belong to.
+ */
+function anyLiveAgentTask(
+  agents: Map<string, ClaudeTaskAgentState>,
+  liveTaskIds: Set<string>,
+): boolean {
+  for (const taskId of liveTaskIds) {
+    const agent = agents.get(taskId);
+    if (agent && classifyTaskAgentKind({ taskType: agent.taskType }) === "agent") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Decides whether a starting task belongs to a subagent rather than the main
+ * agent, from the only linkage the SDK gives us: the launching tool's id.
+ *
+ * `SDKTaskStartedMessage` carries no owner field, so a subagent's background
+ * shell is indistinguishable on the wire from one the main agent launched. What
+ * separates them is that the main agent's launching tool was streamed through
+ * THIS session and a subagent's was not.
+ *
+ * All three conjuncts are load-bearing:
+ * - a task with no `tool_use_id` at all is a re-announcement or a fan-out
+ *   sibling, never a first sighting; treating those as foreign misclassified a
+ *   main agent's own parallel `Agent` launches.
+ * - membership is the actual signal.
+ * - the liveness tie-break keeps the classifier fail-open after a restart, when
+ *   the set is empty and every launcher looks unseen.
+ *
+ * This is concurrency state, not structure: a subagent's shell that starts
+ * after its owner has already settled reads as parent-owned. That direction is
+ * the safe one - it keeps a wake we might not need rather than dropping one.
+ */
+function isSubagentOwnedTask(
+  context: ClaudeSessionContext,
+  toolUseId: string | undefined,
+): boolean {
+  return (
+    toolUseId !== undefined &&
+    !context.seenToolUseIds.has(toolUseId) &&
+    anyLiveAgentTask(context.taskAgents, context.liveTaskIds)
+  );
+}
+
 /**
  * Linkage bundle repeated on every task.* payload for `taskId`. Reads the
  * remembered identity (from task_started) so progress/terminal rows are
@@ -1080,6 +1167,7 @@ function taskLinkageFor(
   return {
     ...(agent.taskType ? { taskType: agent.taskType } : {}),
     ...(agent.owningAgentId ? { agentId: agent.owningAgentId } : {}),
+    ...(agent.subagentOwned ? { subagentOwned: true } : {}),
     ...(agent.description ? { title: agent.description } : {}),
     ...(agent.subagentType ? { role: agent.subagentType } : {}),
     ...(agent.model ? { model: agent.model } : {}),
@@ -2713,6 +2801,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(parentToolUseId ? { parentToolUseId } : {}),
       };
       context.inFlightTools.set(index, tool);
+      // Ownership record for tasks this tool may launch. Kept separate from
+      // `inFlightTools` because that map is cleared at every turn result, and a
+      // background task settles long after its launching turn is over.
+      rememberToolUseId(context.seenToolUseIds, itemId);
 
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
@@ -2907,6 +2999,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             skipTranscript: existing?.skipTranscript ?? false,
             runHandles,
             owningAgentId: existing?.owningAgentId,
+            subagentOwned: existing?.subagentOwned,
             model: existing?.model,
             effort: existing?.effort,
           });
@@ -3311,6 +3404,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             )
           : undefined;
         const owningAgentId = launchingTool?.agentId;
+        // Sticky: a task id is classified once. A re-announced task_started
+        // arrives WITHOUT its tool_use_id, so recomputing would flip a
+        // parent-owned task to foreign (measured: 8 task ids re-announce this
+        // way, one of them a wake the agent acted on).
+        const subagentOwned =
+          context.taskAgents.get(message.task_id)?.subagentOwned ??
+          isSubagentOwnedTask(context, message.tool_use_id);
         // Model/effort: the Agent tool's input carries explicit overrides;
         // absent ones inherit the session's selection (SDK behavior).
         // Subagent assistant snapshots later refine model with the
@@ -3337,6 +3437,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           skipTranscript: message.skip_transcript === true,
           runHandles: context.taskAgents.get(message.task_id)?.runHandles,
           owningAgentId,
+          subagentOwned,
           model,
           effort,
         });
@@ -3349,6 +3450,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             description: message.description,
             ...(message.task_type ? { taskType: message.task_type } : {}),
             ...(owningAgentId ? { agentId: owningAgentId } : {}),
+            ...(subagentOwned ? { subagentOwned: true } : {}),
             ...(message.description ? { title: message.description } : {}),
             ...(message.subagent_type ? { role: message.subagent_type } : {}),
             ...(model ? { model } : {}),
@@ -3970,6 +4072,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const taskAgents = new Map<string, ClaudeTaskAgentState>();
       const workflowMemberFingerprints = new Map<string, string>();
       const liveTaskIds = new Set<string>();
+      const seenToolUseIds = new Set<string>();
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -4455,6 +4558,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         taskAgents,
         workflowMemberFingerprints,
         liveTaskIds,
+        seenToolUseIds,
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
         lastKnownTokenUsage: undefined,

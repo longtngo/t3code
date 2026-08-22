@@ -565,6 +565,15 @@ const taskAgentLinkageFields = {
    * agent-internal and keep them out of the parent work log.
    */
   agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /**
+   * True when the task was launched from inside a subagent rather than by the
+   * thread's main agent. Distinct from `agentId`, which names WHICH subagent:
+   * the provider tells us a task exists without telling us who owns it, so we
+   * can know a task is foreign to the main agent while being unable to
+   * attribute it. Consumers that only need "is this the main agent's work"
+   * read this; `agentId` stays for the cases where the owner is known.
+   */
+  subagentOwned: Schema.optional(Schema.Boolean),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
   role: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
