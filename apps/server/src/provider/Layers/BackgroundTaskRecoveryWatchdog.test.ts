@@ -194,6 +194,7 @@ describe("BackgroundTaskRecoveryWatchdog", () => {
         const shell = input.shells.get(threadId);
         return Effect.succeed(shell ? Option.some(shell) : Option.none());
       },
+      getThreadSessionById: () => Effect.die("unused"),
       getThreadDetailById: () => Effect.die("unused"),
     };
 

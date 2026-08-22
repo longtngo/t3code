@@ -14,6 +14,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
+  OrchestrationSession,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
@@ -162,6 +163,19 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadShellById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single thread's provider session, archived and deleted threads
+   * included.
+   *
+   * Deliberately not filtered the way the shell and detail reads are: stopping
+   * a session is a lifecycle operation, and the archive path requests the stop
+   * only AFTER the thread is archived, so a navigation filter here means the
+   * stop can never find its own thread.
+   */
+  readonly getThreadSessionById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationSession>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.

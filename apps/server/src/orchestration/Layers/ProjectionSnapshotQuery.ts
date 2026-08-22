@@ -2473,6 +2473,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       });
     });
 
+  const getThreadSessionById: ProjectionSnapshotQueryShape["getThreadSessionById"] = (threadId) =>
+    getThreadSessionRowByThread({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadSessionById:getSession:query",
+          "ProjectionSnapshotQuery.getThreadSessionById:getSession:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map(mapSessionRow)),
+    );
+
   const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (threadId) =>
     Effect.gen(function* () {
       const [threadRow, latestTurnRow, sessionRow] = yield* Effect.all([
@@ -2874,6 +2885,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
+    getThreadSessionById,
     getThreadDetailById,
     getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;

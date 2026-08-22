@@ -1251,6 +1251,15 @@ const makeWsRpcLayer = (
                       // killing the new session. Archive stops stay
                       // unconditional: turn starts on archived threads are
                       // rejected, so there is no new session to protect.
+                      //
+                      // That reasoning omits unarchive. The stop is decided
+                      // synchronously but RUNS when the reactor drains it, so
+                      // unarchiving inside that window leaves a live thread
+                      // whose session this stop then kills. `onlyIfSettled`
+                      // would not help - it is checked at decide time, and the
+                      // race is at drain time. The window is milliseconds and
+                      // unarchive is a menu action on a separate screen, so
+                      // this is named rather than defended against.
                       ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
                     });
 

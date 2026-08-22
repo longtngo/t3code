@@ -3385,6 +3385,134 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.activeTurnId).toBeNull();
   });
 
+  // Archiving dispatches this stop AFTER `thread.archive` has already landed,
+  // so the handler only ever sees an ALREADY-archived thread. Resolving the
+  // thread through the navigation query, which filters archived rows, made the
+  // handler return before stopping anything. In a real database 66 archive
+  // stops had been requested and exactly one reached a stopped session, while
+  // settle stops - the same handler, the same provider call, no archive - were
+  // 45 for 45.
+  it("stops the session of a thread that has already been archived", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-for-archive-stop"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          // Seeded non-null on purpose: asserting `activeTurnId === null`
+          // afterwards proves nothing if it started null.
+          activeTurnId: asTurnId("turn-1"),
+          lastError: "previous failure",
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-archive-before-stop"),
+        threadId: ThreadId.make("thread-1"),
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-after-archive"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    await waitFor(async () => {
+      const model = await harness.readModel();
+      const entry = model.threads.find((item) => item.id === ThreadId.make("thread-1"));
+      return entry?.session?.status === "stopped";
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.archivedAt).not.toBeNull();
+    expect(thread?.session?.status).toBe("stopped");
+    // The whole point of the handler: the turn the archive interrupted is
+    // released.
+    expect(thread?.session?.activeTurnId).toBeNull();
+    // Everything else on the session survives the stop, so unarchiving resumes
+    // against the same provider and configuration rather than a blank session.
+    // `providerName` is the field the chat header reads, so it is asserted
+    // separately from the instance id.
+    expect(thread?.session?.providerName).toBe("codex");
+    expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
+    expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.session?.lastError).toBe("previous failure");
+  });
+
+  // The `status !== "stopped"` guard is load-bearing in both directions: a
+  // second stop must not re-enter the provider, because the adapter has no
+  // session to stop and the failure path would write a bogus
+  // "Provider session stop failed" entry into the user's work log.
+  it("does not re-enter the provider when the session is already stopped", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const later = "2026-01-01T00:05:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-already-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-already-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: later,
+      }),
+    );
+
+    // The handler always rewrites the session, so a changed `updatedAt` is the
+    // signal that it ran - without it "stopSession was never called" would also
+    // be true simply because the handler had not got there yet.
+    await waitFor(async () => {
+      const model = await harness.readModel();
+      const entry = model.threads.find((item) => item.id === ThreadId.make("thread-1"));
+      return entry?.session?.updatedAt === later;
+    });
+
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.status).toBe("stopped");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.session.stop.failed"),
+    ).toBeUndefined();
+  });
+
   // The stopSession call was uncaught, so a provider that failed to stop took
   // the whole handler down with it - and the session-set to "stopped" that
   // follows never ran, leaving the thread visibly stuck in its old status with

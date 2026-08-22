@@ -1592,20 +1592,22 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
-      return;
-    }
+    // NOT `resolveThread`: that read filters archived and deleted threads, and
+    // the archive path requests this stop only after `thread.archive` has
+    // landed, so the thread it names is always already filtered out. The
+    // session row itself carries everything this handler needs.
+    const threadId = event.payload.threadId;
+    const session = Option.getOrNull(yield* projectionSnapshotQuery.getThreadSessionById(threadId));
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
+    if (session && session.status !== "stopped") {
       // Best effort: a provider that cannot be stopped (dead process, closed
       // transport) must not take this handler down with it, or the session-set
       // below never runs and the thread stays stuck in its old status.
-      yield* providerService.stopSession({ threadId: thread.id }).pipe(
+      yield* providerService.stopSession({ threadId }).pipe(
         Effect.catchCause((cause) =>
           appendProviderFailureActivity({
-            threadId: thread.id,
+            threadId,
             kind: "provider.session.stop.failed",
             summary: "Provider session stop failed",
             detail: Cause.pretty(cause),
@@ -1617,17 +1619,17 @@ const make = Effect.gen(function* () {
     }
 
     yield* setThreadSession({
-      threadId: thread.id,
+      threadId,
       session: {
-        threadId: thread.id,
+        threadId,
         status: "stopped",
-        providerName: thread.session?.providerName ?? null,
-        ...(thread.session?.providerInstanceId !== undefined
-          ? { providerInstanceId: thread.session.providerInstanceId }
+        providerName: session?.providerName ?? null,
+        ...(session?.providerInstanceId !== undefined
+          ? { providerInstanceId: session.providerInstanceId }
           : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
-        lastError: thread.session?.lastError ?? null,
+        lastError: session?.lastError ?? null,
         updatedAt: now,
       },
       createdAt: now,

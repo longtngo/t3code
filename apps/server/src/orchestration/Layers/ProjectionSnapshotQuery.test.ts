@@ -2798,4 +2798,69 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       }
     }),
   );
+  // The archive path requests a session stop only AFTER `thread.archive` has
+  // landed, so every read this stop makes is a read of an archived thread.
+  // A navigation filter here is what made 65 archived threads keep a live
+  // session forever.
+  it.effect.each([
+    ["archived", "'2026-03-01T00:00:00.000Z'", "NULL"],
+    ["deleted", "NULL", "'2026-03-01T00:00:00.000Z'"],
+  ])("reads the session of a %s thread", ([kind, archivedAt, deletedAt]) =>
+    Effect.gen(function* () {
+      // One database is shared across both cases, so each seeds its own ids.
+      const projectId = `project-${kind}`;
+      const threadId = `thread-${kind}`;
+      const sql = yield* SqlClient.SqlClient;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        )
+        VALUES (
+          ${projectId}, 'Project 1', ${`/tmp/${projectId}`},
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql.unsafe(`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, branch, worktree_path, latest_turn_id,
+          latest_user_message_at, pending_approval_count, pending_user_input_count,
+          has_actionable_proposed_plan, created_at, updated_at, archived_at, deleted_at
+        )
+        VALUES (
+          '${threadId}', '${projectId}', 'Thread 1',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, NULL, NULL, 0, 0, 0,
+          '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z',
+          ${archivedAt}, ${deletedAt}
+        )
+      `);
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, provider_session_id,
+          provider_thread_id, runtime_mode, active_turn_id, last_error, updated_at
+        )
+        VALUES (
+          ${threadId}, 'ready', 'codex', NULL, NULL,
+          'full-access', NULL, NULL, '2026-03-01T00:00:01.000Z'
+        )
+      `;
+
+      const session = yield* snapshotQuery.getThreadSessionById(ThreadId.make(threadId));
+      assert.equal(session._tag, "Some");
+      if (session._tag === "Some") {
+        assert.equal(session.value.status, "ready");
+        assert.equal(session.value.providerName, "codex");
+      }
+
+      // Control: the navigation reads DO filter this thread out, so the
+      // assertion above is about this query and not about the seed data.
+      const shell = yield* snapshotQuery.getThreadShellById(ThreadId.make(threadId));
+      assert.equal(shell._tag, "None");
+    }),
+  );
 });
