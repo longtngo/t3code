@@ -41,3 +41,8 @@ node_modules/
 
 # Stray verification screenshots taken while driving the live UI.
 /*.png
+
+# deploy swap dirs (built side-by-side, never committed)
+apps/*/dist-next
+apps/*/dist-prev
+apps/*/dist-bad
