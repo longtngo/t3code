@@ -3247,12 +3247,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // the stop don't silently fire.
       context.pendingTurns.length = 0;
     } else {
-      // Completed OR failed. A provider failure is not a deliberate stop — a 429
-      // session limit or a transient 500 must not eat the messages the user
-      // stacked behind it. Dropping them was also unobservable: sendTurn has
-      // already handed each turnId back to the reactor, so orchestration keeps a
-      // pending turn row that no turn.started or turn.completed ever follows,
-      // which is the frozen thread this classification set out to fix.
+      // Completed OR failed. A provider failure is not a deliberate stop: a 429
+      // session limit or a transient 500 must not silently discard what the user
+      // stacked behind it, which is what dropping the queue did — the typed
+      // message vanished with nothing recording it had ever been sent. Only
+      // interrupted/cancelled means the user asked the queue to stop.
+      //
+      // Draining after a failure is safe on the ingestion side: turn.completed
+      // clears activeTurnId, so the queued turn.started no longer conflicts with
+      // an active turn and is applied normally.
       yield* drainNextPendingTurn(context);
     }
   });
