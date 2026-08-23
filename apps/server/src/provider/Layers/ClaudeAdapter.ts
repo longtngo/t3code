@@ -473,6 +473,13 @@ function isClaudeDiagnosticError(error: string): boolean {
   return error.trimStart().toLowerCase().startsWith(CLAUDE_DIAGNOSTIC_ERROR_PREFIX);
 }
 
+/**
+ * Errors from an error-shaped result. Deliberately reads ONLY `errors[]`, never the success
+ * variant's `result` string, because `resultErrorsText` feeds the interrupt/cancel substring
+ * heuristics below: `result` carries assistant prose, so a failure whose text merely mentions
+ * "cancel" would be reclassified as a user cancellation. Keep this narrow —
+ * `resultUserFacingError` is the human-facing reader.
+ */
 function userFacingResultErrors(result: SDKResultMessage): ReadonlyArray<string> {
   return "errors" in result && Array.isArray(result.errors)
     ? result.errors.filter((error) => !isClaudeDiagnosticError(error))
@@ -495,12 +502,35 @@ function isAbortedResult(result: SDKResultMessage): boolean {
 }
 
 /**
- * First user-facing error from a non-success result. "[ede_diagnostic] ..."
- * entries are CLI-internal telemetry (the CLI hides them from its own UI too),
- * so they must never become the error banner.
+ * First user-facing error from a failed result, or undefined when the turn really succeeded.
+ * "[ede_diagnostic] ..." entries are CLI-internal telemetry (the CLI hides them from its own
+ * UI too), so they must never become the error banner.
  */
 function resultUserFacingError(result: SDKResultMessage): string | undefined {
-  return result.subtype === "success" ? undefined : userFacingResultErrors(result)[0];
+  if (result.subtype !== "success") {
+    return userFacingResultErrors(result)[0];
+  }
+  // An abort also sets is_error, but there `result` holds the partial assistant reply, which
+  // is not an error and must not be persisted as one.
+  if (!result.is_error || isAbortedResult(result)) {
+    return undefined;
+  }
+  // `result` is typed `string`, but the adapter spawns an external CLI that runs ahead of the
+  // typed SDK (it already emits a `terminal_reason` the union does not declare). Throwing here
+  // would surface as a defect, which `Effect.mapError` does not catch, tearing down the whole
+  // session and losing the very message we are trying to surface.
+  if (typeof result.result !== "string") {
+    return undefined;
+  }
+  // Filtered per line, not as one blob: on an api_error payload the diagnostic line can sit
+  // anywhere, so a prefix test on the whole string both leaks it from line 2 and throws away
+  // a real message when it is on line 1.
+  const text = result.result
+    .split("\n")
+    .filter((line) => !isClaudeDiagnosticError(line))
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : undefined;
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
@@ -1454,7 +1484,17 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
 });
 
 function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
-  if (result.subtype === "success") {
+  // `subtype` is a payload-SHAPE discriminator ("carries a `result` string"), not an outcome:
+  // the SDK declares `is_error` on the success variant too, so a provider HTTP failure arrives
+  // as subtype:"success" + is_error:true with its message in `result`. Reading `subtype` here
+  // reported those turns as clean completions, which the user experienced as a frozen thread.
+  //
+  // Aborts also set is_error and fall through to the checks below. Those substring heuristics
+  // read only `errors[]`, which the success variant is not declared to carry — so in practice a
+  // success-shaped payload is routed by isAbortedResult's terminal_reason alone. If the CLI ever
+  // does put `errors[]` on one, resultUserFacingError still keys off isAbortedResult and would
+  // disagree with the "interrupted"/"cancelled" chosen here; keep the two in step.
+  if (result.subtype === "success" && !result.is_error) {
     return "completed";
   }
 
@@ -3180,18 +3220,40 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const errorMessage = resultUserFacingError(message);
 
     if (status === "failed") {
-      yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+      // The only structured record of WHY: the ingestion `runtime.error` case persists just
+      // `message` and drops `detail`, and the provider-turn metrics key on the send Effect's
+      // exit, which succeeds here. `apiErrorStatus` is present only for the provider-HTTP
+      // shape; every other failure reason arrives under `terminalReason`.
+      yield* Effect.logWarning("claude.turn.failed", {
+        threadId: context.session.threadId,
+        ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+        ...(message.subtype === "success" && typeof message.api_error_status === "number"
+          ? { apiErrorStatus: message.api_error_status }
+          : {}),
+        ...(message.terminal_reason ? { terminalReason: message.terminal_reason } : {}),
+      });
+      // Only with a live turn: a turnId-less runtime.error is applied unconditionally by
+      // ingestion and would stomp an unrelated running turn. Same reason as completeTurn's
+      // no-active-turn early return.
+      if (context.turnState) {
+        yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+      }
     }
 
     yield* completeTurn(context, status, errorMessage, message);
 
-    if (status === "completed") {
-      // Start the next queued follow-up turn, if the user stacked any.
-      yield* drainNextPendingTurn(context);
-    } else {
-      // Interrupt / cancel / failure halts the run: drop queued follow-ups so a
-      // deliberate stop doesn't silently fire the messages stacked behind it.
+    if (status === "interrupted" || status === "cancelled") {
+      // A deliberate stop: drop queued follow-ups so the messages stacked behind
+      // the stop don't silently fire.
       context.pendingTurns.length = 0;
+    } else {
+      // Completed OR failed. A provider failure is not a deliberate stop — a 429
+      // session limit or a transient 500 must not eat the messages the user
+      // stacked behind it. Dropping them was also unobservable: sendTurn has
+      // already handed each turnId back to the reactor, so orchestration keeps a
+      // pending turn row that no turn.started or turn.completed ever follows,
+      // which is the frozen thread this classification set out to fix.
+      yield* drainNextPendingTurn(context);
     }
   });
 

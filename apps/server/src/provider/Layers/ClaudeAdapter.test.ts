@@ -2221,6 +2221,417 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  // The CLI reports a provider HTTP failure as subtype:"success" with is_error:true and the
+  // message in `result` — `subtype` names the payload shape, not the outcome. Reading `subtype`
+  // recorded these as clean completions, which users experienced as a frozen thread. Measured
+  // across 720 retained result payloads: 5 real failures (400 GPU-OOM, 500, OAuth expiry, and
+  // two 429 session-limit) all reported success. No fixture paired subtype:"success" with
+  // is_error:true before these — the untested quadrant was the production one.
+  const successShapedErrorResult = (overrides: Record<string, unknown>) =>
+    ({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      terminal_reason: "api_error",
+      stop_reason: "stop_sequence",
+      session_id: "sdk-session-api-error",
+      uuid: "result-api-error",
+      ...overrides,
+    }) as unknown as SDKMessage;
+
+  it.effect(
+    "reports a provider api_error result as a failed turn carrying the provider text",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        // A genuine failure emits runtime.error as well, so 7 events.
+        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        const turn = yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "hello",
+          attachments: [],
+        });
+
+        harness.query.emit(
+          successShapedErrorResult({
+            api_error_status: 400,
+            result:
+              "API Error: 400 Prompt (121404 tokens) requires ~46098MB GPU memory but only ~45536MB available.",
+          }),
+        );
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+        assert.equal(runtimeError?.type, "runtime.error");
+        if (runtimeError?.type === "runtime.error") {
+          assert.equal(
+            runtimeError.payload.message,
+            "API Error: 400 Prompt (121404 tokens) requires ~46098MB GPU memory but only ~45536MB available.",
+          );
+        }
+
+        const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+        assert.equal(turnCompleted?.type, "turn.completed");
+        if (turnCompleted?.type === "turn.completed") {
+          assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+          assert.equal(turnCompleted.payload.state, "failed");
+          assert.equal(
+            turnCompleted.payload.errorMessage,
+            "API Error: 400 Prompt (121404 tokens) requires ~46098MB GPU memory but only ~45536MB available.",
+          );
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  // A user Stop also sets is_error on a success-shaped payload, but there `result` holds the
+  // partial assistant reply. Classifying that as a failure would put the model's own prose in
+  // an error banner. Guards isAbortedResult winning over the new failure branch.
+  it.effect("keeps a success-shaped aborted result interrupted, with no error message", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      // Interrupted emits no runtime.error, so the stream closes at 6.
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit(
+        successShapedErrorResult({
+          terminal_reason: "aborted_streaming",
+          result: "Sure — I'll start by reading the config file and then",
+        }),
+      );
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "interrupted");
+        assert.equal(turnCompleted.payload.errorMessage, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // 706 of 720 retained payloads are this shape. Also pins the truthiness check: an absent
+  // is_error must complete, so `!result.is_error` cannot be swapped for `=== false`.
+  it.effect("still completes a success result whose is_error flag is absent", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        stop_reason: "end_turn",
+        result: "All done.",
+        session_id: "sdk-session-no-flag",
+        uuid: "result-no-flag",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "completed");
+        assert.equal(turnCompleted.payload.errorMessage, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // 35 of 720 payloads ship a blank `result`. Without the trim an implementer emits "   " into
+  // a field typed TrimmedNonEmptyString, and the turn still has to complete.
+  it.effect("falls back to a generic message when a failed result's text is blank", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit(successShapedErrorResult({ result: "   " }));
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(runtimeError.payload.message, "Claude turn failed.");
+      }
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(turnCompleted.payload.errorMessage, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // The CLI runs ahead of the typed SDK — it already emits a terminal_reason the union does not
+  // declare. Reading `result` unguarded turns a non-string into a thrown defect, which
+  // Effect.mapError does not catch, tearing down the whole session: worse than the bug.
+  it.effect("survives a failed result whose text is not a string", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit(successShapedErrorResult({ result: { message: "not a string" } }));
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(runtimeError.payload.message, "Claude turn failed.");
+      }
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(turnCompleted.payload.errorMessage, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // The diagnostic can sit on any line of an api_error payload, so the filter runs per line.
+  // A whole-blob prefix test leaks it from line 2 and discards a real message from line 1.
+  it.effect("strips an ede_diagnostic line from anywhere in a failed result's text", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit(
+        successShapedErrorResult({
+          api_error_status: 429,
+          result:
+            "You've hit your session limit\n[ede_diagnostic] result_type=user stop_reason=tool_use",
+        }),
+      );
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "failed");
+        assert.equal(turnCompleted.payload.errorMessage, "You've hit your session limit");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // A runtime.error with no turnId is applied unconditionally by the ingestion lifecycle guard,
+  // so emitting one for a result that has no turn in flight stomps whatever turn IS running:
+  // the session flips to error and the composer un-busies mid-turn. completeTurn already
+  // dropped its untargeted turn.completed for this reason; the error emit must match.
+  it.effect("emits no runtime.error for a failed result with no active turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      // Closes the real turn, so the next result lands with no turnState.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        num_turns: 1,
+        session_id: "sdk-session-orphan",
+        uuid: "result-real",
+      } as unknown as SDKMessage);
+
+      // The resume-handshake shape, but carrying a provider api_error. Nothing may be emitted:
+      // there is no turn to attribute it to.
+      harness.query.emit(
+        successShapedErrorResult({
+          num_turns: 0,
+          api_error_status: 500,
+          result: "API Error: 500 fetch failed",
+          uuid: "result-orphan",
+        }),
+      );
+
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.filter((event) => event.type === "runtime.error"),
+        [],
+      );
+      const completions = runtimeEvents.filter((event) => event.type === "turn.completed");
+      assert.equal(completions.length, 1);
+      const completed = completions[0];
+      if (completed?.type === "turn.completed") {
+        assert.equal(String(completed.turnId), String(turn.turnId));
+        assert.equal(completed.payload.state, "completed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // Reclassifying api_error as a failure moved these payloads out of the "completed" branch that
+  // drains the queue and into the one that discarded it — so a 429 session limit silently ate the
+  // messages the user had stacked behind it, and left the reactor holding turnIds that sendTurn
+  // had already returned but no turn.started would ever follow. Only a deliberate stop drops the
+  // queue; the sibling test above covers that side.
+  it.effect("starts a queued follow-up turn after the active turn fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "session.exited",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const firstTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+      // Queued behind the running turn.
+      const queuedTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello again",
+        attachments: [],
+      });
+
+      harness.query.emit(
+        successShapedErrorResult({
+          api_error_status: 429,
+          result: "API Error: 429 You've hit your session limit · resets 5:40pm",
+        }),
+      );
+      harness.query.finish();
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const startedTurnIds = events
+        .filter((event) => event.type === "turn.started")
+        .map((event) => (event.type === "turn.started" ? String(event.turnId) : null));
+
+      // Both turns ran: the failure surfaced, and the stacked message was not swallowed.
+      assert.deepEqual(startedTurnIds, [String(firstTurn.turnId), String(queuedTurn.turnId)]);
+      const failed = events.find(
+        (event) =>
+          event.type === "turn.completed" && String(event.turnId) === String(firstTurn.turnId),
+      );
+      assert.equal(failed?.type, "turn.completed");
+      if (failed?.type === "turn.completed") {
+        assert.equal(failed.payload.state, "failed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("closes the session when the Claude stream aborts after a turn starts", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
