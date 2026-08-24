@@ -2294,8 +2294,19 @@ describe("session activity performance", () => {
       }),
     ];
 
+    // Guards against an algorithmic regression: reusing rows must stay linear in
+    // the activity count.
+    //
+    // The bound is chosen from measurement, not taste. A healthy run is ~70ms in
+    // isolation, but this is wall-clock on a shared machine: across seven
+    // full-gate runs on an UNCHANGED tree it landed between 102ms and 179ms
+    // purely from scheduling and GC, busting the old 100ms budget five times.
+    // The cheapest possible quadratic (a bare integer double-loop, injected to
+    // check this bound can still fail) costs 407ms, and any realistic quadratic
+    // here allocates objects and costs seconds. 300ms sits above the worst
+    // observed noise and was verified to fail against that 407ms injection.
     const startedAt = performance.now();
     expect(deriveWorkLogEntries(updatedActivities)).toHaveLength(20_001);
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    expect(performance.now() - startedAt).toBeLessThan(300);
   });
 });
