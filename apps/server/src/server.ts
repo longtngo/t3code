@@ -13,6 +13,7 @@ import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
   assetRouteLayer,
+  attachmentUploadRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   viewerAssetRouteLayer,
@@ -525,6 +526,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     // Before the static catch-all, which would otherwise swallow /viewer/*.
     viewerRouteLayer,
     viewerAssetRouteLayer,
+    attachmentUploadRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

@@ -54,7 +54,7 @@ A merge that "tidies" these into filename order will re-run or skip migrations o
 
 ### 2. One patch in `patches/` is fork-owned
 
-14 of the 15 files in `patches/` are byte-identical to upstream. Exactly one is not:
+15 of the 16 files in `patches/` are byte-identical to upstream. Exactly one is not:
 
 - `patches/@effect__platform-node@4.0.0-beta.103.patch` — adds a no-op `socket.on("error")`
   handler in `makeUpgradeHandler`. Without it a peer RST between Node emitting `upgrade` and
@@ -195,6 +195,65 @@ _not_ the fork-only part; verified against the running app on 2026-08-11.) The p
 therefore carries **both** buttons: an ellipsis opening the fork dialog and a gear navigating to
 upstream's page. Collapsing them to one drops multi-repo workspace management entirely.
 Consolidating the two is real work, not merge work.
+
+### 7. `interruptTurn` is the COOPERATIVE rung; `stopSession` is the hard one
+
+Upstream `#5891` replaced Claude's `interruptTurn` body with `stopSessionInternal(context)` — one
+hard kill, on the reasoning that `interrupt()` can acknowledge while resumed background tasks keep
+the CLI alive. This fork keeps the two rungs apart, because the Stop button is a **client-side
+ladder** (`ChatView.logic.ts` `nextStopAction`): the first press sends a cooperative
+`thread.turn.interrupt`, and a deliberate second press inside a 500ms–10s band escalates to a hard
+`thread.session.stop`. Collapsing rung 1 into rung 2 makes that band vestigial for the
+most-used provider and charges every "stop to redirect" a cold subprocess restart.
+
+Neither side was a superset, so the 20th reconcile took a hybrid:
+
+- **`interruptTurn` stays the fork's** — bounded `stopTask` fleet sweep (each task's
+  `task.completed` made authoritative), then `query.interrupt()` bounded by
+  `INTERRUPT_REQUEST_GRACE`. Both bounds exist because this runs on the single reactor command
+  worker, where an unbounded await head-of-line blocks every later command including the
+  watchdog's own `session.stop`.
+- **`stopSessionInternal` is upstream's, hardened** — `query.close()` moved to the very top
+  (before `context.stopped = true`, so a close failure leaves the session usable), a
+  `task.completed` sweep over `liveTaskIds` that does not need `stopTask` support, an
+  identity-guarded `sessions.delete`, and `stopSessions` collecting per-session failures for
+  `stopAll`. The fork's own contribution here — bounding `Fiber.interrupt(streamFiber)` with
+  `STOP_INTERRUPT_GRACE` — is kept on top of it.
+
+Two consequences a later reconcile must not undo:
+
+- `ClaudeQueryRuntime.interrupt` and `.stopTask` were **removed by upstream outside any conflict
+  marker**, and restored here. If they vanish again, the fork's `interruptTurn` stops compiling —
+  which is the good case; the bad case is a resolution that also takes upstream's `interruptTurn`
+  and leaves nothing failing.
+- Upstream's four new tests are **retargeted, not deleted**. Three of them now drive
+  `stopSession`, whose semantics they actually describe here: the one about settling live tasks
+  and closing the provider session, the one about keeping the session available when the process
+  close fails, and the one about keeping a resumed replacement session during slow stop cleanup.
+  The fourth, covering `stopAll` when one close fails, needed no change.
+
+### 8. The interrupt reactor gates on the LIVE session, not the projection
+
+`processTurnInterruptRequested` asks `hasLiveSessionForThread` before forwarding. With no live
+session the interrupt's goal is already met, so it settles the thread to `stopped` (clearing the
+spinner) rather than appending a `provider.turn.interrupt.failed` activity — and deliberately does
+not resume a subprocess just to no-op it. Upstream reads `thread.session` from the projection
+instead.
+
+Upstream `#7412`'s `recoverInterruptFailure` (stop the session and record the detail when the
+provider's interrupt fails) is **adopted on top of** that gate. Its three tests set up a projected
+session only, so each needed `harness.runtimeSessions.push({...})` added to reach the path it
+tests; without it they pass through the fork's gate and assert `lastError: null`. A future
+upstream test about interrupt failure will need the same line.
+
+### 9. `entrypoint.test.ts` realpaths its temp dir (macOS)
+
+Upstream's `matches through a symlinked entrypoint` fixture builds its paths under
+`os.tmpdir()`, which on macOS is `/var/folders/...` — itself a symlink to `/private/var/...`.
+`realpathSync` resolves that prefix as well as the fixture's own link, so the assertion can never
+hold. It passes on upstream's Linux CI and fails on every macOS run. `makeTempDir` realpaths the
+temp root here; `isEntrypoint` itself is untouched, and production is unaffected (an
+npm-installed CLI symlink carries no such prefix indirection). Worth sending upstream.
 
 ## CI does not run here — the pre-push hook is the gate
 

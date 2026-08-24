@@ -154,6 +154,7 @@ function createProviderServiceHarness() {
     },
     rollbackConversation: () => unsupported(),
     refreshAccountUsage: () => Effect.void,
+    uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },

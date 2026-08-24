@@ -120,6 +120,7 @@ const startupDependencies = Layer.mergeAll(
     rollbackConversation: () => Effect.die("unused"),
     // FORK: this shape carries `refreshAccountUsage`; upstream's mock predates it.
     refreshAccountUsage: () => Effect.void,
+    uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),
   // FORK: startup begins both watchdogs. They are no-ops here — this test's
