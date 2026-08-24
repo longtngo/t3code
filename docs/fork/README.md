@@ -262,8 +262,10 @@ npm-installed CLI symlink carries no such prefix indirection). Worth sending ups
 and are cancelled: **429 runs on this fork, zero successes and zero failures.**
 
 The compensating control is `.githooks/pre-push`, activated via `core.hooksPath` by the root
-`package.json` `prepare` script. It runs the full `pnpm run verify` (typecheck + lint + test)
-on every push, because nothing else executes the ~7.5k-test suite automatically. Read the
+`package.json` `prepare` script. On every push it runs the full `pnpm run verify`, which is four
+steps and starts with formatting: `fmt:check`, `typecheck`, `lint`, `test`. A gate you assembled
+by hand from the last three is not this gate — it will pass and the hook will still reject the
+push. It runs because nothing else executes the ~7.5k-test suite automatically. Read the
 comment at the top of that hook before weakening it — an earlier version ran only typecheck and
 lint on the false belief that CI covered the unit suite.
 
