@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  BellIcon,
   BlocksIcon,
   BotIcon,
   CpuIcon,
@@ -49,6 +50,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
 > = {
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
+  "/settings/notifications": BellIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
   "/settings/local-models": CpuIcon,

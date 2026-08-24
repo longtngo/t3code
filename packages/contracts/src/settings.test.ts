@@ -384,3 +384,127 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
+
+describe("ServerSettings notification categories", () => {
+  it("defaults every category on, so behavior is unchanged until the user opts out", () => {
+    expect(decodeServerSettings({}).notificationCategories).toEqual({
+      finished: true,
+      finishedBackground: true,
+      needsInput: true,
+      failed: true,
+    });
+  });
+
+  it("fills absent categories when a settings file predates the field", () => {
+    // The real settings.json on an existing install has no notificationCategories key.
+    const decoded = decodeServerSettings({
+      addProjectBaseDirectory: "~/src",
+      enableProviderUpdateChecks: false,
+    });
+
+    expect(decoded.notificationCategories.finished).toBe(true);
+    expect(decoded.notificationCategories.finishedBackground).toBe(true);
+    expect(decoded.notificationCategories.needsInput).toBe(true);
+    expect(decoded.notificationCategories.failed).toBe(true);
+  });
+
+  it("keeps sibling categories on when only one is turned off", () => {
+    const decoded = decodeServerSettings({ notificationCategories: { finished: false } });
+
+    expect(decoded.notificationCategories).toEqual({
+      finished: false,
+      finishedBackground: true,
+      needsInput: true,
+      failed: true,
+    });
+  });
+
+  it("accepts a single-category patch without carrying siblings", () => {
+    const patch = decodeServerSettingsPatch({ notificationCategories: { finished: false } });
+
+    // A patch must NOT materialize defaults: deepMerge would then reset the
+    // siblings the user never touched.
+    expect(patch.notificationCategories).toEqual({ finished: false });
+  });
+
+  it("exposes the defaults through DEFAULT_SERVER_SETTINGS for the fail-open path", () => {
+    expect(DEFAULT_SERVER_SETTINGS.notificationCategories).toEqual({
+      finished: true,
+      finishedBackground: true,
+      needsInput: true,
+      failed: true,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema / patch mirror parity
+// ---------------------------------------------------------------------------
+
+/**
+ * Every settings struct has a hand-written `*Patch` mirror, and the RPC decodes
+ * edits through the mirror. A field present in the schema but absent from the
+ * mirror is therefore silently dropped on save — no error, no warning, nothing
+ * persisted. That has already shipped twice.
+ *
+ * Walk `ast.propertySignatures` directly on each node: `.fields` is erased by
+ * `withDecodingDefault`, and following `ast.encoding[0].to` lands on a Union
+ * with no property signatures, so a walker that does either passes vacuously.
+ */
+function schemaPropertySignatures(
+  ast: unknown,
+): ReadonlyArray<{ name: PropertyKey; type: unknown }> {
+  const candidate = (
+    ast as { propertySignatures?: ReadonlyArray<{ name: PropertyKey; type: unknown }> }
+  )?.propertySignatures;
+  return candidate ?? [];
+}
+
+function fieldsMissingFromMirror(
+  schemaAst: unknown,
+  mirrorAst: unknown,
+  path: ReadonlyArray<string> = [],
+): ReadonlyArray<string> {
+  const mirrorByName = new Map(
+    schemaPropertySignatures(mirrorAst).map((property) => [String(property.name), property]),
+  );
+  return schemaPropertySignatures(schemaAst).flatMap((property) => {
+    const name = String(property.name);
+    const here = [...path, name];
+    const counterpart = mirrorByName.get(name);
+    return counterpart === undefined
+      ? [here.join(".")]
+      : fieldsMissingFromMirror(property.type, counterpart.type, here);
+  });
+}
+
+describe("settings schema / patch parity", () => {
+  it("walks nested structs rather than passing vacuously", () => {
+    // Guards the guard: if the AST shape changes and the walker stops seeing
+    // properties, every assertion below would pass while checking nothing.
+    expect(
+      schemaPropertySignatures((ServerSettings as unknown as { ast: unknown }).ast).length,
+    ).toBeGreaterThan(10);
+  });
+
+  it("mirrors every ServerSettings field in ServerSettingsPatch", () => {
+    const deliberatelyUnpatchable = [
+      // Read once at startup as a privilege-escalation guard; deliberately not
+      // editable over the settings RPC. See ServerSettingsPatch's own comment.
+      "disableAuthentication",
+      // KNOWN GAP, not a deliberate exclusion: this is silently dropped on save
+      // today, so "Reset to defaults" cannot clear a custom Claude config dir.
+      // Removing this entry is the whole of the follow-up that fixes it.
+      "providers.claudeAgent.configDirPath",
+    ];
+
+    expect(
+      [
+        ...fieldsMissingFromMirror(
+          (ServerSettings as unknown as { ast: unknown }).ast,
+          (ServerSettingsPatch as unknown as { ast: unknown }).ast,
+        ),
+      ].sort(),
+    ).toEqual([...deliberatelyUnpatchable].sort());
+  });
+});

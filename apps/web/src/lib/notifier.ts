@@ -11,7 +11,12 @@
  * active-thread lookup) via `registerThreadNotificationHost`.
  */
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  NotificationCategorySettings,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import { isElectron } from "../env";
 
@@ -22,6 +27,20 @@ export interface ThreadCompletion {
   readonly turnId: string;
   readonly title: string;
   readonly outcome: TerminalTurnOutcome;
+  /**
+   * Whether other work was still running when this turn settled. An agent that
+   * fans out to subagents settles its turn once per wake-up; those interim
+   * finishes are a separate category from the one that means "it is all done".
+   */
+  readonly backgroundActive: boolean;
+}
+
+/** Mirrors the server-side mapping in `WebPushRelay.filterEdgesByCategory`. */
+function categoryForCompletion(completion: ThreadCompletion): keyof NotificationCategorySettings {
+  if (completion.outcome === "error") {
+    return "failed";
+  }
+  return completion.backgroundActive ? "finishedBackground" : "finished";
 }
 
 const TERMINAL_OUTCOMES = new Set<TerminalTurnOutcome>(["completed", "error", "interrupted"]);
@@ -42,7 +61,9 @@ export function classifyThreadCompletion(input: {
   readonly nextTurnId: string | null | undefined;
   readonly nextState: string | null | undefined;
   readonly title: string;
-}): ThreadCompletion | null {
+  // `backgroundActive` is not decided here: this classifies the turn EDGE, while
+  // background liveness is thread state the caller reads from the same shell.
+}): Omit<ThreadCompletion, "backgroundActive"> | null {
   if (input.previousState !== "running") {
     return null;
   }
@@ -165,6 +186,7 @@ export function notifyThreadCompletions(input: {
   readonly environmentId: EnvironmentId;
   readonly completions: ReadonlyArray<ThreadCompletion>;
   readonly enabled: boolean;
+  readonly categories: NotificationCategorySettings;
 }): void {
   if (!input.enabled || input.completions.length === 0) {
     return;
@@ -174,7 +196,13 @@ export function notifyThreadCompletions(input: {
     if (notifiedTurnKeys.has(key)) {
       continue;
     }
+    // Recorded before the category check, like the "already viewing" skip below:
+    // this completion has happened, so turning the category back on later must
+    // not replay it.
     rememberNotified(key);
+    if (!input.categories[categoryForCompletion(completion)]) {
+      continue;
+    }
     const ref = scopeThreadRef(input.environmentId, completion.threadId);
     if (isViewingThread(ref)) {
       continue;

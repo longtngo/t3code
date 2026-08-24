@@ -79,23 +79,9 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import {
-  primaryServerConfigAtom,
-  primaryServerObservabilityAtom,
-  primaryServerProvidersAtom,
-  serverEnvironment,
-} from "../../state/server";
-import { usePrimaryEnvironment } from "../../state/environments";
-import {
-  hasValidPushSubscription,
-  isWebPushSupported,
-  subscribeToPush,
-  unsubscribeFromPush,
-} from "../../lib/webPush";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
 import { useProjects } from "../../state/entities";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
-import { ensureWebNotificationPermission } from "../../lib/notifier";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -1870,89 +1856,6 @@ function LegacyFeaturesSection() {
 export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-
-  // Per-device Web Push toggle. Push works only in the deployed web PWA (a service
-  // worker + secure context) — never Electron or dev — and needs a server VAPID key.
-  const serverConfig = useAtomValue(primaryServerConfigAtom);
-  const primaryEnvironment = usePrimaryEnvironment();
-  const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
-  const vapidPublicKey = serverConfig?.webPushVapidPublicKey ?? null;
-  const pushAvailable =
-    !isElectron && import.meta.env.PROD && isWebPushSupported() && vapidPublicKey !== null;
-  const pushRegister = useAtomCommand(serverEnvironment.pushSubscriptionsRegister, {
-    reportFailure: false,
-  });
-
-  const [pushEnabled, setPushEnabled] = useState(false);
-  const [pushBusy, setPushBusy] = useState(false);
-  useEffect(() => {
-    if (!pushAvailable || !vapidPublicKey) {
-      return;
-    }
-    let cancelled = false;
-    void hasValidPushSubscription(vapidPublicKey).then((enabled) => {
-      if (!cancelled) {
-        setPushEnabled(enabled);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [pushAvailable, vapidPublicKey]);
-
-  const handlePushEnabledChange = useCallback(
-    async (checked: boolean) => {
-      if (pushBusy || !vapidPublicKey) {
-        return;
-      }
-      setPushBusy(true);
-      try {
-        if (!checked) {
-          await unsubscribeFromPush();
-          setPushEnabled(false);
-          return;
-        }
-        const permission = await ensureWebNotificationPermission();
-        if (permission !== "granted") {
-          setPushEnabled(false);
-          return;
-        }
-        const subscription = await subscribeToPush(vapidPublicKey);
-        if (!subscription || !primaryEnvironmentId) {
-          setPushEnabled(false);
-          return;
-        }
-        const result = await pushRegister({
-          environmentId: primaryEnvironmentId,
-          input: { subscription },
-        });
-        if (result._tag === "Failure") {
-          setPushEnabled(false);
-          return;
-        }
-        setPushEnabled(result.value.ok === true);
-      } catch {
-        setPushEnabled(false);
-      } finally {
-        setPushBusy(false);
-      }
-    },
-    [pushBusy, vapidPublicKey, primaryEnvironmentId, pushRegister],
-  );
-
-  // Enabling requires a gesture-bound OS permission prompt; only persist the
-  // preference once permission is granted so the toggle reflects reality.
-  const handleNotifyOnThreadCompletionChange = useCallback(
-    async (checked: boolean) => {
-      if (!checked) {
-        updateSettings({ notifyOnThreadCompletion: false });
-        return;
-      }
-      const permission = await ensureWebNotificationPermission();
-      updateSettings({ notifyOnThreadCompletion: permission === "granted" });
-    },
-    [updateSettings],
-  );
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
@@ -2312,50 +2215,6 @@ export function GeneralSettingsPanel() {
             </>
           }
         />
-
-        <SettingsRow
-          {...searchableSetting("task-completion-notifications")}
-          description="Show a system notification when a task finishes and you're not viewing it."
-          resetAction={
-            settings.notifyOnThreadCompletion !==
-            DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion ? (
-              <SettingResetButton
-                label="task completion notifications"
-                onClick={() =>
-                  updateSettings({
-                    notifyOnThreadCompletion: DEFAULT_UNIFIED_SETTINGS.notifyOnThreadCompletion,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.notifyOnThreadCompletion}
-              onCheckedChange={(checked) => {
-                void handleNotifyOnThreadCompletionChange(Boolean(checked));
-              }}
-              aria-label="Notify when a task finishes"
-            />
-          }
-        />
-
-        {pushAvailable ? (
-          <SettingsRow
-            {...searchableSetting("background-notifications")}
-            description="Get a notification when a task finishes or needs your input, even with the app closed or the screen off. Works on this device only."
-            control={
-              <Switch
-                checked={pushEnabled}
-                disabled={pushBusy}
-                onCheckedChange={(checked) => {
-                  void handlePushEnabledChange(Boolean(checked));
-                }}
-                aria-label="Enable background notifications on this device"
-              />
-            }
-          />
-        ) : null}
 
         <SettingsRow
           {...searchableSetting("new-threads")}

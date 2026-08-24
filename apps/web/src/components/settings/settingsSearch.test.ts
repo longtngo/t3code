@@ -1,3 +1,4 @@
+import { NOTIFICATION_CATEGORIES } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -88,6 +89,28 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+});
+
+describe("notification settings search entries", () => {
+  it("routes every notification category to the notifications tab", () => {
+    for (const category of NOTIFICATION_CATEGORIES) {
+      const [hit] = searchSettings(category.label);
+      expect(hit).toMatchObject({ id: `notify-${category.key}`, to: "/settings/notifications" });
+    }
+  });
+
+  it("keeps the relocated delivery rows pointing at their new home", () => {
+    // These two rows moved out of General; their anchor ids are unchanged so
+    // existing deep links keep working, but the section must follow the move.
+    expect(searchSettings("task completion notifications")[0]).toMatchObject({
+      id: "task-completion-notifications",
+      to: "/settings/notifications",
+    });
+    expect(searchSettings("background notifications")[0]).toMatchObject({
+      id: "background-notifications",
+      to: "/settings/notifications",
     });
   });
 });

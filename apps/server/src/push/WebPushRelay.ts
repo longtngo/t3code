@@ -16,9 +16,12 @@
  *
  * @module WebPushRelay
  */
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import type {
+  NotificationCategorySettings,
   OrchestrationEvent,
   OrchestrationLatestTurnState,
+  OrchestrationThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -39,6 +42,7 @@ import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PushSubscriptionRepository } from "../persistence/Services/PushSubscription.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 // ---------------------------------------------------------------------------
 // VAPID keys (server secret, generated once)
@@ -175,6 +179,58 @@ export function classifyThreadNotifyEdges(
   return edges;
 }
 
+/**
+ * Which category an edge belongs to, given whether other work was still running
+ * when the turn settled.
+ *
+ * A finish splits on live background work rather than on what started the turn:
+ * an agent that fans out to subagents settles its turn once per wake-up, and the
+ * LAST of those is the genuinely-final completion. Keying off the originating
+ * message would silence exactly that one. A failure never becomes an interim
+ * finish — it is the alert people keep when they silence everything else.
+ */
+function categoryForEdge(
+  edge: ThreadNotifyEdge,
+  backgroundActive: boolean,
+): keyof NotificationCategorySettings {
+  if (edge.kind === "asking") {
+    return "needsInput";
+  }
+  if (edge.outcome === "error") {
+    return "failed";
+  }
+  return backgroundActive ? "finishedBackground" : "finished";
+}
+
+/**
+ * Whether a thread has background work running right now, for the purposes of
+ * splitting a finish into "done" vs "interim".
+ *
+ * Only `"working"` counts. `"monitoring"` means watch loops are the only live
+ * work, and treating that as active would permanently classify a thread with a
+ * standing watcher as an interim finish — silencing it forever once the user
+ * turns that category off. Absent (older server, or after a restart, since the
+ * liveness map is in-memory) reads as "nothing running", so the alert still fires.
+ */
+export function isBackgroundWorkActive(
+  liveness: OrchestrationThreadShell["backgroundLiveness"],
+): boolean {
+  return liveness === "working";
+}
+
+/**
+ * Drop the edges whose category the user has switched off. Pure so the mapping
+ * is testable without standing up the relay; `processThread` keeps ownership of
+ * when the settings are read and when the baseline advances.
+ */
+export function filterEdgesByCategory(
+  edges: ReadonlyArray<ThreadNotifyEdge>,
+  categories: NotificationCategorySettings,
+  backgroundActive: boolean,
+): ReadonlyArray<ThreadNotifyEdge> {
+  return edges.filter((edge) => categories[categoryForEdge(edge, backgroundActive)]);
+}
+
 /** Build the JSON push payload the service-worker `push` handler renders. */
 export function buildPushPayload(input: {
   readonly edge: ThreadNotifyEdge;
@@ -306,6 +362,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const serverEnvironment = yield* ServerEnvironment;
   const pushRepo = yield* PushSubscriptionRepository;
+  const serverSettings = yield* ServerSettingsService;
 
   const vapidKeys = yield* getOrCreateVapidKeys(secrets);
   webpush.setVapidDetails(VAPID_SUBJECT, vapidKeys.publicKey, vapidKeys.privateKey);
@@ -359,6 +416,21 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  // Fail OPEN: an unreadable settings file must not silence notifications. This is
+  // `catchCause`, not `orElseSucceed`, because `getRawSettings` is backed by a Cache
+  // whose lookup can die with a defect rather than a typed error — and a defect
+  // escaping here would skip `advanceBaseline` and drop the edge for good. The cache
+  // also never retries a failed lookup, so without the warning below a single
+  // transient read error would ignore every category for the rest of the process.
+  const readNotificationCategories = serverSettings.getRawSettings.pipe(
+    Effect.map((settings) => settings.notificationCategories),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("notification categories unreadable; allowing all notifications", {
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(DEFAULT_SERVER_SETTINGS.notificationCategories)),
+    ),
+  );
+
   const processThread = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const shellOption = yield* snapshotQuery.getThreadShellById(threadId);
@@ -391,15 +463,34 @@ const make = Effect.gen(function* () {
       });
 
       if (edges.length > 0) {
+        // Read the categories ONLY here. On the first-sight and no-edge paths this
+        // function does no I/O at all today, and putting a fallible read there
+        // would let a settings hiccup abort before `advanceBaseline` — losing an
+        // edge that never re-emits.
+        const categories = yield* readNotificationCategories;
+        const allowed = filterEdgesByCategory(
+          edges,
+          categories,
+          isBackgroundWorkActive(shell.backgroundLiveness),
+        );
+        if (allowed.length < edges.length) {
+          yield* Effect.logDebug("web push edges suppressed by notification categories", {
+            threadId,
+            suppressed: edges.length - allowed.length,
+            categories,
+            backgroundLiveness: shell.backgroundLiveness ?? null,
+          });
+        }
+
         // Deliberately NOT recovered to an empty list: swallowing the failure here
         // reaches `advanceBaseline` below, which consumes the edge, and a terminal
         // edge never re-emits — the exact silent drop the comment above forbids.
         // Letting it fail skips the baseline advance and logs via the outer catch.
-        const subscriptions = yield* pushRepo.list();
+        const subscriptions = allowed.length > 0 ? yield* pushRepo.list() : [];
         if (subscriptions.length > 0) {
           const environmentId = yield* serverEnvironment.getEnvironmentId;
           const url = `/${environmentId}/${threadId}`;
-          for (const edge of edges) {
+          for (const edge of allowed) {
             const payload = buildPushPayload({ edge, title: shell.title, url, threadId });
             yield* Effect.forEach(
               subscriptions,

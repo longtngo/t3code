@@ -1,8 +1,11 @@
+import type { NotificationCategoryKey } from "@t3tools/contracts";
+
 import { isElectron } from "~/env";
 
 export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
+  | "/settings/notifications"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/local-models"
@@ -28,6 +31,7 @@ export interface SettingsSearchItem {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
+  "/settings/notifications": "Notifications",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
   "/settings/local-models": "Local LLM",
@@ -146,12 +150,32 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "task-completion-notifications",
     title: "Task completion notifications",
-    to: "/settings/general",
+    to: "/settings/notifications",
   },
   {
     id: "background-notifications",
     title: "Background notifications on this device",
-    to: "/settings/general",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notify-finished",
+    title: "Task finished",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notify-finishedBackground",
+    title: "Interim finish",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notify-needsInput",
+    title: "Agent asked a question",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notify-failed",
+    title: "Task failed",
+    to: "/settings/notifications",
   },
   {
     id: "new-threads",
@@ -272,6 +296,19 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = Object.fromEntries(
   SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item]),
 ) as Readonly<Record<SettingsSearchItemId, SettingsSearchItem>>;
+
+/**
+ * Fails to compile if a notification category gains or loses a key without its
+ * search entry following. The catalog stays explicit rather than derived: a
+ * derived one widens `SettingsSearchItemId` to `string`, which breaks
+ * `searchableSetting` under `noUncheckedIndexedAccess` and silently drops the
+ * typo guard that makes this whole module worth having.
+ */
+type ExactlySameIds<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+export const _searchCatalogParity: ExactlySameIds<
+  `notify-${NotificationCategoryKey}`,
+  Extract<SettingsSearchItemId, `notify-${string}`>
+> = true;
 
 /**
  * `id` and `title` props for the element a search item anchors to. Panels

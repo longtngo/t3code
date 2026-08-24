@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Notifications](#notifications)
 
 ## Concepts
 
@@ -140,6 +141,22 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Notifications
+
+Alerts raised outside the thread timeline. Two paths deliver them: the foreground OS notifier in [notifier.ts][25], and Web Push to a browser that is closed or asleep in [WebPushRelay.ts][26]. Both read the same categories, but they do not raise the same set: the foreground notifier only handles turn completions, so `needsInput` is gated by the Web Push path alone.
+
+#### Notification category
+
+A class of event the user can silence independently, defined once in `NOTIFICATION_CATEGORIES` in [the settings contracts][27] and stored as `ServerSettings.notificationCategories`. Server-authoritative rather than client-local, because the Web Push relay sends from the server and cannot read a client's `localStorage`. Every category defaults on.
+
+#### Notification edge
+
+A state transition worth alerting on, not a state. Computed by `classifyThreadNotifyEdges` in [WebPushRelay.ts][26]: a turn going `running` → terminal, or a thread beginning to ask for input. First sight of a thread records a baseline and deliberately emits nothing, so a restart never replays a stale alert.
+
+#### Interim finish
+
+A turn that settled while background work was still running, as opposed to one that settled with nothing left to do. An agent delegating to subagents settles once per wake-up, so most of its finishes are interim. The split is computed from live background liveness at edge time rather than from what started the turn — the last wake-up of a run is the genuinely final completion, so keying off the originating message would silence exactly the alert worth keeping.
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -179,3 +196,6 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ../../apps/web/src/lib/notifier.ts
+[26]: ../../apps/server/src/push/WebPushRelay.ts
+[27]: ../../packages/contracts/src/settings.ts

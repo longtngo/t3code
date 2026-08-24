@@ -6,7 +6,8 @@
  *     the focused thread and route to a thread on click.
  *  2. Observe every thread shell's latest-turn state and, on a genuine
  *     running -> terminal edge for a thread the user is not viewing, raise an
- *     OS notification (gated by the `notifyOnThreadCompletion` client setting).
+ *     OS notification. Gated by the `notifyOnThreadCompletion` client setting
+ *     and by the server-side notification categories.
  *
  * The shell list (`useThreadShells`) is the authoritative per-thread state for
  * ALL threads — not just the actively-viewed one — so it is the path that
@@ -20,7 +21,7 @@ import { useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
-import { useClientSettings } from "./useSettings";
+import { useClientSettings, usePrimarySettings } from "./useSettings";
 import { useThreadShells } from "../state/entities";
 import {
   classifyThreadCompletion,
@@ -75,6 +76,20 @@ export function useThreadCompletionNotifications(): void {
   const enabledBox = useRef(enabled);
   enabledBox.current = enabled;
 
+  // Server-authoritative, so the Web Push relay and this notifier agree on which
+  // categories are silenced. Read from the PRIMARY environment only, while the
+  // loop below walks shells from every attached environment — so a secondary
+  // environment's completions are gated by the primary's categories. The settings
+  // panel writes to primary too, so that is at least self-consistent; it only
+  // diverges for multi-environment users.
+  //
+  // Held in a ref for the same reason as `enabled` above: the effect depends only
+  // on `threads`, and adding settings to its deps would re-run the whole
+  // thread-diff loop on every unrelated settings save.
+  const categories = usePrimarySettings((settings) => settings.notificationCategories);
+  const categoriesBox = useRef(categories);
+  categoriesBox.current = categories;
+
   const threads = useThreadShells();
   // Per (environment:thread) previous latest-turn state, so we can detect the
   // running -> terminal edge across renders without any server/RPC changes.
@@ -99,8 +114,11 @@ export function useThreadCompletionNotifications(): void {
       if (completion) {
         notifyThreadCompletions({
           environmentId: shell.environmentId,
-          completions: [completion],
+          completions: [
+            { ...completion, backgroundActive: shell.backgroundLiveness === "working" },
+          ],
           enabled: enabledBox.current,
+          categories: categoriesBox.current,
         });
       }
       previous.set(key, nextState);

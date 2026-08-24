@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { NotificationCategorySettings } from "@t3tools/contracts";
+
 import {
   buildPushPayload,
   classifyThreadNotifyEdges,
+  filterEdgesByCategory,
+  isBackgroundWorkActive,
   isAllowedPushEndpoint,
   type ThreadNotifyState,
 } from "./WebPushRelay.ts";
@@ -159,5 +163,93 @@ describe("buildPushPayload", () => {
     expect(payload.body).toBe("Waiting for your input");
     expect(payload.tag).toBe("id");
     expect(payload.kind).toBe("asking");
+  });
+});
+
+describe("filterEdgesByCategory", () => {
+  const allOn: NotificationCategorySettings = {
+    finished: true,
+    finishedBackground: true,
+    needsInput: true,
+    failed: true,
+  };
+  const finishedEdge = { kind: "finished", outcome: "completed" } as const;
+  const interruptedEdge = { kind: "finished", outcome: "interrupted" } as const;
+  const failedEdge = { kind: "finished", outcome: "error" } as const;
+  const askingEdge = { kind: "asking" } as const;
+  const everyEdge = [finishedEdge, interruptedEdge, failedEdge, askingEdge];
+
+  it("passes everything through when no category is disabled", () => {
+    expect(filterEdgesByCategory(everyEdge, allOn, false)).toEqual(everyEdge);
+    expect(filterEdgesByCategory(everyEdge, allOn, true)).toEqual(everyEdge);
+  });
+
+  it("drops nothing at all when there is nothing to drop", () => {
+    expect(filterEdgesByCategory([], allOn, false)).toEqual([]);
+  });
+
+  it("treats an interrupted turn as finished, not as its own category", () => {
+    const noFinished = { ...allOn, finished: false };
+    expect(filterEdgesByCategory([finishedEdge, interruptedEdge], noFinished, false)).toEqual([]);
+  });
+
+  it("routes a finish to finishedBackground only while other work is still running", () => {
+    const noInterim = { ...allOn, finishedBackground: false };
+    const noFinished = { ...allOn, finished: false };
+
+    // Background work still alive: this is an interim finish.
+    expect(filterEdgesByCategory([finishedEdge], noInterim, true)).toEqual([]);
+    expect(filterEdgesByCategory([finishedEdge], noFinished, true)).toEqual([finishedEdge]);
+
+    // Nothing left running: this is the real completion and must survive
+    // silencing the interim ones. This is the whole point of the split.
+    expect(filterEdgesByCategory([finishedEdge], noInterim, false)).toEqual([finishedEdge]);
+    expect(filterEdgesByCategory([finishedEdge], noFinished, false)).toEqual([]);
+  });
+
+  it("keeps a failure in its own category even while background work runs", () => {
+    // A failure is the alert people keep when they silence everything else;
+    // reclassifying it as interim would hide it behind the noisy switch.
+    const noInterim = { ...allOn, finishedBackground: false };
+    expect(filterEdgesByCategory([failedEdge], noInterim, true)).toEqual([failedEdge]);
+    expect(filterEdgesByCategory([failedEdge], { ...allOn, failed: false }, true)).toEqual([]);
+  });
+
+  it("gates an input request on needsInput regardless of background work", () => {
+    const noInput = { ...allOn, needsInput: false };
+    expect(filterEdgesByCategory([askingEdge], noInput, false)).toEqual([]);
+    expect(filterEdgesByCategory([askingEdge], noInput, true)).toEqual([]);
+    expect(filterEdgesByCategory([askingEdge], allOn, true)).toEqual([askingEdge]);
+  });
+
+  it("drops every edge when the user turns everything off", () => {
+    const allOff: NotificationCategorySettings = {
+      finished: false,
+      finishedBackground: false,
+      needsInput: false,
+      failed: false,
+    };
+    expect(filterEdgesByCategory(everyEdge, allOff, false)).toEqual([]);
+    expect(filterEdgesByCategory(everyEdge, allOff, true)).toEqual([]);
+  });
+});
+
+describe("isBackgroundWorkActive", () => {
+  it("treats only live work as active", () => {
+    expect(isBackgroundWorkActive("working")).toBe(true);
+  });
+
+  it("does NOT treat watch loops as active", () => {
+    // "monitoring" means watch loops are the only live work. Counting it would
+    // pin a thread with a standing watcher to the interim category forever, so
+    // silencing interim finishes would silence that thread permanently.
+    expect(isBackgroundWorkActive("monitoring")).toBe(false);
+  });
+
+  it("reads an absent liveness as nothing running, so the alert still fires", () => {
+    // The liveness map is in-memory, so it is empty after a restart. Failing
+    // toward "notify" is the safe direction.
+    expect(isBackgroundWorkActive(null)).toBe(false);
+    expect(isBackgroundWorkActive(undefined)).toBe(false);
   });
 });

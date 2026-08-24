@@ -751,6 +751,68 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+/**
+ * The notification categories a user can silence, in the order they render.
+ *
+ * Drives the Settings → Notifications rows and their copy. The schema below is
+ * written out by hand rather than derived from this table: deriving it erases the
+ * literal key types, and `optionalKey` over a defaulted field would make a
+ * single-category patch reset its siblings. `_categoryParity` keeps the two in step.
+ *
+ * `finished` deliberately covers interrupted turns as well as completed ones — the
+ * user-facing concept is "the turn stopped running", and the push body still names
+ * which it was.
+ *
+ * `finishedBackground` splits that same edge by whether other work was still
+ * running when the turn ended. An agent that farms work out to subagents settles
+ * its turn once per wake-up, and each of those is an alert today; measured on a
+ * real install, 43% of all turns are machine-initiated wake-ups. Splitting on
+ * live background work rather than on what started the turn is what keeps the
+ * genuinely-final alert: at the true end of a run nothing is left running, so it
+ * lands in `finished` and survives silencing the interim ones.
+ */
+export const NOTIFICATION_CATEGORIES = [
+  {
+    key: "finished",
+    label: "Task finished",
+    description:
+      "A task stopped running and nothing was left working in the background. This is the alert that fires when a whole piece of work is genuinely done.",
+  },
+  {
+    key: "finishedBackground",
+    label: "Interim finish",
+    description:
+      "A task stopped running while subagents or other background work were still going. On agent runs that fan out to subagents these are most of the notifications you get.",
+  },
+  {
+    key: "needsInput",
+    label: "Agent asked a question",
+    description: "An agent is waiting on an answer before it can continue.",
+  },
+  {
+    key: "failed",
+    label: "Task failed",
+    description: "A task stopped because of an error.",
+  },
+] as const;
+
+export type NotificationCategoryKey = (typeof NOTIFICATION_CATEGORIES)[number]["key"];
+
+export const NotificationCategorySettings = Schema.Struct({
+  finished: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  finishedBackground: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  needsInput: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  failed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type NotificationCategorySettings = typeof NotificationCategorySettings.Type;
+
+/** Fails to compile if the table and the schema stop describing the same categories. */
+type ExactlySameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+export const _categoryParity: ExactlySameKeys<
+  NotificationCategoryKey,
+  keyof NotificationCategorySettings
+> = true;
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -771,6 +833,13 @@ export const ServerSettings = Schema.Struct({
    * between a desktop window and a phone attached to the same server.
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Which notification categories may raise an alert. Server-authoritative because
+   * the Web Push relay sends from the server and cannot read a client's
+   * localStorage; the foreground notifier reads the same field so both paths agree.
+   * Every category defaults on, so an existing install behaves exactly as before.
+   */
+  notificationCategories: NotificationCategorySettings,
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -990,6 +1059,17 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  // Every key optional so a single-category edit patches just that key. Using the
+  // defaulted struct here would materialize the untouched siblings and deepMerge
+  // would write them back over the user's choices.
+  notificationCategories: Schema.optionalKey(
+    Schema.Struct({
+      finished: Schema.optionalKey(Schema.Boolean),
+      finishedBackground: Schema.optionalKey(Schema.Boolean),
+      needsInput: Schema.optionalKey(Schema.Boolean),
+      failed: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

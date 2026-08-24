@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  NotificationCategorySettings,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   __resetThreadNotificationStateForTest,
@@ -7,6 +12,13 @@ import {
   notifyThreadCompletions,
   registerThreadNotificationHost,
 } from "./notifier";
+
+const ALL_ON: NotificationCategorySettings = {
+  finished: true,
+  finishedBackground: true,
+  needsInput: true,
+  failed: true,
+};
 
 const ENV = "env-1" as EnvironmentId;
 const tid = (value: string): ThreadId => value as ThreadId;
@@ -122,22 +134,43 @@ describe("notifyThreadCompletions", () => {
     turnId: "turn-1",
     title: "My task",
     outcome: "completed" as const,
+    backgroundActive: false,
   };
 
   it("does nothing when the setting is disabled", () => {
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: false });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: false,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(0);
   });
 
   it("raises a browser notification when enabled and not viewing the thread", () => {
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(1);
     expect(created[0]?.title).toBe("My task");
   });
 
   it("dedups the same thread+turn across batches", () => {
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(1);
   });
 
@@ -151,7 +184,12 @@ describe("notifyThreadCompletions", () => {
       getActiveThreadRef: () => ({ environmentId: ENV, threadId: tid("t1") }) as ScopedThreadRef,
     });
 
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(0);
 
     // Even after the window loses focus it must not re-fire for the same turn.
@@ -159,7 +197,12 @@ describe("notifyThreadCompletions", () => {
       visibilityState: "hidden",
       hasFocus: () => false,
     };
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(0);
     unregister();
   });
@@ -174,8 +217,109 @@ describe("notifyThreadCompletions", () => {
       getActiveThreadRef: () => ({ environmentId: ENV, threadId: tid("other") }) as ScopedThreadRef,
     });
 
-    notifyThreadCompletions({ environmentId: ENV, completions: [completion], enabled: true });
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
     expect(created).toHaveLength(1);
     unregister();
+  });
+
+  it("gates a completed turn on `finished`", () => {
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [{ ...completion, outcome: "completed" as const }],
+      enabled: true,
+      categories: { ...ALL_ON, finished: false },
+    });
+    expect(created).toHaveLength(0);
+  });
+
+  it("gates an interrupted turn on `finished` too, not a category of its own", () => {
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [{ ...completion, outcome: "interrupted" as const }],
+      enabled: true,
+      categories: { ...ALL_ON, finished: false },
+    });
+    expect(created).toHaveLength(0);
+  });
+
+  it("gates an errored turn on `failed`, and keeps it when only `finished` is off", () => {
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [{ ...completion, turnId: "a", outcome: "error" as const }],
+      enabled: true,
+      categories: { ...ALL_ON, finished: false },
+    });
+    expect(created).toHaveLength(1);
+
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [{ ...completion, turnId: "b", outcome: "error" as const }],
+      enabled: true,
+      categories: { ...ALL_ON, failed: false },
+    });
+    expect(created).toHaveLength(1);
+  });
+
+  it("keeps a failure in its own category even while background work runs", () => {
+    // Mirrors the server-side guarantee. Without this the client could
+    // reclassify an error as an interim finish and swallow it behind the
+    // noisy switch -- a mutant that did exactly that passed the suite.
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [
+        { ...completion, turnId: "err-bg", outcome: "error" as const, backgroundActive: true },
+      ],
+      enabled: true,
+      categories: { ...ALL_ON, finishedBackground: false },
+    });
+    expect(created).toHaveLength(1);
+  });
+
+  it("routes a finish to `finishedBackground` only while other work is still running", () => {
+    // Background work alive => interim finish, silenced by finishedBackground.
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [
+        { ...completion, turnId: "a", outcome: "completed" as const, backgroundActive: true },
+      ],
+      enabled: true,
+      categories: { ...ALL_ON, finishedBackground: false },
+    });
+    expect(created).toHaveLength(0);
+
+    // Nothing left running => the real completion, which must survive.
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [
+        { ...completion, turnId: "b", outcome: "completed" as const, backgroundActive: false },
+      ],
+      enabled: true,
+      categories: { ...ALL_ON, finishedBackground: false },
+    });
+    expect(created).toHaveLength(1);
+  });
+
+  it("still records a category-suppressed completion so a later flip cannot replay it", () => {
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: { ...ALL_ON, finished: false },
+    });
+    expect(created).toHaveLength(0);
+
+    // Same thread+turn, category now on: this already happened, so it must not fire.
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [completion],
+      enabled: true,
+      categories: ALL_ON,
+    });
+    expect(created).toHaveLength(0);
   });
 });
