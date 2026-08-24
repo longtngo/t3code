@@ -492,10 +492,6 @@ describe("settings schema / patch parity", () => {
       // Read once at startup as a privilege-escalation guard; deliberately not
       // editable over the settings RPC. See ServerSettingsPatch's own comment.
       "disableAuthentication",
-      // KNOWN GAP, not a deliberate exclusion: this is silently dropped on save
-      // today, so "Reset to defaults" cannot clear a custom Claude config dir.
-      // Removing this entry is the whole of the follow-up that fixes it.
-      "providers.claudeAgent.configDirPath",
     ];
 
     expect(
@@ -506,5 +502,19 @@ describe("settings schema / patch parity", () => {
         ),
       ].sort(),
     ).toEqual([...deliberatelyUnpatchable].sort());
+  });
+});
+
+describe("ClaudeSettingsPatch config directory", () => {
+  it("keeps configDirPath through a patch instead of silently dropping it", () => {
+    // The RPC decodes edits through the patch mirror, so a field missing from it
+    // never reaches disk. This one was missing, which made "Reset to defaults"
+    // unable to clear a custom Claude config directory.
+    const patch = decodeServerSettingsPatch({
+      providers: { claudeAgent: { configDirPath: "~/.claude-personal", homePath: "/x" } },
+    });
+
+    expect(patch.providers?.claudeAgent?.configDirPath).toBe("~/.claude-personal");
+    expect(patch.providers?.claudeAgent?.homePath).toBe("/x");
   });
 });
