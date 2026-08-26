@@ -181,13 +181,32 @@ are untouched by the primary fix.
 
 ## Tradeoffs and known limitations
 
-- **Racy-clean window.** If a file is modified within the same filesystem-timestamp
-  granularity as the index's recorded mtime and keeps the same size, git's stat
-  shortcut can miss it. This is the **standard** git racy-clean caveat that every
-  `git add` / `git status` already lives with (git mitigates it via the racy-clean
-  re-check on entries whose mtime equals the index mtime). Seeding from the real
-  index inherits exactly the same behaviour the user's own `git status` has — it is
-  not a new correctness regression. _Accepted; do not over-engineer._
+- **Racy-clean window. This entry was wrong, and it cost seven weeks.** Corrected
+  2026-08-26; the text below is kept because the shape of the mistake is the useful
+  part. Its premise was right and its conclusion did not follow.
+
+  What it said: a file modified within the same timestamp granularity as the index's
+  recorded mtime, at the same size, can slip past git's stat shortcut — but git
+  mitigates that with a racy-clean re-check on entries whose mtime is not older than
+  the index's, so seeding from the real index "inherits exactly the same behaviour
+  the user's own `git status` has". _Accepted; do not over-engineer._
+
+  The mitigation is keyed on **the index file's own mtime**, and a plain byte copy
+  resets it to "now". So the copy inherits the stat cache while discarding the guard
+  that makes the stat cache safe. That is the opposite of inheriting `git status`'s
+  behaviour: against the real index the entry is racy and gets re-read; against the
+  copy it never is. Capture stored the pre-edit blob for any file the turn rewrote at
+  the same size, and a revert handed it back to the user.
+
+  Measured on the checkpoint revert test: 18 red in 60. On a standalone git probe:
+  92 stale in 189 with a plain copy, 0 in 189 with the mtime carried over. Fixed by
+  carrying it over. The optimisation itself was never in question — the numbers in
+  this document still stand.
+
+  The lesson worth keeping: an accepted risk needs the same evidence as a rejected
+  one. "Standard caveat, already lives with it" named a real mechanism and then
+  reasoned about a _different_ artifact than the one the code creates.
+
 - **Concurrent index writes.** If the user runs a git command that rewrites the index
   while capture copies it, git's lockfile+rename means the copy reads a _complete_
   index (old or new), never a torn one. A slightly stale copy only costs a few extra

@@ -125,12 +125,19 @@ These rules override the ones above for this fork only.
   runners that only exist in the upstream org, so jobs queue for 24h and are cancelled — 429 runs,
   zero successes, zero failures. Local `pnpm verify` (and the pre-push hook that now runs it) is
   the entire safety net.
-- `pnpm test` runs each package's `unit` project. The `*.browser.tsx` files under `apps/web` are
-  **not** wired into any test project right now (`apps/web/vite.config.ts` registers only
-  `unitTestProject`), so no command runs them — don't assume they are covered.
-- **Do not** run `vp test run apps/web` (or `vp test run <dir>`): it mixes the `unit` and `browser`
-  projects in one run, and browser-only files then fail with misleading `Cannot find module '~/...'`
-  alias errors. Use `--project unit` / `--project browser`, or the `pnpm` scripts above.
+- `pnpm test` runs each package's own `test` script **from that package's directory**. For the web
+  app that is `vp test run --passWithNoTests --project unit`.
+- **Run web tests from `apps/web`, not from the repo root.** A root-level path filter
+  (`vp test run apps/web/...`) uses the root config, which has no `.wasm?inline` handling, so
+  `src/terminal/ghostty/runtimeAbi.test.ts` dies in transform. Measured 2026-08-26: 312 files pass,
+  that one file fails, **0 tests fail**, exit 1 — a red run with nothing actually broken. The same
+  file passes 9/9 from `apps/web`. Named projects only resolve there too; at the root both
+  `--project unit` and `--project browser` error with `No projects matched the filter`.
+- There is **no `browser` test project and no browser test file**. `apps/web/vite.config.ts`
+  registers only `unitTestProject`, and no `*.browser.tsx` source file exists — the nine
+  `__screenshots__/*.browser.tsx` entries are PNG **directories** left by tests that were deleted,
+  and none of them is tracked in git. An earlier version of this note said those files existed but
+  ran nowhere; nothing is going uncovered.
 
 ## Pull requests
 

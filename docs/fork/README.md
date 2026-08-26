@@ -351,6 +351,27 @@ Two cautions, both learned the expensive way:
 All the directions are set differences over stripped lines, so they share one blind spot: a line
 whose count drops N -> N-1 is invisible, and a moved line reads as present.
 
+### Which files get swept, and which merges get refused
+
+The directions above are only as good as the file list they run over, and that list had three holes
+— each one a confident `All directions clean.` at exit 0. Fixed 2026-08-26, every one first
+reproduced on a scratch repo that scored a false green before the change:
+
+- **Only files BOTH sides changed were opened.** A file one side touched is exactly where a
+  wholesale clobber hides: `git checkout --ours`/`--theirs`, or a hand-revert. The sweep now runs
+  over the **union**. One-sided findings print `[one-sided]`, because that wider net is far more
+  often a reword than a real loss — on the 21st reconcile it added 4 files and 52 lines with zero
+  true positives, 41 of them from `ContextWindowMeter.test.tsx`, a file this fork deletes on
+  purpose and whose three siblings were already being reported.
+- **An octopus merge was swept as if it had two parents.** Parents 3 and beyond were read by
+  nothing. Now refused outright rather than half-swept.
+- **`--trunk`/`--upstream` were ignored entirely once the merge was committed.** A typo'd ref
+  swept whatever `HEAD` happened to be and called it clean. They are now checked against `HEAD`'s
+  parents: an explicit ref that does not resolve is an error, and a merge committed from the
+  **upstream** side has its sides swapped with a note — left unswapped every direction reads
+  mirrored, so a lost fork line is reported as a dropped upstream one, pointing at the wrong half
+  of the merge.
+
 Four pre-existing defects in the sweep were fixed at the same time, each of which made it report
 clean while something was genuinely missing:
 
