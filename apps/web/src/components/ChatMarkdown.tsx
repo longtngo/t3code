@@ -1514,51 +1514,55 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     [targetPath],
   );
 
-  const showFileContextMenu = useCallback(
-    async (position: { x: number; y: number }) => {
-      const api = readLocalApi();
-      if (!api) return;
-
-      try {
-        const clicked = await api.contextMenu.show(
-          [
-            ...(onOpen ? ([{ id: "open", label: openInEditorMenuLabel }] as const) : []),
-            ...(onOpenInBrowser
-              ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
-              : []),
-            ...(onReveal && revealLabel ? ([{ id: "reveal", label: revealLabel }] as const) : []),
-            { id: "copy-relative", label: "Copy relative path" },
-            { id: "copy-full", label: "Copy full path" },
-          ] as const,
-          position,
-        );
-
-        if (clicked === "open") {
-          handleOpenInEditor();
-          return;
-        }
-        if (clicked === "open-in-browser") {
-          handleOpenInBrowser();
-          return;
-        }
-        if (clicked === "reveal") {
-          handleRevealInFileManager();
-          return;
-        }
-        if (clicked === "copy-relative") {
-          handleCopy(displayPath, "Relative path");
-          return;
-        }
-        if (clicked === "copy-full") {
-          handleCopy(targetPath, "Full path");
-        }
-      } catch (cause) {
-        reportMarkdownActionFailure(
-          { operation: "show-file-context-menu", target: targetPath },
-          cause,
-        );
-      }
-    },
+  /**
+   * The items BOTH of this chip's menus carry, with their conditions and their
+   * handlers, in one place. The native right-click menu shows exactly this list; the
+   * chevron menu prepends its own two web-only entries and then renders the rest.
+   *
+   * They used to be two hand-kept lists, and they drifted twice: the chevron menu was
+   * missing "Open in integrated browser" entirely, and offered a single ambiguous
+   * "Copy path" where right-click offered a relative and a full one. Sharing the array
+   * is what makes a third drift impossible rather than merely discouraged.
+   *
+   * Deliberately NOT shared: "View in side panel" and "Open in new tab". Those are
+   * web-route actions the native menu has no business showing.
+   */
+  const sharedFileMenuItems = useMemo(
+    () => [
+      // `onOpen` became optional upstream (#7140), so the editor item follows it. The
+      // label comes from the prop rather than a constant, or this reads "Open in editor"
+      // for the same action the user's settings call "Open in Zed".
+      ...(onOpen
+        ? ([{ id: "open", label: openInEditorMenuLabel, run: handleOpenInEditor }] as const)
+        : []),
+      // Gated on the preview runtime and the file type, NOT on `canUseShellActions` like
+      // its neighbours. So this is the one action here that survives on a remote or
+      // browser client, where the editor and reveal items never appear at all.
+      ...(onOpenInBrowser
+        ? ([
+            {
+              id: "open-in-browser",
+              label: "Open in integrated browser",
+              run: handleOpenInBrowser,
+            },
+          ] as const)
+        : []),
+      // `revealLabel` is the ENVIRONMENT's wording, resolved from server config -- Finder,
+      // File Explorer or Files -- so it is absent whenever the host cannot reveal.
+      ...(onReveal && revealLabel
+        ? ([{ id: "reveal", label: revealLabel, run: handleRevealInFileManager }] as const)
+        : []),
+      {
+        id: "copy-relative",
+        label: "Copy relative path",
+        run: () => handleCopy(displayPath, "Relative path"),
+      },
+      {
+        id: "copy-full",
+        label: "Copy full path",
+        run: () => handleCopy(targetPath, "Full path"),
+      },
+    ],
     [
       displayPath,
       handleCopy,
@@ -1572,6 +1576,27 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       revealLabel,
       targetPath,
     ],
+  );
+
+  const showFileContextMenu = useCallback(
+    async (position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api) return;
+
+      try {
+        const clicked = await api.contextMenu.show(
+          sharedFileMenuItems.map(({ id, label }) => ({ id, label })),
+          position,
+        );
+        sharedFileMenuItems.find((item) => item.id === clicked)?.run();
+      } catch (cause) {
+        reportMarkdownActionFailure(
+          { operation: "show-file-context-menu", target: targetPath },
+          cause,
+        );
+      }
+    },
+    [sharedFileMenuItems, targetPath],
   );
 
   const basename = basenamePathSegment(targetPath);
@@ -1698,8 +1723,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       {/* A visible affordance for actions the native context menu above also offers.
           That menu works in a browser too — `readLocalApi` gates on `window`, not Electron
           — but on a chip with a primary action it takes a right-click, which is
-          undiscoverable on touch. The two menus carry different items on purpose; what
-          they must not disagree on is a shared item's condition. */}
+          undiscoverable on touch. This one carries two extra web-route items on purpose;
+          everything else comes from `sharedFileMenuItems`, so the overlap cannot drift. */}
       <Menu>
         <Tooltip>
           <TooltipTrigger
@@ -1730,19 +1755,13 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           {isAbsoluteFilePath(targetPath) && (threadRef ?? fileEnvironmentId) ? (
             <MenuItem onClick={handleOpenInNewTab}>Open in new tab</MenuItem>
           ) : null}
-          {/* `onOpen` became optional upstream (#7140), so the editor item follows it.
-              Label from the same prop the native menu uses, or right-click reads
-              "Open in Zed" and this reads "Open in editor" for the identical action. */}
-          {onOpen ? (
-            <MenuItem onClick={handleOpenInEditor}>{openInEditorMenuLabel}</MenuItem>
-          ) : null}
-          {/* Mirrors the reveal item in `showFileContextMenu` above — same condition, same
-              slot before the copy items. Nothing enforces the pairing, so change both.
-              `revealLabel` is the ENVIRONMENT's wording, resolved from server config. */}
-          {onReveal && revealLabel ? (
-            <MenuItem onClick={handleRevealInFileManager}>{revealLabel}</MenuItem>
-          ) : null}
-          <MenuItem onClick={() => handleCopy(targetPath, "Full path")}>Copy path</MenuItem>
+          {/* Everything right-click offers, same order, same wording, same conditions.
+              See `sharedFileMenuItems` for why these are not written out again here. */}
+          {sharedFileMenuItems.map((item) => (
+            <MenuItem key={item.id} onClick={item.run}>
+              {item.label}
+            </MenuItem>
+          ))}
         </MenuPopup>
       </Menu>
     </span>
