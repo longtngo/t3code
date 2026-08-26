@@ -88,6 +88,12 @@ export interface VitalsGaugeInputs {
  * resources (CPU / GPU / memory); the halves never touch. Arc sweep is fullness,
  * color is severity.
  */
+/**
+ * Edge length of the composer-footer glyph, in px. Matches the `size-8` button
+ * it fills, so a change to one is a visible change to the other.
+ */
+export const VITALS_GAUGE_TRIGGER_SIZE = 32;
+
 export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: number }) {
   const { context, fiveHour, sevenDay, cpu, gpu, mem } = props.inputs;
   const size = props.size ?? 20;
@@ -599,16 +605,17 @@ export function VitalsGauge(props: {
             type="button"
             className={cn(
               // size-8 matches the composer's send button, so the two controls
-              // in the footer share one hit-target size.
-              "inline-flex size-8 cursor-pointer items-center justify-center rounded-full border border-transparent text-muted-foreground outline-none transition-colors",
+              // in the footer share one hit-target size. The glyph fills it:
+              // no inner wrapper and no transparent border, both of which used
+              // to inset it, because the arcs are the only thing here worth
+              // reading at a glance.
+              "inline-flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground outline-none transition-colors",
               "hover:bg-accent data-[pressed]:bg-accent",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             )}
             aria-label={describeInputs(inputs)}
           >
-            <span className="flex size-6 items-center justify-center">
-              <VitalsGaugeIcon inputs={inputs} size={24} />
-            </span>
+            <VitalsGaugeIcon inputs={inputs} size={VITALS_GAUGE_TRIGGER_SIZE} />
           </button>
         }
       />

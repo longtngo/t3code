@@ -291,6 +291,105 @@ describe("rightHalfArc", () => {
 describe("deriveLatestAccountUsage balances", () => {
   const usageActivity = (payload: unknown) => [makeActivity("a", "account.usage.updated", payload)];
 
+  it("surfaces Claude extra credits as a balance", () => {
+    // A real account's payload, over its monthly limit. Amounts are cents.
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        fiveHour: { utilization: 1, resetsAt: "2026-08-20T21:39:59.563953+00:00" },
+        sevenDay: { utilization: 59, resetsAt: "2026-08-24T08:59:59.563973+00:00" },
+        extra: {
+          isEnabled: true,
+          usedCredits: 20166,
+          monthlyLimit: 20000,
+          utilization: 100,
+          currency: "CAD",
+        },
+      }),
+    );
+
+    expect(view?.balances).toEqual([
+      { label: "Extra usage", detail: "CAD 201.66 of CAD 200.00", utilization: 100 },
+    ]);
+  });
+
+  it("omits extra credits for an account that has not turned them on", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        fiveHour: { utilization: 1, resetsAt: null },
+        sevenDay: null,
+        extra: {
+          isEnabled: false,
+          usedCredits: 0,
+          monthlyLimit: 0,
+          utilization: 0,
+          currency: null,
+        },
+      }),
+    );
+
+    expect(view?.balances).toEqual([]);
+  });
+
+  it("omits an enabled-but-empty account, which isEnabled alone does not catch", () => {
+    // `OAuthUsage` maps an `extra_usage` carrying only `is_enabled` to this
+    // all-zeros record, asserted by its own test. Gating on `isEnabled` renders
+    // "$0.00 of $0.00" in green, and that row alone opens the limits block on
+    // an account with nothing else in it.
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        extra: { isEnabled: true, usedCredits: 0, monthlyLimit: 0, utilization: 0, currency: null },
+      }),
+    );
+
+    expect(view?.balances).toEqual([]);
+  });
+
+  it("leaves utilization null when the payload omits it, rather than reading as 0%", () => {
+    // A balance row colours null as neutral and 0 as green, so defaulting a
+    // missing utilization would claim a healthy reading nobody sent.
+    const view = deriveLatestAccountUsage(
+      usageActivity({ extra: { isEnabled: true, usedCredits: 4354, monthlyLimit: 200000 } }),
+    );
+
+    expect(view?.balances[0]?.utilization).toBeNull();
+  });
+
+  it("treats a missing used amount as zero spent against the limit", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({ extra: { isEnabled: true, monthlyLimit: 200000, utilization: 0 } }),
+    );
+
+    expect(view?.balances[0]?.detail).toBe("$0.00 of $2000.00");
+  });
+
+  it("ignores an empty currency instead of printing it as a prefix", () => {
+    // `formatSpend` builds "<currency> <amount>", so an empty string renders a
+    // leading space and a doubled one before the limit.
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        extra: {
+          isEnabled: true,
+          usedCredits: 43540,
+          monthlyLimit: 200000,
+          utilization: 21.77,
+          currency: "",
+        },
+      }),
+    );
+
+    expect(view?.balances[0]?.detail).toBe("$435.40 of $2000.00");
+  });
+
+  it("falls back to dollars when the payload names no currency", () => {
+    const view = deriveLatestAccountUsage(
+      usageActivity({
+        extra: { isEnabled: true, usedCredits: 4354, monthlyLimit: 20000, utilization: 21 },
+      }),
+    );
+
+    expect(view?.balances[0]?.detail).toBe("$43.54 of $200.00");
+  });
+
   it("surfaces Cursor on-demand spend as a balance, not a window", () => {
     // A window implies a reset time and therefore a pace. Spend has neither, and
     // rendering it with a pace bar would claim a deadline that does not exist.

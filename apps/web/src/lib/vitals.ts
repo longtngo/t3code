@@ -203,6 +203,41 @@ function formatSpend(used: number, limit: number | null, currency: string | null
 }
 
 /**
+ * Claude's extra credits: spend past the plan's monthly allowance.
+ *
+ * Amounts are cents. That is not visible in the payload — `usedCredits: 20166`
+ * against `monthlyLimit: 20000` reads as either $201.66 of $200.00 or twenty
+ * thousand of something — so it is asserted by the test that carries a real
+ * account's payload.
+ *
+ * Not a window: extra credits reset with the billing month, and the payload
+ * carries no reset time to pace against.
+ */
+function parseClaudeExtraBalance(value: unknown): UsageBalanceView[] {
+  const record = asRecord(value);
+  if (!record || record.isEnabled !== true) return [];
+  const used = asFiniteNumber(record.usedCredits) ?? 0;
+  const limit = asFiniteNumber(record.monthlyLimit);
+  // `isEnabled` alone is not "has something to show": the server maps an
+  // `extra_usage` object carrying only `is_enabled` to an all-zeros record, and
+  // a row reading "$0.00 of $0.00" is noise that also drags the whole limits
+  // block open on an account with nothing else in it.
+  if (used <= 0 && (limit ?? 0) <= 0) return [];
+  // An empty currency is not a currency. `formatSpend` builds its prefix as
+  // `${currency} `, so "" renders a leading space and a doubled one before the
+  // limit; the renderer this restores treated "" as absent for that reason.
+  const currency =
+    typeof record.currency === "string" && record.currency.length > 0 ? record.currency : "USD";
+  return [
+    {
+      label: "Extra usage",
+      detail: formatSpend(used / 100, limit === null ? null : limit / 100, currency),
+      utilization: asFiniteNumber(record.utilization),
+    },
+  ];
+}
+
+/**
  * Cursor's non-window rows: on-demand spend, and the enterprise request bucket.
  *
  * Both are ceilings you sit under rather than periods you burn through, so
@@ -286,7 +321,11 @@ export function deriveLatestAccountUsage(
       fiveHour: parseUsageWindow(payload.fiveHour),
       sevenDay: parseUsageWindow(payload.sevenDay),
       extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
-      balances: [...parseCodexBalances(payload.codex), ...parseCursorBalances(payload.cursor)],
+      balances: [
+        ...parseClaudeExtraBalance(payload.extra),
+        ...parseCodexBalances(payload.codex),
+        ...parseCursorBalances(payload.cursor),
+      ],
     };
   }
   return null;

@@ -5,7 +5,13 @@ import type { ContextWindowSnapshot } from "~/lib/contextWindow";
 import type { HostMetricsSample } from "~/lib/hostMetrics";
 import type { AccountUsageView } from "~/lib/vitals";
 import { FIVE_HOUR_MS, SEVERITY_STROKE, fullnessArc, vitalsLevel, windowArc } from "~/lib/vitals";
-import { MachineDetailList, VitalsDetail, VitalsGauge, VitalsGaugeIcon } from "./VitalsGauge";
+import {
+  MachineDetailList,
+  VitalsDetail,
+  VitalsGauge,
+  VitalsGaugeIcon,
+  VITALS_GAUGE_TRIGGER_SIZE,
+} from "./VitalsGauge";
 
 function countPaths(markup: string): number {
   return markup.split("<path").length - 1;
@@ -248,6 +254,28 @@ describe("VitalsGauge trigger", () => {
     expect(markup).toContain(
       'aria-label="Vitals — context 46%, 5-hour 88%, 7-day 41%, CPU 22%, GPU 44%, memory 50%"',
     );
+  });
+
+  it("draws the glyph at the full size of its button, with nothing insetting it", () => {
+    const markup = renderToStaticMarkup(
+      <VitalsGauge
+        context={emptyContext}
+        accountUsage={null}
+        host={{ sample, streaming: true, enabled: true, onToggle: () => {} }}
+      />,
+    );
+
+    // The button is `size-8`. The glyph used to be a 24px svg inside a `size-6`
+    // wrapper inside a transparent border, so a quarter of the control was
+    // padding. Asserted through the trigger rather than on the icon alone,
+    // which would pass whatever size the trigger chose to hand it.
+    expect(VITALS_GAUGE_TRIGGER_SIZE).toBe(32);
+    expect(markup).toContain('width="32" height="32"');
+    expect(markup).not.toContain("size-6");
+    // The border counts as inset too: `box-sizing: border-box` means a 1px
+    // border shrinks the content box to 30px around a 32px glyph, and asserting
+    // only on the wrapper would not see that come back.
+    expect(markup).not.toContain("border-transparent");
   });
 });
 
