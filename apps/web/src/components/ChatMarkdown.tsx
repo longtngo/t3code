@@ -973,8 +973,19 @@ interface MarkdownFileLinkProps {
   onOpen?: ((targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   onOpenInPanel: (workspaceRelativePath: string, line: number | undefined) => void;
   openInEditorMenuLabel: string;
-  onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
-  onReveal?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
+  /* These two take their target as an argument rather than closing over it. A closure
+     would be a fresh function on every render, and `areMarkdownFileLinkPropsEqual`
+     compares both -- so the memo could never short-circuit on exactly the clients that
+     show these items. Every chip in a streaming message re-rendered on every delta. */
+  onOpenInBrowser?:
+    | ((filePath: string) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
+  onReveal?:
+    | ((target: {
+        readonly filePath: string;
+        readonly workspaceRelativePath: string | null;
+      }) => Promise<AtomCommandResult<unknown, unknown>>)
+    | undefined;
   /** Platform-specific menu label ("Reveal in Finder", ...); required for the
       reveal item to show. */
   revealLabel?: string | undefined;
@@ -1405,7 +1416,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await onOpenInBrowser();
+        const result = await onOpenInBrowser(iconPath);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1435,7 +1446,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onOpenInBrowser, targetPath]);
+  }, [iconPath, onOpenInBrowser, targetPath]);
 
   const handleRevealInFileManager = useCallback(() => {
     if (!onReveal) {
@@ -1443,7 +1454,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     void (async () => {
       try {
-        const result = await onReveal();
+        const result = await onReveal({ filePath: iconPath, workspaceRelativePath });
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -1473,7 +1484,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
-  }, [onReveal, targetPath]);
+  }, [iconPath, onReveal, targetPath, workspaceRelativePath]);
 
   const handleCopy = useCallback(
     (value: string, title: string) => {
@@ -2075,7 +2086,12 @@ function ChatMarkdown({
     [cwd, findWorkspaceBasenameMatch, threadRef],
   );
   const revealMarkdownFileInFileManager = useCallback(
-    async (fileLinkMeta: MarkdownFileLinkMeta) => {
+    // Takes only the two fields it reads, not the whole meta: the chip has these as
+    // props already, so it can call this without the parent building a closure per link.
+    async (fileLinkMeta: {
+      readonly filePath: string;
+      readonly workspaceRelativePath: string | null;
+    }) => {
       const workspaceRelativePath = fileLinkMeta.workspaceRelativePath;
       const match = workspaceRelativePath
         ? await findWorkspaceBasenameMatch(workspaceRelativePath)
@@ -2125,7 +2141,7 @@ function ChatMarkdown({
           openInEditorMenuLabel={preferredEditorMenuLabel}
           onReveal={
             canUseShellActions && revealInFileManagerLabel !== undefined
-              ? () => revealMarkdownFileInFileManager(fileLinkMeta)
+              ? revealMarkdownFileInFileManager
               : undefined
           }
           revealLabel={revealInFileManagerLabel}
@@ -2133,7 +2149,7 @@ function ChatMarkdown({
             threadRef &&
             isPreviewSupportedInRuntime() &&
             isBrowserPreviewFile(fileLinkMeta.filePath)
-              ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+              ? openMarkdownFileInPreview
               : undefined
           }
           className={className}
