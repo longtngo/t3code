@@ -30,7 +30,13 @@ function DraftChatThreadRouteView() {
       ) ?? null)
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
-  const serverThread = useThread(serverThreadRef);
+  // `promotedTo` is persisted in the browser and outlives the server's memory of
+  // the thread: a start that never landed, or a database that was rebuilt, both
+  // leave a ref here for a thread the server 404s. Without the shell to confirm
+  // it exists, subscribing to it opened an unbounded retry loop against a thread
+  // that will never appear. `inferredThreadRef` already comes from the shell, so
+  // this only gates the persisted half.
+  const serverThread = useThread(serverThreadRef, { waitForShell: true });
   const serverThreadStarted = threadHasStarted(serverThread);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(serverThreadRef);
   const canonicalThreadRef = resolveDraftPromotionNavigationTarget({

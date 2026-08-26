@@ -8,10 +8,12 @@ import {
   useTerminalUiStateStore,
 } from "./terminalUiStateStore";
 import { DEFAULT_THREAD_TERMINAL_ID } from "./types";
+import { collectActiveTerminalUiThreadKeys } from "./lib/terminalUiStateCleanup";
 
 const THREAD_ID = ThreadId.make("thread-1");
 const THREAD_REF = scopeThreadRef("environment-a" as never, THREAD_ID);
 const OTHER_THREAD_REF = scopeThreadRef("environment-b" as never, THREAD_ID);
+const GHOST_THREAD_REF = scopeThreadRef("environment-a" as never, ThreadId.make("thread-ghost"));
 
 describe("terminalUiStateStore actions", () => {
   beforeEach(() => {
@@ -292,5 +294,85 @@ describe("terminalUiStateStore actions", () => {
     store.clearTerminalUiState(THREAD_REF);
 
     expect(useTerminalUiStateStore.getState()).toBe(before);
+  });
+});
+
+describe("pruning terminal UI state for threads that no longer exist", () => {
+  beforeEach(() => {
+    useTerminalUiStateStore.persist.clearStorage();
+    useTerminalUiStateStore.setState({
+      terminalUiStateByThreadKey: {},
+      suppressedTerminalIdsByThreadKey: {},
+    });
+  });
+
+  const openTerminalFor = (ref: typeof THREAD_REF) => {
+    useTerminalUiStateStore.getState().setTerminalOpen(ref, true);
+  };
+
+  it("keeps live threads and drops ones the server no longer lists", () => {
+    const active = collectActiveTerminalUiThreadKeys({
+      snapshotThreads: [
+        { key: scopedThreadKey(THREAD_REF), deletedAt: null, archivedAt: null },
+        { key: scopedThreadKey(OTHER_THREAD_REF), deletedAt: null, archivedAt: null },
+      ],
+      draftThreadKeys: [],
+    });
+
+    openTerminalFor(THREAD_REF);
+    openTerminalFor(OTHER_THREAD_REF);
+    // A thread the snapshot does not mention at all: deleted server-side, or
+    // never created there. This is the state that used to accumulate forever.
+    openTerminalFor(GHOST_THREAD_REF);
+
+    useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(active);
+
+    const keys = Object.keys(useTerminalUiStateStore.getState().terminalUiStateByThreadKey);
+    expect(keys).toContain(scopedThreadKey(THREAD_REF));
+    expect(keys).toContain(scopedThreadKey(OTHER_THREAD_REF));
+    expect(keys).not.toContain(scopedThreadKey(GHOST_THREAD_REF));
+  });
+
+  it("drops an archived thread, which the server answers for exactly like a missing one", () => {
+    const active = collectActiveTerminalUiThreadKeys({
+      snapshotThreads: [
+        { key: scopedThreadKey(THREAD_REF), deletedAt: null, archivedAt: "2026-08-01T00:00:00Z" },
+      ],
+      draftThreadKeys: [],
+    });
+
+    openTerminalFor(THREAD_REF);
+    useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(active);
+
+    expect(Object.keys(useTerminalUiStateStore.getState().terminalUiStateByThreadKey)).toEqual([]);
+  });
+
+  it("keeps a draft thread the snapshot has never heard of", () => {
+    // A draft exists only in the browser until its first send, so absence from
+    // the snapshot is normal rather than evidence it is gone.
+    const draftKey = scopedThreadKey(OTHER_THREAD_REF);
+    const active = collectActiveTerminalUiThreadKeys({
+      snapshotThreads: [{ key: scopedThreadKey(THREAD_REF), deletedAt: null, archivedAt: null }],
+      draftThreadKeys: [draftKey],
+    });
+
+    openTerminalFor(OTHER_THREAD_REF);
+    useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(active);
+
+    expect(Object.keys(useTerminalUiStateStore.getState().terminalUiStateByThreadKey)).toContain(
+      draftKey,
+    );
+  });
+
+  it("wipes everything when told nothing is active, which is why the caller waits for bootstrap", () => {
+    // Not a wish, a warning: this function is unconditional, so calling it
+    // against the cached shell that loads before the live one would delete the
+    // terminal layout of every thread the user has.
+    openTerminalFor(THREAD_REF);
+    openTerminalFor(OTHER_THREAD_REF);
+
+    useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(new Set());
+
+    expect(Object.keys(useTerminalUiStateStore.getState().terminalUiStateByThreadKey)).toEqual([]);
   });
 });

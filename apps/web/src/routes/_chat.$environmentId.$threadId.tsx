@@ -8,6 +8,7 @@ import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadR
 import { resolveThreadSyncPhase } from "../threadSync";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
+  resolveThreadDetailRef,
   useEnvironmentThreadRefs,
   useThreadDetail,
   useThreadShell,
@@ -25,7 +26,19 @@ function ChatThreadRouteView() {
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
   const serverThreadShell = useThreadShell(threadRef);
-  const serverThreadDetail = useThreadDetail(threadRef);
+  const routeDraftThread = useComposerDraftStore((store) =>
+    threadRef ? store.getDraftThreadByRef(threadRef) : null,
+  );
+  // A draft thread id does not exist on the server until the first send, so
+  // subscribing to its detail asks for a thread that is missing by design and
+  // retries until it gives up. Matches the guard `ChatView` already applies to
+  // the same ref; a real thread is unaffected.
+  const serverThreadDetail = useThreadDetail(
+    resolveThreadDetailRef(threadRef, {
+      shellExists: serverThreadShell !== null,
+      waitForShell: routeDraftThread !== null,
+    }),
+  );
   const serverThreadStatus = useThreadStatus(threadRef);
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";

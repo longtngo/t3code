@@ -5,6 +5,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -25,7 +26,13 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { EnvironmentRpcRequestObserver, request, runStream, subscribe } from "./client.ts";
+import {
+  EnvironmentRpcRequestObserver,
+  expectedFailureRetryDelay,
+  request,
+  runStream,
+  subscribe,
+} from "./client.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -355,6 +362,94 @@ describe("environment RPC", () => {
     }),
   );
 
+  it.effect("stops retrying a subscription the server permanently refuses", () =>
+    Effect.gen(function* () {
+      // A thread the server has never heard of, or an archived one, fails the
+      // snapshot every time. This used to resubscribe every 250ms forever,
+      // re-issuing the HTTP snapshot fetch on each attempt: measured at 3.35
+      // requests a second, indefinitely, against one dead thread id.
+      const domainError = new Error("Thread abc was not found");
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.unwrap(
+            Ref.update(subscriptionCount, (count) => count + 1).pipe(
+              Effect.as(Stream.fail(domainError)),
+            ),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalEvents,
+        {},
+        { onExpectedFailure: () => Effect.void, retryExpectedFailureAfter: "250 millis" },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+
+      // An hour of simulated time, far past the backoff budget. Under the old
+      // fixed 250ms retry this would be ~14,400 subscriptions.
+      for (let tick = 0; tick < 60; tick += 1) {
+        yield* TestClock.adjust("60 seconds");
+        for (let pump = 0; pump < 40; pump += 1) {
+          yield* Effect.yieldNow;
+        }
+      }
+      yield* Fiber.interrupt(subscriptionFiber);
+
+      // One initial attempt plus the retry limit.
+      expect(yield* Ref.get(subscriptionCount)).toBe(13);
+    }),
+  );
+
+  it.effect("gives a subscription its retry budget back once it produces a value", () =>
+    Effect.gen(function* () {
+      // Otherwise a subscription that flaps occasionally over a long session
+      // would eventually exhaust a cap meant for permanent refusals.
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.unwrap(
+            Ref.getAndUpdate(subscriptionCount, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                count % 2 === 0
+                  ? Stream.fail(new Error("transient"))
+                  : Stream.make({ ok: true }).pipe(Stream.concat(Stream.fail(new Error("again")))),
+              ),
+            ),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalEvents,
+        {},
+        { onExpectedFailure: () => Effect.void, retryExpectedFailureAfter: "250 millis" },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+
+      for (let tick = 0; tick < 60; tick += 1) {
+        yield* TestClock.adjust("10 seconds");
+        for (let pump = 0; pump < 40; pump += 1) {
+          yield* Effect.yieldNow;
+        }
+      }
+      yield* Fiber.interrupt(subscriptionFiber);
+
+      // Every other attempt emits, so the budget never runs out and the
+      // subscription keeps recovering well past the 13 a dead one gets.
+      expect(yield* Ref.get(subscriptionCount)).toBeGreaterThan(13);
+    }),
+  );
+
   it.effect("does not classify subscription defects as expected failures", () =>
     Effect.gen(function* () {
       const defect = new Error("subscription invariant failed");
@@ -466,4 +561,24 @@ describe("environment RPC", () => {
       yield* Fiber.interrupt(subscriptionFiber);
     }),
   );
+});
+
+describe("expectedFailureRetryDelay", () => {
+  it("starts at the caller's delay and doubles", () => {
+    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 0))).toBe(250);
+    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 1))).toBe(500);
+    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 4))).toBe(4_000);
+  });
+
+  it("caps, so a long-lived dead subscription settles at twice a minute", () => {
+    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 7))).toBe(30_000);
+    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 99))).toBe(30_000);
+  });
+
+  it("does not overflow into an unwaitable delay", () => {
+    // 2 ** 1024 is Infinity, and a Duration of Infinity never fires.
+    const delay = expectedFailureRetryDelay("250 millis", 5_000);
+    expect(Number.isFinite(Duration.toMillis(delay))).toBe(true);
+    expect(Duration.toMillis(delay)).toBe(30_000);
+  });
 });

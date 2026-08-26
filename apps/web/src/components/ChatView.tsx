@@ -284,12 +284,15 @@ import {
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  useAllEnvironmentShellsBootstrapped,
   useProject,
   useProjects,
   useThread,
   useThreadRefs,
   useThreadShell,
+  useThreadShells,
 } from "../state/entities";
+import { collectActiveTerminalUiThreadKeys } from "../lib/terminalUiStateCleanup";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -1893,6 +1896,29 @@ function ChatViewContent(props: ChatViewProps) {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
     return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
+  // The filter above hides a dead thread's terminal state; it never removes it.
+  // The persisted map therefore keeps every thread the user ever opened a
+  // terminal in, including ones the server has since forgotten, and each one is
+  // a candidate to be re-mounted the moment a stale cached shell still lists it.
+  //
+  // Gated on every environment's shell having bootstrapped, because the cached
+  // shell that loads first is exactly the thing that cannot be trusted to say a
+  // thread is gone — pruning against it would delete live state.
+  const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  const threadShells = useThreadShells();
+  useEffect(() => {
+    if (!shellsBootstrapped) return;
+    useTerminalUiStateStore.getState().removeOrphanedTerminalUiStates(
+      collectActiveTerminalUiThreadKeys({
+        snapshotThreads: threadShells.map((shell) => ({
+          key: scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)),
+          deletedAt: null,
+          archivedAt: shell.archivedAt,
+        })),
+        draftThreadKeys,
+      }),
+    );
+  }, [draftThreadKeys, shellsBootstrapped, threadShells]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeRunningTurnId =
     (activeThread?.session?.status === "running" ? activeThread.session.activeTurnId : null) ??
