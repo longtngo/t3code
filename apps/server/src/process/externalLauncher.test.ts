@@ -184,9 +184,47 @@ it.effect("reveals a file in Finder with open -R on macOS", () =>
 
     assert.ok(spawned);
     assert.equal(spawned.command, "open");
-    assert.deepEqual(spawned.args, ["-R", "/workspace/media/linux-mini-v2.mp4"]);
+    assert.deepEqual(spawned.args, ["-R", "--", "/workspace/media/linux-mini-v2.mp4"]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+// `cwd` arrives from a client as a TrimmedNonEmptyString and cannot be tightened to
+// "absolute" -- one call site still sends a workspace-relative path -- so `open` has to
+// be told where its options stop. Without the separator `open -R -a` is not a reveal at
+// all: `-a` is `open`'s "use this application" flag, and it consumes the next argument.
+for (const reveal of [true, false]) {
+  it.effect(`passes a dash-leading path to open after -- (reveal: ${reveal})`, () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-editors-" });
+      const openPath = path.join(binDir, "open");
+      yield* fileSystem.writeFileString(openPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(openPath, 0o755);
+
+      let spawned: ChildProcess.StandardCommand | undefined;
+      yield* Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        yield* launcher.launchEditor({ editor: "file-manager", cwd: "-a", reveal });
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            platform: "darwin",
+            env: { PATH: binDir },
+            onSpawn: (command) => {
+              spawned = command;
+            },
+          }),
+        ),
+      );
+
+      assert.ok(spawned);
+      assert.equal(spawned.command, "open");
+      assert.equal(spawned.args.at(-2), "--");
+      assert.equal(spawned.args.at(-1), "-a");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}
 
 it.effect("reveals a file in File Explorer through PowerShell on Windows", () =>
   Effect.gen(function* () {

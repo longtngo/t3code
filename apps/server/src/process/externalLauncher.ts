@@ -571,7 +571,12 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     args:
       command === "explorer.exe" && env.WSL_DISTRO_NAME !== undefined
         ? [resolveWslFileManagerPath(input.cwd, env.WSL_DISTRO_NAME)]
-        : [input.cwd],
+        : // Same reason as the reveal branch above: on darwin this command is `open`,
+          // which parses a leading dash as an option. `explorer` and `xdg-open` have no
+          // single-dash options to confuse, and neither accepts `--`.
+          command === "open"
+          ? ["--", input.cwd]
+          : [input.cwd],
   };
 });
 
@@ -622,7 +627,12 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   if (platform === "darwin") {
-    return { editor: "file-manager", target, command: "open", args: ["-R", target] };
+    // `--` because `target` is an unvalidated client string: `LaunchEditorInput.cwd` is a
+    // TrimmedNonEmptyString, and one client call site still sends a workspace-relative
+    // path, so it cannot be tightened to "absolute" here. Without the separator `open`
+    // reads a leading dash as its own option -- `-a` makes it demand an application
+    // argument, and `-a <app>` would pick one.
+    return { editor: "file-manager", target, command: "open", args: ["-R", "--", target] };
   }
 
   if (platform === "win32") {
