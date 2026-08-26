@@ -98,6 +98,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       // server says it honours `localOnly`, so a server that stops advertising
       // this silently costs every workspace tab its status.
       expect(second.capabilities.vcsLocalOnlyStatus).toBe(true);
+      expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),
   );

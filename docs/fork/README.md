@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-22, against `origin/main`: **304 files added, 261 modified, 4 deleted.**
-Concentrated in `apps/server` (206) and `apps/web` (162).
+As of 2026-08-26, against `origin/main`: **307 files added, 269 modified, 3 deleted.**
+Concentrated in `apps/server` (208) and `apps/web` (167).
 
 ## Invariants a merge must not break
 
@@ -100,9 +100,9 @@ comm -23 <(git show "$MB:$f" | sort -u) <(git show "personal:$f" | sort -u) \
 This is what caught the ClaudeAdapter steering test below, which the conflict presented as an
 ordinary upstream addition.
 
-The three deletions counted in Surface above are the fork's largest one: upstream's
-`ContextWindowMeter.tsx`, `.logic.ts`, and `.logic.test.ts` are gone, replaced by the fork's
-composer vitals gauge. They come back only if upstream _modifies_ one of them: git then raises a
+Two of the three deletions counted in Surface above are the fork's largest one: upstream's
+`ContextWindowMeter.tsx` and its `ContextWindowMeter.test.tsx` are gone, replaced by the fork's
+composer vitals gauge. The `.logic.ts` sibling survives for a reason of its own — see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
 modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
 the former call site recording why.
 
@@ -254,6 +254,70 @@ Upstream's `matches through a symlinked entrypoint` fixture builds its paths und
 hold. It passes on upstream's Linux CI and fails on every macOS run. `makeTempDir` realpaths the
 temp root here; `isEntrypoint` itself is untouched, and production is unaffected (an
 npm-installed CLI symlink carries no such prefix indirection). Worth sending upstream.
+
+### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
+
+The meter component is deleted (invariant 4). Its `.logic.ts` sibling is **not**: upstream `#8144`
+put the Claude resume-compaction helpers there, and `ChatView`'s compaction banner uses them. The
+banner is independent of the meter, so rejecting the meter must not reject the compaction feature.
+
+The file is kept under upstream's name so upstream edits to those helpers keep merging instead of
+arriving as a modify/delete every reconcile. Two of its exports are deliberately absent:
+`resolveContextWindowModelDisplayName` (reimplemented inline in `ChatComposer.tsx`, which already
+carries a comment saying so) and `formatContextWindowCompactionMessage` (only ever served the
+deleted component). `ContextWindowMeter.logic.test.ts` is trimmed to match; upstream's new
+`ContextWindowMeter.test.tsx` is deleted with the component it tests.
+
+Upstream's `activeContextWindow: ContextWindowSnapshot | null` prop on `ChatComposer` is also
+rejected: the fork derives the snapshot **and** the account-usage view the Vitals gauge needs from
+`activeThreadActivities`, which stays the prop the parent passes. `compactDisabled` /
+`compactDisabledReason` / `onCompactContext` are adopted — `compactThreadContext` consumes them,
+so they are live, not vestigial.
+
+### 11. One `environmentId` for markdown rendered without a thread
+
+The fork's `fileEnvironmentId` prop on `ChatMarkdown` and upstream `#7140`'s `environmentId` are
+the same concept. Upstream's is the superset and replaced it: besides "Open in new tab" it drives
+remote-open resolution, the editor hook, server config and the workspace basename lookup — the
+exact narrowness the fork's own comment recorded as a known gap. `TrustedFileView` passes the new
+name; the inner `MarkdownFileLink` keeps `fileEnvironmentId` and is fed from it.
+
+The chip itself stays the fork's superset — a `<span>` wrapping the tooltip **and** an in-DOM
+`<Menu>`, which is the only options surface reachable on web and mobile — with upstream's
+`hasPrimaryAction` / `useBrowserPrimaryAction` gating, repositioned native context menu, and
+no-primary-action `<button>` fallback grafted into the tooltip trigger. `onOpen` became optional
+upstream, so the menu's "Open in editor" item now follows it.
+
+Open follow-up: upstream's native context menu carries "Reveal in file manager"; the fork's in-DOM
+menu does not. Adding it is feature work, not merge work.
+
+## A fourth sweep direction the script does not have
+
+`scripts/sweep-merge.py` checks three directions: fork-deleted lines resurrected, upstream-added
+lines dropped, fork-added lines lost. The 21st reconcile hit a fourth it cannot see:
+
+**a line present in the merge-base AND in the fork, deleted by upstream, with the merge honouring
+the deletion.** It is not fork-_added_, so FORK-LOSS is blind to it; it is not fork-_deleted_, so
+RESURRECTED is blind to it; it is not upstream-_added_, so DROPPED is blind to it.
+
+Usually that is exactly right — a merge should honour upstream's deletions. It is a defect only
+when the fork still references the deleted thing. Twice in one merge it did:
+
+- upstream renamed `composerHasDraftContent` to `composerHasUnsentContent` in `ChatView`; the
+  fork's five references stayed behind pointing at a binding that no longer existed.
+- upstream replaced `ChatComposer`'s `activeThreadActivities` prop with a precomputed
+  `activeContextWindow`; the fork's body still derived from `activeThreadActivities`.
+
+Both were caught by `typecheck`, which is the good case. The bad case is a runtime-only reference.
+The probe is cheap — for every file both sides touched, `(base ∩ fork) \ result`:
+
+```python
+lost = (base_lines & fork_lines) - result_lines
+```
+
+167 lines on that merge, almost all legitimate (version bumps, dependency pins, upstream
+refactors of upstream's own code). What matters is the same rule as the other three: every file in
+the list needs a name.
 
 ## CI does not run here — the pre-push hook is the gate
 

@@ -98,6 +98,15 @@ import Migration0047 from "./Migrations/042_DropUnusedCommandReceiptIndexes.ts";
 // 041_ProjectionThreadsTitleRegenerationFailedAt (id 46); filenames are free to
 // repeat, applied ids are not.
 import Migration0048 from "./Migrations/041_AuthSessionClientConnection.ts";
+// Upstream's 042 (projection_threads.linked_pull_request_json, #8160) arrives after
+// the fork already deployed ids 33-48, so it takes the next free id (49) rather than
+// its filename number. Its 042 filename collides with the fork's own
+// 042_DropUnusedCommandReceiptIndexes (id 47); filenames are free to repeat,
+// applied ids are not.
+import Migration0049 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
+// Upstream's 043 (projection_threads.unsettled_at, #8231) likewise takes the next
+// free id (50) rather than its filename number.
+import Migration0050 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -157,6 +166,8 @@ export const migrationEntries = [
   [46, "ProjectionThreadsTitleRegenerationFailedAt", Migration0046],
   [47, "DropUnusedCommandReceiptIndexes", Migration0047],
   [48, "AuthSessionClientConnection", Migration0048],
+  [49, "ProjectionThreadLinkedPullRequest", Migration0049],
+  [50, "ProjectionThreadsUnsettledAt", Migration0050],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

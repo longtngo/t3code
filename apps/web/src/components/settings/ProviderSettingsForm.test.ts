@@ -37,6 +37,22 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("shows the auto-compaction threshold for Claude providers", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    expect(claude).toBeDefined();
+
+    expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "homePath",
+      // FORK: `configDirPath` is a fork-only Claude field. Upstream's order has no
+      // slot for it, so this assertion is retargeted rather than deleted — its
+      // subject (autoCompactWindow shows up for Claude) still applies.
+      "configDirPath",
+      "autoCompactWindow",
+      "launchArgs",
+    ]);
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();
