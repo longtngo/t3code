@@ -2259,26 +2259,44 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("updates 20,000 ordered tool activities within 100 ms", () => {
-    const activities = Array.from({ length: 20_000 }, (_, index) =>
-      makeActivity({
-        id: `benchmark-tool-${index}`,
-        createdAt: new Date(1_700_000_000_000 + index).toISOString(),
-        kind: "tool.completed",
-        summary: "Ran command",
-        sequence: index,
-        payload: {
-          itemType: "command_execution",
-          title: "Ran command",
-          data: {
-            toolCallId: `benchmark-tool-${index}`,
-            item: { command: ["git", "status"] },
+  /**
+   * Guards against the algorithmic regression that matters here: appending one activity
+   * must reuse every row it already derived, which is what keeps the update linear.
+   *
+   * This asserts the property, not a stopwatch. A wall-clock budget sat here and was not
+   * salvageable: it went 100ms -> 300ms after a healthy tree busted it five times in
+   * seven runs, then failed at 428ms under gate load -- above the 407ms its own comment
+   * records for the cheapest injected quadratic. A 10k-vs-20k ratio replaced it and
+   * failed too, at 5.8x, because a 6ms baseline is below the noise floor of anything
+   * `performance.now` can see in a loaded worker. Both were proxies. Row reuse is the
+   * thing they were proxies FOR, and identity is exact.
+   *
+   * Seen failing: stubbing out the `derivedWorkLogEntryByActivity` lookup gives 0 of
+   * 20,000 reused.
+   */
+  it("reuses every derived row when one activity is appended", () => {
+    const makeActivities = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        makeActivity({
+          id: `benchmark-tool-${index}`,
+          createdAt: new Date(1_700_000_000_000 + index).toISOString(),
+          kind: "tool.completed",
+          summary: "Ran command",
+          sequence: index,
+          payload: {
+            itemType: "command_execution",
+            title: "Ran command",
+            data: {
+              toolCallId: `benchmark-tool-${index}`,
+              item: { command: ["git", "status"] },
+            },
           },
-        },
-      }),
-    );
-    deriveWorkLogEntries(activities);
-    const updatedActivities = [
+        }),
+      );
+
+    const activities = makeActivities(20_000);
+    const before = deriveWorkLogEntries(activities);
+    const after = deriveWorkLogEntries([
       ...activities,
       makeActivity({
         id: "benchmark-tool-appended",
@@ -2292,21 +2310,13 @@ describe("session activity performance", () => {
           data: { toolCallId: "benchmark-tool-appended", item: { command: ["git", "diff"] } },
         },
       }),
-    ];
+    ]);
 
-    // Guards against an algorithmic regression: reusing rows must stay linear in
-    // the activity count.
-    //
-    // The bound is chosen from measurement, not taste. A healthy run is ~70ms in
-    // isolation, but this is wall-clock on a shared machine: across seven
-    // full-gate runs on an UNCHANGED tree it landed between 102ms and 179ms
-    // purely from scheduling and GC, busting the old 100ms budget five times.
-    // The cheapest possible quadratic (a bare integer double-loop, injected to
-    // check this bound can still fail) costs 407ms, and any realistic quadratic
-    // here allocates objects and costs seconds. 300ms sits above the worst
-    // observed noise and was verified to fail against that 407ms injection.
-    const startedAt = performance.now();
-    expect(deriveWorkLogEntries(updatedActivities)).toHaveLength(20_001);
-    expect(performance.now() - startedAt).toBeLessThan(300);
+    expect(after).toHaveLength(before.length + 1);
+    let reused = 0;
+    for (let index = 0; index < before.length; index += 1) {
+      if (after[index] === before[index]) reused += 1;
+    }
+    expect(reused).toBe(before.length);
   });
 });
