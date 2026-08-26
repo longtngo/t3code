@@ -4,6 +4,8 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { ThreadId, type VcsError } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -223,3 +225,43 @@ it.layer(TestLayer)("CheckpointStore.layer", (it) => {
     );
   });
 });
+
+// Outside `it.layer`, which hands out a tester with no live clock -- and this test's
+// entire subject is wall-clock seconds recorded in file mtimes.
+it.live("captureCheckpoint keeps an edit whose stat still looks like the index's cached one", () =>
+  Effect.gen(function* () {
+    const tmp = yield* makeTmpDir();
+    yield* initRepoWithCommit(tmp);
+    const readme = NodePath.join(tmp, "README.md");
+
+    // Land just inside a fresh second, so the seed write, the `git add` that records its
+    // stat, and the edit that follows cannot straddle a second boundary between them.
+    const startedAt = yield* Clock.currentTimeMillis;
+    yield* Effect.sleep(Duration.millis(1_005 - (startedAt % 1_000)));
+    yield* writeTextFile(readme, "# base\n");
+    yield* git(tmp, ["add", "README.md"]);
+    // Same byte count, rewritten in place: size, inode and mode are all unchanged, so
+    // git's cached stat can only be invalidated by mtime -- which it compares in whole
+    // seconds, making this edit indistinguishable from the stat it just recorded.
+    yield* writeTextFile(readme, "# edit\n");
+
+    // Cross into the next second before capturing. A loaded host does this for free:
+    // seven git subprocesses run between the write and the index copy. Inside
+    // the same second the entry is racy-clean and git re-reads it, which is why this
+    // defect is invisible when the suite runs unloaded.
+    const editedAt = yield* Clock.currentTimeMillis;
+    yield* Effect.sleep(Duration.millis(1_050 - (editedAt % 1_000)));
+
+    const checkpointStore = yield* CheckpointStore.CheckpointStore;
+    const checkpointRef = checkpointRefForThreadTurn(
+      ThreadId.make("thread-checkpoint-stale-stat"),
+      1,
+    );
+    yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef });
+
+    // Before the fix this is "# base": `git add -A` believed the cached stat and the
+    // checkpoint stored the PRE-edit blob, so reverting to it hands the user back a file
+    // they had already changed.
+    expect(yield* git(tmp, ["show", `${checkpointRef}:README.md`])).toBe("# edit");
+  }).pipe(Effect.provide(TestLayer)),
+);

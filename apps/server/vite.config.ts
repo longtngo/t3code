@@ -82,15 +82,21 @@ export default mergeConfig(
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
       testTimeout: 120_000,
-      // A handful of git/checkpoint integration tests (CheckpointReactor capture/
-      // revert, orchestrationEngine.integration multi-turn/revert, GitManager
-      // cross-repo PR) are load-sensitive async-timing races: green in isolation,
-      // occasionally red only under heavy concurrent CPU load (e.g. another job
-      // saturating the machine). The cause is environmental contention, not a
-      // product bug — and it resists a per-test fix without reproducing that load
-      // (a racy-git hypothesis was tested and falsified on APFS's ns-mtime). A
-      // bounded retry absorbs the transient contention without masking a real
-      // regression, which fails deterministically across all attempts.
+      // This said the checkpoint flakes were "environmental contention, not a product
+      // bug", that they resisted a per-test fix, and that a racy-git hypothesis had
+      // been falsified. All three were wrong, and the retry below hid the evidence for
+      // seven weeks: the falsification tested the file's nanosecond mtime, when the
+      // causal variable is the INDEX FILE's mtime, and the real defect was a stale
+      // checkpoint capture in GitVcsDriver — reproduced at 18/60 and now fixed.
+      //
+      // Retry stays because a second, unrelated family is still open: eight cases in
+      // src/git/GitManager.test.ts pass a bare number as `it.effect`'s third argument,
+      // which is a per-test timeout — 12s and 20s, well under the 120s above, and they
+      // blow it under load. (They contain no literal "timeout", so grepping for the word
+      // finds nothing; confirmed by making a 50ms one fire.) Treat a retry as a report
+      // of something real. It is also silent: the default reporter this suite uses
+      // prints nothing when a retry RESCUES a test, so a red that becomes green leaves
+      // no trace at all. It does print "(retry x2)" when the test ends up failing.
       retry: 2,
     },
   }),

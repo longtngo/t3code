@@ -497,6 +497,24 @@ function parseGitRemoteVerboseOutput(
   return remotes;
 }
 
+/**
+ * The whole second to stamp on a copied git index, given its source's mtime in
+ * epoch milliseconds.
+ *
+ * Never later than the source's own second, and the `- 1` is what guarantees that.
+ * `File.Info.mtime` is a `Date`, which Node builds from `st_mtime_ns` by rounding to
+ * the nearest millisecond, so a nanosecond tail at or above 999_499_878 rounds UP and
+ * a plain floor returns the NEXT second. Stamping a copy later than its source makes
+ * fewer entries look racy to `git add`, which is the one direction that reopens the
+ * stale-capture defect this exists to prevent -- measured at 1 capture in 2,000.
+ *
+ * Landing one second EARLY (at a tail of 0) is harmless: more entries look racy, so
+ * git re-reads more of them. Slower, never wrong.
+ */
+export function copiedIndexStampSeconds(mtimeMillis: number): number {
+  return Math.floor((mtimeMillis - 1) / 1_000);
+}
+
 const gitCommand = (
   process: VcsProcess.VcsProcess["Service"],
   operation: string,
@@ -913,27 +931,47 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         // read-tree HEAD seed, which still produces a correct (just slower) checkpoint.
         let seededFromRealIndex = false;
         if (canSeedFromRealIndex) {
-          seededFromRealIndex = yield* fileSystem.copyFile(realIndexPath, tempIndexPath).pipe(
-            Effect.as(true),
-            Effect.orElseSucceed(() => false),
-          );
+          seededFromRealIndex = yield* Effect.gen(function* () {
+            yield* fileSystem.copyFile(realIndexPath, tempIndexPath);
+            // Carry the source index's mtime across, or the copy silently captures the
+            // PRE-edit content of any file the turn rewrote at the same size.
+            //
+            // `git add` decides a file is unchanged by comparing the index's cached stat
+            // against lstat, in WHOLE seconds. Its only guard against "the file changed
+            // during the second its stat was recorded" is read-time raciness: an entry
+            // counts as racy, and is re-read, iff `index_mtime.sec <= entry_mtime.sec`.
+            // A fresh copy carries mtime "now", so once the capture crosses a second
+            // boundary every entry looks non-racy and the stale stat is believed.
+            // Nothing downstream notices: add, write-tree, commit-tree and update-ref
+            // all exit 0, and the checkpoint just holds the wrong blob until a revert
+            // hands the user back a file they had already changed.
+            const info = yield* fileSystem.stat(realIndexPath);
+            const mtime = Option.getOrUndefined(info.mtime);
+            if (mtime === undefined) return false;
+            const seconds = copiedIndexStampSeconds(mtime.getTime());
+            yield* fileSystem.utimes(tempIndexPath, seconds, seconds);
+            return true;
+          }).pipe(Effect.orElseSucceed(() => false));
         }
 
         if (!seededFromRealIndex) {
-          // A failed copy can leave a partial temp index on disk. Discard it so the
-          // fallback seeds a clean index: `read-tree HEAD` would overwrite it, but a
-          // repo with no HEAD would otherwise run `git add -A` on corrupt bytes and
-          // fail the whole capture.
+          // Seeding can fail with a COMPLETE, valid, stale copy already on disk: the
+          // copy succeeds and the mtime carry-over does not. That is the dangerous
+          // input, not corrupt bytes -- `git add -A` on a complete stale index exits 0
+          // and captures the wrong tree, while a truncated one is merely re-read. This
+          // removal is best-effort, so neither branch below may depend on it.
           yield* fileSystem.remove(tempIndexPath, { force: true }).pipe(Effect.ignore);
           const headExists = yield* hasHeadCommit(input.cwd);
-          if (headExists) {
-            yield* execute({
-              operation,
-              cwd: input.cwd,
-              args: ["read-tree", "HEAD"],
-              env: commitEnv,
-            });
-          }
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            // `read-tree HEAD` overwrites whatever the failed seed left behind. With no
+            // HEAD there is nothing to overwrite it with, so empty the index explicitly
+            // rather than trusting the best-effort removal above -- that is the one
+            // corner where a surviving stale copy reaches `git add -A`.
+            args: headExists ? ["read-tree", "HEAD"] : ["read-tree", "--empty"],
+            env: commitEnv,
+          });
         }
 
         // `:(exclude,literal)` pathspecs drop the oversized untracked files from `-A`. `git add`

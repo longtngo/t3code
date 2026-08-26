@@ -65,6 +65,17 @@ runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
   },
 });
 
+it("copiedIndexStampSeconds never stamps a copied index later than its source", () => {
+  // A source whose nanosecond tail Node rounded UP to the next millisecond, and so to a
+  // whole second: a plain `Math.floor(ms / 1000)` returns 1787760001 here, one second
+  // LATER than the real mtime. That is the value that reopens the stale capture.
+  assert.equal(GitVcsDriver.copiedIndexStampSeconds(1787760001000), 1787760000);
+  // Ordinary sub-second value: the second it belongs to.
+  assert.equal(GitVcsDriver.copiedIndexStampSeconds(1787760000500), 1787760000);
+  // Exactly on a second: one second early, which only makes more entries look racy.
+  assert.equal(GitVcsDriver.copiedIndexStampSeconds(1787760000000), 1787759999);
+});
+
 it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
   let observedEnv: NodeJS.ProcessEnv | undefined;
   let observedAppendTruncationMarker: boolean | undefined;
