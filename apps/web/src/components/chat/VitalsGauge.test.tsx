@@ -237,6 +237,65 @@ describe("VitalsGauge detail", () => {
   });
 });
 
+describe("VitalsDetail usage refresh", () => {
+  const usageWithLimits = {
+    fiveHour: { utilization: 88, resetsAt: null },
+    sevenDay: { utilization: 41, resetsAt: null },
+    extraWindows: [],
+    balances: [],
+  };
+
+  it("offers a refresh control on the limits block when one is wired", () => {
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={usageWithLimits}
+        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
+        now={0}
+        timestampFormat="24-hour"
+        refreshUsage={{ run: () => {}, pending: false }}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Refresh usage from the provider"');
+    expect(markup).not.toContain("animate-spin");
+  });
+
+  it("spins and refuses a second press while the refresh is in flight", () => {
+    // The numbers arrive later as an activity, so the button is the only place
+    // the request is visible at all. Without the disabled state a slow provider
+    // reads as a dead control and invites repeat presses.
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={usageWithLimits}
+        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
+        now={0}
+        timestampFormat="24-hour"
+        refreshUsage={{ run: () => {}, pending: true }}
+      />,
+    );
+
+    expect(markup).toContain("animate-spin");
+    expect(markup).toContain("disabled");
+  });
+
+  it("renders without the control when nothing is wired, so the detail stays pure", () => {
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={usageWithLimits}
+        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
+        now={0}
+        timestampFormat="24-hour"
+      />,
+    );
+
+    expect(markup).toContain("Usage limits");
+    expect(markup).not.toContain('aria-label="Refresh usage from the provider"');
+  });
+});
+
 describe("VitalsGauge trigger", () => {
   it("names every present metric in the button aria-label, including usage windows", () => {
     const markup = renderToStaticMarkup(

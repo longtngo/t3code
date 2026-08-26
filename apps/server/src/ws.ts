@@ -1897,6 +1897,15 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.accountUsageRefresh]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.accountUsageRefresh,
+            // The service already logs and swallows a per-provider failure, so this
+            // reports success once every provider has been asked. The refreshed
+            // numbers arrive separately, as `account.usage.updated`.
+            providerService.refreshAccountUsage().pipe(Effect.as({ ok: true as const })),
+            { "rpc.aggregate": "provider" },
+          ),
         [WS_METHODS.getResourceQueue]: (_input) =>
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
             "rpc.aggregate": "server",

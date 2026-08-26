@@ -269,6 +269,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     rollbackThread,
     uploadFeedback,
     stopAll,
+    refreshAccountUsage,
   };
 }
 
@@ -384,6 +385,67 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
 
     assert.equal(Exit.isSuccess(closeExit), true);
     assert.equal(codex.stopAll.mock.calls.length, 1);
+  }),
+);
+
+it.effect("refreshAccountUsage asks every provider even when one of them fails", () =>
+  Effect.gen(function* () {
+    // The RPC that exposes this reports success once every provider has been
+    // asked. If one broken provider could fail the call, a user with Codex
+    // configured and Claude working would be unable to refresh Claude.
+    const codex = makeFakeCodexAdapter();
+    const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    codex.refreshAccountUsage.mockImplementation(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: String(CODEX_DRIVER),
+          method: "refreshAccountUsage",
+          detail: "simulated usage refresh failure",
+        }),
+      ),
+    );
+    const registry = makeAdapterRegistryMock({
+      [CODEX_DRIVER]: codex.adapter,
+      [CLAUDE_AGENT_DRIVER]: claude.adapter,
+    });
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    const providerService = yield* ProviderService.ProviderService.pipe(
+      Effect.provide(runtimeServices),
+    );
+
+    const refreshExit = yield* providerService.refreshAccountUsage().pipe(Effect.exit);
+    yield* Scope.close(scope, Exit.void);
+
+    assert.equal(Exit.isSuccess(refreshExit), true);
+    assert.equal(codex.refreshAccountUsage.mock.calls.length, 1);
+    assert.equal(claude.refreshAccountUsage.mock.calls.length, 1);
   }),
 );
 

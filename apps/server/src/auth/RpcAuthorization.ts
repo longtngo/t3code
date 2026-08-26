@@ -138,6 +138,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsUpload]: AuthOrchestrationOperateScope,
   [WS_METHODS.getResourceQueue]: AuthOrchestrationReadScope,
+  // Operate, not read: it spends the provider's rate limit on demand.
+  [WS_METHODS.accountUsageRefresh]: AuthOrchestrationOperateScope,
   [WS_METHODS.pushSubscriptionsRegister]: AuthOrchestrationOperateScope,
   [WS_METHODS.llmServeLoad]: AuthOrchestrationOperateScope,
   [WS_METHODS.llmServeUnload]: AuthOrchestrationOperateScope,

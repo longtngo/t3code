@@ -322,6 +322,9 @@ export const WS_METHODS = {
   llmServeLoad: "llmServe.load",
   llmServeUnload: "llmServe.unload",
 
+  // Account usage — refetch from the provider, bypassing the poll's own cadence
+  accountUsageRefresh: "account.usage.refresh",
+
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
 
@@ -494,6 +497,24 @@ export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSumm
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * Refetch account usage from every configured provider now, instead of waiting for
+ * the background poll. The adapters' on-demand path deliberately skips the "are any
+ * sessions active" check the scheduled poll applies, so this is the cache bypass and
+ * not a nudge to the scheduler.
+ *
+ * Answers as soon as the fetches settle, not with the usage itself: the numbers reach
+ * clients the way they always do, as an `account.usage.updated` activity, so there is
+ * one path for the UI to render and no second shape to keep in step. A provider that
+ * fails is logged and skipped rather than failing the call, because one broken
+ * provider must not deny the others their refresh.
+ */
+export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: EnvironmentAuthorizationError,
 });
 
@@ -1320,6 +1341,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
+  WsAccountUsageRefreshRpc,
   WsGetResourceQueueRpc,
   WsPushSubscriptionsRegisterRpc,
   WsLlmServeLoadRpc,

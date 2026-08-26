@@ -37,6 +37,14 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudInstallRelayClient)).toBe(AuthRelayWriteScope);
   });
 
+  it("treats an on-demand usage refresh as an operation, not a read", () => {
+    // It spends the provider's rate limit on demand, so a read-scoped token
+    // must not be able to make this machine call out to Anthropic on request.
+    expect(requiredScopeForRpcMethod(WS_METHODS.accountUsageRefresh)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("requires permission to operate on a thread before uploading feedback", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.providerUploadFeedback)).toBe(
       AuthOrchestrationOperateScope,

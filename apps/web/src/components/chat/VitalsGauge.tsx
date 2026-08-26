@@ -6,7 +6,8 @@ import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
-import { ChevronRightIcon } from "lucide-react";
+import { useAccountUsageRefresh } from "~/hooks/useAccountUsageRefresh";
+import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import {
   type AccountUsageView,
@@ -245,18 +246,50 @@ function LimitsBlock(props: {
   usage: AccountUsageView;
   now: number;
   timestampFormat: TimestampFormat;
+  refresh?: { run: () => void; pending: boolean } | undefined;
 }) {
-  const { usage, now, timestampFormat } = props;
+  const { usage, now, timestampFormat, refresh } = props;
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Usage limits</span>
-        {/*
-          Legend for the pace diff on each row's header line — deliberately not
-          extended to cover the reset text, which sits on the footer line and is
-          self-labelling ("resets 14:20").
-        */}
-        <span className="font-mono text-[11px] text-muted-foreground/60">pace</span>
+        <span className="flex items-center gap-1.5">
+          {/*
+            Legend for the pace diff on each row's header line — deliberately not
+            extended to cover the reset text, which sits on the footer line and is
+            self-labelling ("resets 14:20").
+          */}
+          <span className="font-mono text-[11px] text-muted-foreground/60">pace</span>
+          {refresh ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    // The numbers here are polled, so what is on screen can be
+                    // minutes old at the moment you look at it — which is
+                    // exactly when you care. This refetches from the provider.
+                    onClick={refresh.run}
+                    disabled={refresh.pending}
+                    className={cn(
+                      "-my-0.5 rounded p-0.5 text-muted-foreground/60 transition-colors",
+                      refresh.pending ? "cursor-default" : "cursor-pointer hover:text-foreground",
+                    )}
+                    aria-label="Refresh usage from the provider"
+                  />
+                }
+              >
+                <RotateCwIcon
+                  className={cn("size-3", refresh.pending && "animate-spin")}
+                  aria-hidden
+                />
+              </TooltipTrigger>
+              <TooltipPopup>
+                {refresh.pending ? "Refreshing…" : "Refresh usage from the provider"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+        </span>
       </div>
       <div className="mt-1">
         {usage.fiveHour ? (
@@ -537,6 +570,11 @@ export function VitalsDetail(props: {
    * behaviour unasserted.
    */
   timestampFormat: TimestampFormat;
+  /**
+   * Refetch usage from the provider on demand. Optional so the detail keeps
+   * rendering without a connection, which is how its tests drive it.
+   */
+  refreshUsage?: { run: () => void; pending: boolean } | undefined;
   providerDisplayName?: string | null | undefined;
   /** Selected model for this thread, named beside the window size. */
   modelDisplayName?: string | null | undefined;
@@ -558,7 +596,12 @@ export function VitalsDetail(props: {
         />
       ) : null}
       {hasWindows && accountUsage ? (
-        <LimitsBlock usage={accountUsage} now={now} timestampFormat={timestampFormat} />
+        <LimitsBlock
+          usage={accountUsage}
+          now={now}
+          timestampFormat={timestampFormat}
+          refresh={props.refreshUsage}
+        />
       ) : null}
       <MachineBlock
         sample={host.sample}
@@ -574,6 +617,7 @@ export function VitalsGauge(props: {
   context: ContextWindowSnapshot | null;
   accountUsage: AccountUsageView | null;
   host: VitalsHost;
+  refreshUsage?: { run: () => void; pending: boolean } | undefined;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
 }) {
@@ -632,6 +676,7 @@ export function VitalsGauge(props: {
           host={host}
           now={now}
           timestampFormat={timestampFormat}
+          refreshUsage={props.refreshUsage}
           providerDisplayName={props.providerDisplayName}
           modelDisplayName={props.modelDisplayName}
         />
@@ -673,11 +718,13 @@ export function VitalsGaugeConnected(props: {
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
+  const refreshUsage = useAccountUsageRefresh(props.environmentId);
   return (
     <VitalsGauge
       context={props.context}
       accountUsage={props.accountUsage}
       host={{ sample, streaming, enabled, onToggle: setEnabled }}
+      refreshUsage={refreshUsage}
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
     />

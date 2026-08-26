@@ -111,6 +111,10 @@
       "types": "./src/state/relayDiscovery.ts",
       "default": "./src/state/relayDiscovery.ts"
     },
+    "./state/account-usage": {
+      "types": "./src/state/accountUsage.ts",
+      "default": "./src/state/accountUsage.ts"
+    },
     "./state/resource-queue": {
       "types": "./src/state/resourceQueue.ts",
       "default": "./src/state/resourceQueue.ts"
