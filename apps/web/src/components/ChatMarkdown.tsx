@@ -1730,8 +1730,12 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           {isAbsoluteFilePath(targetPath) && (threadRef ?? fileEnvironmentId) ? (
             <MenuItem onClick={handleOpenInNewTab}>Open in new tab</MenuItem>
           ) : null}
-          {/* `onOpen` became optional upstream (#7140), so the editor item follows it. */}
-          {onOpen ? <MenuItem onClick={handleOpenInEditor}>Open in editor</MenuItem> : null}
+          {/* `onOpen` became optional upstream (#7140), so the editor item follows it.
+              Label from the same prop the native menu uses, or right-click reads
+              "Open in Zed" and this reads "Open in editor" for the identical action. */}
+          {onOpen ? (
+            <MenuItem onClick={handleOpenInEditor}>{openInEditorMenuLabel}</MenuItem>
+          ) : null}
           {/* Mirrors the reveal item in `showFileContextMenu` above — same condition, same
               slot before the copy items. Nothing enforces the pairing, so change both.
               `revealLabel` is the ENVIRONMENT's wording, resolved from server config. */}
