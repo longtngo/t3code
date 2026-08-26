@@ -1695,9 +1695,11 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           </div>
         </TooltipPopup>
       </Tooltip>
-      {/* An in-DOM menu rather than only the native context menu above, which is
-          Electron-only (`readLocalApi`) and so unreachable on web and mobile —
-          where a long file path is exactly where these actions are wanted. */}
+      {/* A visible affordance for actions the native context menu above also offers.
+          That menu works in a browser too — `readLocalApi` gates on `window`, not Electron
+          — but on a chip with a primary action it takes a right-click, which is
+          undiscoverable on touch. The two menus carry different items on purpose; what
+          they must not disagree on is a shared item's condition. */}
       <Menu>
         <Tooltip>
           <TooltipTrigger
@@ -1730,6 +1732,12 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           ) : null}
           {/* `onOpen` became optional upstream (#7140), so the editor item follows it. */}
           {onOpen ? <MenuItem onClick={handleOpenInEditor}>Open in editor</MenuItem> : null}
+          {/* Mirrors the reveal item in `showFileContextMenu` above — same condition, same
+              slot before the copy items. Nothing enforces the pairing, so change both.
+              `revealLabel` is the ENVIRONMENT's wording, resolved from server config. */}
+          {onReveal && revealLabel ? (
+            <MenuItem onClick={handleRevealInFileManager}>{revealLabel}</MenuItem>
+          ) : null}
           <MenuItem onClick={() => handleCopy(targetPath, "Full path")}>Copy path</MenuItem>
         </MenuPopup>
       </Menu>

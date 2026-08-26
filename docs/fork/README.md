@@ -283,13 +283,32 @@ exact narrowness the fork's own comment recorded as a known gap. `TrustedFileVie
 name; the inner `MarkdownFileLink` keeps `fileEnvironmentId` and is fed from it.
 
 The chip itself stays the fork's superset — a `<span>` wrapping the tooltip **and** an in-DOM
-`<Menu>`, which is the only options surface reachable on web and mobile — with upstream's
-`hasPrimaryAction` / `useBrowserPrimaryAction` gating, repositioned native context menu, and
-no-primary-action `<button>` fallback grafted into the tooltip trigger. `onOpen` became optional
-upstream, so the menu's "Open in editor" item now follows it.
+`<Menu>`, a visible affordance for actions the native context menu otherwise hides behind a
+right-click — with upstream's `hasPrimaryAction` / `useBrowserPrimaryAction` gating, repositioned
+native context menu, and no-primary-action `<button>` fallback grafted into the tooltip trigger.
+`onOpen` became optional upstream, so the menu's "Open in editor" item now follows it.
 
-Open follow-up: upstream's native context menu carries "Reveal in file manager"; the fork's in-DOM
-menu does not. Adding it is feature work, not merge work.
+**Verified 2026-08-26.** `readLocalApi()` is gated on `typeof window`, not on Electron, and
+`contextMenu.show` falls back to `showContextMenuFallback`, a real DOM menu with its own passing
+suite — so the native context menu works in any browser, and right-click has always offered these
+actions there. The in-DOM menu earns its place on **discoverability** and on touch, not on reach.
+`apps/mobile` is a separate React Native app that never renders this component.
+
+(Both this section and a comment in `ChatMarkdown.tsx` previously claimed the native menu was
+"Electron-only" and the in-DOM menu "the only options surface reachable on web and mobile". Both
+were wrong when written, and the comment is what seeded the doc. If a reconcile restores that
+wording from upstream, it is still wrong.)
+
+The two menus deliberately differ: the in-DOM one carries "View in side panel" and "Open in new
+tab", the native one carries "Open in integrated browser" and "Copy relative path". What must not
+differ is a **shared** item's condition. The reveal item closed that gap on 2026-08-26; it uses
+`onReveal && revealLabel` inline at both sites, and nothing enforces the pairing, so change both.
+
+Do not extract that condition into a shared `boolean` predicate. At the **native** site
+`ContextMenuItem.label` is a required `string`, and the inline truthiness test is what narrows
+`revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native site
+stops compiling. (At the in-DOM site the test is only defensive — a `MenuItem` child is a
+`ReactNode`.) A shared _object_ would narrow correctly, if the pairing ever needs enforcing.
 
 ## A fourth sweep direction the script does not have
 
