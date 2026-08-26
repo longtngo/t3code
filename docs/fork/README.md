@@ -310,33 +310,72 @@ Do not extract that condition into a shared `boolean` predicate. At the **native
 stops compiling. (At the in-DOM site the test is only defensive — a `MenuItem` child is a
 `ReactNode`.) A shared _object_ would narrow correctly, if the pairing ever needs enforcing.
 
-## A fourth sweep direction the script does not have
+## The sweep's fourth and fifth directions
 
-`scripts/sweep-merge.py` checks three directions: fork-deleted lines resurrected, upstream-added
-lines dropped, fork-added lines lost. The 21st reconcile hit a fourth it cannot see:
+The sweep script lives in the `reconcile-upstream-drift` **skill**, not in this repo — the path
+`scripts/sweep-merge.py` written here previously was wrong. It checked three directions:
+fork-deleted lines resurrected, upstream-added lines dropped, fork-added lines lost. The 21st
+reconcile prompted two more, both shipped on 2026-08-26.
 
-**a line present in the merge-base AND in the fork, deleted by upstream, with the merge honouring
-the deletion.** It is not fork-_added_, so FORK-LOSS is blind to it; it is not fork-_deleted_, so
-RESURRECTED is blind to it; it is not upstream-_added_, so DROPPED is blind to it.
+**BOTH-KEPT — a line the base, the fork and upstream all still have, that the merge lost.** Nobody
+deleted it; the hand resolution dropped it. All three older directions are blind: it was not
+fork-added, not fork-deleted, and not upstream-added. Demonstrated on a synthetic merge where the
+old script prints `Both directions clean.` and exits **0** while a shared line is missing. Runs by
+default — measured 0 hits against 186 real candidates, so it costs nothing to leave armed.
 
-Usually that is exactly right — a merge should honour upstream's deletions. It is a defect only
-when the fork still references the deleted thing. Twice in one merge it did:
-
-- upstream renamed `composerHasDraftContent` to `composerHasUnsentContent` in `ChatView`; the
-  fork's five references stayed behind pointing at a binding that no longer existed.
-- upstream replaced `ChatComposer`'s `activeThreadActivities` prop with a precomputed
-  `activeContextWindow`; the fork's body still derived from `activeThreadActivities`.
-
-Both were caught by `typecheck`, which is the good case. The bad case is a runtime-only reference.
-The probe is cheap — for every file both sides touched, `(base ∩ fork) \ result`:
+**UPSTREAM-DELETED (`--upstream-deleted`, opt-in) — base-and-fork lines upstream removed, with the
+merge honouring the removal.** Usually correct; a defect only when the fork still references the
+removed thing.
 
 ```python
-lost = (base_lines & fork_lines) - result_lines
+upstream_deleted = ((base_lines & fork_lines) - result_lines) - upstream_lines
+both_kept        = (base_lines & fork_lines & upstream_lines) - result_lines
 ```
 
-167 lines on that merge, almost all legitimate (version bumps, dependency pins, upstream
-refactors of upstream's own code). What matters is the same rule as the other three: every file in
-the list needs a name.
+Opt-in because it is loud and its precision is unproven: **186 lines over 28 files on reconcile
+21, against 61 for the other four combined, and zero true positives.** Its exhibit was three CSS
+rules in `index.css` that upstream had _widened_ (`a.chat-markdown-file-link` ->
+`.chat-markdown-file-link`, so its new `<button>` chip picks them up), not dropped.
+
+Two cautions, both learned the expensive way:
+
+- **Do not dismiss its `.ts`/`.tsx` bulk as "typecheck covers that."** Typecheck catches dangling
+  _references_, not dropped _behaviour_. A lost `if (guard) {` or a lost `.filter(...)` is exactly
+  as invisible to the compiler as a lost CSS rule.
+- The two reconcile-21 breakages often cited for this direction — `composerHasDraftContent` and
+  `ChatComposer`'s `activeThreadActivities` prop — were **caught by typecheck**, and neither is
+  reproducible from any tree that can be rebuilt: they were transient states of a hand resolution,
+  not output of the merge algorithm. Re-running the naive resolve-toward-HEAD merge scores zero on
+  both from all directions. Treat this direction as an enumeration aid, not a proven net.
+
+All the directions are set differences over stripped lines, so they share one blind spot: a line
+whose count drops N -> N-1 is invisible, and a moved line reads as present.
+
+Four pre-existing defects in the sweep were fixed at the same time, each of which made it report
+clean while something was genuinely missing:
+
+- **Renames erased the collision.** `git diff --name-only` reports a detected rename as the
+  destination path only, so when upstream moved a file the fork had edited, the two path sets never
+  intersected and the file was never swept — "files touched by BOTH sides: 0 / All directions clean
+  / exit 0" with a fork-added line provably gone. That is the ask-question Cancel button scenario
+  the FORK-LOSS direction exists for. Now read with `--no-renames`.
+- **An unresolved index guaranteed a green.** Mid-merge, conflict markers keep BOTH sides' text, so
+  every direction is empty — at exactly the moment the tool tells you to run it. Now exits 2.
+- **Files absent from the merge result** were flagged but their lost lines were never named. Now
+  swept against an empty merged side. This is why reconcile 21's `dropped` reads **37**, not the
+  19 originally recorded: the extra 18 are all `ContextWindowMeter.tsx`, the fork's deliberate
+  deletion under invariant 4, and are expected.
+- **A path with invalid UTF-8** killed the text report mid-loop under any strict locale while the
+  exit code still said "findings", silently losing every finding after it.
+
+And a zero-intersection sweep no longer prints "All directions clean" — it exits 2 and says nothing
+was examined. That is the reconcile-15 failure, where a merge whose two sides touched no file in
+common reported all-green having checked nothing.
+
+**The 186 above corrects a "167" previously recorded here.** That figure does not reproduce under
+any of twelve formula variants (they give 147/149/186/188); it was a mid-merge number quoted in a
+post-merge document. The same reconcile's `fork-loss` was recorded as 16 and is **18**. Re-measure
+before quoting a sweep number — the tool is one command.
 
 ## CI does not run here — the pre-push hook is the gate
 
