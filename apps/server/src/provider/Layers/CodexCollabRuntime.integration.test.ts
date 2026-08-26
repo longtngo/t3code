@@ -9,6 +9,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -81,7 +82,14 @@ function buildScript() {
   };
 }
 
-const scriptPath = NodePath.join(import.meta.dirname, "../testFixtures/.collab-script.json");
+// Generated per run, in the OS temp dir. It used to be written next to the checked-in
+// fixtures: the finalizers remove it on a normal exit, but a killed run left it, plus its
+// `.interrupts`/`.responses` siblings, untracked inside `src/` -- where the next checkpoint
+// captures them.
+const scriptPath = NodePath.join(
+  NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-codex-collab-")),
+  "collab-script.json",
+);
 const peerPath = NodePath.join(import.meta.dirname, "../testFixtures/codexCollabMockPeer.sh");
 
 describe("CodexSessionRuntime collab integration", () => {

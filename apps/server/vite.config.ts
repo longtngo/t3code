@@ -82,22 +82,26 @@ export default mergeConfig(
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
       testTimeout: 120_000,
-      // This said the checkpoint flakes were "environmental contention, not a product
-      // bug", that they resisted a per-test fix, and that a racy-git hypothesis had
-      // been falsified. All three were wrong, and the retry below hid the evidence for
-      // seven weeks: the falsification tested the file's nanosecond mtime, when the
-      // causal variable is the INDEX FILE's mtime, and the real defect was a stale
-      // checkpoint capture in GitVcsDriver — reproduced at 18/60 and now fixed.
+      // There is deliberately no `retry` here. A `retry: 2` sat in this slot for seven
+      // weeks under a comment calling the checkpoint flakes "environmental contention,
+      // not a product bug" that "resisted a per-test fix". Every part of that was wrong,
+      // and the retry is what let it stay wrong: it is silent when it RESCUES a test, so
+      // a red turning green left no trace at all, and three separate passes read the
+      // green and moved on. Each of the three causes was a real defect with a real fix:
       //
-      // Retry stays because a second, unrelated family is still open: eight cases in
-      // src/git/GitManager.test.ts pass a bare number as `it.effect`'s third argument,
-      // which is a per-test timeout — 12s and 20s, well under the 120s above, and they
-      // blow it under load. (They contain no literal "timeout", so grepping for the word
-      // finds nothing; confirmed by making a 50ms one fire.) Treat a retry as a report
-      // of something real. It is also silent: the default reporter this suite uses
-      // prints nothing when a retry RESCUES a test, so a red that becomes green leaves
-      // no trace at all. It does print "(retry x2)" when the test ends up failing.
-      retry: 2,
+      //   1. A stale checkpoint capture in GitVcsDriver. Copying the git index reset its
+      //      mtime, which is the exact variable git's racy-clean guard is keyed on, so a
+      //      same-size edit was captured PRE-edit and a revert handed it back. 18 red in
+      //      60 before, 0 in 60 after.
+      //   2. Eight cases in src/git/GitManager.test.ts carried their own 12s/20s
+      //      deadlines as a bare positional argument, well inside the 120s above.
+      //   3. src/provider/Layers/CodexCollabRuntime.integration.test.ts wrote its
+      //      generated script to a fixed path in `src/`, so two concurrent runs deleted
+      //      each other's fixtures.
+      //
+      // Measured after all three: five green full-suite runs at `--retry=0`, three
+      // unloaded and two as a concurrent pair — which is the contention the old comment
+      // blamed. Put a retry back only alongside a cause you have actually named.
     },
   }),
 );
