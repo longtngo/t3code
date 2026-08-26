@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import type * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 
@@ -8,10 +9,12 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import type {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  FilesystemEntryKind,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectSearchContentsInput,
@@ -19,6 +22,7 @@ import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
+import { FILESYSTEM_BROWSE_MAX_ENTRIES } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
@@ -113,6 +117,32 @@ function expandHomePath(input: string, path: Path.Path): string {
   return input;
 }
 
+/**
+ * Classify a directory entry, resolving symlinks.
+ *
+ * `dirent.isDirectory()` is false for a symlink to a directory — on macOS that
+ * includes `/etc`, `/tmp` and `/var` — so trusting it renders those as files
+ * nobody can open. Only symlinks pay for the extra `stat`; a link that dangles
+ * or points at a fifo, socket or device resolves to `other`, which the viewer
+ * refuses to open.
+ */
+const direntKind = Effect.fn("WorkspaceEntries.direntKind")(function* (
+  dirent: NodeFS.Dirent,
+  fullPath: string,
+): Effect.fn.Return<FilesystemEntryKind, never> {
+  if (dirent.isDirectory()) return "directory";
+  if (dirent.isFile()) return "file";
+  if (!dirent.isSymbolicLink()) return "other";
+  const stats = yield* Effect.promise(() =>
+    NodeFSP.stat(fullPath).then(
+      (resolved) => resolved,
+      () => null,
+    ),
+  );
+  if (stats === null) return "other";
+  return stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other";
+});
+
 const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(function* (
   input: FilesystemBrowseInput,
   path: Path.Path,
@@ -140,6 +170,14 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
 
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
+  // A full listing readdirs off-thread, but the libuv pool is four threads by
+  // default and RPC concurrency is unbounded: measured on a 19,477-entry
+  // directory, four concurrent listings take an unrelated file read from 0.05ms
+  // to 23ms and eight take it to 129ms, alongside WebSocket frame compression
+  // for every connected client, which shares the same pool. Two permits leaves
+  // headroom on a four-thread pool; a real directory listing costs single-digit
+  // to low-tens of milliseconds, so nothing queues in practice.
+  const listingSemaphore = yield* Semaphore.make(2);
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
 
@@ -190,52 +228,95 @@ export const make = Effect.gen(function* () {
 
   const browse: WorkspaceEntries["Service"]["browse"] = Effect.fn("WorkspaceEntries.browse")(
     function* (input) {
-      const resolvedInputPath = yield* resolveBrowseTarget(input, path);
-      const endsWithSeparator = /[\\/]$/.test(input.partialPath) || input.partialPath === "~";
-      const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
-      const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
-
-      const dirents = yield* Effect.tryPromise({
-        try: () => NodeFSP.readdir(parentPath, { withFileTypes: true }),
-        catch: (cause) =>
-          new WorkspaceEntriesReadDirectoryError({
-            cwd: input.cwd,
-            partialPath: input.partialPath,
-            parentPath,
-            cause,
-          }),
-      }).pipe(
-        Effect.catchIf(
-          (error) => {
-            const code = (error.cause as NodeJS.ErrnoException | undefined)?.code;
-            return code === "EACCES" || code === "EPERM";
-          },
-          () => Effect.succeed([]),
-        ),
+      return yield* browseUnbounded(input).pipe(
+        input.includeFiles === true ? Semaphore.withPermits(listingSemaphore, 1) : (self) => self,
       );
+    },
+  );
 
-      const showHidden = endsWithSeparator || prefix.startsWith(".");
-      const lowerPrefix = prefix.toLowerCase();
-      const entries: Array<{ readonly name: string; readonly fullPath: string }> = [];
-      for (const dirent of dirents) {
-        if (
-          dirent.isDirectory() &&
-          dirent.name.toLowerCase().startsWith(lowerPrefix) &&
-          (showHidden || !dirent.name.startsWith("."))
-        ) {
-          entries.push({
-            name: dirent.name,
-            fullPath: path.join(parentPath, dirent.name),
-          });
-        }
-      }
+  const browseUnbounded = Effect.fn("WorkspaceEntries.browseUnbounded")(function* (
+    input: FilesystemBrowseInput,
+  ): Effect.fn.Return<FilesystemBrowseResult, WorkspaceEntriesBrowseError> {
+    const resolvedInputPath = yield* resolveBrowseTarget(input, path);
+    const endsWithSeparator = /[\\/]$/.test(input.partialPath) || input.partialPath === "~";
+    const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
+    const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
 
+    const dirents = yield* Effect.tryPromise({
+      try: () => NodeFSP.readdir(parentPath, { withFileTypes: true }),
+      catch: (cause) =>
+        new WorkspaceEntriesReadDirectoryError({
+          cwd: input.cwd,
+          partialPath: input.partialPath,
+          parentPath,
+          cause,
+        }),
+    }).pipe(
+      Effect.catchIf(
+        (error) => {
+          // A viewer must not render an unreadable folder as an empty one, so
+          // only autocomplete keeps the quiet degradation.
+          if (input.includeFiles === true) return false;
+          const code = (error.cause as NodeJS.ErrnoException | undefined)?.code;
+          return code === "EACCES" || code === "EPERM";
+        },
+        () => Effect.succeed([]),
+      ),
+    );
+
+    const showHidden = endsWithSeparator || prefix.startsWith(".");
+    const lowerPrefix = prefix.toLowerCase();
+    const matched = dirents.filter(
+      (dirent) =>
+        dirent.name.toLowerCase().startsWith(lowerPrefix) &&
+        (showHidden || !dirent.name.startsWith(".")),
+    );
+
+    if (input.includeFiles !== true) {
+      const entries = matched
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => ({
+          name: dirent.name,
+          fullPath: path.join(parentPath, dirent.name),
+        }));
       return {
         parentPath,
         entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
       };
-    },
-  );
+    }
+
+    const totalCount = matched.length;
+    // Sorted before the cap, not after: slicing raw `readdir` order and sorting
+    // the survivors yields a list that looks alphabetical and is missing names
+    // from the middle of it, under a count that says only the tail was dropped.
+    // Truncating a sorted list drops a contiguous tail, which is what "showing
+    // N of M" claims. Directories are floated to the top afterwards, on the
+    // entries that survived, because that needs a `kind` this stage lacks.
+    const kept = matched
+      .toSorted((left, right) => left.name.localeCompare(right.name))
+      .slice(0, FILESYSTEM_BROWSE_MAX_ENTRIES);
+    const entries: Array<{
+      readonly name: string;
+      readonly fullPath: string;
+      readonly kind: FilesystemEntryKind;
+    }> = [];
+    for (const dirent of kept) {
+      const fullPath = path.join(parentPath, dirent.name);
+      entries.push({ name: dirent.name, fullPath, kind: yield* direntKind(dirent, fullPath) });
+    }
+
+    return {
+      parentPath,
+      entries: entries.toSorted(
+        (left, right) =>
+          Number(right.kind === "directory") - Number(left.kind === "directory") ||
+          left.name.localeCompare(right.name),
+      ),
+      listedFiles: true,
+      truncated: totalCount > kept.length,
+      totalCount,
+    };
+  });
 
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {

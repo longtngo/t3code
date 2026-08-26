@@ -57,6 +57,10 @@ import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
 import { fileBreadcrumbs } from "./filePath";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
+import { useRightPanelStore } from "~/rightPanelStore";
+
+import { DirectoryListingView } from "./DirectoryListingView";
+import { listedFileTarget, workspaceListingPath } from "./directoryListing.logic";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
 import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
 import WorkspaceRepoBar from "../WorkspaceRepoBar";
@@ -65,6 +69,7 @@ import {
   confirmProjectFileQueryData,
   getOptimisticProjectFileQueryData,
   setProjectFileQueryData,
+  useDirectoryListingQuery,
   useProjectFileQuery,
 } from "./projectFilesQueryState";
 
@@ -823,6 +828,18 @@ export default function FilePreviewPanel({
   });
   const isImage = relativePath !== null && isWorkspaceImagePreviewPath(relativePath);
   const file = useProjectFileQuery(environmentId, cwd, relativePath, !isImage);
+  // Same rule as the trusted viewer: a failed read is a directory candidate, and
+  // asking for the listing is the test. Rooted at this panel's own cwd + relative
+  // path rather than anything the server resolved, so children relativize back
+  // against `cwd` cleanly even when the project sits under a symlink.
+  const listingPath =
+    relativePath && file.error && file.data === null
+      ? workspaceListingPath(cwd, relativePath)
+      : null;
+  const listing = useDirectoryListingQuery(
+    listingPath === null ? null : environmentId,
+    listingPath,
+  );
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   // Reading markdown rendered is a preference, not a property of one file. Keeping
   // it on the panel meant a thread switch dropped it and forced source back.
@@ -1043,7 +1060,20 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               alt={relativePath}
             />
-          ) : relativePath && file.error && file.data === null ? (
+          ) : listingPath !== null && listing.data !== null ? (
+            <DirectoryListingView
+              environmentId={environmentId}
+              directoryPath={listingPath}
+              onOpenListedFile={(absolutePath: string) => {
+                const target = listedFileTarget(cwd, absolutePath);
+                if (target.kind === "workspace") {
+                  onOpenFile(target.relativePath, fileRepoCwd);
+                  return;
+                }
+                useRightPanelStore.getState().openTrustedFile(threadRef, target.absolutePath);
+              }}
+            />
+          ) : relativePath && file.error && file.data === null && !listing.isPending ? (
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
               {file.error}
             </div>
@@ -1133,7 +1163,16 @@ export default function FilePreviewPanel({
                 selectedPath={treeCwd === cwd ? relativePath : null}
                 selectedPathRevealId={revealRequestId}
                 onOpenFile={openFileFromTree}
-                {...(relativePath && !isImage ? { onRefreshSelectedFile: file.refresh } : {})}
+                {...(relativePath && !isImage
+                  ? {
+                      onRefreshSelectedFile: () => {
+                        file.refresh();
+                        // The read stays failed for a directory, so refreshing
+                        // it alone never reaches the listing on screen.
+                        if (listing.data !== null) listing.refresh();
+                      },
+                    }
+                  : {})}
               />
             </div>
           </aside>

@@ -20,8 +20,13 @@ import type { EnvironmentId } from "@t3tools/contracts";
 
 import ChatMarkdown, { HighlightedCodeView } from "../ChatMarkdown";
 import { classifyFileViewerKind } from "../../lib/codeFileTypes";
+import { DirectoryListingView } from "./DirectoryListingView";
 import { isMarkdownPreviewFile } from "./filePreviewMode";
-import { useTrustedFileQuery, useTrustedMarkdownHtmlQuery } from "./projectFilesQueryState";
+import {
+  useDirectoryListingQuery,
+  useTrustedFileQuery,
+  useTrustedMarkdownHtmlQuery,
+} from "./projectFilesQueryState";
 import { viewerHttpUrl } from "./viewerPath";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
@@ -57,6 +62,12 @@ export interface TrustedFileViewProps {
   environmentId: EnvironmentId | null;
   absolutePath: string | null;
   className?: string;
+  /**
+   * Opens a file picked out of a directory listing, when this path turns out to
+   * be a folder. Every mount supplies one; a listing whose rows do nothing when
+   * clicked is worse than the read error it replaced.
+   */
+  onOpenListedFile?: (absolutePath: string) => void;
 }
 
 /**
@@ -84,7 +95,12 @@ export function trustedViewKind(absolutePath: string): TrustedViewKind {
  * sits under the tab strip — so navigation stays out of this component while the
  * view controls live next to the state they act on.
  */
-function TrustedFileViewContents({ environmentId, absolutePath, className }: TrustedFileViewProps) {
+function TrustedFileViewContents({
+  environmentId,
+  absolutePath,
+  className,
+  onOpenListedFile,
+}: TrustedFileViewProps) {
   // "Show the non-default view for this kind": rendered↔source for html, and
   // markdown↔server-rendered-html for markdown. Reset per file by the `key` on the
   // wrapper below, so a toggle set while reading a report cannot follow you to the
@@ -108,6 +124,15 @@ function TrustedFileViewContents({ environmentId, absolutePath, className }: Tru
   // Bumped by Reload for the raw-byte views, whose bytes the server sends with
   // `no-store` but which the <img>/<iframe> would otherwise not re-request.
   const [rawReloadToken, setRawReloadToken] = useState(0);
+  // A read only fails on a path the server could not open as a regular file, so
+  // every failure is a directory candidate. Asking for the listing is both the
+  // question and the answer: it succeeds for a folder, and for anything else it
+  // fails and the read error below stands. Nothing here guesses from the name —
+  // `Makefile`, `LICENSE` and `.env` are all files that look like folders.
+  const listing = useDirectoryListingQuery(
+    file.error !== null ? environmentId : null,
+    file.error !== null ? absolutePath : null,
+  );
   const rawUrlWithReload =
     rawUrl === null ? null : rawReloadToken === 0 ? rawUrl : `${rawUrl}&reload=${rawReloadToken}`;
 
@@ -176,6 +201,23 @@ function TrustedFileViewContents({ environmentId, absolutePath, className }: Tru
       );
     }
     if (file.error !== null && contents === null) {
+      if (listing.data !== null && environmentId !== null) {
+        return (
+          <DirectoryListingView
+            environmentId={environmentId}
+            directoryPath={absolutePath}
+            {...(onOpenListedFile ? { onOpenListedFile } : {})}
+          />
+        );
+      }
+      if (listing.isPending) {
+        return (
+          <TrustedFileNotice>
+            <LoaderCircle className="size-4 animate-spin" aria-hidden />
+            Loading…
+          </TrustedFileNotice>
+        );
+      }
       return <TrustedFileNotice tone="error">{file.error}</TrustedFileNotice>;
     }
     if (contents === null) {
@@ -250,7 +292,12 @@ function TrustedFileViewContents({ environmentId, absolutePath, className }: Tru
             onClick={() => {
               if (usesRawBytes) setRawReloadToken((token) => token + 1);
               else if (markdownHtmlMode) rendered.refresh();
-              else file.refresh();
+              else {
+                file.refresh();
+                // The read stays failed for a directory, so refreshing it alone
+                // never reaches the listing that is actually on screen.
+                if (file.error !== null) listing.refresh();
+              }
             }}
             title="Reload file"
           >

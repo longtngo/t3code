@@ -7258,6 +7258,9 @@ function ChatViewContent(props: ChatViewProps) {
         <TrustedFileView
           environmentId={activeProject?.environmentId ?? null}
           absolutePath={activeRightPanelSurface.absolutePath}
+          onOpenListedFile={(absolutePath) => {
+            useRightPanelStore.getState().openTrustedFile(activeThreadRef, absolutePath);
+          }}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (

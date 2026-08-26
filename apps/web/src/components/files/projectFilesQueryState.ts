@@ -1,6 +1,7 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
+  FilesystemBrowseResult,
   ProjectListEntriesResult,
   ProjectReadFileResult,
 } from "@t3tools/contracts";
@@ -10,9 +11,11 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { filesystemEnvironment } from "~/state/filesystem";
 import { projectEnvironment } from "~/state/projects";
 import { useProjectPathSearch } from "~/state/queries";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
+import { isDirectoryListing } from "./directoryListing.logic";
 
 const EMPTY_PROJECT_FILE_PATH = "";
 const EMPTY_PROJECT_FILE_QUERY_ATOM = Atom.make(
@@ -250,6 +253,51 @@ export function useTrustedFileQuery(
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
     error: errorMessage(result),
+    isPending: result.waiting,
+    refresh,
+  };
+}
+
+const EMPTY_DIRECTORY_LISTING_ATOM = Atom.make(
+  AsyncResult.initial<FilesystemBrowseResult, never>(false),
+).pipe(Atom.withLabel("directory-listing-query:empty"));
+
+/**
+ * One level of a directory, by absolute path.
+ *
+ * The trailing separator is what tells `filesystem.browse` to list the folder
+ * rather than treat its last segment as an autocomplete prefix, and
+ * `includeFiles` is what makes it return files, tag every entry with a kind,
+ * and report an unreadable folder instead of an empty one.
+ *
+ * A failure here is also the answer to "is this path a directory at all" — the
+ * viewers ask for a listing after a read fails, and keep the read error when
+ * this one fails too.
+ */
+export function useDirectoryListingQuery(
+  environmentId: EnvironmentId | null,
+  directoryPath: string | null,
+): ProjectQueryState<FilesystemBrowseResult> {
+  const atom =
+    environmentId !== null && directoryPath !== null
+      ? filesystemEnvironment.browse({
+          environmentId,
+          input: {
+            partialPath: directoryPath.endsWith("/") ? directoryPath : `${directoryPath}/`,
+            includeFiles: true,
+          },
+        })
+      : EMPTY_DIRECTORY_LISTING_ATOM;
+  const result = useAtomValue(atom);
+  const refreshAtom = useAtomRefresh(atom);
+  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
+  const value = Option.getOrNull(AsyncResult.value(result));
+  // Discarding an unconfirmed listing leaves the viewer's original read error,
+  // which is the most an older server can honestly support.
+  const supported = value === null || isDirectoryListing(value);
+  return {
+    data: supported ? value : null,
+    error: supported ? errorMessage(result) : "This server cannot list folders.",
     isPending: result.waiting,
     refresh,
   };

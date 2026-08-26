@@ -3,12 +3,16 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { FileFinder } from "@ff-labs/fff-node";
 import { it, afterEach, describe, expect } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import { vi } from "vite-plus/test";
+
+import { FILESYSTEM_BROWSE_MAX_ENTRIES } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -630,6 +634,204 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const match = result.matches[0]!;
         const range = match.matchRanges[0]!;
         expect(match.lineContent.slice(range.start, range.end)).toBe("wörld");
+      }),
+    );
+  });
+
+  describe("browse with includeFiles", () => {
+    it.effect("returns files and directories, directories first, each tagged", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-listing-" });
+        yield* writeTextFile(cwd, "readme.md", "hi");
+        yield* writeTextFile(cwd, "src/index.ts", "export {};\n");
+        yield* writeTextFile(cwd, ".env", "SECRET=1");
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+          includeFiles: true,
+        });
+
+        expect(result.entries).toEqual([
+          { name: "src", fullPath: path.join(cwd, "src"), kind: "directory" },
+          { name: ".env", fullPath: path.join(cwd, ".env"), kind: "file" },
+          { name: "readme.md", fullPath: path.join(cwd, "readme.md"), kind: "file" },
+        ]);
+        expect(result.truncated).toBe(false);
+        expect(result.totalCount).toBe(3);
+        // The client cannot tell a legacy directories-only answer from a real
+        // listing without this, so it gates the whole feature on it.
+        expect(result.listedFiles).toBe(true);
+      }),
+    );
+
+    it.effect("resolves a symlinked directory as a directory, not a file", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-listing-link-" });
+        yield* writeTextFile(cwd, "real/inner.txt", "x");
+        yield* writeTextFile(cwd, "target.txt", "x");
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(path.join(cwd, "real"), path.join(cwd, "link-dir")),
+        );
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(path.join(cwd, "target.txt"), path.join(cwd, "link-file")),
+        );
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(path.join(cwd, "nope"), path.join(cwd, "dead")),
+        );
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+          includeFiles: true,
+        });
+        const kindOf = (name: string) => result.entries.find((entry) => entry.name === name)?.kind;
+
+        // `dirent.isDirectory()` answers false for both of these; only a stat
+        // tells them apart, and on macOS this is what /etc and /tmp look like.
+        expect(kindOf("link-dir")).toBe("directory");
+        // A symlinked file must stay a file: `other` rows render disabled, so
+        // demoting these would make every symlinked file unopenable.
+        expect(kindOf("link-file")).toBe("file");
+        expect(kindOf("dead")).toBe("other");
+      }),
+    );
+
+    it.effect("caps the listing to the alphabetical head and reports the true total", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-listing-cap-" });
+        const total = FILESYSTEM_BROWSE_MAX_ENTRIES + 5;
+        const named = (index: number) => `file-${String(index).padStart(6, "0")}.txt`;
+        // Served in reverse order on purpose. A real `readdir` returns whatever
+        // the filesystem's directory order is — on the temp dir this suite
+        // creates it happens to come back sorted, which makes "cap then sort"
+        // and "sort then cap" indistinguishable and the assertion vacuous.
+        vi.mocked(NodeFSP.readdir).mockResolvedValueOnce(
+          Array.from({ length: total }, (_unused, index) => ({
+            name: named(total - 1 - index),
+            isDirectory: () => false,
+            isFile: () => true,
+            isSymbolicLink: () => false,
+          })) as never,
+        );
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+          includeFiles: true,
+        });
+
+        expect(result.entries.length).toBe(FILESYSTEM_BROWSE_MAX_ENTRIES);
+        expect(result.truncated).toBe(true);
+        expect(result.totalCount).toBe(total);
+        // "Showing N of M" only tells the truth if the M-N dropped are the tail.
+        // Capping the directory's own order and sorting the survivors satisfies
+        // every count above while omitting names from the middle of the list.
+        const names = result.entries.map((entry) => entry.name);
+        expect(names[0]).toBe(named(0));
+        expect(names.at(-1)).toBe(named(FILESYSTEM_BROWSE_MAX_ENTRIES - 1));
+      }),
+    );
+
+    it.effect("reports an unreadable directory instead of returning it empty", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-listing-eacces-" });
+        const readdirMock = vi.mocked(NodeFSP.readdir);
+        readdirMock.mockImplementationOnce(() => {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          return Promise.reject(error);
+        });
+
+        const listing = yield* Effect.exit(
+          workspaceEntries.browse({
+            partialPath: yield* appendSeparator(cwd),
+            includeFiles: true,
+          }),
+        );
+
+        // Autocomplete degrades EACCES to an empty array; a viewer that did the
+        // same would render an unreadable folder as an empty one. Assert which
+        // failure, or any bug that throws at all satisfies this.
+        expect(listing._tag).toBe("Failure");
+        const error = listing._tag === "Failure" ? Cause.squash(listing.cause) : undefined;
+        expect((error as { readonly _tag?: string } | undefined)?._tag).toBe(
+          "WorkspaceEntriesReadDirectoryError",
+        );
+
+        // The other half of the guard: the autocomplete path must keep
+        // degrading quietly, because a command palette that errors on an
+        // unreadable directory is worse than one that shows nothing.
+        readdirMock.mockImplementationOnce(() => {
+          const denied = new Error("permission denied") as NodeJS.ErrnoException;
+          denied.code = "EACCES";
+          return Promise.reject(denied);
+        });
+        const autocomplete = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+        });
+        expect(autocomplete.entries).toEqual([]);
+        expect(autocomplete.listedFiles).toBeUndefined();
+      }),
+    );
+
+    it.effect("lets only two listings hold a libuv thread at once", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-listing-permits-" });
+        const partialPath = yield* appendSeparator(cwd);
+
+        // `readdir` is held open until released, so "how many have started" is
+        // exactly "how many hold a pool thread" — no timing involved.
+        const release: Array<() => void> = [];
+        let started = 0;
+        let onStart: (() => void) | null = null;
+        const hold = () => {
+          started += 1;
+          onStart?.();
+          return new Promise((resolve) => {
+            release.push(() => {
+              resolve([] as never);
+            });
+          });
+        };
+        // Queued per call rather than installed persistently: `restoreAllMocks`
+        // does not give this module-level `vi.fn` its original implementation
+        // back, so a lingering never-resolving `readdir` would hang every later
+        // test in the file.
+        for (let call = 0; call < 3; call += 1) {
+          vi.mocked(NodeFSP.readdir).mockImplementationOnce(hold as never);
+        }
+        const startedAtLeast = (count: number) =>
+          new Promise<void>((resolve) => {
+            onStart = () => {
+              if (started >= count) resolve();
+            };
+            onStart();
+          });
+
+        const listings = yield* Effect.forkChild(
+          Effect.all(
+            Array.from({ length: 3 }, () =>
+              workspaceEntries.browse({ partialPath, includeFiles: true }),
+            ),
+            { concurrency: "unbounded" },
+          ),
+        );
+
+        yield* Effect.promise(() => startedAtLeast(2));
+        // Three were asked for and nothing has finished, so a third reader here
+        // means the permit is not being taken.
+        expect(started).toBe(2);
+
+        release[0]?.();
+        yield* Effect.promise(() => startedAtLeast(3));
+        expect(started).toBe(3);
+        for (const resolve of release) resolve();
+        yield* Fiber.join(listings);
       }),
     );
   });

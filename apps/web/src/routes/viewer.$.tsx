@@ -148,7 +148,14 @@ function ViewerRouteView() {
 
         {/* Content, the markdown/HTML toggle, and reload all live in the shared
             component, so this route and the right-panel surface cannot drift. */}
-        <TrustedFileView environmentId={environmentId} absolutePath={absolutePath} />
+        {/* Picking a file out of a directory listing is address-bar navigation
+            by another name, so it goes through the same handler and the path
+            the user lands on stays shareable. */}
+        <TrustedFileView
+          environmentId={environmentId}
+          absolutePath={absolutePath}
+          onOpenListedFile={navigateTo}
+        />
       </div>
     </SidebarInset>
   );
