@@ -28,7 +28,7 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   EnvironmentRpcRequestObserver,
-  expectedFailureRetryDelay,
+  subscriptionRetryDelay,
   request,
   runStream,
   subscribe,
@@ -533,6 +533,113 @@ describe("environment RPC", () => {
       }),
   );
 
+  it.effect("backs off when the server keeps ending the stream immediately", () =>
+    Effect.gen(function* () {
+      // A client that cannot keep up re-overflows the server's live buffer on
+      // every attempt, so every resubscribe ends the same way. At a flat delay
+      // that is a hot loop re-issuing the snapshot fetch four times a second.
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.unwrap(
+            Ref.update(subscriptionCount, (count) => count + 1).pipe(Effect.as(Stream.empty)),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalEvents,
+        {},
+        { resubscribeOnCompletionAfter: "100 millis" },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+
+      const settleAt = (count: number) =>
+        Effect.gen(function* () {
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            if ((yield* Ref.get(subscriptionCount)) >= count) break;
+            yield* Effect.yieldNow;
+          }
+          expect(yield* Ref.get(subscriptionCount)).toBe(count);
+        });
+
+      yield* settleAt(1);
+      // First resubscribe is still the caller's own delay: nothing changes for a
+      // subscription that overflows once and recovers.
+      yield* TestClock.adjust("100 millis");
+      yield* settleAt(2);
+
+      // Second one has doubled. The old flat delay would have fired here.
+      yield* TestClock.adjust("100 millis");
+      yield* settleAt(2);
+      yield* TestClock.adjust("100 millis");
+      yield* settleAt(3);
+
+      yield* Fiber.interrupt(subscriptionFiber);
+    }),
+  );
+
+  it.effect("a subscription that lasts re-arms the resubscribe budget", () =>
+    Effect.gen(function* () {
+      // Backing off forever would punish a thread that overflows once an hour.
+      // Surviving the healthy window is the evidence that clears the budget --
+      // not an emitted value, which an overflowing stream also produces.
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.unwrap(
+            Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                count === 3
+                  ? Stream.fromEffect(Effect.sleep("10 seconds")).pipe(Stream.drain)
+                  : Stream.empty,
+              ),
+            ),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalEvents,
+        {},
+        { resubscribeOnCompletionAfter: "100 millis" },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+
+      const settleAt = (count: number) =>
+        Effect.gen(function* () {
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            if ((yield* Ref.get(subscriptionCount)) >= count) break;
+            yield* Effect.yieldNow;
+          }
+          expect(yield* Ref.get(subscriptionCount)).toBe(count);
+        });
+
+      yield* settleAt(1);
+      yield* TestClock.adjust("100 millis");
+      yield* settleAt(2);
+      // Budget is at one now, so this wait is 200ms.
+      yield* TestClock.adjust("200 millis");
+      yield* settleAt(3);
+
+      // The third subscription lives the full healthy window before ending.
+      yield* TestClock.adjust("10 seconds");
+      // Back to the caller's own delay: 100ms is enough again.
+      yield* TestClock.adjust("100 millis");
+      yield* settleAt(4);
+
+      yield* Fiber.interrupt(subscriptionFiber);
+    }),
+  );
+
   it.effect("does NOT resubscribe on a clean completion when the option is absent", () =>
     Effect.gen(function* () {
       const subscriptionCount = yield* Ref.make(0);
@@ -563,21 +670,21 @@ describe("environment RPC", () => {
   );
 });
 
-describe("expectedFailureRetryDelay", () => {
+describe("subscriptionRetryDelay", () => {
   it("starts at the caller's delay and doubles", () => {
-    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 0))).toBe(250);
-    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 1))).toBe(500);
-    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 4))).toBe(4_000);
+    expect(Duration.toMillis(subscriptionRetryDelay("250 millis", 0))).toBe(250);
+    expect(Duration.toMillis(subscriptionRetryDelay("250 millis", 1))).toBe(500);
+    expect(Duration.toMillis(subscriptionRetryDelay("250 millis", 4))).toBe(4_000);
   });
 
   it("caps, so a long-lived dead subscription settles at twice a minute", () => {
-    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 7))).toBe(30_000);
-    expect(Duration.toMillis(expectedFailureRetryDelay("250 millis", 99))).toBe(30_000);
+    expect(Duration.toMillis(subscriptionRetryDelay("250 millis", 7))).toBe(30_000);
+    expect(Duration.toMillis(subscriptionRetryDelay("250 millis", 99))).toBe(30_000);
   });
 
   it("does not overflow into an unwaitable delay", () => {
     // 2 ** 1024 is Infinity, and a Duration of Infinity never fires.
-    const delay = expectedFailureRetryDelay("250 millis", 5_000);
+    const delay = subscriptionRetryDelay("250 millis", 5_000);
     expect(Number.isFinite(Duration.toMillis(delay))).toBe(true);
     expect(Duration.toMillis(delay)).toBe(30_000);
   });

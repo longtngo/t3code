@@ -1,6 +1,7 @@
 import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -194,11 +195,11 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
 }
 
 /**
- * Longest an expected-failure retry will wait. Reached by doubling
- * `retryExpectedFailureAfter`, so a subscription that cannot succeed settles at
- * two attempts a minute instead of four a second.
+ * Longest a retry will wait. Reached by doubling the caller's own delay, so a
+ * subscription that cannot make progress settles at two attempts a minute
+ * instead of four a second.
  */
-const EXPECTED_FAILURE_RETRY_CEILING = Duration.seconds(30);
+const SUBSCRIPTION_RETRY_CEILING = Duration.seconds(30);
 
 /**
  * Consecutive expected failures before the subscription gives up on this
@@ -213,20 +214,30 @@ const EXPECTED_FAILURE_RETRY_CEILING = Duration.seconds(30);
 const EXPECTED_FAILURE_RETRY_LIMIT = 12;
 
 /**
- * Backoff for consecutive expected failures: the base delay doubled per
- * attempt, capped. `attempt` is zero-based, so the first retry is the caller's
- * own delay and nothing changes for a subscription that recovers immediately.
+ * Backoff for consecutive fruitless attempts, whether the last one failed or
+ * completed: the base delay doubled per attempt, capped. `attempt` is
+ * zero-based, so the first retry is the caller's own delay and nothing changes
+ * for a subscription that recovers immediately.
  */
-export function expectedFailureRetryDelay(
-  base: Duration.Input,
-  attempt: number,
-): Duration.Duration {
+export function subscriptionRetryDelay(base: Duration.Input, attempt: number): Duration.Duration {
   const decoded = Duration.fromInputUnsafe(base);
   // Bounded before the shift: 2 ** 1024 is Infinity, and Duration.times of
   // Infinity is not a delay anyone can wait on.
   const doublings = Math.min(Math.max(attempt, 0), 30);
-  return Duration.min(Duration.times(decoded, 2 ** doublings), EXPECTED_FAILURE_RETRY_CEILING);
+  return Duration.min(Duration.times(decoded, 2 ** doublings), SUBSCRIPTION_RETRY_CEILING);
 }
+
+/**
+ * How long a subscription has to last before its completion counts as healthy
+ * and clears the resubscribe budget.
+ *
+ * Elapsed time is the signal, not whether values arrived. An overflowing stream
+ * emits its whole buffer before the server ends it, so "did it emit anything"
+ * is true in exactly the runaway case this is meant to bound; how long it
+ * survived is what actually separates an occasional resync from a client that
+ * cannot keep up and re-overflows on every attempt.
+ */
+const HEALTHY_SUBSCRIPTION_MILLIS = 10_000;
 
 export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
   tag: TTag,
@@ -247,6 +258,11 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
       // on every emitted value — the two things that count as evidence the
       // subscription can work.
       const expectedFailures = yield* Ref.make(0);
+      // Consecutive resubscribes triggered by a NORMAL completion. Carried across
+      // the `subscribeToSession` recursion like the failure budget above, and
+      // cleared by the same two pieces of evidence: a new session, and a
+      // subscription that lasted long enough to have done its job.
+      const completionResubscribes = yield* Ref.make(0);
       const sessions =
         options?.resubscribe === undefined
           ? sessionChanges
@@ -262,6 +278,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
             onNone: () => Stream.empty,
             onSome: (session) => {
               const resetExpectedFailures = Ref.set(expectedFailures, 0);
+              const resetCompletionResubscribes = Ref.set(completionResubscribes, 0);
               const method = session.client[tag] as (
                 input: EnvironmentRpcInput<TTag>,
               ) => Stream.Stream<
@@ -276,6 +293,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                   Stream.unwrap(
                     Effect.gen(function* () {
                       const input = yield* makeInput(session);
+                      const startedAtMillis = yield* Clock.currentTimeMillis;
                       const completeObservation = yield* observer.observe({
                         environmentId: supervisor.target.environmentId,
                         method: tag,
@@ -297,16 +315,39 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                       // Failures still flow to `catchCause` below; interruption
                       // (client unsubscribe / scope close) is not a completion, so it
                       // never resubscribes.
+                      const resubscribeAfter = options?.resubscribeOnCompletionAfter;
                       const live =
-                        options?.resubscribeOnCompletionAfter === undefined
+                        resubscribeAfter === undefined
                           ? liveOnce
                           : liveOnce.pipe(
                               Stream.concat(
-                                Stream.fromEffect(
-                                  Effect.sleep(options.resubscribeOnCompletionAfter),
-                                ).pipe(Stream.drain),
+                                Stream.unwrap(
+                                  Effect.gen(function* () {
+                                    // Backed off, but never given up on. A capped
+                                    // failure budget is safe because the server said
+                                    // a permanent "no"; a clean completion is a
+                                    // resync request, and abandoning it freezes the
+                                    // thread silently — the exact failure this
+                                    // option exists to prevent. So the delay grows
+                                    // to the ceiling and stays there.
+                                    const elapsed =
+                                      (yield* Clock.currentTimeMillis) - startedAtMillis;
+                                    const attempt =
+                                      elapsed >= HEALTHY_SUBSCRIPTION_MILLIS
+                                        ? yield* Ref.set(completionResubscribes, 1).pipe(
+                                            Effect.as(0),
+                                          )
+                                        : yield* Ref.getAndUpdate(
+                                            completionResubscribes,
+                                            (count) => count + 1,
+                                          );
+                                    yield* Effect.sleep(
+                                      subscriptionRetryDelay(resubscribeAfter, attempt),
+                                    );
+                                    return subscribeToSession();
+                                  }),
+                                ),
                               ),
-                              Stream.concat(Stream.suspend(subscribeToSession)),
                             );
                       return live.pipe(
                         Stream.catchCause((cause) => {
@@ -367,7 +408,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                                       return giveUp;
                                     }
                                     yield* Effect.sleep(
-                                      expectedFailureRetryDelay(retryAfter, attempt),
+                                      subscriptionRetryDelay(retryAfter, attempt),
                                     );
                                     return subscribeToSession();
                                   }),
@@ -381,7 +422,13 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                     }),
                   ),
                 );
-              return subscribeToSession();
+              // A new session is fresh evidence the subscription can work, so it
+              // re-arms the resubscribe budget the way an emitted value re-arms
+              // the failure budget.
+              return Stream.fromEffect(resetCompletionResubscribes).pipe(
+                Stream.drain,
+                Stream.concat(Stream.suspend(subscribeToSession)),
+              );
             },
           }),
         ),
