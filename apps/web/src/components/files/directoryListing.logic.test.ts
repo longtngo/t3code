@@ -19,6 +19,26 @@ describe("workspaceListingPath", () => {
     expect(workspaceListingPath("/Users/me/proj//", "//src")).toBe("/Users/me/proj/src");
   });
 
+  it("joins a Windows cwd with the separator it already uses", () => {
+    // "/" here would build `C:\Users\me\proj/src`, which listedFileTarget then
+    // refuses to recognise as its own root, so every workspace file on Windows
+    // would open read-only.
+    expect(workspaceListingPath("C:\\Users\\me\\proj", "src\\components")).toBe(
+      "C:\\Users\\me\\proj\\src\\components",
+    );
+    expect(workspaceListingPath("C:\\Users\\me\\proj\\", "\\src")).toBe("C:\\Users\\me\\proj\\src");
+  });
+
+  it("keeps forward slashes when a Windows path is written with them", () => {
+    expect(workspaceListingPath("C:/Users/me/proj", "src")).toBe("C:/Users/me/proj/src");
+  });
+
+  it("joins a UNC share the same way", () => {
+    expect(workspaceListingPath("\\\\server\\share\\proj", "src")).toBe(
+      "\\\\server\\share\\proj\\src",
+    );
+  });
+
   it("keeps a trailing separator the author wrote on the relative path", () => {
     // `docs/` is how an agent usually writes a folder, and the listing request
     // appends its own separator anyway — what matters is that the root stays a
@@ -39,6 +59,29 @@ describe("listedFileTarget", () => {
     expect(listedFileTarget("/Users/me/proj/", "/Users/me/proj/README.md")).toEqual({
       kind: "workspace",
       relativePath: "README.md",
+    });
+  });
+
+  it("keeps a workspace-relative path on Windows, separators and all", () => {
+    expect(listedFileTarget("C:\\Users\\me\\proj", "C:\\Users\\me\\proj\\src\\index.ts")).toEqual({
+      kind: "workspace",
+      relativePath: "src\\index.ts",
+    });
+  });
+
+  it("matches a Windows root against a listing written with the other separator", () => {
+    // Mixed separators are legal on Windows, and the two sides of this
+    // comparison do not have to come from the same writer.
+    expect(listedFileTarget("C:\\Users\\me\\proj", "C:/Users/me/proj/src/index.ts")).toEqual({
+      kind: "workspace",
+      relativePath: "src/index.ts",
+    });
+  });
+
+  it("sends a Windows file outside the workspace to the absolute viewer", () => {
+    expect(listedFileTarget("C:\\Users\\me\\proj", "D:\\scratch\\notes.md")).toEqual({
+      kind: "absolute",
+      absolutePath: "D:\\scratch\\notes.md",
     });
   });
 

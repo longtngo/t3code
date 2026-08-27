@@ -25,7 +25,30 @@ export function isDirectoryListing(
 }
 
 function trimTrailingSeparators(path: string): string {
-  return path.replace(/\/+$/, "");
+  return path.replace(/[/\\]+$/, "");
+}
+
+/**
+ * The separator this path is already written with.
+ *
+ * A Windows cwd is `C:\Users\me\proj`; joining it with "/" builds
+ * `C:\Users\me\proj/src`, which the containment test below then fails to
+ * recognise as its own root. A path carrying "/" anywhere keeps "/", which is
+ * also what a Windows path written `C:/Users/me/proj` wants.
+ */
+function separatorOf(path: string): string {
+  return path.includes("\\") && !path.includes("/") ? "\\" : "/";
+}
+
+/**
+ * Both separators folded to "/" so two paths can be compared.
+ *
+ * Character-for-character, so an offset into the normalized string is the same
+ * offset into the original — which is how the relative path below keeps the
+ * separators the platform actually gave it.
+ */
+function withForwardSlashes(path: string): string {
+  return path.replaceAll("\\", "/");
 }
 
 /**
@@ -37,7 +60,8 @@ function trimTrailingSeparators(path: string): string {
  * every file picked out of the listing would lose its workspace-relative path.
  */
 export function workspaceListingPath(cwd: string, relativePath: string): string {
-  return `${trimTrailingSeparators(cwd)}/${relativePath.replace(/^\/+/, "")}`;
+  const root = trimTrailingSeparators(cwd);
+  return `${root}${separatorOf(cwd)}${relativePath.replace(/^[/\\]+/, "")}`;
 }
 
 export type ListedFileTarget =
@@ -54,8 +78,15 @@ export type ListedFileTarget =
  * containment test, not a property of the root.
  */
 export function listedFileTarget(cwd: string, absolutePath: string): ListedFileTarget {
-  const root = `${trimTrailingSeparators(cwd)}/`;
-  return absolutePath.startsWith(root)
+  // Compared with separators folded, sliced from the original: the relative
+  // path that comes back out keeps whichever separator the platform uses.
+  //
+  // Case is NOT folded, even though Windows filesystems ignore it. The listing
+  // this reads was requested with a path built from this same `cwd`, so the
+  // server echoes the case it was given; folding here would instead risk
+  // merging two genuinely different paths on a case-sensitive filesystem.
+  const root = `${withForwardSlashes(trimTrailingSeparators(cwd))}/`;
+  return withForwardSlashes(absolutePath).startsWith(root)
     ? { kind: "workspace", relativePath: absolutePath.slice(root.length) }
     : { kind: "absolute", absolutePath };
 }
