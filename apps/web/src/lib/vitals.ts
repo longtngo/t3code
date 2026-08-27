@@ -203,17 +203,18 @@ function formatSpend(used: number, limit: number | null, currency: string | null
 }
 
 /**
- * Claude's extra credits: spend past the plan's monthly allowance.
+ * A spend balance carried in the shared `AccountUsageExtra` shape: Claude's
+ * extra credits, and Cursor's on-demand budget.
  *
  * Amounts are cents. That is not visible in the payload — `usedCredits: 20166`
  * against `monthlyLimit: 20000` reads as either $201.66 of $200.00 or twenty
- * thousand of something — so it is asserted by the test that carries a real
- * account's payload.
+ * thousand of something — so it is asserted by the tests that carry each
+ * provider's real account payload.
  *
- * Not a window: extra credits reset with the billing month, and the payload
- * carries no reset time to pace against.
+ * Not a window: both reset with the billing month, and neither payload carries
+ * a reset time to pace against.
  */
-function parseClaudeExtraBalance(value: unknown): UsageBalanceView[] {
+function parseSpendBalance(value: unknown, label: string): UsageBalanceView[] {
   const record = asRecord(value);
   if (!record || record.isEnabled !== true) return [];
   const used = asFiniteNumber(record.usedCredits) ?? 0;
@@ -230,7 +231,7 @@ function parseClaudeExtraBalance(value: unknown): UsageBalanceView[] {
     typeof record.currency === "string" && record.currency.length > 0 ? record.currency : "USD";
   return [
     {
-      label: "Extra usage",
+      label,
       detail: formatSpend(used / 100, limit === null ? null : limit / 100, currency),
       utilization: asFiniteNumber(record.utilization),
     },
@@ -248,18 +249,16 @@ function parseCursorBalances(value: unknown): UsageBalanceView[] {
   if (!record) return [];
   const balances: UsageBalanceView[] = [];
 
-  const onDemand = asRecord(record.onDemand);
-  const used = asFiniteNumber(onDemand?.used);
-  if (onDemand !== null && used !== null) {
-    const limit = asFiniteNumber(onDemand.limit);
-    const currency = typeof onDemand.currency === "string" ? onDemand.currency : null;
-    const scope = record.onDemandScope;
-    balances.push({
-      label: scope === "team" ? "Cursor on-demand (team)" : "Cursor on-demand",
-      detail: formatSpend(used, limit, currency),
-      utilization: asFiniteNumber(onDemand.utilization),
-    });
-  }
+  // `onDemand` is an `AccountUsageExtra`, the same shape and the same cents as
+  // Claude's extra credits — not a `{ used, limit }` record. Reading the fields
+  // it does not have is what kept this row off the screen entirely.
+  const scope = record.onDemandScope;
+  balances.push(
+    ...parseSpendBalance(
+      record.onDemand,
+      scope === "team" ? "Cursor on-demand (team)" : "Cursor on-demand",
+    ),
+  );
 
   const requests = asRecord(record.requests);
   const requestsUsed = asFiniteNumber(requests?.used);
@@ -322,7 +321,7 @@ export function deriveLatestAccountUsage(
       sevenDay: parseUsageWindow(payload.sevenDay),
       extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
       balances: [
-        ...parseClaudeExtraBalance(payload.extra),
+        ...parseSpendBalance(payload.extra, "Extra usage"),
         ...parseCodexBalances(payload.codex),
         ...parseCursorBalances(payload.cursor),
       ],

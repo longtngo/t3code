@@ -393,13 +393,24 @@ describe("deriveLatestAccountUsage balances", () => {
   it("surfaces Cursor on-demand spend as a balance, not a window", () => {
     // A window implies a reset time and therefore a pace. Spend has neither, and
     // rendering it with a pace bar would claim a deadline that does not exist.
+    //
+    // `onDemand` carries the wire shape the server actually sends — an
+    // `AccountUsageExtra`, in cents. An earlier fixture invented a
+    // `{ used, limit }` record that no server has ever produced, so it agreed
+    // with a parser that could never render this row against real data.
     const view = deriveLatestAccountUsage(
       usageActivity({
         cursor: {
           auto: null,
           api: null,
           total: null,
-          onDemand: { used: 12.5, limit: 50, utilization: 25, currency: "USD" },
+          onDemand: {
+            isEnabled: true,
+            usedCredits: 1250,
+            monthlyLimit: 5000,
+            utilization: 25,
+            currency: "USD",
+          },
         },
       }),
     );
@@ -410,21 +421,36 @@ describe("deriveLatestAccountUsage balances", () => {
     ]);
   });
 
-  it("names a team-scoped on-demand budget as the team's", () => {
+  it("renders a team on-demand budget from the payload CursorUsage really emits", () => {
+    // The exact `cursor.onDemand` that `normalizeCurrentPeriodUsage` builds from
+    // the recorded live team account (`pooledUsed: 391993` of `pooledLimit:
+    // 800000`). A team spend ceiling of $8,000.00 is the reading that makes
+    // sense of those figures; $800,000.00 is not.
     const view = deriveLatestAccountUsage(
       usageActivity({
         cursor: {
           auto: null,
           api: null,
           total: null,
-          onDemand: { used: 3, limit: null, utilization: 0, currency: null },
+          onDemand: {
+            isEnabled: true,
+            usedCredits: 391993,
+            monthlyLimit: 800000,
+            utilization: 48.999125,
+            currency: "USD",
+          },
           onDemandScope: "team",
         },
       }),
     );
 
-    expect(view?.balances[0]?.label).toBe("Cursor on-demand (team)");
-    expect(view?.balances[0]?.detail).toBe("3");
+    expect(view?.balances).toEqual([
+      {
+        label: "Cursor on-demand (team)",
+        detail: "$3919.93 of $8000.00",
+        utilization: 48.999125,
+      },
+    ]);
   });
 
   it("surfaces the enterprise request bucket", () => {
