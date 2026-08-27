@@ -82,9 +82,13 @@ function withPosition(path: string, line: string | undefined, column: string | u
 
 /**
  * Collapse `.` and `..` segments. Joining cwd with `./src/main.ts` otherwise
- * yields `/cwd/./src/main.ts`, which reads badly and leaves `..` for the
- * server's sandbox check to reason about; resolving it here keeps the path the
- * viewer receives canonical.
+ * yields `/cwd/./src/main.ts`, which reads badly and leaves `..` for whatever
+ * reads the path next; resolving it here keeps the path the viewer receives
+ * canonical.
+ *
+ * Not a safety measure. There is no server-side sandbox to escape — the read
+ * RPC is bounded by request scope, not by path — so this is about giving the
+ * viewer one canonical spelling of a location, nothing more.
  */
 function normalizeDotSegments(path: string): string {
   const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";

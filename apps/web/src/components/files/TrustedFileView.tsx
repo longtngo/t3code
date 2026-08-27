@@ -1,6 +1,12 @@
 /**
  * Read-only view of a file addressed by ABSOLUTE path, read through the trusted
- * read RPC (server-sandboxed to home / OS-temp / trusted roots).
+ * read RPC.
+ *
+ * That RPC applies NO path sandbox — anything the server process can read, it
+ * will read. The boundary is the `orchestration:read` scope on the request, not
+ * a root allow-list; `WorkspaceFileSystem.readTrustedFile` records why the old
+ * allow-list was removed. An earlier version of this comment described a home /
+ * OS-temp / trusted-roots sandbox that no longer exists.
  *
  * This is the renderer behind both the standalone `/viewer/$` route and the
  * right panel's trusted-file surface, so a report opened from a chat message
