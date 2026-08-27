@@ -666,6 +666,71 @@ function claudeContextWindowForModel(
   return only !== undefined && only > 0 ? only : undefined;
 }
 
+/**
+ * The context window Claude Code will ACTUALLY use for a model.
+ *
+ * Not the same as {@link selectedClaudeContextWindow}, which reports our own
+ * Context Window toggle. Several models are `native_1m` in Claude Code's model
+ * registry and run at 1,000,000 whatever that toggle says, so reading the
+ * toggle reports 200,000 for a session the CLI is running at 1M.
+ *
+ * Measured against Claude Code 2.1.247 by calling `getContextUsage` per model,
+ * not inferred from the catalog. **Re-verify on a CLI upgrade** - these are the
+ * CLI's numbers, not ours, and nothing here fails loudly if they move.
+ */
+function claudeCliContextWindow(modelSelection: ModelSelection | undefined): number | undefined {
+  switch (modelSelection?.model) {
+    case "claude-opus-5":
+    case "claude-opus-4-8":
+    case "claude-opus-4-7":
+    case "claude-sonnet-5":
+    case "claude-fable-5":
+      // native_1m: 1M at the API with no `[1m]` suffix required.
+      return 1_000_000;
+    case "claude-sonnet-4-6":
+    case "claude-haiku-4-5":
+    case "claude-opus-4-5":
+      return 200_000;
+    case "claude-opus-4-6":
+      return resolveClaudeContextWindow(modelSelection) === "1m" ? 1_000_000 : 200_000;
+  }
+  return undefined;
+}
+
+/**
+ * Models Claude Code leaves UNARMED - it resolves their window as `"auto"` and
+ * then refuses to auto-compact them at all - paired with the window to hand it
+ * so they compact like every other model.
+ *
+ * Deliberately not "every model we know a window for". Supplying a window makes
+ * the `settings` tier win, which outranks Anthropic's `clientdata`,
+ * `experiment` and `model-default` tiers. For a model the CLI already arms,
+ * that trades a live remote control for nothing: `claude-sonnet-5` carries a
+ * bespoke 1,000,000 default, and `claude-sonnet-4-6`'s window can be raised
+ * remotely. So only the models measured unarmed are listed.
+ *
+ * Being WRONG here is bounded, because the value supplied is the model's true
+ * window: if a later CLI arms one of these itself, our value matches what it
+ * would have chosen, and the entry becomes a no-op rather than a regression.
+ *
+ * Measured on 2.1.247. `claude-opus-4-8` / `claude-opus-4-7` are unarmed too
+ * and are already covered by the >= 1M rule at the call site.
+ */
+const CLAUDE_UNARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
+  "claude-opus-5",
+  "claude-fable-5",
+  "claude-haiku-4-5",
+  "claude-opus-4-5",
+]);
+
+function claudeUnarmedModelContextWindow(
+  modelSelection: ModelSelection | undefined,
+): number | undefined {
+  const model = modelSelection?.model;
+  if (model === undefined || !CLAUDE_UNARMED_COMPACTION_MODELS.has(model)) return undefined;
+  return claudeCliContextWindow(modelSelection);
+}
+
 function selectedClaudeContextWindow(
   modelSelection: ModelSelection | undefined,
 ): number | undefined {
@@ -4778,8 +4843,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // on the raw string being non-empty would let an unresolvable setting
       // suppress it and send no window - which is the exact defect 946685ce0
       // fixed, reintroduced through the door this change opens.
+      //
+      // A percentage resolves against the window Claude Code will actually use,
+      // not our Context Window toggle: `claude-sonnet-5` and friends are
+      // native_1m and run at 1M whatever the toggle says, so resolving "60%"
+      // against the toggle's 200,000 would ask for 120,000 on a 1M session.
+      const cliContextWindow = claudeCliContextWindow(modelSelection) ?? initialContextWindow;
       const autoCompactWindow =
-        resolveClaudeAutoCompactWindow(claudeSettings.autoCompactWindow, initialContextWindow) ??
+        resolveClaudeAutoCompactWindow(claudeSettings.autoCompactWindow, cliContextWindow) ??
+        // Models Claude Code refuses to compact at all get their own window
+        // handed back, which arms them without narrowing anything.
+        claudeUnarmedModelContextWindow(modelSelection) ??
         (initialContextWindow !== undefined && initialContextWindow >= 1_000_000
           ? Math.min(initialContextWindow, 1_000_000)
           : undefined);

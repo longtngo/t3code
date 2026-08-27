@@ -623,6 +623,95 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect.each([
+    // Measured against Claude Code 2.1.247 by calling getContextUsage per
+    // model. These four resolve their window as "auto", and the CLI then
+    // refuses to auto-compact them at all, so t3code hands each its own window.
+    { model: "claude-opus-5", expected: 1_000_000 },
+    { model: "claude-fable-5", expected: 1_000_000 },
+    { model: "claude-haiku-4-5", expected: 200_000 },
+    { model: "claude-opus-4-5", expected: 200_000 },
+  ])("arms auto-compaction on $model, which Claude Code leaves unarmed", ({ model, expected }) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), model),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, expected);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect.each([
+    // The other half of the same measurement: Claude Code already arms these
+    // from its own model-default tier. Supplying a window would make the
+    // `settings` tier win and permanently displace Anthropic's remote tuning —
+    // and for claude-sonnet-5, whose bespoke default is 1,000,000, reading our
+    // Context Window toggle would have sent 200,000 and cut it by 5.8x.
+    //
+    // claude-opus-4-6 is pinned at its 200k selection deliberately: our catalog
+    // defaults it to "1m", where the CLI leaves it unarmed and the >= 1M rule
+    // supplies a window. Only the narrow selection reaches the model-default.
+    { model: "claude-sonnet-5", options: [] },
+    { model: "claude-sonnet-4-6", options: [] },
+    { model: "claude-opus-4-6", options: [{ id: "contextWindow", value: "200k" }] },
+  ])("leaves $model to Claude Code, which already arms it", ({ model, options }) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          model,
+          options,
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(Object.hasOwn(settings, "autoCompactWindow"), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("resolves a percentage against the CLI's window, not the toggle", () => {
+    // claude-sonnet-5 is native_1m: it runs at 1,000,000 whatever our Context
+    // Window toggle says, and that toggle defaults to "200k" for it. Resolving
+    // against the toggle would ask for 120,000 on a 1M session.
+    const harness = makeHarness({ claudeConfig: { autoCompactWindow: "60%" } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-sonnet-5",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 600_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("resolves a percentage auto-compaction window against the model", () => {
     const harness = makeHarness({ claudeConfig: { autoCompactWindow: "60%" } });
     return Effect.gen(function* () {
@@ -870,8 +959,12 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
+      // The auto-compact window rides along: Claude Code resolves Haiku 4.5's
+      // window as "auto" and then never compacts it, so t3code hands it back
+      // its own 200,000.
       assert.deepEqual(createInput?.options.settings, {
         alwaysThinkingEnabled: false,
+        autoCompactWindow: 200_000,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -920,8 +1013,7 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       // claude-opus-4-6 defaults to the 1M context window, so the auto-compact
       // window rides along - Claude Code will not compact a 1M window on its
-      // own. The Haiku 4.5 case above is the same assertion on a 200k model,
-      // where the key is correctly absent.
+      // own. Haiku 4.5 above carries one too, for the same reason at 200,000.
       assert.deepEqual(createInput?.options.settings, {
         fastMode: true,
         autoCompactWindow: 1_000_000,
