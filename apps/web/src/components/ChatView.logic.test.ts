@@ -39,6 +39,8 @@ import {
   shouldShowComposerIntentBanner,
   shouldReleaseTimelineAnchorForToolActivity,
   shouldWriteThreadErrorToCurrentServerThread,
+  isChatSurfaceFocused,
+  nextEscapeAction,
   nextStopAction,
   STOP_ESCALATION_MIN_MS,
   STOP_ESCALATION_WINDOW_MS,
@@ -1018,6 +1020,121 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     // helper rather than beside the call so every abort reason stays in one tested place.
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, feedbackUploadInFlight: true })).toBe(
       true,
+    );
+  });
+});
+
+describe("isChatSurfaceFocused", () => {
+  const body = { name: "body" } as unknown as Node;
+  const insideComposer = { name: "textarea" } as unknown as Node;
+  const insideOverlay = { name: "menu-item" } as unknown as Node;
+  const composerRoot = { contains: (node: Node) => node === insideComposer };
+  const base = {
+    activeElement: insideComposer,
+    bodyElement: body,
+    composerRoot,
+    hasOpenDialog: false,
+  };
+
+  it("answers a press typed in the composer", () => {
+    expect(isChatSurfaceFocused(base)).toBe(true);
+  });
+
+  it("answers a press with focus nowhere, which is where reading the transcript leaves it", () => {
+    expect(isChatSurfaceFocused({ ...base, activeElement: body })).toBe(true);
+  });
+
+  it("declines a press aimed at an overlay that took focus", () => {
+    // A menu, a model picker, a terminal pane: all of them portal or focus
+    // outside the composer, and all of them mean Escape by "dismiss this".
+    expect(isChatSurfaceFocused({ ...base, activeElement: insideOverlay })).toBe(false);
+  });
+
+  it("declines while a dialog is open even if focus has not landed in it", () => {
+    // Focus alone would say yes during the open animation, and stopping a turn
+    // because a dialog was still arriving is exactly the surprise to avoid.
+    expect(isChatSurfaceFocused({ ...base, activeElement: body, hasOpenDialog: true })).toBe(false);
+  });
+
+  it("does not treat an unmounted composer as containing the focus", () => {
+    expect(
+      isChatSurfaceFocused({ ...base, activeElement: insideComposer, composerRoot: null }),
+    ).toBe(false);
+  });
+});
+
+describe("nextEscapeAction", () => {
+  const base = {
+    isChatSurfaceActive: true,
+    alreadyHandled: false,
+    isAutoRepeat: false,
+    isComposing: false,
+    hasRunningTurn: true,
+    hasPendingQuestion: false,
+    heldMessageCount: 0,
+    recallSupported: true,
+  } as const;
+
+  it("stops the running turn when nothing is held", () => {
+    expect(nextEscapeAction(base)).toBe("stop");
+  });
+
+  it("recalls before it stops", () => {
+    // The reversible rung first: a message the agent has not seen costs nothing
+    // to take back, and killing the turn to undo a send is the bigger hammer.
+    expect(nextEscapeAction({ ...base, heldMessageCount: 1 })).toBe("recall");
+  });
+
+  it("stops instead of recalling when the provider cannot take a message back", () => {
+    // Otherwise Escape would appear to do nothing on those providers, because
+    // the recall it chose is one the adapter has no way to perform.
+    expect(nextEscapeAction({ ...base, heldMessageCount: 2, recallSupported: false })).toBe("stop");
+  });
+
+  it("does nothing on an idle thread with nothing held", () => {
+    expect(nextEscapeAction({ ...base, hasRunningTurn: false })).toBe("none");
+  });
+
+  it("still recalls on an idle thread that is holding a message", () => {
+    // A turn can finish between the send and the press. The message is still
+    // waiting to be dispatched, so it is still recallable.
+    expect(nextEscapeAction({ ...base, hasRunningTurn: false, heldMessageCount: 1 })).toBe(
+      "recall",
+    );
+  });
+
+  it("yields to an overlay that owns the press", () => {
+    // Escape's first job everywhere else is "dismiss this". Stopping a turn
+    // while the user is closing a dialog would be a destructive surprise.
+    expect(nextEscapeAction({ ...base, isChatSurfaceActive: false })).toBe("none");
+  });
+
+  it("yields to a handler that already claimed the press", () => {
+    expect(nextEscapeAction({ ...base, alreadyHandled: true })).toBe("none");
+  });
+
+  it("ignores auto-repeat, so holding Escape cannot walk the ladder", () => {
+    // This is the keyboard's version of the reflexive double-click the stop
+    // floor exists to refuse: a held key would otherwise deliver dozens of
+    // presses and reach the force-stop without a second decision.
+    expect(nextEscapeAction({ ...base, isAutoRepeat: true })).toBe("none");
+  });
+
+  it("ignores a press that is cancelling an IME composition", () => {
+    expect(nextEscapeAction({ ...base, isComposing: true })).toBe("none");
+  });
+
+  it("stays out of the way while the agent is waiting on a question", () => {
+    // The composer shows Cancel there, not Stop, and Cancel is deliberately off
+    // the escalation ladder. Escape must not arm a rung the UI is not offering.
+    expect(nextEscapeAction({ ...base, hasPendingQuestion: true })).toBe("none");
+  });
+
+  it("does not recall while a question is pending either", () => {
+    // One rule rather than two: while the agent is asking, Escape belongs to
+    // the question, not to the queue behind it.
+    expect(nextEscapeAction({ ...base, hasPendingQuestion: true, heldMessageCount: 1 })).toBe(
+      "none",
     );
   });
 });

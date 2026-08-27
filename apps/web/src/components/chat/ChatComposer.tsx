@@ -47,7 +47,12 @@ import {
   shouldUseLocalFilePath,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  isChatSurfaceFocused,
+  nextEscapeAction,
+  readFileAsDataUrl,
+} from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
@@ -2995,6 +3000,65 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
+  /**
+   * Escape walks the same ladder the Stop button does: recall what is still
+   * waiting, then interrupt, then force-stop.
+   *
+   * Scoped by FOCUS rather than by an "is anything open" sweep. Every overlay
+   * that owns Escape - dialog, menu, model picker, the terminal - takes focus
+   * into a DOM subtree that is not this form (portal content never is; see the
+   * containment note on `onFocusCapture` below). So "focus is inside the
+   * composer, or nowhere at all" is exactly the set of presses the chat should
+   * answer, and it needs no list of overlays to keep up to date.
+   *
+   * `document.body` counts as nowhere: clicking the transcript leaves focus
+   * there, and Escape should still stop the turn you are reading.
+   *
+   * The dialog check covers the one gap focus alone leaves: a modal that is
+   * open while focus has not landed in it yet.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const action = nextEscapeAction({
+        isChatSurfaceActive: isChatSurfaceFocused({
+          activeElement: document.activeElement,
+          bodyElement: document.body,
+          composerRoot: composerFormRef.current,
+          hasOpenDialog: document.querySelector('[data-slot="dialog-popup"]') !== null,
+        }),
+        alreadyHandled: event.defaultPrevented,
+        isAutoRepeat: event.repeat,
+        isComposing: event.isComposing,
+        hasRunningTurn: phase === "running",
+        hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
+        heldMessageCount: queuedMessages.length,
+        recallSupported: onRecallQueuedMessage !== undefined,
+      });
+      if (action === "none") return;
+      event.preventDefault();
+      if (action === "recall") {
+        // Newest first: Escape undoes the most recent send, the way every other
+        // undo does, rather than draining the queue from the far end.
+        const newest = queuedMessages[queuedMessages.length - 1];
+        if (newest) recallQueuedMessage(newest.id);
+        return;
+      }
+      handleInterruptPrimaryAction();
+    };
+    // Bubble, not capture: a handler that has already claimed this press is one
+    // this must not fight.
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    activePendingApproval,
+    handleInterruptPrimaryAction,
+    onRecallQueuedMessage,
+    pendingUserInputs.length,
+    phase,
+    queuedMessages,
+    recallQueuedMessage,
+  ]);
   const handleCancelQuestionPrimaryAction = useCallback(() => {
     void onCancelQuestion();
   }, [onCancelQuestion]);

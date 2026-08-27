@@ -56,6 +56,26 @@ change direction rather than add to what was asked. A discarded message stays
 visible in the conversation as something you typed; it is simply never
 answered.
 
+### Escape
+
+`Escape` walks the same ladder the Stop button does, without reaching for the
+mouse. While a message is still waiting, `Escape` takes the most recent one
+back into the message box. Once nothing is waiting, `Escape` stops the agent,
+and a second deliberate press force-stops the session.
+
+The second press has to be a deliberate one. A press that lands immediately
+after the first is treated as a slip and ignored, and holding `Escape` down does
+not walk the ladder at all, so the force-stop is never something you arrive at
+by accident.
+
+While the agent is waiting on a question or an approval, `Escape` does nothing.
+The message box offers **Cancel** there, which declines without stopping the
+session, and that is a different decision from stopping the agent.
+
+`Escape` keeps its usual meaning everywhere else. It only stops the agent when
+the message box has focus or nothing does; while a dialog, a menu, or a terminal
+is open, `Escape` closes that instead.
+
 ## Hiding the workspace row
 
 Below the composer, a row shows which workspace and branch the agent will work in. The folder

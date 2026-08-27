@@ -380,6 +380,93 @@ export function nextStopAction(input: {
   return elapsedMs < STOP_ESCALATION_MIN_MS ? "ignore" : "hardStop";
 }
 
+/**
+ * What an Escape press in the chat surface should do.
+ *
+ * The rungs run recall -> stop -> force-stop, and Escape only ever supplies the
+ * press. Deciding between stop and force-stop stays with `nextStopAction`, so
+ * the keyboard and the Stop button share one ladder and one 500ms floor: two
+ * deliberate presses force-stop, an accidental double-tap does not, and Escape
+ * held down (which auto-repeats) cannot reach the destructive rung at all.
+ *
+ * Recall comes first because it is the reversible rung. A message still waiting
+ * has not cost the agent anything yet, so taking it back is a cheaper answer to
+ * "I did not mean that" than killing the turn - and once the queue is empty the
+ * next press stops, exactly as if the queue had never been there.
+ */
+/**
+ * Whether an Escape press belongs to the chat rather than to something layered
+ * over it.
+ *
+ * Decided by FOCUS, not by an inventory of overlays. Every control that owns
+ * Escape - dialog, menu, model picker, terminal pane - takes focus into a DOM
+ * subtree that is not the composer's, and portalled content is never inside it.
+ * So "focus is in the composer, or nowhere" is exactly the set of presses the
+ * chat should answer, and it stays correct as overlays are added.
+ *
+ * Nowhere means `document.body`: clicking the transcript leaves focus there,
+ * and Escape should still stop the turn you were reading.
+ *
+ * `hasOpenDialog` covers the single gap focus alone leaves - a modal that is
+ * open while focus has not landed inside it yet.
+ */
+export function isChatSurfaceFocused(input: {
+  readonly activeElement: Node | null;
+  readonly bodyElement: Node | null;
+  readonly composerRoot: { readonly contains: (node: Node) => boolean } | null;
+  readonly hasOpenDialog: boolean;
+}): boolean {
+  if (input.hasOpenDialog) return false;
+  if (input.activeElement === null) return true;
+  if (input.bodyElement !== null && input.activeElement === input.bodyElement) return true;
+  return input.composerRoot?.contains(input.activeElement) ?? false;
+}
+
+export type EscapeAction = "recall" | "stop" | "none";
+
+export function nextEscapeAction(input: {
+  /**
+   * Whether the chat is what the keypress belongs to. False whenever an overlay
+   * owns Escape: this is what keeps Escape from stopping a turn while the user
+   * is dismissing a dialog or a menu.
+   */
+  readonly isChatSurfaceActive: boolean;
+  /** `event.defaultPrevented` - another handler already claimed this press. */
+  readonly alreadyHandled: boolean;
+  /** `event.repeat` - the key is being held, not pressed again. */
+  readonly isAutoRepeat: boolean;
+  /** `event.isComposing` - Escape is cancelling an IME candidate, not a turn. */
+  readonly isComposing: boolean;
+  readonly hasRunningTurn: boolean;
+  /**
+   * The agent is waiting on an approval or a question. The composer replaces
+   * Stop with Cancel there, and Cancel is deliberately NOT on this ladder - it
+   * dispatches a cooperative decline and never arms the force-stop. Escape
+   * stays out of it rather than arming, invisibly, a rung the visible UI is not
+   * even offering.
+   */
+  readonly hasPendingQuestion: boolean;
+  readonly heldMessageCount: number;
+  /** False for a provider whose adapter cannot take a queued message back. */
+  readonly recallSupported: boolean;
+}): EscapeAction {
+  if (
+    !input.isChatSurfaceActive ||
+    input.alreadyHandled ||
+    input.isAutoRepeat ||
+    input.isComposing ||
+    input.hasPendingQuestion
+  ) {
+    return "none";
+  }
+  if (input.heldMessageCount > 0 && input.recallSupported) {
+    return "recall";
+  }
+  // Nothing running and nothing recallable: leave the press alone rather than
+  // firing an interrupt at a thread that is already idle.
+  return input.hasRunningTurn ? "stop" : "none";
+}
+
 export function resolveSendEnvMode(input: {
   requestedEnvMode: DraftThreadEnvMode;
   isGitRepo: boolean;
