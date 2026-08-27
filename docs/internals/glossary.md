@@ -121,6 +121,27 @@ The agent interaction style for a thread. In [the contracts][1], the values are 
 
 Controls how assistant text reaches the thread timeline. In [the contracts][1], `streaming` updates incrementally and `buffered` accumulates text. Buffered delivery is not held until the turn completes: it spills once accumulated text would exceed 24,000 characters, and flushes at approval and user-input boundaries. See [ProviderRuntimeIngestion.ts][5].
 
+#### Context window
+
+The number of tokens a model can hold at once. On the wire this is `maxTokens` on a
+`ThreadTokenUsageSnapshot`, and it is the denominator the context meter reads against.
+
+Distinct from the **auto-compact window** below, which the provider's own API confusingly also
+reports as `maxTokens`. Keeping the two apart is the whole reason the Claude adapter tracks a
+separate current-model window: a configured compaction budget once became the meter's denominator,
+so a 1M thread at 541,000 tokens displayed as "90%, 541k / 600k" in red while it was 54% full.
+
+#### Auto-compact window
+
+The budget a provider compacts against, which is `min(contextWindow, configuredWindow)` and so
+never larger than the context window. Claude Code derives an **auto-compact threshold** from it by
+subtracting a fixed reserve of about 33,000 tokens; that threshold, not the window, is the point
+compaction actually fires, and it is what the context meter marks.
+
+Whether compaction is armed at all is reported separately, as `autoCompactSource`. Claude Code
+answers `"auto"` for a window it does not trust and then refuses to compact, so neither the
+threshold nor the user's on/off setting says whether anything will happen.
+
 #### Snapshot
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].

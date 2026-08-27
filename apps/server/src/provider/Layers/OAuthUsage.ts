@@ -15,6 +15,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -242,6 +243,15 @@ export const fetchUsageSnapshot = (
       Effect.flatMap((response) => response.json),
       Effect.flatMap(decodeRawUsage),
       Effect.map(normalizeUsage),
+      // Stamped at the fetch, which is the only place that knows how old these
+      // numbers are. The carrying event's `createdAt` is re-stamped whenever a
+      // cached payload is re-broadcast, so it cannot answer that question.
+      Effect.flatMap((payload) =>
+        Effect.map(DateTime.now, (at) => ({
+          ...payload,
+          fetchedAt: DateTime.formatIso(at),
+        })),
+      ),
       Effect.timeout(REQUEST_TIMEOUT),
       Effect.mapError((error) =>
         // Preserve our safe status-bearing detail; collapse any other cause

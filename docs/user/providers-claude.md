@@ -36,14 +36,25 @@ the rest of your environment stay as they are.
 
 ## Reduce Context Usage
 
-In Settings, open your Claude provider and set **Auto-compact after** to a token count between
-`100000` and `1000000`. For example, `300000` compacts the conversation into a summary once it
-reaches about 300,000 tokens, without changing the model's context window.
+In Settings, open your Claude provider and set **Auto-compact after** to either a token count
+between `100000` and `1000000`, or a percentage of the model's context window such as `60%`. For
+example, `300000` compacts the conversation into a summary once it reaches about 300,000 tokens,
+without changing the model's context window.
+
+A percentage follows the model you are using, so one setting keeps its meaning when you switch
+between a 200,000-token model and a 1,000,000-token one. A token count does not: it is capped at
+the model's own window, so `600000` quietly means 200,000 on a 200,000-token model. The percent
+sign is required, because a bare number is always a token count.
 
 Leave the field empty to keep Claude Code's default behavior. On a model with a 1,000,000-token
 context window, Claude Code does not compact on its own, so T3 Code fills in that model's own
 window for you and compaction starts at about 967,000 tokens. Anything you type in the field
 always takes priority.
+
+The context meter shows where this lands. Open it and you will see the model's full window as the
+denominator, with a marker on the bar at the point compaction will actually fire and the token
+figure beneath it. When the meter shows no marker, Claude Code is not compacting this conversation
+automatically, whatever the field says.
 
 Because T3 Code passes this setting to Claude Code at the highest priority, the `/autocompact`
 command inside a conversation cannot override it, and neither can an `autoCompactWindow` value in

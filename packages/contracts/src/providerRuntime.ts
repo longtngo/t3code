@@ -818,6 +818,15 @@ const AccountUsageUpdatedPayload = Schema.Struct({
   extra: Schema.NullOr(AccountUsageExtra),
   cursor: Schema.optional(AccountUsageCursorPayload),
   codex: Schema.optional(AccountUsageCodexPayload),
+  /**
+   * When these numbers were fetched from the provider.
+   *
+   * Distinct from the carrying event's `createdAt`, which is stamped at every
+   * emission - including the re-broadcast of a cached payload on session start,
+   * and the poller re-sending an unchanged one. Only this says how stale the
+   * figures are, so it is what a "last updated" readout must use.
+   */
+  fetchedAt: Schema.optional(Schema.String),
 });
 export type AccountUsageUpdatedPayload = typeof AccountUsageUpdatedPayload.Type;
 

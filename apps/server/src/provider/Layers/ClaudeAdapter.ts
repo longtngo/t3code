@@ -28,6 +28,7 @@ import {
   type CanonicalRequestType,
   type ClaudeSettings,
   classifyTaskAgentKind,
+  resolveClaudeAutoCompactWindow,
   EventId,
   type ProviderApprovalDecision,
   ProviderDriverKind,
@@ -311,6 +312,18 @@ function rememberPendingTaskModel(
   }
 }
 
+/**
+ * What Claude Code last told us about compaction, and the window it said it
+ * about. Only `getContextUsage` (turn end) reports these, so they are cached to
+ * keep the panel steady across a turn's streaming snapshots.
+ */
+interface ClaudeCompactionFacts {
+  readonly autoCompactThreshold?: number;
+  readonly autoCompactSource?: string;
+  readonly compactsAutomatically?: boolean;
+  readonly forContextWindow: number | undefined;
+}
+
 interface ClaudeSessionContext {
   session: ProviderSession;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
@@ -375,7 +388,22 @@ interface ClaudeSessionContext {
   /** Task ids that have started and not yet reached a terminal state. */
   readonly liveTaskIds: Set<string>;
   turnState: ClaudeTurnState | undefined;
+  /**
+   * The CURRENT model's context window - never the compaction budget, and never
+   * a maximum across the models a session has touched. Both of those made the
+   * meter's denominator wrong in opposite directions.
+   */
   lastKnownContextWindow: number | undefined;
+  /**
+   * Compaction facts from the last `getContextUsage`, carried onto the
+   * streaming snapshots that cannot ask for them.
+   *
+   * `forContextWindow` pins them to the window they were computed against: a
+   * threshold is an absolute token count derived from that window, so after a
+   * model switch the cached one describes the wrong model and must be dropped
+   * rather than re-rendered against the new denominator.
+   */
+  lastKnownCompaction: ClaudeCompactionFacts | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
@@ -602,18 +630,40 @@ function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.make(value);
 }
 
-function maxClaudeContextWindowFromModelUsage(
+/**
+ * The CURRENT model's context window out of a turn's `modelUsage` map.
+ *
+ * Keyed, never a maximum. `modelUsage` is cumulative for the whole session and
+ * keyed by model, so it holds an entry for every model the session has touched
+ * - including subagent models. Taking the max over it means one 1M subagent
+ * spawned from a 200k thread reports a 1M window for the rest of the session,
+ * and the meter then reads 19% on a thread 9,000 tokens from its hard ceiling.
+ * A narrowing model switch fails the same way and never self-corrects.
+ *
+ * Each entry's `contextWindow` is the true window for ITS model, so a keyed
+ * lookup is both correct and aware of overrides (`CLAUDE_CODE_DISABLE_1M_CONTEXT`)
+ * that our own model catalog cannot see. Returns undefined rather than a guess
+ * when the running model has no entry yet.
+ */
+function claudeContextWindowForModel(
   modelUsage: Record<string, ModelUsage> | undefined,
+  apiModelId: string | undefined,
+  model: string | undefined,
 ): number | undefined {
   if (!modelUsage) return undefined;
-
-  let maxContextWindow: number | undefined;
-  for (const value of Object.values(modelUsage)) {
-    const contextWindow = value.contextWindow;
-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
+  for (const key of [apiModelId, model]) {
+    if (key === undefined) continue;
+    const contextWindow = modelUsage[key]?.contextWindow;
+    if (contextWindow !== undefined && contextWindow > 0) return contextWindow;
   }
-
-  return maxContextWindow;
+  // A single entry is the running model by construction - there is no second
+  // model to confuse it with, so the ambiguity this function exists to avoid
+  // cannot arise. This is the ordinary case: a turn that spawns no subagent and
+  // switches no model. With two or more entries and no key to choose between
+  // them, say nothing and let the caller keep the window it already had.
+  const entries = Object.values(modelUsage);
+  const only = entries.length === 1 ? entries[0]?.contextWindow : undefined;
+  return only !== undefined && only > 0 ? only : undefined;
 }
 
 function selectedClaudeContextWindow(
@@ -731,10 +781,57 @@ function makeClaudeTokenUsageSnapshot(input: {
   };
 }
 
+/**
+ * Compaction facts to spread onto a snapshot, or nothing when the cached ones
+ * describe a different window than the one being rendered against.
+ */
+function carriedCompactionFacts(
+  compaction: ClaudeCompactionFacts | undefined,
+  contextWindow: number | undefined,
+): Omit<ClaudeCompactionFacts, "forContextWindow"> {
+  if (!compaction || compaction.forContextWindow !== contextWindow) return {};
+  const { forContextWindow: _forContextWindow, ...facts } = compaction;
+  return facts;
+}
+
+/**
+ * Re-stamp the last good snapshot with this turn's window and total.
+ *
+ * Drops the compaction fields whenever the window actually changes: a threshold
+ * is an absolute token count derived from the previous window, so carrying it
+ * across a model switch renders a marker for the wrong model. Reachable without
+ * a switch too - `queryCurrentContextUsage` has a one-second timeout, so any
+ * slow turn end falls through to here.
+ */
+function reWindowedTokenUsageSnapshot(
+  lastGoodUsage: ThreadTokenUsageSnapshot,
+  maxTokens: number | undefined,
+  accumulatedTotalProcessedTokens: number | undefined,
+): ThreadTokenUsageSnapshot {
+  const hasMaxTokens = typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0;
+  const windowChanged = hasMaxTokens && lastGoodUsage.maxTokens !== maxTokens;
+  const {
+    autoCompactThreshold: _autoCompactThreshold,
+    autoCompactSource: _autoCompactSource,
+    compactsAutomatically: _compactsAutomatically,
+    ...withoutCompaction
+  } = lastGoodUsage;
+  return {
+    ...(windowChanged ? withoutCompaction : lastGoodUsage),
+    ...(hasMaxTokens ? { maxTokens } : {}),
+    ...(typeof accumulatedTotalProcessedTokens === "number" &&
+    Number.isFinite(accumulatedTotalProcessedTokens) &&
+    accumulatedTotalProcessedTokens > lastGoodUsage.usedTokens
+      ? { totalProcessedTokens: accumulatedTotalProcessedTokens }
+      : {}),
+  };
+}
+
 function normalizeClaudeActiveTokenUsage(
   value: unknown,
   contextWindow?: number,
   totalProcessedTokens?: number,
+  compaction?: ClaudeCompactionFacts,
 ): ThreadTokenUsageSnapshot | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -753,6 +850,7 @@ function normalizeClaudeActiveTokenUsage(
     activeTokens,
     inputTokens,
     outputTokens,
+    ...carriedCompactionFacts(compaction, contextWindow),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
   });
@@ -761,6 +859,7 @@ function normalizeClaudeActiveTokenUsage(
 function normalizeClaudeContextUsageApiSnapshot(
   value: SDKControlGetContextUsageResponse,
   totalProcessedTokens?: number,
+  modelContextWindow?: number,
 ): ThreadTokenUsageSnapshot | undefined {
   const autoCompactThreshold = finitePositiveInteger(value.autoCompactThreshold);
   // Claude Code reports how it resolved the auto-compaction window, but the key
@@ -773,7 +872,12 @@ function normalizeClaudeContextUsageApiSnapshot(
     typeof rawSource === "string" && rawSource.length > 0 ? rawSource : undefined;
   return makeClaudeTokenUsageSnapshot({
     activeTokens: value.totalTokens,
-    contextWindow: value.maxTokens,
+    // The model's window, not `value.maxTokens` - see `queryCurrentContextUsage`.
+    // `rawMaxTokens` on this response looks like the field that would make the
+    // caller's argument unnecessary; it is not. Claude Code 2.1.247 builds the
+    // response as `maxTokens: h, rawMaxTokens: h` from one variable, so the name
+    // promises a raw window the value does not carry.
+    contextWindow: modelContextWindow ?? value.maxTokens,
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
     compactsAutomatically: value.isAutoCompactEnabled,
     ...(autoCompactThreshold !== undefined ? { autoCompactThreshold } : {}),
@@ -2363,8 +2467,40 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return undefined;
     }
 
-    context.lastKnownContextWindow = usage.value.maxTokens;
-    return normalizeClaudeContextUsageApiSnapshot(usage.value, totalProcessedTokens);
+    // `maxTokens` here is the window Claude Code COMPACTS against, which is
+    // `min(modelWindow, configuredWindow)` - not the model's context window.
+    // Writing it into `lastKnownContextWindow` made a configured budget the
+    // denominator of every later snapshot, which is how a 1M thread at 541k
+    // came to read "541k / 600k, 90%" in red.
+    //
+    // Only widen when we have nothing better. The reported value can never
+    // EXCEED the model's window (every branch of the CLI's resolver returns
+    // `Math.min(modelWindow, ...)`), so it is a safe floor and a bad ceiling.
+    context.lastKnownContextWindow ??= usage.value.maxTokens;
+    const snapshot = normalizeClaudeContextUsageApiSnapshot(
+      usage.value,
+      totalProcessedTokens,
+      context.lastKnownContextWindow,
+    );
+    // Remember what the panel needs so the streaming snapshots below can carry
+    // it too. `getContextUsage` only runs at turn end, so without this the
+    // compaction marker and the "automatically compacts" note blink out for the
+    // whole of every turn and reappear when it finishes.
+    if (snapshot) {
+      context.lastKnownCompaction = {
+        ...(snapshot.autoCompactThreshold !== undefined
+          ? { autoCompactThreshold: snapshot.autoCompactThreshold }
+          : {}),
+        ...(snapshot.autoCompactSource !== undefined
+          ? { autoCompactSource: snapshot.autoCompactSource }
+          : {}),
+        ...(snapshot.compactsAutomatically !== undefined
+          ? { compactsAutomatically: snapshot.compactsAutomatically }
+          : {}),
+        forContextWindow: context.lastKnownContextWindow,
+      };
+    }
+    return snapshot;
   });
 
   const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (
@@ -2456,7 +2592,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     errorMessage?: string,
     result?: SDKResultMessage,
   ) {
-    const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
+    const resultContextWindow = claudeContextWindowForModel(
+      result?.modelUsage,
+      context.currentApiModelId,
+      context.session.model,
+    );
     if (resultContextWindow !== undefined) {
       context.lastKnownContextWindow = resultContextWindow;
     }
@@ -2490,40 +2630,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           resultUsageRecord,
           maxTokens,
           accumulatedTotalProcessedTokens ?? context.lastKnownTotalProcessedTokens,
+          context.lastKnownCompaction,
         )
       : undefined;
     const lastGoodUsage = context.lastKnownTokenUsage;
     const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
       contextUsageSnapshot ??
       (resultTotalOnly && lastGoodUsage
-        ? {
-            ...lastGoodUsage,
-            ...(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-              ? { maxTokens }
-              : {}),
-            ...(typeof accumulatedTotalProcessedTokens === "number" &&
-            Number.isFinite(accumulatedTotalProcessedTokens) &&
-            accumulatedTotalProcessedTokens > lastGoodUsage.usedTokens
-              ? {
-                  totalProcessedTokens: accumulatedTotalProcessedTokens,
-                }
-              : {}),
-          }
+        ? reWindowedTokenUsageSnapshot(lastGoodUsage, maxTokens, accumulatedTotalProcessedTokens)
         : resultIterationSnapshot) ??
       (lastGoodUsage
-        ? {
-            ...lastGoodUsage,
-            ...(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-              ? { maxTokens }
-              : {}),
-            ...(typeof accumulatedTotalProcessedTokens === "number" &&
-            Number.isFinite(accumulatedTotalProcessedTokens) &&
-            accumulatedTotalProcessedTokens > lastGoodUsage.usedTokens
-              ? {
-                  totalProcessedTokens: accumulatedTotalProcessedTokens,
-                }
-              : {}),
-          }
+        ? reWindowedTokenUsageSnapshot(lastGoodUsage, maxTokens, accumulatedTotalProcessedTokens)
         : undefined);
 
     const turnState = context.turnState;
@@ -2712,6 +2829,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         event.usage,
         context.lastKnownContextWindow,
         context.lastKnownTotalProcessedTokens,
+        context.lastKnownCompaction,
       );
       yield* emitThreadTokenUsage(context, snapshot, {
         rawMethod: "claude/stream_event/message_delta",
@@ -3260,6 +3378,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const usageSnapshot = normalizeClaudeActiveTokenUsage(
         (message.message as { usage?: unknown }).usage,
         context.lastKnownContextWindow,
+        undefined,
+        context.lastKnownCompaction,
       );
       if (usageSnapshot) {
         context.lastKnownTokenUsage = usageSnapshot;
@@ -4649,14 +4769,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // (clientdata / experiment / model-default) in charge, which outranking
       // it would silently suppress.
       //
-      // Clamped because the CLI validates this key as `.max(1e6).catch(void 0)`:
-      // a larger window would be dropped without an error, back to no
-      // compaction at all.
-      const autoCompactWindow = claudeSettings.autoCompactWindow
-        ? Number(claudeSettings.autoCompactWindow)
-        : initialContextWindow !== undefined && initialContextWindow >= 1_000_000
+      // Clamped because the CLI validates this key as
+      // `.int().min(1e5).max(1e6).catch(void 0)`: an out-of-range value is
+      // dropped without an error, back to no compaction at all.
+      //
+      // The fallback runs whenever the setting resolves to nothing, not only
+      // when the field is blank. `Number("60%")` is NaN, so keying the fallback
+      // on the raw string being non-empty would let an unresolvable setting
+      // suppress it and send no window - which is the exact defect 946685ce0
+      // fixed, reintroduced through the door this change opens.
+      const autoCompactWindow =
+        resolveClaudeAutoCompactWindow(claudeSettings.autoCompactWindow, initialContextWindow) ??
+        (initialContextWindow !== undefined && initialContextWindow >= 1_000_000
           ? Math.min(initialContextWindow, 1_000_000)
-          : undefined;
+          : undefined);
       const settings = {
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
@@ -4818,6 +4944,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         seenToolUseIds,
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
+        lastKnownCompaction: undefined,
         lastKnownTokenUsage: undefined,
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
@@ -4937,6 +5064,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
         });
         context.currentApiModelId = apiModelId;
+      }
+      // Re-seed the window with the model, and drop the compaction facts the
+      // old one produced. Without this a 1M -> 200k switch keeps reporting the
+      // wide window until a `modelUsage` entry for the new model arrives, and
+      // an interrupted turn carries no result, so it may never arrive at all.
+      const switchedContextWindow = selectedClaudeContextWindow(modelSelection);
+      if (switchedContextWindow !== context.lastKnownContextWindow) {
+        context.lastKnownContextWindow = switchedContextWindow;
+        context.lastKnownCompaction = undefined;
       }
       context.session = {
         ...context.session,

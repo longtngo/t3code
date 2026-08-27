@@ -8,6 +8,7 @@ import type {
   Options as ClaudeQueryOptions,
   PermissionMode,
   PermissionResult,
+  SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -117,6 +118,21 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   readonly stopTask = async (taskId: string): Promise<void> => {
     this.stopTaskCalls.push(taskId);
   };
+
+  // The turn-end context-usage control call. Left empty by default so existing
+  // tests keep exercising the streaming path; push responses to drive the
+  // compaction facts (threshold / source), which no other seam reports.
+  //
+  // A queue rather than a single settable field: turn completion runs on the
+  // adapter's own fiber, so a test that assigns a new value straight after
+  // emitting a result races it, and the FIRST turn silently reads the SECOND
+  // turn's value. One entry is consumed per call, in order.
+  public readonly contextUsageResponses: Array<Record<string, unknown> | undefined> = [];
+
+  readonly getContextUsage = async (): Promise<SDKControlGetContextUsageResponse> =>
+    (this.contextUsageResponses.length > 0
+      ? this.contextUsageResponses.shift()
+      : undefined) as SDKControlGetContextUsageResponse;
 
   readonly setModel = async (model?: string): Promise<void> => {
     this.setModelCalls.push(model);
@@ -601,6 +617,55 @@ describe("ClaudeAdapterLive", () => {
 
       const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
       assert.equal(settings.autoCompactWindow, 300_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("resolves a percentage auto-compaction window against the model", () => {
+    const harness = makeHarness({ claudeConfig: { autoCompactWindow: "60%" } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "1m" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 600_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("falls back to the 1M default when the configured window is unresolvable", () => {
+    // The key guard on the percentage form. `Number("nonsense")` is NaN, and a
+    // truthiness check on the raw string would treat this as "configured" and
+    // send NO window — which on a >=1M model is classified "auto" and disables
+    // compaction outright, the exact defect 946685ce0 fixed.
+    const harness = makeHarness({ claudeConfig: { autoCompactWindow: "nonsense" } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-8",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 1_000_000);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -4030,6 +4095,305 @@ describe("ClaudeAdapterLive", () => {
             maxTokens: 200000,
           },
         });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("reports the model's window as the denominator, not the compaction budget", () => {
+    // The reported bug. `getContextUsage().maxTokens` is what Claude Code
+    // COMPACTS against — `min(modelWindow, configuredWindow)` — so a 600k
+    // budget on a 1M model made the meter read "541k / 600k, 90%" in red on a
+    // thread that was 54% full.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      harness.query.contextUsageResponses.push({
+        totalTokens: 541_000,
+        maxTokens: 600_000,
+        isAutoCompactEnabled: true,
+        autoCompactThreshold: 567_000,
+        autocompactSource: "settings",
+      });
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-8",
+        ),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-window-vs-budget",
+        usage: { total_tokens: 541_000 },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
+      assert.equal(usageEvent?.type, "thread.token-usage.updated");
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        assert.equal(usageEvent.payload.usage?.maxTokens, 1_000_000);
+        assert.equal(usageEvent.payload.usage?.usedTokens, 541_000);
+        // The budget survives as the threshold, which is what the marker uses.
+        assert.equal(usageEvent.payload.usage?.autoCompactThreshold, 567_000);
+        assert.equal(usageEvent.payload.usage?.autoCompactSource, "settings");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drops compaction facts that describe a different window", () => {
+    // A threshold is an absolute token count derived from one window. Carrying
+    // it across a model switch draws the marker for the wrong model — the panel
+    // would read "compacts at 189k" with the marker at 19% while the real
+    // threshold is 567k. Reachable without a switch too: the context-usage call
+    // has a one-second timeout, so any slow turn end falls through here.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      harness.query.contextUsageResponses.push({
+        totalTokens: 150_000,
+        maxTokens: 200_000,
+        isAutoCompactEnabled: true,
+        autoCompactThreshold: 167_000,
+        autocompactSource: "settings",
+      });
+
+      // Self-terminating rather than a fixed count: two turns emit a different
+      // number of events than one, and a count that guesses too high hangs the
+      // test rather than failing it.
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "thread.token-usage.updated" &&
+            event.payload.usage?.maxTokens === 1_000_000,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "one", attachments: [] });
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-switch",
+        usage: { total_tokens: 150_000 },
+      } as unknown as SDKMessage);
+
+      // Switch to the 1M model. The queue is empty now, so the context-usage
+      // call goes silent and the cached facts are the only ones available.
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "two",
+        attachments: [],
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-8",
+        ),
+      });
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-switch",
+        usage: { total_tokens: 160_000 },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvents = runtimeEvents.filter(
+        (event) => event.type === "thread.token-usage.updated",
+      );
+      const last = usageEvents.at(-1);
+      assert.equal(last?.type, "thread.token-usage.updated");
+      if (last?.type === "thread.token-usage.updated") {
+        assert.equal(last.payload.usage?.maxTokens, 1_000_000);
+        assert.equal(last.payload.usage?.autoCompactThreshold, undefined);
+        assert.equal(last.payload.usage?.autoCompactSource, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drops a stale threshold when the window moves without a model switch", () => {
+    // The narrow path the model-switch clear does NOT cover: the context-usage
+    // call has a one-second timeout, so a slow turn end leaves the previous
+    // turn's compaction facts cached while `modelUsage` moves the window under
+    // them. Rendering those facts against the new denominator puts the marker
+    // at the wrong place — "compacts at 167k" on a 1M window.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      harness.query.contextUsageResponses.push({
+        totalTokens: 150_000,
+        maxTokens: 200_000,
+        isAutoCompactEnabled: true,
+        autoCompactThreshold: 167_000,
+        autocompactSource: "settings",
+      });
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "thread.token-usage.updated" &&
+            event.payload.usage?.maxTokens === 1_000_000,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "one", attachments: [] });
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-stale-threshold",
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 150_000 },
+        modelUsage: { "model-a": { contextWindow: 200000, maxOutputTokens: 64000 } },
+      } as unknown as SDKMessage);
+
+      // Second turn: the queue is empty, so the control call goes silent (the
+      // timeout), and the window widens. Same session, same selection —
+      // nothing clears the cached facts.
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "two", attachments: [] });
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-stale-threshold",
+        usage: { input_tokens: 20, output_tokens: 10, total_tokens: 160_000 },
+        modelUsage: { "model-b": { contextWindow: 1000000, maxOutputTokens: 64000 } },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const last = runtimeEvents
+        .filter((event) => event.type === "thread.token-usage.updated")
+        .at(-1);
+      assert.equal(last?.type, "thread.token-usage.updated");
+      if (last?.type === "thread.token-usage.updated") {
+        assert.equal(last.payload.usage?.maxTokens, 1_000_000);
+        assert.equal(last.payload.usage?.autoCompactThreshold, undefined);
+        assert.equal(last.payload.usage?.autoCompactSource, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps the running model's window when a subagent used a wider one", () => {
+    // The defect this replaced a `Math.max` to fix. `modelUsage` is cumulative
+    // for the whole session and keyed by model, so a 200k thread that spawns
+    // one 1M subagent used to latch 1M for good — and the meter then read 19%
+    // on a thread 9,000 tokens from its ceiling, silently.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1234,
+        duration_api_ms: 1200,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-subagent-window",
+        usage: { total_tokens: 190000 },
+        modelUsage: {
+          "claude-opus-4-6": { contextWindow: 200000, maxOutputTokens: 64000 },
+          // A subagent's model, which the session has now "touched" forever.
+          "claude-opus-4-8": { contextWindow: 1000000, maxOutputTokens: 64000 },
+        },
+      } as unknown as SDKMessage);
+      harness.query.finish();
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
+      assert.equal(usageEvent?.type, "thread.token-usage.updated");
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        assert.equal(usageEvent.payload.usage?.maxTokens, 200_000);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

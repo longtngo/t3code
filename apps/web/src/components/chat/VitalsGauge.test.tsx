@@ -54,7 +54,14 @@ function renderCompactionNote(overrides: Partial<ContextWindowSnapshot>): string
   return renderToStaticMarkup(
     <VitalsDetail
       context={{ ...emptyContext, compactsAutomatically: true, ...overrides }}
-      accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
+      accountUsage={{
+        fiveHour: null,
+        sevenDay: null,
+        extraUsage: null,
+        fetchedAt: null,
+        extraWindows: [],
+        balances: [],
+      }}
       host={compactionHost}
       now={0}
       timestampFormat="24-hour"
@@ -85,7 +92,14 @@ describe("VitalsDetail auto-compaction note", () => {
       renderToStaticMarkup(
         <VitalsDetail
           context={{ ...emptyContext, compactsAutomatically: false }}
-          accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
+          accountUsage={{
+            fiveHour: null,
+            sevenDay: null,
+            extraUsage: null,
+            fetchedAt: null,
+            extraWindows: [],
+            balances: [],
+          }}
           host={compactionHost}
           now={0}
           timestampFormat="24-hour"
@@ -186,6 +200,8 @@ describe("VitalsGauge detail", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [],
       balances: [],
     };
@@ -217,7 +233,14 @@ describe("VitalsGauge detail", () => {
     const markup = renderToStaticMarkup(
       <VitalsDetail
         context={emptyContext}
-        accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
+        accountUsage={{
+          fiveHour: null,
+          sevenDay: null,
+          extraUsage: null,
+          fetchedAt: null,
+          extraWindows: [],
+          balances: [],
+        }}
         host={host}
         now={0}
         timestampFormat="24-hour"
@@ -231,6 +254,8 @@ describe("VitalsGauge detail", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: null,
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [
         {
           label: "Codex 5h",
@@ -291,6 +316,8 @@ describe("VitalsDetail usage refresh", () => {
   const usageWithLimits = {
     fiveHour: { utilization: 88, resetsAt: null },
     sevenDay: { utilization: 41, resetsAt: null },
+    extraUsage: null,
+    fetchedAt: null,
     extraWindows: [],
     balances: [],
   };
@@ -354,6 +381,8 @@ describe("VitalsGauge trigger", () => {
         accountUsage={{
           fiveHour: { utilization: 88, resetsAt: null },
           sevenDay: { utilization: 41, resetsAt: null },
+          extraUsage: null,
+          fetchedAt: null,
           extraWindows: [],
           balances: [],
         }}
@@ -511,6 +540,8 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [],
       balances: [],
     };
@@ -533,6 +564,8 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: { utilization: 30, resetsAt: null },
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [],
       balances: [],
     };
@@ -553,6 +586,8 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: null,
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [],
       balances: [],
     };
@@ -576,6 +611,8 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: null,
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [],
       balances: [],
     };
@@ -604,6 +641,8 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: null,
+      extraUsage: null,
+      fetchedAt: null,
       extraWindows: [
         {
           label: "weekly",

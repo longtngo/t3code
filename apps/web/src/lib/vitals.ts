@@ -106,9 +106,32 @@ export interface UsageBalanceView {
   readonly utilization: number | null;
 }
 
+/**
+ * A spend row rendered as a paced window rather than a bare balance.
+ *
+ * The reset instant is DERIVED (see {@link billingMonthWindow}), not sent by the
+ * provider, which is why this is a distinct shape from
+ * {@link LabeledUsageWindowView}: `detail` carries the money figure that a
+ * percentage-only window row would drop, and `segmentCount` the days in the
+ * month.
+ */
+export interface SpendWindowView extends UsageWindowView {
+  readonly label: string;
+  readonly detail: string;
+  readonly windowMs: number;
+  readonly segmentCount: number;
+}
+
 export interface AccountUsageView {
   readonly fiveHour: UsageWindowView | null;
   readonly sevenDay: UsageWindowView | null;
+  /**
+   * Claude's extra-usage spend, paced against a derived calendar month. Null
+   * when the account has no extra usage to show.
+   */
+  readonly extraUsage: SpendWindowView | null;
+  /** When the account-usage snapshot was fetched from the provider, if known. */
+  readonly fetchedAt: string | null;
   /**
    * Extra provider-native windows for the limits block (Codex/Cursor). Empty for
    * a Claude account. The ring glyph stays Claude-only (context + 5h + 7d); these
@@ -211,8 +234,10 @@ function formatSpend(used: number, limit: number | null, currency: string | null
  * thousand of something — so it is asserted by the tests that carry each
  * provider's real account payload.
  *
- * Not a window: both reset with the billing month, and neither payload carries
- * a reset time to pace against.
+ * Stays a balance for every provider but Claude. Both reset with the billing
+ * month and neither payload carries a reset time, so pacing one means inventing
+ * its anchor — see {@link parseClaudeExtraUsageWindow}, which does exactly that
+ * for Claude alone, on an explicit instruction, and says so.
  */
 function parseSpendBalance(value: unknown, label: string): UsageBalanceView[] {
   const record = asRecord(value);
@@ -236,6 +261,32 @@ function parseSpendBalance(value: unknown, label: string): UsageBalanceView[] {
       utilization: asFiniteNumber(record.utilization),
     },
   ];
+}
+
+/**
+ * Claude's extra usage as a paced window.
+ *
+ * Reuses {@link parseSpendBalance} rather than re-reading the payload, so the
+ * two suppression gates it encodes still apply: a row is dropped when
+ * `isEnabled` is not true, and when both the spend and the limit are zero —
+ * which is the exact shape the server emits for an `extra_usage` object
+ * carrying only `is_enabled`, and a "$0.00 of $0.00" row would otherwise drag
+ * the whole limits block open on an account with nothing in it.
+ *
+ * The reset instant is derived, not reported. See {@link billingMonthWindow}.
+ */
+function parseClaudeExtraUsageWindow(value: unknown, nowMs: number): SpendWindowView | null {
+  const [balance] = parseSpendBalance(value, "Extra usage");
+  if (!balance || balance.utilization === null) return null;
+  const { resetsAt, windowMs } = billingMonthWindow(nowMs);
+  return {
+    label: balance.label,
+    detail: balance.detail,
+    utilization: balance.utilization,
+    resetsAt,
+    windowMs,
+    segmentCount: daysInUtcMonth(nowMs),
+  };
 }
 
 /**
@@ -306,6 +357,7 @@ function parseCodexBalances(value: unknown): UsageBalanceView[] {
  */
 export function deriveLatestAccountUsage(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  nowMs: number,
 ): AccountUsageView | null {
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
@@ -319,12 +371,15 @@ export function deriveLatestAccountUsage(
     return {
       fiveHour: parseUsageWindow(payload.fiveHour),
       sevenDay: parseUsageWindow(payload.sevenDay),
+      extraUsage: parseClaudeExtraUsageWindow(payload.extra, nowMs),
+      // `fetchedAt`, not `activity.createdAt`. The activity is stamped at
+      // emission, and the cached payload is re-emitted on every session start
+      // and every poll — so `createdAt` measures when we last broadcast the
+      // numbers, not how old they are, and would read "just now" on data hours
+      // stale. Absent for snapshots recorded before the field existed.
+      fetchedAt: typeof payload.fetchedAt === "string" ? payload.fetchedAt : null,
       extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
-      balances: [
-        ...parseSpendBalance(payload.extra, "Extra usage"),
-        ...parseCodexBalances(payload.codex),
-        ...parseCursorBalances(payload.cursor),
-      ],
+      balances: [...parseCodexBalances(payload.codex), ...parseCursorBalances(payload.cursor)],
     };
   }
   return null;
@@ -409,6 +464,87 @@ export function formatWindowReset(
   const time = formatShortTimestamp(resetsAt, timestampFormat);
   if (time === "") return null;
   return at - nowMs < ONE_DAY_MS ? time : `${resetDateFormatter.format(at)} ${time}`;
+}
+
+/**
+ * Where a bar's unit boundaries fall, as a CSS `background-image`.
+ *
+ * Built stop-by-stop rather than with `repeating-linear-gradient` because the
+ * repeating form also emits a boundary at 100%, which lands inside the track's
+ * rounded cap and renders as a sliver darkening the right-hand end at every
+ * segment count. This draws `segments - 1` interior boundaries and nothing else.
+ *
+ * The caller must paint this ABOVE the fill, not on the track. A background on
+ * the track is painted before its positioned children, so separators drawn
+ * there are hidden under the fill — invisible in exactly the case the segments
+ * exist to explain. Measured at the real popover width: at 31 segments and 97%
+ * used, zero of them were visible.
+ */
+export function segmentBoundariesBackground(segments: number): string | undefined {
+  if (!Number.isFinite(segments) || segments < 2) return undefined;
+  const count = Math.min(Math.round(segments), 62);
+  const stops: string[] = [];
+  for (let index = 1; index < count; index += 1) {
+    const at = (index / count) * 100;
+    stops.push(
+      `transparent calc(${at}% - 0.5px)`,
+      `var(--popover) calc(${at}% - 0.5px)`,
+      `var(--popover) calc(${at}% + 0.5px)`,
+      `transparent calc(${at}% + 0.5px)`,
+    );
+  }
+  return stops.length > 0 ? `linear-gradient(to right, ${stops.join(", ")})` : undefined;
+}
+
+/** Days in the UTC month containing `nowMs`; the extra-usage bar's segment count. */
+export function daysInUtcMonth(nowMs: number): number {
+  const now = new Date(nowMs);
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/**
+ * The billing month as a pace-able window: when it resets, and how long it is.
+ *
+ * The provider sends neither. `GET /api/oauth/usage` returns `extra_usage`
+ * with `is_enabled`, `monthly_limit`, `used_credits`, `utilization` and
+ * `currency` and no reset instant at all, so this is DERIVED from the
+ * maintainer's statement that the anchor is the 1st — it is not provider data,
+ * and if the account's billing anchor is not the 1st the pace is wrong.
+ *
+ * Derived in UTC, deliberately. Anchoring on the local month makes the boundary
+ * cross at a different real instant for every user: at UTC+14 the local month
+ * turns over 14 hours before the provider's counter resets, so a normal account
+ * reads "+98% over pace" in the most severe colour for those 14 hours, every
+ * month. `windowMs` is the distance between the two boundaries rather than
+ * `days * 86_400_000`, so the length always matches the month it describes.
+ */
+export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs: number } {
+  const now = new Date(nowMs);
+  const startedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const resetsAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  return { resetsAt: new Date(resetsAt).toISOString(), windowMs: resetsAt - startedAt };
+}
+
+const ONE_MINUTE_MS = 60 * 1000;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+
+/**
+ * How old a polled snapshot is, for the refresh control's label.
+ *
+ * Floored at "just now" rather than allowed to go negative: the instant is
+ * stamped by the server and `nowMs` is the client's clock, so on a remote or
+ * relayed connection a phone a few minutes ahead would otherwise render
+ * "-4m ago".
+ */
+export function formatSnapshotAge(fetchedAt: string | null, nowMs: number): string | null {
+  if (fetchedAt === null) return null;
+  const at = Date.parse(fetchedAt);
+  if (!Number.isFinite(at)) return null;
+  const elapsed = nowMs - at;
+  if (elapsed < ONE_MINUTE_MS) return "just now";
+  if (elapsed < ONE_HOUR_MS) return `${Math.floor(elapsed / ONE_MINUTE_MS)}m ago`;
+  if (elapsed < ONE_DAY_MS) return `${Math.floor(elapsed / ONE_HOUR_MS)}h ago`;
+  return `${Math.floor(elapsed / ONE_DAY_MS)}d ago`;
 }
 
 /**

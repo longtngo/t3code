@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  type ContextWindowSnapshot,
+  deriveCompactionMarker,
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -98,5 +103,56 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+});
+
+describe("deriveCompactionMarker", () => {
+  const snapshot = (overrides: Partial<ContextWindowSnapshot>): ContextWindowSnapshot =>
+    ({
+      usedTokens: 541_000,
+      maxTokens: 1_000_000,
+      usedPercentage: 54.1,
+      remainingTokens: 459_000,
+      remainingPercentage: 45.9,
+      compactsAutomatically: true,
+      autoCompactThreshold: 567_000,
+      autoCompactSource: "settings",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+      ...overrides,
+    }) as ContextWindowSnapshot;
+
+  it("places the marker at the threshold's share of the model window", () => {
+    const marker = deriveCompactionMarker(snapshot({}));
+    expect(marker?.pct).toBeCloseTo(56.7, 5);
+    expect(marker?.label).toBe("compacts at 567k");
+  });
+
+  it("draws nothing when the provider omits the source", () => {
+    // The gate is "present and not auto", NOT "!== auto". `autocompactSource`
+    // is absent from the SDK's declared response type and missing from most
+    // live snapshots, so a `!== "auto"` test degrades OPEN and would draw a
+    // marker on a window that will never compact.
+    expect(deriveCompactionMarker(snapshot({ autoCompactSource: null }))).toBeNull();
+  });
+
+  it("draws nothing when the window is one Claude refuses to compact", () => {
+    // `autoCompactThreshold` is present and meaningless in this state — the CLI
+    // computes it without consulting the source.
+    expect(
+      deriveCompactionMarker(
+        snapshot({ autoCompactSource: "auto", autoCompactThreshold: 967_000 }),
+      ),
+    ).toBeNull();
+  });
+
+  it("draws nothing without a threshold or a window to measure it against", () => {
+    expect(deriveCompactionMarker(snapshot({ autoCompactThreshold: null }))).toBeNull();
+    expect(deriveCompactionMarker(snapshot({ maxTokens: null }))).toBeNull();
+  });
+
+  it("draws nothing when the threshold is not inside the window", () => {
+    // Equal means the marker would sit on the bar's end cap, claiming a
+    // boundary that carries no information.
+    expect(deriveCompactionMarker(snapshot({ autoCompactThreshold: 1_000_000 }))).toBeNull();
   });
 });

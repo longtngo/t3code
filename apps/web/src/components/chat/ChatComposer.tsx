@@ -1090,8 +1090,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
     [activeThreadActivities],
   );
+  // `Date.now()` at derive time, not a ticking clock: the only use is anchoring
+  // the extra-usage billing month, which moves once a month. Threading the
+  // gauge's per-second `now` through here would re-derive the whole account
+  // usage view every second, on every render of the composer.
   const activeAccountUsage = useMemo(
-    () => deriveLatestAccountUsage(activeThreadActivities ?? []),
+    () => deriveLatestAccountUsage(activeThreadActivities ?? [], Date.now()),
     [activeThreadActivities],
   );
   const activeThreadProviderDisplayName = useMemo(() => {

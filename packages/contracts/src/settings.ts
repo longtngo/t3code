@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
@@ -397,11 +398,11 @@ export const CodexSettings = makeProviderSettingsSchema(
 );
 export type CodexSettings = typeof CodexSettings.Type;
 
-// Empty, or an integer from 100,000 to 1,000,000. Shared by the full
-// Claude settings schema and its patch so an out-of-range value fails at
-// the update that introduced it.
+// Empty, an integer from 100,000 to 1,000,000, or `10%` to `100%` of the
+// selected model's window. Shared by the full Claude settings schema and its
+// patch so an out-of-range value fails at the update that introduced it.
 //
-// The bounds mirror Claude Code's own validation of this key
+// The token bounds mirror Claude Code's own validation of this key
 // (`.int().min(1e5).max(1e6).catch(undefined)`), which discards an
 // out-of-range value SILENTLY rather than reporting it - so a value this
 // pattern let through would simply stop having any effect. Keep the two in
@@ -409,7 +410,58 @@ export type CodexSettings = typeof CodexSettings.Type;
 // rejects values it would honour. Note that values under 200,000 do work,
 // but disable Claude Code's precomputed-compaction path, which is keyed on
 // its own 200,000-token long-context boundary.
-const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
+//
+// The `%` is REQUIRED on the percentage form, and a bare number is always
+// tokens. Claude Code's own `/autocompact` grammar reads a bare `600` as
+// 600,000, so accepting a bare `60` as a percentage here would collide with
+// vocabulary users already have. `resolveClaudeAutoCompactWindow` turns a
+// percentage into tokens and clamps it back into [100,000, 1,000,000] before
+// it reaches the CLI, because 30% of a 200k model is 60,000 - under Claude
+// Code's own minimum, and therefore silently dropped.
+const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000|(?:[1-9]\d|100)%)$/;
+
+/** Claude Code's own accepted range for the key; outside it the value is dropped. */
+export const CLAUDE_AUTO_COMPACT_WINDOW_MIN = 100_000;
+export const CLAUDE_AUTO_COMPACT_WINDOW_MAX = 1_000_000;
+
+/**
+ * Turn a stored `autoCompactWindow` setting into the token count Claude Code
+ * should be handed, or `undefined` when the setting says nothing.
+ *
+ * Percentages need the model's window to resolve, so an unresolvable one is
+ * `undefined` ("say nothing") rather than a guess. Everything that survives is
+ * clamped into Claude Code's accepted range: it validates this key as
+ * `.int().min(1e5).max(1e6).catch(undefined)`, and that `catch` is a SILENT
+ * discard, not a clamp - a dropped value leaves the window classified `"auto"`,
+ * which is exactly the state where the CLI refuses to compact at all.
+ */
+export function resolveClaudeAutoCompactWindow(
+  setting: string | undefined,
+  modelContextWindow: number | undefined,
+): number | undefined {
+  const trimmed = setting?.trim();
+  if (!trimmed) return undefined;
+
+  const clamp = (value: number) =>
+    Math.min(
+      CLAUDE_AUTO_COMPACT_WINDOW_MAX,
+      Math.max(CLAUDE_AUTO_COMPACT_WINDOW_MIN, Math.round(value)),
+    );
+
+  if (trimmed.endsWith("%")) {
+    const percent = Number(trimmed.slice(0, -1));
+    if (!Number.isFinite(percent) || percent <= 0) return undefined;
+    if (modelContextWindow === undefined || modelContextWindow <= 0) return undefined;
+    return clamp((percent / 100) * modelContextWindow);
+  }
+
+  const tokens = Number(trimmed);
+  // Not `?? fallback` at the call site: an unparseable value must not read as
+  // "the user configured nothing", because the caller's own default for that
+  // case is what keeps compaction armed on a 1M window.
+  if (!Number.isFinite(tokens) || tokens <= 0) return undefined;
+  return clamp(tokens);
+}
 
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
@@ -465,12 +517,29 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN),
     ).pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
+      // Recover to "use Claude's default" instead of failing this key, which
+      // would fail the whole document. `loadSettingsFromDisk` answers a failed
+      // `ServerSettings` decode by keeping DEFAULT_SERVER_SETTINGS and then
+      // writing them back on the next unrelated settings change - so one
+      // unreadable value here costs the user every provider path, every custom
+      // provider instance, `opencode.serverPassword`, and the local-model
+      // config, permanently. Measured, not inferred.
+      //
+      // That makes this the guard that lets the pattern above change at all: a
+      // value written by a NEWER build (a percentage) has to be survivable by
+      // an OLDER one, and a rollback or an upstream checkout is enough to make
+      // that happen. Strict validation still lives in `ClaudeSettingsPatch`,
+      // where a bad value fails only the update that introduced it and is
+      // reported to the user.
+      Schema.catchDecoding(() => Effect.succeed(Option.some(""))),
       Schema.annotateKey({
         title: "Auto-compact after",
         description:
-          "Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default.",
+          "Compact after 100,000 to 1,000,000 tokens, or a percentage of the model's context " +
+          "window such as 60%. A token count is capped at the model's own window. Leave empty " +
+          "to use Claude's default.",
         providerSettingsForm: {
-          placeholder: "e.g. 300000",
+          placeholder: "e.g. 60% or 300000",
           clearWhenEmpty: "omit",
         },
       }),

@@ -4,7 +4,11 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import {
+  type ContextWindowSnapshot,
+  deriveCompactionMarker,
+  formatContextWindowTokens,
+} from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { useAccountUsageRefresh } from "~/hooks/useAccountUsageRefresh";
 import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
@@ -16,7 +20,9 @@ import {
   type UsageWindowView,
   clampPct,
   computeWindowPace,
+  formatSnapshotAge,
   formatWindowReset,
+  segmentBoundariesBackground,
   fullnessArc,
   readingPct,
   windowArc,
@@ -134,6 +140,9 @@ function ContextBlock(props: {
   const pct = readingPct(usage.usedPercentage ?? 0);
   const level: Severity = vitalsLevel(pct);
   const hasMax = usage.maxTokens !== null;
+  // The denominator is the model's window, so the reading no longer climbs to
+  // 100% as compaction approaches. This marker is what carries that signal now.
+  const compaction = deriveCompactionMarker(usage);
   // Gated on EITHER half, not on hasMax: a provider that reports no window size
   // is exactly the case where naming the model matters most, and hanging the
   // name off the size's gate would drop it there.
@@ -164,12 +173,32 @@ function ContextBlock(props: {
               {formatContextWindowTokens(usage.maxTokens ?? null)}
             </span>
           </div>
-          <div className={cn("mt-2.5 h-1.5 w-full", TRACK_CLASS)}>
+          {/*
+            `relative` is load-bearing, and its absence is silent: an absolutely
+            positioned marker resolves against the nearest POSITIONED ancestor,
+            so without it the marker would lay itself out against the popover.
+            The overhang is inside the track's height rather than the pace
+            marker's `-top-/-bottom-[3px]` because TRACK_CLASS is
+            `overflow-hidden`, which would clip anything taller.
+          */}
+          <div className={cn("relative mt-2.5 h-1.5 w-full", TRACK_CLASS)}>
             <div
               className={cn("h-full rounded-full", SEVERITY_BG[level])}
               style={{ width: `${clampPct(pct)}%` }}
             />
+            {compaction ? (
+              <span
+                className="absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-sm bg-foreground/70"
+                style={{ left: `${clampPct(compaction.pct)}%` }}
+                aria-hidden="true"
+              />
+            ) : null}
           </div>
+          {compaction ? (
+            <div className="mt-1 font-mono text-[11px] text-muted-foreground/70">
+              {compaction.label}
+            </div>
+          ) : null}
         </>
       ) : (
         <div className="mt-1.5 font-mono text-xs text-muted-foreground">
@@ -198,10 +227,16 @@ function WindowRow(props: {
   windowMs: number | null;
   now: number;
   timestampFormat: TimestampFormat;
+  /** Unit boundaries to draw across the bar: 5 for the 5-hour, 7 for the 7-day. */
+  segmentCount?: number | undefined;
+  /** Trailing figure for rows whose headline is money rather than a percentage. */
+  detail?: string | undefined;
 }) {
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
   const level = windowSeverity(pace);
   const resetAt = formatWindowReset(props.window.resetsAt, props.now, props.timestampFormat);
+  const segments =
+    props.segmentCount === undefined ? undefined : segmentBoundariesBackground(props.segmentCount);
   return (
     <div className="border-t border-dashed border-border py-2.5 first:border-t-0">
       <div className="flex items-baseline gap-2">
@@ -217,6 +252,19 @@ function WindowRow(props: {
           className={cn("absolute inset-y-0 left-0 rounded-full", SEVERITY_BG[level])}
           style={{ width: `${clampPct(pace.usage)}%` }}
         />
+        {/*
+          Above the fill, not on the track. The fill is an opaque positioned
+          child, and a background painted on the track sits under it — so the
+          unit boundaries would vanish precisely as the bar filled up, which is
+          when they are worth reading.
+        */}
+        {segments ? (
+          <span
+            className="pointer-events-none absolute inset-0 rounded-full"
+            style={{ backgroundImage: segments }}
+            aria-hidden="true"
+          />
+        ) : null}
         {pace.projection !== null ? (
           <span
             className="absolute -top-[3px] -bottom-[3px] w-0.5 -translate-x-1/2 rounded-sm bg-foreground"
@@ -243,7 +291,16 @@ function WindowRow(props: {
           <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
           {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
         </span>
-        {resetAt !== null ? <span className="whitespace-nowrap">resets {resetAt}</span> : null}
+        {/*
+          `detail` before the reset time: a spend row's headline is its money
+          figure, and moving that row from a balance to a window would otherwise
+          drop "CAD 201.66 of CAD 200.00" from the panel entirely.
+        */}
+        {props.detail !== undefined ? (
+          <span className="whitespace-nowrap">{props.detail}</span>
+        ) : resetAt !== null ? (
+          <span className="whitespace-nowrap">resets {resetAt}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -256,47 +313,53 @@ function LimitsBlock(props: {
   refresh?: { run: () => void; pending: boolean } | undefined;
 }) {
   const { usage, now, timestampFormat, refresh } = props;
+  const age = formatSnapshotAge(usage.fetchedAt, now);
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Usage limits</span>
-        <span className="flex items-center gap-1.5">
-          {/*
-            Legend for the pace diff on each row's header line — deliberately not
-            extended to cover the reset text, which sits on the footer line and is
-            self-labelling ("resets 14:20").
-          */}
-          <span className="font-mono text-[11px] text-muted-foreground/60">pace</span>
-          {refresh ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    // The numbers here are polled, so what is on screen can be
-                    // minutes old at the moment you look at it — which is
-                    // exactly when you care. This refetches from the provider.
-                    onClick={refresh.run}
-                    disabled={refresh.pending}
-                    className={cn(
-                      "-my-0.5 rounded p-0.5 text-muted-foreground/60 transition-colors",
-                      refresh.pending ? "cursor-default" : "cursor-pointer hover:text-foreground",
-                    )}
-                    aria-label="Refresh usage from the provider"
-                  />
-                }
-              >
-                <RotateCwIcon
-                  className={cn("size-3", refresh.pending && "animate-spin")}
-                  aria-hidden
+        {/*
+          The `pace` legend that sat here is gone. Every row's footer already
+          reads "· pace 49%", so it labelled something self-labelling — and on a
+          window with no projection (Cursor's, which carry no fixed length) it
+          labelled nothing at all. Its space buys the refresh control a text
+          label, which is what makes the control findable: as a bare 12px icon
+          at 60% opacity beside a word, it read as decoration.
+
+          The age is the reason to press it, so it IS the label.
+        */}
+        {refresh ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  // The numbers here are polled, so what is on screen can be
+                  // minutes old at the moment you look at it — which is
+                  // exactly when you care. This refetches from the provider.
+                  onClick={refresh.run}
+                  disabled={refresh.pending}
+                  className={cn(
+                    "-mx-1 -my-0.5 flex items-center gap-1.5 rounded px-1 py-0.5 font-mono text-[11px] text-muted-foreground/70 transition-colors",
+                    refresh.pending
+                      ? "cursor-default"
+                      : "cursor-pointer hover:bg-muted hover:text-foreground",
+                  )}
+                  aria-label="Refresh usage from the provider"
                 />
-              </TooltipTrigger>
-              <TooltipPopup>
-                {refresh.pending ? "Refreshing…" : "Refresh usage from the provider"}
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-        </span>
+              }
+            >
+              {age ? <span>{age}</span> : null}
+              <RotateCwIcon
+                className={cn("size-3 shrink-0", refresh.pending && "animate-spin")}
+                aria-hidden
+              />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {refresh.pending ? "Refreshing…" : "Refresh usage from the provider"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       <div className="mt-1">
         {usage.fiveHour ? (
@@ -306,6 +369,7 @@ function LimitsBlock(props: {
             windowMs={FIVE_HOUR_MS}
             now={now}
             timestampFormat={timestampFormat}
+            segmentCount={5}
           />
         ) : null}
         {usage.sevenDay ? (
@@ -315,6 +379,18 @@ function LimitsBlock(props: {
             windowMs={SEVEN_DAY_MS}
             now={now}
             timestampFormat={timestampFormat}
+            segmentCount={7}
+          />
+        ) : null}
+        {usage.extraUsage ? (
+          <WindowRow
+            label={usage.extraUsage.label}
+            window={usage.extraUsage}
+            windowMs={usage.extraUsage.windowMs}
+            now={now}
+            timestampFormat={timestampFormat}
+            segmentCount={usage.extraUsage.segmentCount}
+            detail={usage.extraUsage.detail}
           />
         ) : null}
         {usage.extraWindows.map((window) => (
@@ -590,6 +666,7 @@ export function VitalsDetail(props: {
   const hasWindows = Boolean(
     accountUsage?.fiveHour ||
     accountUsage?.sevenDay ||
+    accountUsage?.extraUsage ||
     accountUsage?.extraWindows.length ||
     accountUsage?.balances.length,
   );

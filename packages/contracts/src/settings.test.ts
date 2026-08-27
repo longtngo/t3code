@@ -8,6 +8,7 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   defaultEnabledForDriver,
+  resolveClaudeAutoCompactWindow,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -25,19 +26,49 @@ describe("ClaudeSettings auto-compaction", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");
   });
 
-  it.each(["100000", "300000", "1000000"])(
+  it.each(["100000", "300000", "1000000", "10%", "60%", "100%"])(
     "accepts a supported auto-compaction threshold: %s",
     (value) => {
       expect(decodeClaudeSettings({ autoCompactWindow: value }).autoCompactWindow).toBe(value);
     },
   );
 
-  it.each(["99999", "1000001", "300k", "invalid"])(
-    "rejects an unsupported auto-compaction threshold: %s",
+  it.each(["99999", "1000001", "300k", "invalid", "60", "0%", "101%", "%60"])(
+    "recovers to Claude's default rather than failing the document: %s",
     (value) => {
-      expect(() => decodeClaudeSettings({ autoCompactWindow: value })).toThrow();
+      // Deliberately NOT a throw. This schema decodes the whole settings file,
+      // and `loadSettingsFromDisk` answers a failure by keeping the defaults
+      // and writing them back on the next unrelated change — so one unreadable
+      // value here would cost every provider path, every custom instance and
+      // the local-model config, permanently.
+      //
+      // That containment is what lets the accepted set above change at all: a
+      // value a newer build writes (a percentage) has to be survivable by an
+      // older one, and a rollback is enough to make that happen.
+      expect(decodeClaudeSettings({ autoCompactWindow: value }).autoCompactWindow).toBe("");
     },
   );
+
+  it.each(["99999", "300k", "60", "0%", "101%"])(
+    "still rejects an unsupported threshold at the patch boundary: %s",
+    (value) => {
+      // Strict where it can report: a bad value fails only the update that
+      // introduced it, so it never reaches the file in the first place.
+      expect(() =>
+        decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: value } } }),
+      ).toThrow();
+    },
+  );
+
+  it("keeps the rest of the file when one provider value is unreadable", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        claudeAgent: { autoCompactWindow: "60", binaryPath: "/custom/claude" },
+      },
+    });
+    expect(decoded.providers.claudeAgent.autoCompactWindow).toBe("");
+    expect(decoded.providers.claudeAgent.binaryPath).toBe("/custom/claude");
+  });
 
   it("rejects an unsupported threshold at the settings patch boundary", () => {
     expect(() =>
@@ -561,5 +592,48 @@ describe("ClaudeSettingsPatch config directory", () => {
 
     expect(patch.providers?.claudeAgent?.configDirPath).toBe("~/.claude-personal");
     expect(patch.providers?.claudeAgent?.homePath).toBe("/x");
+  });
+});
+
+describe("resolveClaudeAutoCompactWindow", () => {
+  it("passes a token count through, clamped to Claude Code's accepted range", () => {
+    expect(resolveClaudeAutoCompactWindow("600000", 1_000_000)).toBe(600_000);
+    expect(resolveClaudeAutoCompactWindow("100000", 200_000)).toBe(100_000);
+  });
+
+  it("resolves a percentage against the selected model's window", () => {
+    expect(resolveClaudeAutoCompactWindow("60%", 1_000_000)).toBe(600_000);
+    expect(resolveClaudeAutoCompactWindow("100%", 200_000)).toBe(200_000);
+  });
+
+  it("clamps a percentage up to Claude Code's minimum instead of being discarded", () => {
+    // 30% of a 200k model is 60,000, under the CLI's own `.min(1e5)`. It
+    // validates this key with `.catch(void 0)`, which is a SILENT discard, and
+    // a discarded window leaves the source classified "auto" — the one state
+    // where the CLI refuses to compact at all.
+    expect(resolveClaudeAutoCompactWindow("30%", 200_000)).toBe(100_000);
+  });
+
+  it("clamps above Claude Code's maximum for the same reason", () => {
+    expect(resolveClaudeAutoCompactWindow("100%", 2_000_000)).toBe(1_000_000);
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(resolveClaudeAutoCompactWindow("", 1_000_000)).toBeUndefined();
+    expect(resolveClaudeAutoCompactWindow(undefined, 1_000_000)).toBeUndefined();
+    expect(resolveClaudeAutoCompactWindow("   ", 1_000_000)).toBeUndefined();
+  });
+
+  it("cannot resolve a percentage without a window, and does not guess one", () => {
+    expect(resolveClaudeAutoCompactWindow("60%", undefined)).toBeUndefined();
+    expect(resolveClaudeAutoCompactWindow("60%", 0)).toBeUndefined();
+  });
+
+  it("returns nothing for a value it cannot parse, so the caller's default runs", () => {
+    // The caller distinguishes this from a configured value: `Number("60%")` is
+    // NaN, and a truthiness check on the raw string would let an unresolvable
+    // setting suppress the 1M fallback and send no window at all.
+    expect(resolveClaudeAutoCompactWindow("nonsense", 1_000_000)).toBeUndefined();
+    expect(resolveClaudeAutoCompactWindow("-5", 1_000_000)).toBeUndefined();
   });
 });

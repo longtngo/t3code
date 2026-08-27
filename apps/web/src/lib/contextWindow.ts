@@ -90,8 +90,13 @@ export function deriveLatestContextWindowSnapshot(
       compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
       autoCompactThreshold: asFiniteNumber(payload?.autoCompactThreshold),
       // null, not undefined: NullableContextWindowUsage maps every optional
-      // contract field to `T | null`, and apps/mobile typechecks this file with
-      // exactOptionalPropertyTypes.
+      // contract field to `T | null`, and apps/web's own tsconfig sets
+      // exactOptionalPropertyTypes, so `T | undefined` fails to assign here.
+      //
+      // This comment previously credited apps/mobile. Mobile never imports this
+      // file — it drops `context-window.updated` unread at
+      // `apps/mobile/src/lib/threadActivity.ts` — and its tsconfig does not set
+      // that flag. The rule is real; the reason was not.
       autoCompactSource:
         typeof payload?.autoCompactSource === "string" ? payload.autoCompactSource : null,
       updatedAt: activity.createdAt,
@@ -115,4 +120,35 @@ export function formatContextWindowTokens(value: number | null): string {
     return `${Math.round(value / 1_000)}k`;
   }
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
+}
+
+/**
+ * Where the auto-compaction marker sits on the context bar, and what to call it.
+ *
+ * Gated on the source being PRESENT and not `"auto"`, not merely `!== "auto"`.
+ * Claude Code reports `"auto"` for the windows it refuses to compact, but
+ * `autocompactSource` is absent from the SDK's declared response type and
+ * survives only because the CLI's object carries an extra key — in live data
+ * only 18 of 49 threshold-bearing snapshots have it. A `!== "auto"` test
+ * therefore degrades OPEN, drawing "compacts at 967k" on a window that will
+ * never compact. Absent means unknown, and unknown draws nothing.
+ *
+ * The threshold is an absolute count (the compaction window less a fixed
+ * ~33,000-token reserve), not a fraction of anything, so it is labelled with
+ * the token figure rather than a percentage that would not move proportionally.
+ */
+export function deriveCompactionMarker(
+  usage: ContextWindowSnapshot,
+): { readonly pct: number; readonly label: string } | null {
+  const { autoCompactThreshold, autoCompactSource, maxTokens } = usage;
+  // `== null` covers both halves deliberately: the mapped type keeps each key
+  // OPTIONAL as well as nullable, so every one of these is `T | null | undefined`.
+  if (autoCompactSource == null || autoCompactSource === "auto") return null;
+  if (autoCompactThreshold == null || autoCompactThreshold <= 0) return null;
+  if (maxTokens == null || maxTokens <= 0) return null;
+  if (autoCompactThreshold >= maxTokens) return null;
+  return {
+    pct: (autoCompactThreshold / maxTokens) * 100,
+    label: `compacts at ${formatContextWindowTokens(autoCompactThreshold)}`,
+  };
 }
