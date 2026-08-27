@@ -45,6 +45,12 @@ context window, Claude Code does not compact on its own, so T3 Code fills in tha
 window for you and compaction starts at about 967,000 tokens. Anything you type in the field
 always takes priority.
 
+Because T3 Code passes this setting to Claude Code at the highest priority, the `/autocompact`
+command inside a conversation cannot override it, and neither can an `autoCompactWindow` value in
+your own Claude Code configuration file. Change it here instead. To switch automatic compaction
+off altogether, set `autoCompactEnabled` to `false` in your Claude Code settings file, which T3
+Code never overrides.
+
 On web and desktop, when you return to an older Claude thread with a large context, T3 Code
 offers to compact the conversation before you continue. You can also select **Compact context**
 from the context meter. On every client, you can enter `/compact` in the message composer, and

@@ -400,6 +400,15 @@ export type CodexSettings = typeof CodexSettings.Type;
 // Empty, or an integer from 100,000 to 1,000,000. Shared by the full
 // Claude settings schema and its patch so an out-of-range value fails at
 // the update that introduced it.
+//
+// The bounds mirror Claude Code's own validation of this key
+// (`.int().min(1e5).max(1e6).catch(undefined)`), which discards an
+// out-of-range value SILENTLY rather than reporting it - so a value this
+// pattern let through would simply stop having any effect. Keep the two in
+// step: widening here accepts values Claude Code drops, and narrowing here
+// rejects values it would honour. Note that values under 200,000 do work,
+// but disable Claude Code's precomputed-compaction path, which is keyed on
+// its own 200,000-token long-context boundary.
 const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
 
 export const ClaudeSettings = makeProviderSettingsSchema(
