@@ -38,8 +38,12 @@ the rest of your environment stay as they are.
 
 In Settings, open your Claude provider and set **Auto-compact after** to a token count between
 `100000` and `1000000`. For example, `300000` compacts the conversation into a summary once it
-reaches about 300,000 tokens, without changing the model's context window. Leave the field
-empty to keep Claude Code's default behavior.
+reaches about 300,000 tokens, without changing the model's context window.
+
+Leave the field empty to keep Claude Code's default behavior. On a model with a 1,000,000-token
+context window, Claude Code does not compact on its own, so T3 Code fills in that model's own
+window for you and compaction starts at about 967,000 tokens. Anything you type in the field
+always takes priority.
 
 On web and desktop, when you return to an older Claude thread with a large context, T3 Code
 offers to compact the conversation before you continue. You can also select **Compact context**

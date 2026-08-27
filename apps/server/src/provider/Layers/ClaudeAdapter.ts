@@ -4627,13 +4627,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "full-access": "bypassPermissions",
       };
       const permissionMode = runtimeModeToPermission[input.runtimeMode];
+      // Claude Code refuses to auto-compact at all when it classifies a context
+      // window as "auto", and every >=1M window it holds no model default for
+      // lands there - the trigger returns before it even counts tokens. Handing
+      // it the window we already resolved flips that to "settings" and arms
+      // compaction at min(window, 1M) - 33,000. Below 1M the CLI already
+      // resolves correctly, so staying quiet there leaves its own remote tuning
+      // (clientdata / experiment / model-default) in charge, which outranking
+      // it would silently suppress.
+      //
+      // Clamped because the CLI validates this key as `.max(1e6).catch(void 0)`:
+      // a larger window would be dropped without an error, back to no
+      // compaction at all.
+      const autoCompactWindow = claudeSettings.autoCompactWindow
+        ? Number(claudeSettings.autoCompactWindow)
+        : initialContextWindow !== undefined && initialContextWindow >= 1_000_000
+          ? Math.min(initialContextWindow, 1_000_000)
+          : undefined;
       const settings = {
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
-        ...(claudeSettings.autoCompactWindow
-          ? { autoCompactWindow: Number(claudeSettings.autoCompactWindow) }
-          : {}),
+        ...(autoCompactWindow ? { autoCompactWindow } : {}),
       };
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
       // The attachments dir grant lets the agent Read/copy pasted images at

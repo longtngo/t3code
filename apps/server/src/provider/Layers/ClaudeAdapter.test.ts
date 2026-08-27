@@ -488,6 +488,125 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  // `options.settings` is `string | Settings` on the SDK type, and only the
+  // object form is ever built here. Narrowing once keeps each assertion to the
+  // one field it is about.
+  const querySettings = (settings: string | Record<string, unknown> | undefined) =>
+    typeof settings === "object" && settings !== null ? settings : {};
+
+  it.effect("defaults the auto-compaction window to the model's own window at 1M", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "1m" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 1_000_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("defaults the auto-compaction window for a 1M model with no window option", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        // claude-opus-4-8 exposes no contextWindow option and is sent WITHOUT
+        // the [1m] suffix, so it reaches 1M through selectedClaudeContextWindow's
+        // hardcoded switch rather than through a descriptor. It is also the
+        // model behind most real threads, so a rule keyed on [1m] would miss it.
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-8",
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 1_000_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves the auto-compaction window to Claude below 1M", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(Object.hasOwn(settings, "autoCompactWindow"), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves the auto-compaction window to Claude when the window is unknown", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(Object.hasOwn(settings, "autoCompactWindow"), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("prefers a configured auto-compaction window over the 1M default", () => {
+    const harness = makeHarness({ claudeConfig: { autoCompactWindow: "300000" } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "1m" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(settings.autoCompactWindow, 300_000);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("forwards claude effort levels into query options", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -734,8 +853,13 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
+      // claude-opus-4-6 defaults to the 1M context window, so the auto-compact
+      // window rides along - Claude Code will not compact a 1M window on its
+      // own. The Haiku 4.5 case above is the same assertion on a 200k model,
+      // where the key is correctly absent.
       assert.deepEqual(createInput?.options.settings, {
         fastMode: true,
+        autoCompactWindow: 1_000_000,
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
