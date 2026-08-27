@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import {
+  FilePathString,
   NonNegativeInt,
   PositiveInt,
   TrimmedNonEmptyString,
@@ -8,14 +9,16 @@ import {
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
-const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
-const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
+// Linux's PATH_MAX, the largest of the three supported platforms. The former
+// 512 sat below all of them, so a file that exists could not be addressed.
+const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 4096;
+const PROJECT_READ_FILE_PATH_MAX_LENGTH = 4096;
 
 export const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 export type ProjectEntryKind = typeof ProjectEntryKind.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
+  cwd: FilePathString,
   // An empty query is a bounded browse: the index returns frecency-ordered
   // entries, which the file picker uses for its initial results.
   query: TrimmedString.check(Schema.isMaxLength(256)),
@@ -26,7 +29,7 @@ export const ProjectSearchEntriesInput = Schema.Struct({
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 
 export const ProjectEntry = Schema.Struct({
-  path: TrimmedNonEmptyString,
+  path: FilePathString,
   kind: ProjectEntryKind,
 });
 export type ProjectEntry = typeof ProjectEntry.Type;
@@ -38,7 +41,7 @@ export const ProjectSearchEntriesResult = Schema.Struct({
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
 export const ProjectSearchContentsInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
+  cwd: FilePathString,
   // Whitespace is significant in content queries (" foo", regex trailing
   // spaces), so the query is deliberately not trimmed on the wire.
   query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
@@ -56,7 +59,7 @@ export const ProjectContentMatchRange = Schema.Struct({
 export type ProjectContentMatchRange = typeof ProjectContentMatchRange.Type;
 
 export const ProjectContentMatch = Schema.Struct({
-  path: TrimmedNonEmptyString,
+  path: FilePathString,
   lineNumber: PositiveInt,
   lineContent: Schema.String,
   matchRanges: Schema.Array(ProjectContentMatchRange),
@@ -71,7 +74,7 @@ export const ProjectSearchContentsResult = Schema.Struct({
 export type ProjectSearchContentsResult = typeof ProjectSearchContentsResult.Type;
 
 export const ProjectListEntriesInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
+  cwd: FilePathString,
 });
 export type ProjectListEntriesInput = typeof ProjectListEntriesInput.Type;
 
@@ -192,8 +195,8 @@ export class ProjectListEntriesError extends Schema.TaggedErrorClass<ProjectList
 }
 
 export const ProjectReadFileInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  cwd: FilePathString,
+  relativePath: FilePathString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
 
@@ -204,7 +207,7 @@ export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
  * so the cwd-relative read keeps its exact semantics.
  */
 export const ProjectReadTrustedFileInput = Schema.Struct({
-  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  path: FilePathString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });
 export type ProjectReadTrustedFileInput = typeof ProjectReadTrustedFileInput.Type;
 
@@ -215,7 +218,7 @@ export const ProjectRenderMarkdownHtmlResult = Schema.Struct({
 export type ProjectRenderMarkdownHtmlResult = typeof ProjectRenderMarkdownHtmlResult.Type;
 
 export const ProjectReadFileResult = Schema.Struct({
-  relativePath: TrimmedNonEmptyString,
+  relativePath: FilePathString,
   contents: Schema.String,
   byteLength: NonNegativeInt,
   truncated: Schema.Boolean,
@@ -290,14 +293,14 @@ export class ProjectReadFileError extends Schema.TaggedErrorClass<ProjectReadFil
 }
 
 export const ProjectWriteFileInput = Schema.Struct({
-  cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
+  cwd: FilePathString,
+  relativePath: FilePathString.check(Schema.isMaxLength(PROJECT_WRITE_FILE_PATH_MAX_LENGTH)),
   contents: Schema.String,
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 
 export const ProjectWriteFileResult = Schema.Struct({
-  relativePath: TrimmedNonEmptyString,
+  relativePath: FilePathString,
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 

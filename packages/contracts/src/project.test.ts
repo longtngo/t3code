@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ProjectReadFileError,
+  ProjectReadFileInput,
+  ProjectReadTrustedFileInput,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchEntriesError,
@@ -105,5 +107,37 @@ describe("project RPC errors", () => {
     expect(writeError.message).toBe("Legacy project write failure.");
     expect(writeError.relativePath).toBeUndefined();
     expect(writeError.failure).toBeUndefined();
+  });
+});
+
+describe("project file path inputs", () => {
+  const decodeRead = Schema.decodeUnknownSync(ProjectReadFileInput);
+  const decodeTrusted = Schema.decodeUnknownSync(ProjectReadTrustedFileInput);
+
+  it("reads the file that was asked for, spaces and all", () => {
+    // The failure this guards is silent: a trimming schema turns a request for
+    // `notes ` into a request for `notes`, and on POSIX both can exist, so the
+    // read succeeds against the wrong file instead of failing.
+    expect(decodeTrusted({ path: "/tmp/notes " }).path).toBe("/tmp/notes ");
+    expect(decodeRead({ cwd: "/w", relativePath: "docs/notes " }).relativePath).toBe("docs/notes ");
+  });
+
+  it("keeps a leading space, which is a name too", () => {
+    // Relative, deliberately: `.trim()` only touches the ends of the whole
+    // string, so an absolute path with an interior space would pass under the
+    // old schema too and assert nothing.
+    expect(decodeRead({ cwd: "/w", relativePath: " leading/notes.md" }).relativePath).toBe(
+      " leading/notes.md",
+    );
+  });
+
+  it("accepts a path past the old 512-character ceiling", () => {
+    const deep = `/${Array.from({ length: 120 }, (_, index) => `segment-${String(index)}`).join("/")}`;
+    expect(deep.length).toBeGreaterThan(512);
+    expect(decodeTrusted({ path: deep }).path).toBe(deep);
+  });
+
+  it("still refuses an empty path", () => {
+    expect(() => decodeTrusted({ path: "" })).toThrow();
   });
 });

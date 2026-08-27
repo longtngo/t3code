@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { FilePathString, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-const FILESYSTEM_PATH_MAX_LENGTH = 512;
+/**
+ * Bound on a path on the wire. 512 sat below every supported platform's real
+ * limit — a nested `node_modules` path clears it easily — so a folder that
+ * exists could not be listed. 4096 is Linux's PATH_MAX, the largest of the
+ * three, and still a bound.
+ */
+const FILESYSTEM_PATH_MAX_LENGTH = 4096;
 
 /**
  * Cap on a single directory listing. Path autocomplete never approaches it; the
@@ -12,8 +18,8 @@ const FILESYSTEM_PATH_MAX_LENGTH = 512;
 export const FILESYSTEM_BROWSE_MAX_ENTRIES = 10_000;
 
 export const FilesystemBrowseInput = Schema.Struct({
-  partialPath: TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
-  cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH))),
+  partialPath: FilePathString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
+  cwd: Schema.optional(FilePathString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH))),
   /**
    * Return files and other non-directory entries too, each tagged with its
    * `kind`. Path autocomplete wants folders only; the directory viewer wants
@@ -45,7 +51,7 @@ export const FilesystemBrowseEntry = Schema.Struct({
 export type FilesystemBrowseEntry = typeof FilesystemBrowseEntry.Type;
 
 export const FilesystemBrowseResult = Schema.Struct({
-  parentPath: TrimmedNonEmptyString,
+  parentPath: FilePathString,
   entries: Schema.Array(FilesystemBrowseEntry),
   /**
    * The server confirming it understood `includeFiles`, so every entry carries

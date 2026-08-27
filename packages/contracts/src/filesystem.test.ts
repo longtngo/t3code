@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { FilesystemBrowseError } from "./filesystem.ts";
+import { FilesystemBrowseError, FilesystemBrowseInput } from "./filesystem.ts";
 
 describe("FilesystemBrowseError", () => {
   it("derives a stable message from browse context while retaining the cause", () => {
@@ -29,5 +29,28 @@ describe("FilesystemBrowseError", () => {
     expect(error.message).toBe("Legacy filesystem browse failure.");
     expect(error.partialPath).toBeUndefined();
     expect(error.failure).toBeUndefined();
+  });
+});
+
+describe("FilesystemBrowseInput", () => {
+  const decode = Schema.decodeUnknownSync(FilesystemBrowseInput);
+
+  it("carries a path with significant trailing whitespace verbatim", () => {
+    // `FilesystemBrowseEntry.name` is untrimmed because a folder may be named
+    // `reports ` — so the request that lists it has to survive the round trip.
+    // A trimming schema does not reject this, it browses a DIFFERENT directory.
+    expect(decode({ partialPath: "/tmp/reports /" }).partialPath).toBe("/tmp/reports /");
+    expect(decode({ partialPath: "/tmp/x", cwd: "/w/ s " }).cwd).toBe("/w/ s ");
+  });
+
+  it("accepts a path longer than any single platform's PATH_MAX floor", () => {
+    // A nested node_modules path clears 512 characters without trying.
+    const deep = `/${Array.from({ length: 120 }, (_, index) => `segment-${String(index)}`).join("/")}`;
+    expect(deep.length).toBeGreaterThan(512);
+    expect(decode({ partialPath: deep }).partialPath).toBe(deep);
+  });
+
+  it("still refuses an empty path", () => {
+    expect(() => decode({ partialPath: "" })).toThrow();
   });
 });

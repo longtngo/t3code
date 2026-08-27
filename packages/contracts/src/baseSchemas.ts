@@ -14,6 +14,27 @@ export const TrimmedString = Schema.String.pipe(
 );
 export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 
+/**
+ * A filesystem path carried exactly as given.
+ *
+ * Deliberately not `TrimmedNonEmptyString`: that one TRANSFORMS rather than
+ * rejects, so a request to read `notes ` silently becomes a request to read
+ * `notes`. On POSIX both can exist side by side, which makes the failure a
+ * quiet read of the WRONG file rather than an error anyone would notice.
+ * `FilesystemBrowseEntry.name` already says such names are real and is
+ * untrimmed for the same reason; these are the request and result fields that
+ * have to agree with it.
+ *
+ * Whitespace a human typed by accident is trimmed where it is typed — see
+ * `viewerPath.ts` — which is the only layer that knows it was a typo and not
+ * a name.
+ *
+ * Error payloads keep `TrimmedNonEmptyString`: they echo a path back as
+ * diagnostic prose, nothing addresses a file with them, and a tidy message is
+ * worth more there than a faithful one.
+ */
+export const FilePathString = Schema.String.check(Schema.isNonEmpty());
+
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
