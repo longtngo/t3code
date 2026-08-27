@@ -37,8 +37,11 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-22: 47 entries, all ids unique, monotonic, max 48. Id `34` is intentionally burned (an
+Verified 2026-08-27: 49 entries, all ids unique, monotonic, max 50. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
+
+The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
+object literals. A probe grepping for `id:` matches only the doc comment and reports nothing.
 
 A migration's **test** carries this too. Upstream's `041_AuthSessionClientConnection.test.ts`
 ran `toMigrationInclusive: 40` then `41` — its filename numbers — and found no columns, which is
@@ -309,6 +312,41 @@ Do not extract that condition into a shared `boolean` predicate. At the **native
 `revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native site
 stops compiling. (At the in-DOM site the test is only defensive — a `MenuItem` child is a
 `ReactNode`.) A shared _object_ would narrow correctly, if the pairing ever needs enforcing.
+
+## Probing an invariant that asserts ABSENCE
+
+Half the entries above say a thing must **not** be there. Three of them were probed with
+`grep -c` on the 22nd reconcile and every one came back non-zero against a correct tree: each
+hit was the **FORK comment recording the deletion**, sitting exactly where the deleted code used
+to be. That is by design — the comments are what stop a later reconcile restoring the code — and
+it makes a bare count useless in the one direction it is most often reached for.
+
+Read the matched **lines**, never the count. A count of 0 is also not proof: it can mean the
+comment is gone too, which is its own finding.
+
+The same sitting also produced a probe that matched nothing because it assumed the wrong file
+shape (see invariant 1). Both failures are the same mistake — trusting a grep's number without
+looking at what it matched.
+
+## Checking a gate's test-count delta without re-running the baseline
+
+A merge changes the total, and the cheap instinct is to net additions against deletions and see
+if the number looks right. That is precisely what let four destroyed tests through a green gate
+earlier this month: removed and added cancelled out.
+
+Re-running the full gate on the pre-merge tree costs ~20 minutes. A **per-file test-declaration
+diff** costs seconds, needs no worktree and no install, and answers the question that actually
+matters — _did any file lose tests?_
+
+```python
+# for every test file at <trunk>, count `it(` / `test(` declarations at the trunk ref and in
+# the merged worktree; print every file whose count DROPPED
+```
+
+On the 22nd reconcile: 18,268 -> 18,297 declarations over 2,526 files, and every file that lost
+any was upstream's own deletion plus one deduplicated case. No fork test file lost a declaration.
+The residual gap against the executed-test delta is `.each` expansion, which the regex cannot
+see — so treat the totals as approximate and the **per-file drop list** as the real result.
 
 ## The sweep's fourth and fifth directions
 
