@@ -176,7 +176,14 @@ function ContextBlock(props: {
           {formatContextWindowTokens(usage.usedTokens)} tokens
         </div>
       )}
-      {usage.compactsAutomatically ? (
+      {/*
+        `compactsAutomatically` is the provider's auto-compaction SETTING, which
+        is on by default even where the trigger is disabled - so on its own it
+        makes this sentence false. Claude Code reports `autoCompactSource:
+        "auto"` for exactly the windows it refuses to compact. Providers that
+        send no source keep the old behaviour.
+      */}
+      {usage.compactsAutomatically && usage.autoCompactSource !== "auto" ? (
         <div className="mt-2 text-pretty text-[11px] font-medium text-muted-foreground/70">
           {props.providerDisplayName ?? "It"} automatically compacts its context when needed.
         </div>

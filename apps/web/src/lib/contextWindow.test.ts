@@ -27,6 +27,10 @@ describe("contextWindow", () => {
         maxTokens: 258_000,
         compactsAutomatically: true,
         autoCompactThreshold: 200_000,
+        // Carried because it is the only field that says whether compaction is
+        // ARMED - the provider reports "auto" for the windows it refuses to
+        // compact, while the two fields above read the same either way.
+        autoCompactSource: "settings",
       }),
     ]);
 
@@ -36,6 +40,18 @@ describe("contextWindow", () => {
     expect(snapshot?.maxTokens).toBe(258_000);
     expect(snapshot?.compactsAutomatically).toBe(true);
     expect(snapshot?.autoCompactThreshold).toBe(200_000);
+    expect(snapshot?.autoCompactSource).toBe("settings");
+  });
+
+  it("leaves the auto-compaction source unset when the provider omits it", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 14_000,
+        compactsAutomatically: true,
+      }),
+    ]);
+
+    expect(snapshot?.autoCompactSource).toBeNull();
   });
 
   it("ignores malformed payloads", () => {

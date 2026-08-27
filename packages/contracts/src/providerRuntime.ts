@@ -331,6 +331,16 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
   autoCompactThreshold: Schema.optional(PositiveInt),
+  /**
+   * How the provider resolved the window it auto-compacts against.
+   *
+   * Claude Code reports `"auto"` when it has no window it trusts, and that is
+   * exactly the case where it refuses to compact at all - so this, not
+   * {@link compactsAutomatically}, is what says whether compaction is armed.
+   * `autoCompactThreshold` is computed without consulting it and reads the same
+   * either way.
+   */
+  autoCompactSource: Schema.optional(Schema.String),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 

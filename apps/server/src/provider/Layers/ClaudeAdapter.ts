@@ -694,6 +694,7 @@ function makeClaudeTokenUsageSnapshot(input: {
   readonly lastUsedTokens?: number;
   readonly compactsAutomatically?: boolean;
   readonly autoCompactThreshold?: number;
+  readonly autoCompactSource?: string;
 }): ThreadTokenUsageSnapshot | undefined {
   const activeTokens = finiteNonNegativeInteger(input.activeTokens);
   if (activeTokens === undefined || activeTokens <= 0) {
@@ -720,6 +721,9 @@ function makeClaudeTokenUsageSnapshot(input: {
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(input.compactsAutomatically !== undefined
       ? { compactsAutomatically: input.compactsAutomatically }
+      : {}),
+    ...(input.autoCompactSource !== undefined
+      ? { autoCompactSource: input.autoCompactSource }
       : {}),
     ...(input.autoCompactThreshold !== undefined
       ? { autoCompactThreshold: input.autoCompactThreshold }
@@ -759,12 +763,21 @@ function normalizeClaudeContextUsageApiSnapshot(
   totalProcessedTokens?: number,
 ): ThreadTokenUsageSnapshot | undefined {
   const autoCompactThreshold = finitePositiveInteger(value.autoCompactThreshold);
+  // Claude Code reports how it resolved the auto-compaction window, but the key
+  // is absent from the SDK's response type, so it needs reading off the raw
+  // object. It is the only field here that says whether compaction is actually
+  // armed: `isAutoCompactEnabled` is the user's setting, and
+  // `autoCompactThreshold` is computed without consulting the source at all.
+  const rawSource = (value as { readonly autocompactSource?: unknown }).autocompactSource;
+  const autoCompactSource =
+    typeof rawSource === "string" && rawSource.length > 0 ? rawSource : undefined;
   return makeClaudeTokenUsageSnapshot({
     activeTokens: value.totalTokens,
     contextWindow: value.maxTokens,
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
     compactsAutomatically: value.isAutoCompactEnabled,
     ...(autoCompactThreshold !== undefined ? { autoCompactThreshold } : {}),
+    ...(autoCompactSource !== undefined ? { autoCompactSource } : {}),
   });
 }
 

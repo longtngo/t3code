@@ -89,6 +89,11 @@ export function deriveLatestContextWindowSnapshot(
       durationMs: asFiniteNumber(payload?.durationMs),
       compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
       autoCompactThreshold: asFiniteNumber(payload?.autoCompactThreshold),
+      // null, not undefined: NullableContextWindowUsage maps every optional
+      // contract field to `T | null`, and apps/mobile typechecks this file with
+      // exactOptionalPropertyTypes.
+      autoCompactSource:
+        typeof payload?.autoCompactSource === "string" ? payload.autoCompactSource : null,
       updatedAt: activity.createdAt,
     };
   }

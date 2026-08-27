@@ -46,6 +46,56 @@ const sample: HostMetricsSample = {
   gpu: { pct: 44 },
 };
 
+const COMPACT_SENTENCE = "automatically compacts its context when needed";
+
+const compactionHost = { sample, streaming: true, enabled: true, onToggle: () => {} };
+
+function renderCompactionNote(overrides: Partial<ContextWindowSnapshot>): string {
+  return renderToStaticMarkup(
+    <VitalsDetail
+      context={{ ...emptyContext, compactsAutomatically: true, ...overrides }}
+      accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
+      host={compactionHost}
+      now={0}
+      timestampFormat="24-hour"
+      providerDisplayName="Claude"
+    />,
+  );
+}
+
+describe("VitalsDetail auto-compaction note", () => {
+  it("stays hidden when the provider resolved the window as auto", () => {
+    // "auto" is exactly the case where Claude Code refuses to compact, so the
+    // sentence would be a lie. The inverted case below is what proves this
+    // assertion can fail - an absence check that never renders the string for
+    // some unrelated reason would pass either way.
+    expect(renderCompactionNote({ autoCompactSource: "auto" })).not.toContain(COMPACT_SENTENCE);
+  });
+
+  it("shows once the provider resolved a real window", () => {
+    expect(renderCompactionNote({ autoCompactSource: "settings" })).toContain(COMPACT_SENTENCE);
+  });
+
+  it("shows for a provider that reports no source at all", () => {
+    expect(renderCompactionNote({})).toContain(COMPACT_SENTENCE);
+  });
+
+  it("stays hidden when the provider does not auto-compact", () => {
+    expect(
+      renderToStaticMarkup(
+        <VitalsDetail
+          context={{ ...emptyContext, compactsAutomatically: false }}
+          accountUsage={{ fiveHour: null, sevenDay: null, extraWindows: [], balances: [] }}
+          host={compactionHost}
+          now={0}
+          timestampFormat="24-hour"
+          providerDisplayName="Claude"
+        />,
+      ),
+    ).not.toContain(COMPACT_SENTENCE);
+  });
+});
+
 describe("VitalsGaugeIcon", () => {
   const NO_ARCS = {
     context: { pct: null, level: null },
