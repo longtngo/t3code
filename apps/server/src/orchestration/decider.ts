@@ -1384,6 +1384,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.message.withdraw": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      // Idempotent on a message that is already gone: the adapter half of a
+      // withdraw can succeed and the command be retried, and a retry that
+      // rejects would report failure for work that landed.
+      if (!message) {
+        return [];
+      }
+      if (message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.messageId}' on thread '${command.threadId}' is not a user message.`,
+        });
+      }
+      // Nothing here checks that the provider had not already been handed the
+      // turn, because this decider cannot know: the queue is the adapter's.
+      // The withdraw RPC releases the adapter's entry first and only dispatches
+      // this command when that release actually happened.
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-withdrawn",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.proposed-plan.upsert": {
       yield* requireThread({
         readModel,

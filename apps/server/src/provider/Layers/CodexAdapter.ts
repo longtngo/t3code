@@ -2130,6 +2130,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     hasSession,
     stopAll,
     refreshAccountUsage: refreshAccountUsageNow,
+    // Codex's app-server owns its queue; nothing is held on this side.
+    withdrawQueuedTurn: () => Effect.succeed(false),
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },

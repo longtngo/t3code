@@ -93,6 +93,7 @@ import {
   type ComposerSubmissionIntent,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
+import { partitionHeldMessages } from "./chat/heldMessages.logic";
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -134,6 +135,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { useQueuedMessageRecall } from "../hooks/useQueuedMessageRecall";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -2877,15 +2879,97 @@ function ChatViewContent(props: ChatViewProps) {
     deliveredOutboxTurns,
     queuedOutboxTurns,
   ]);
+  // Settled state of the open thread, resolved exactly like the sidebar
+  // partition (same shell, same capability gate, same PR auto-settle input)
+  // so the banner and the sidebar row never disagree.
+  const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  /**
+   * The message the provider is holding behind the running turn. Derived from
+   * the shell because `latestUserMessageAt` lives only there, not on the
+   * thread detail.
+   *
+   * Scans the SERVER messages, not the rendered timeline: the timeline appends
+   * optimistic and offline-outbox bubbles, so a message still sitting in the
+   * outbox would otherwise take the label from the one the provider is
+   * actually holding.
+   */
+  const waitingUserMessageIds = useMemo(
+    () =>
+      activeThreadShell === null
+        ? EMPTY_WAITING_MESSAGE_IDS
+        : waitingUserMessageIdsOf(activeThreadShell, displayServerMessages),
+    [activeThreadShell, displayServerMessages],
+  );
+  /**
+   * What the queued strip shows, and what the transcript therefore does not.
+   *
+   * Server messages plus the optimistic bubbles only — never the offline
+   * outbox, which is a different queue with a different reason for waiting.
+   * The optimistic half matters: a message sent a moment ago is not in the
+   * server list yet, and without it the bubble would render in the transcript
+   * and then jump into the strip when the echo landed.
+   */
+  const heldMessageIds = useMemo(() => {
+    if (activeThreadShell === null || optimisticUserMessages.length === 0) {
+      return waitingUserMessageIds;
+    }
+    return waitingUserMessageIdsOf(activeThreadShell, [
+      ...displayServerMessages,
+      ...optimisticUserMessages,
+    ]);
+  }, [activeThreadShell, displayServerMessages, optimisticUserMessages, waitingUserMessageIds]);
+  // Held messages leave the transcript and render in the queued strip instead.
+  // `activeThread.messages` is deliberately untouched by this: the optimistic
+  // bubble retires when its id appears there, so filtering the source would
+  // strand the bubble on screen forever rather than move it.
+  const heldPartition = useMemo(
+    () => partitionHeldMessages(timelineMessages, heldMessageIds),
+    [heldMessageIds, timelineMessages],
+  );
+  const heldMessages = heldPartition.held;
+  /**
+   * The held messages, shaped for the strip. An attachment count rather than
+   * the attachments themselves: the strip says what is waiting, it is not a
+   * second renderer for images the transcript already knows how to draw.
+   */
+  const queuedComposerMessages = useMemo(
+    () =>
+      heldMessages.map((message) => ({
+        id: message.id,
+        text: message.text,
+        attachmentCount: message.attachments?.length ?? 0,
+      })),
+    [heldMessages],
+  );
+  /**
+   * Whether the adapter actually holding this queue can give a turn back.
+   *
+   * Keyed on the live session's instance, not the composer's current
+   * selection: the queue belongs to the adapter the running turn is bound to,
+   * and changing the picker mid-turn does not move it.
+   */
+  const queuedRecallSupported =
+    providerStatuses.find(
+      (status) => status.instanceId === activeThread?.session?.providerInstanceId,
+    )?.supportsQueuedMessageRecall === true;
+  const queuedMessageRecall = useQueuedMessageRecall(activeThreadEnvironmentId, activeThreadId);
+  const recallQueuedMessage = useCallback(
+    async (messageId: string) => {
+      const message = queuedComposerMessages.find((entry) => entry.id === messageId);
+      if (!message) return null;
+      return await queuedMessageRecall.run({ id: message.id, text: message.text });
+    },
+    [queuedComposerMessages, queuedMessageRecall],
+  );
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
-        timelineMessages,
+        heldPartition.transcript,
         activeThread?.proposedPlans ?? [],
         workLogEntries,
         turnPlans,
       ),
-    [activeThread?.proposedPlans, timelineMessages, turnPlans, workLogEntries],
+    [activeThread?.proposedPlans, heldPartition.transcript, turnPlans, workLogEntries],
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
@@ -4590,27 +4674,7 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeThreadBranch, activeWorktreePath, envMode, gitStatusQuery.data?.refName, isServerThread],
   );
-  // Settled state of the open thread, resolved exactly like the sidebar
-  // partition (same shell, same capability gate, same PR auto-settle input)
-  // so the banner and the sidebar row never disagree.
-  const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
-  /**
-   * The message the provider is holding behind the running turn. Derived from
-   * the shell because `latestUserMessageAt` lives only there, not on the
-   * thread detail.
-   *
-   * Scans the SERVER messages, not the rendered timeline: the timeline appends
-   * optimistic and offline-outbox bubbles, so a message still sitting in the
-   * outbox would otherwise take the label from the one the provider is
-   * actually holding.
-   */
-  const waitingUserMessageIds = useMemo(
-    () =>
-      activeThreadShell === null
-        ? EMPTY_WAITING_MESSAGE_IDS
-        : waitingUserMessageIdsOf(activeThreadShell, displayServerMessages),
-    [activeThreadShell, displayServerMessages],
-  );
+
   const activeComposerTasksProgress =
     activeLatestTurn !== null && !latestTurnSettled
       ? (activeThreadShell?.planProgress ?? null)
@@ -7608,6 +7672,11 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             externalDrawerAttached={externalComposerDrawerAttached}
+                            queuedMessages={queuedComposerMessages}
+                            {...(queuedRecallSupported
+                              ? { onRecallQueuedMessage: recallQueuedMessage }
+                              : {})}
+                            recallPendingMessageId={queuedMessageRecall.pendingId}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}

@@ -1763,6 +1763,9 @@ export function makeOpenCodeAdapter(
       stopAll,
       // OpenCode has no account-usage concept; on-demand refresh is a no-op.
       refreshAccountUsage: () => Effect.void,
+      // OpenCode's own server queues into the busy session, so the turn is
+      // already gone by the time it is queued.
+      withdrawQueuedTurn: () => Effect.succeed(false),
       get streamEvents() {
         return Stream.fromQueue(runtimeEvents);
       },

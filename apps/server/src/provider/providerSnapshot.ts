@@ -56,6 +56,7 @@ export interface ServerProviderPresentation {
   readonly displayName: string;
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
+  readonly supportsQueuedMessageRecall?: boolean;
   readonly requiresNewThreadForModelChange?: boolean;
 }
 
@@ -235,6 +236,9 @@ export function buildServerProvider(input: {
     ...(input.presentation.badgeLabel ? { badgeLabel: input.presentation.badgeLabel } : {}),
     ...(typeof input.presentation.showInteractionModeToggle === "boolean"
       ? { showInteractionModeToggle: input.presentation.showInteractionModeToggle }
+      : {}),
+    ...(typeof input.presentation.supportsQueuedMessageRecall === "boolean"
+      ? { supportsQueuedMessageRecall: input.presentation.supportsQueuedMessageRecall }
       : {}),
     ...(typeof input.presentation.requiresNewThreadForModelChange === "boolean"
       ? { requiresNewThreadForModelChange: input.presentation.requiresNewThreadForModelChange }

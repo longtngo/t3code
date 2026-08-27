@@ -139,6 +139,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.attachmentsUpload]: AuthOrchestrationOperateScope,
   [WS_METHODS.getResourceQueue]: AuthOrchestrationReadScope,
   // Operate, not read: it spends the provider's rate limit on demand.
+  // Operate, not read: it mutates a thread and cancels queued provider work.
+  [WS_METHODS.threadWithdrawQueuedMessage]: AuthOrchestrationOperateScope,
   [WS_METHODS.accountUsageRefresh]: AuthOrchestrationOperateScope,
   [WS_METHODS.pushSubscriptionsRegister]: AuthOrchestrationOperateScope,
   [WS_METHODS.llmServeLoad]: AuthOrchestrationOperateScope,

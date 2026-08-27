@@ -899,6 +899,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent":
+        case "thread.message-withdrawn":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -1033,6 +1034,24 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          return;
+        }
+
+        case "thread.message-withdrawn": {
+          yield* projectionThreadMessageRepository.deleteByMessageId({
+            messageId: event.payload.messageId,
+          });
+          // Same sweep revert uses: hand over the paths the surviving rows still
+          // reference and let everything else in the thread's attachment
+          // directory go. Without it a recalled image would sit on disk forever,
+          // referenced by nothing.
+          const remainingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          attachmentSideEffects.prunedThreadRelativePaths.set(
+            event.payload.threadId,
+            collectThreadAttachmentRelativePaths(event.payload.threadId, remainingRows),
+          );
           return;
         }
 

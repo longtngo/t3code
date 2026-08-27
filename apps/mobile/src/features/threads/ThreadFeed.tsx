@@ -112,8 +112,6 @@ import { useAssetUrl, useAssetUrlState } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
 
-const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
-
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   includeOrderedLists: Platform.OS === "android",
 } as const;
@@ -161,11 +159,6 @@ export interface ThreadFeedProps {
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
-  /**
-   * The user message the provider is holding behind the running turn. Every
-   * provider already holds a mid-turn send; none of them says so.
-   */
-  readonly waitingUserMessageIds?: ReadonlySet<string>;
   readonly submittedMessageId: MessageId | null;
   readonly contentInsetEndAdjustment: SharedValue<number>;
   readonly contentTopInset?: number;
@@ -986,7 +979,6 @@ function renderFeedEntry(
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
-    readonly waitingUserMessageIds: ReadonlySet<string>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
@@ -1107,11 +1099,6 @@ function renderFeedEntry(
               );
             })}
           </View>
-          {props.waitingUserMessageIds.has(message.id) ? (
-            <Text className="mt-1 font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
-              Waiting for the current turn to finish
-            </Text>
-          ) : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
@@ -2031,7 +2018,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         expandedWorkRows,
         terminalAssistantMessageIds,
         unsettledTurnId,
-        waitingUserMessageIds: props.waitingUserMessageIds ?? EMPTY_WAITING_MESSAGE_IDS,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
@@ -2052,7 +2038,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       terminalAssistantMessageIds,
       unsettledTurnId,
-      props.waitingUserMessageIds,
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,

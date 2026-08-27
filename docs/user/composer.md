@@ -32,18 +32,29 @@ You do not have to wait for the agent to finish before sending. A message sent
 mid-turn is held and delivered when the current turn ends; it is never mixed
 into the answer already in progress.
 
-A held message shows a "Waiting for the current turn to finish" note beneath it,
-so it is clear the agent has not seen it yet. If you send several, each one is
-marked. The note clears on its own when the turn ends and the message is
-delivered.
+A held message does not appear in the conversation. It waits in a strip just
+above the message box, showing a count of what is queued; opening the strip
+lists each message in the order it will be sent. It joins the conversation when
+it is actually delivered, so what you see in the thread is what the agent has
+seen.
+
+### Taking a message back
+
+In the strip, a held message can be pulled back into the message box for
+editing. Its text is added to whatever you have already typed rather than
+replacing it. Attachments are not brought back and need attaching again.
+
+If the agent has already been handed the message, taking it back is no longer
+possible and T3 Code says so. The message is a normal message from then on.
+
+Recall is available with Claude. Other providers pass a held message straight
+through to the agent rather than holding it in a queue T3 Code can reach into,
+so their held messages are listed but cannot be taken back.
 
 Stopping the agent discards anything still waiting, so use Stop when you want to
-change direction rather than add to what was asked.
-
-The note appears for Claude and Codex, which start a distinct turn for the held
-message. Other providers hold the message the same way, but continue under the
-turn that was already running, so there is no separate turn for the note to
-track.
+change direction rather than add to what was asked. A discarded message stays
+visible in the conversation as something you typed; it is simply never
+answered.
 
 ## Hiding the workspace row
 

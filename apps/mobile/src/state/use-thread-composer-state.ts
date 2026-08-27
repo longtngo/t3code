@@ -1,6 +1,11 @@
 import { waitingUserMessageIds as waitingUserMessageIdsOf } from "@t3tools/client-runtime/state/thread-settled";
 
 const EMPTY_WAITING_MESSAGE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_HELD_MESSAGES: ReadonlyArray<{
+  readonly id: string;
+  readonly text: string;
+  readonly attachmentCount: number;
+}> = [];
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert } from "react-native";
@@ -111,21 +116,6 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
-  const selectedThreadFeed = useMemo(() => {
-    if (!selectedThreadDetail) {
-      return [];
-    }
-    const submissions = selectedThreadKey
-      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
-      : [];
-    return buildThreadFeed(selectedThreadDetail, {
-      localMessages: submissions.flatMap((submission) =>
-        submission.status === "interrupted"
-          ? []
-          : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
-      ),
-    });
-  }, [feedbackSubmissionsByThreadKey, selectedThreadDetail, selectedThreadKey]);
   /**
    * The user message held behind the running turn. Derived from the shell —
    * `latestUserMessageAt` lives only there, not on the thread detail the feed
@@ -138,6 +128,55 @@ export function useThreadComposerState() {
         : waitingUserMessageIdsOf(selectedThreadShell, selectedThreadDetail?.messages ?? []),
     [selectedThreadDetail, selectedThreadShell],
   );
+  const selectedThreadFeed = useMemo(() => {
+    if (!selectedThreadDetail) {
+      return [];
+    }
+    const submissions = selectedThreadKey
+      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
+      : [];
+    // Held messages are drawn in the strip above the composer instead, so the
+    // feed never shows a message the thread has not sent yet. The detail object
+    // itself is left intact - only what is rendered changes.
+    const detail =
+      waitingUserMessageIds.size === 0
+        ? selectedThreadDetail
+        : {
+            ...selectedThreadDetail,
+            messages: selectedThreadDetail.messages.filter(
+              (message) => !(message.role === "user" && waitingUserMessageIds.has(message.id)),
+            ),
+          };
+    return buildThreadFeed(detail, {
+      localMessages: submissions.flatMap((submission) =>
+        submission.status === "interrupted"
+          ? []
+          : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
+      ),
+    });
+  }, [
+    feedbackSubmissionsByThreadKey,
+    selectedThreadDetail,
+    selectedThreadKey,
+    waitingUserMessageIds,
+  ]);
+
+  /**
+   * The held messages, shaped for the strip. An attachment count rather than the
+   * attachments themselves: the strip says what is waiting, it does not render
+   * images the feed already knows how to draw.
+   */
+  const heldMessages = useMemo(() => {
+    if (waitingUserMessageIds.size === 0) return EMPTY_HELD_MESSAGES;
+    const held = (selectedThreadDetail?.messages ?? [])
+      .filter((message) => message.role === "user" && waitingUserMessageIds.has(message.id))
+      .map((message) => ({
+        id: message.id,
+        text: message.text,
+        attachmentCount: message.attachments?.length ?? 0,
+      }));
+    return held.length === 0 ? EMPTY_HELD_MESSAGES : held;
+  }, [selectedThreadDetail, waitingUserMessageIds]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -411,6 +450,7 @@ export function useThreadComposerState() {
   return {
     selectedThreadFeed,
     waitingUserMessageIds,
+    heldMessages,
     selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,

@@ -1301,6 +1301,9 @@ export function makeCursorAdapter(
       hasSession,
       stopAll,
       refreshAccountUsage: refreshAccountUsageNow,
+      // Cursor holds a mid-turn prompt on the ACP semaphore, below any
+      // handle this adapter owns, so there is nothing here to take back.
+      withdrawQueuedTurn: () => Effect.succeed(false),
       streamEvents,
     } satisfies CursorAdapterShape;
   });

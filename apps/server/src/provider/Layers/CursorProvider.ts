@@ -54,6 +54,8 @@ const CURSOR_PRESENTATION = {
   displayName: "Cursor",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
+  // Its adapter has no queue to take a turn back out of.
+  supportsQueuedMessageRecall: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

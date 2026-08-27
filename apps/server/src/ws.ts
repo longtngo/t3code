@@ -1897,6 +1897,46 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.threadWithdrawQueuedMessage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadWithdrawQueuedMessage,
+            Effect.gen(function* () {
+              // The order here is the whole safety property. The adapter gives
+              // the queued turn up first, and only a release that actually
+              // happened removes the message. Reversed, losing the race would
+              // delete a message the provider is already running.
+              const withdrawn = yield* providerService
+                .withdrawQueuedTurn({ threadId: input.threadId, messageId: input.messageId })
+                .pipe(
+                  // Every failure means the same thing to the caller: the turn
+                  // was not taken back. Answering "not withdrawn" leaves the
+                  // message a message, which is the safe direction to be wrong in.
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to withdraw queued provider turn", {
+                      threadId: input.threadId,
+                      messageId: input.messageId,
+                      cause,
+                    }).pipe(Effect.as(false)),
+                  ),
+                );
+              if (!withdrawn) {
+                return { withdrawn: false };
+              }
+              // Not caught, unlike the half above: the turn is already gone from
+              // the queue, so a swallowed failure here would leave a message that
+              // reads as pending and will never be sent. A broken event store is
+              // a defect, and every other command dispatch treats it as one.
+              yield* dispatchNormalizedCommand({
+                type: "thread.message.withdraw",
+                commandId: CommandId.make(`withdraw-queued-message:${input.messageId}`),
+                threadId: input.threadId,
+                messageId: input.messageId,
+                createdAt: yield* nowIso,
+              }).pipe(Effect.orDie);
+              return { withdrawn: true };
+            }),
+            { "rpc.aggregate": "provider" },
+          ),
         [WS_METHODS.accountUsageRefresh]: (_input) =>
           observeRpcEffect(
             WS_METHODS.accountUsageRefresh,

@@ -170,6 +170,10 @@ export const ServerProvider = Schema.Struct({
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
+  // Whether a message this provider is holding behind a running turn can be
+  // taken back before it is sent. Absent means no, so a client talking to an
+  // older server offers recall nowhere rather than offering it everywhere.
+  supportsQueuedMessageRecall: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,

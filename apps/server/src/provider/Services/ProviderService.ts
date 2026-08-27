@@ -24,6 +24,7 @@ import type {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
   ThreadId,
+  MessageId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -52,6 +53,18 @@ export interface ProviderServiceShape {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
+   * Take a queued turn back out of its adapter's queue before it is started.
+   *
+   * Answers whether the turn was actually removed. `false` covers both "the
+   * provider already has it" and "this adapter does not queue at all", because
+   * callers treat them the same: the message stays a message.
+   */
+  readonly withdrawQueuedTurn: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * Interrupt a running provider turn.

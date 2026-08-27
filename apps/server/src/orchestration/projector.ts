@@ -20,6 +20,7 @@ import {
   ThreadForkedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMessageWithdrawnPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -639,6 +640,32 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.message-withdrawn":
+      return decodeForEvent(
+        ThreadMessageWithdrawnPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const messages = thread.messages.filter((entry) => entry.id !== payload.messageId);
+          if (messages.length === thread.messages.length) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages,
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
 
     case "thread.session-set":
       return Effect.gen(function* () {

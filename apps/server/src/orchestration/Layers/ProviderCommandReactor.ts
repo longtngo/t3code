@@ -870,6 +870,7 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId?: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -921,6 +922,7 @@ const make = Effect.gen(function* () {
 
     return {
       threadId: input.threadId,
+      ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
@@ -1312,6 +1314,9 @@ const make = Effect.gen(function* () {
 
     const turnStartInput = {
       threadId: event.payload.threadId,
+      // Carried so an adapter that queues this turn can be asked to give it
+      // back by the same id the client uses.
+      messageId: event.payload.messageId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined

@@ -41,6 +41,8 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
+  // Its adapter has no queue to take a turn back out of.
+  supportsQueuedMessageRecall: false,
 } as const;
 
 export interface CodexAppServerProviderSnapshot {

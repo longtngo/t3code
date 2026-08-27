@@ -496,6 +496,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       rollbackThread,
       stopAll,
       refreshAccountUsage: () => Effect.void,
+      withdrawQueuedTurn: () => Effect.succeed(false),
       streamEvents: Stream.fromQueue(runtimeEvents),
     };
 

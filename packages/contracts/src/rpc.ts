@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { MessageId, ThreadId } from "./baseSchemas.ts";
 import {
   AttachmentUploadError,
   AttachmentUploadInput,
@@ -322,6 +323,9 @@ export const WS_METHODS = {
   llmServeLoad: "llmServe.load",
   llmServeUnload: "llmServe.unload",
 
+  // Held messages — take a queued turn back before the provider is handed it
+  threadWithdrawQueuedMessage: "thread.withdrawQueuedMessage",
+
   // Account usage — refetch from the provider, bypassing the poll's own cadence
   accountUsageRefresh: "account.usage.refresh",
 
@@ -512,6 +516,25 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
  * fails is logged and skipped rather than failing the call, because one broken
  * provider must not deny the others their refresh.
  */
+/**
+ * Take back a message that is waiting for the running turn to finish, so the user can
+ * edit it before it is sent.
+ *
+ * The two halves have to happen in this order and on this side of the wire: the adapter
+ * releases its queued turn first, and only a release that actually happened removes the
+ * message. Handing clients the removal on its own would let one delete a message that
+ * is already on its way to the provider.
+ *
+ * `withdrawn: false` is the honest answer for a message the provider already has, and
+ * for every adapter that cannot withdraw at all. It is not an error: losing the race is
+ * a normal outcome and the message simply stays a normal message.
+ */
+export const WsThreadWithdrawQueuedMessageRpc = Rpc.make(WS_METHODS.threadWithdrawQueuedMessage, {
+  payload: Schema.Struct({ threadId: ThreadId, messageId: MessageId }),
+  success: Schema.Struct({ withdrawn: Schema.Boolean }),
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ ok: Schema.Literal(true) }),
@@ -1341,6 +1364,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
+  WsThreadWithdrawQueuedMessageRpc,
   WsAccountUsageRefreshRpc,
   WsGetResourceQueueRpc,
   WsPushSubscriptionsRegisterRpc,

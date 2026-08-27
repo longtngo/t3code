@@ -35,6 +35,8 @@ const GROK_PRESENTATION = {
   displayName: "Grok",
   badgeLabel: "Early Access",
   showInteractionModeToggle: false,
+  // Its adapter has no queue to take a turn back out of.
+  supportsQueuedMessageRecall: false,
   requiresNewThreadForModelChange: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({

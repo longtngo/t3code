@@ -214,6 +214,9 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   );
 
   const refreshAccountUsage = vi.fn((): Effect.Effect<void, ProviderAdapterError> => Effect.void);
+  const withdrawQueuedTurn = vi.fn(
+    (): Effect.Effect<boolean, ProviderAdapterError> => Effect.succeed(false),
+  );
 
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
@@ -233,6 +236,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     refreshAccountUsage,
+    withdrawQueuedTurn,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },

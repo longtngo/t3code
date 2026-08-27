@@ -394,6 +394,23 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.message-withdrawn": {
+      const messages = Arr.filter(thread.messages, (entry) => entry.id !== event.payload.messageId);
+      if (messages.length === thread.messages.length) {
+        return { kind: "unchanged" };
+      }
+      // Only the message goes. A withdrawn message never had a turn, so there
+      // is no turn state, no checkpoint, and no assistant reply to unwind.
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
       // Leaving the "running" session status is the turn-end signal: settle a

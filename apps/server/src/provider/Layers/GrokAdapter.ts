@@ -1485,6 +1485,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       stopAll,
       // Grok has no account-usage concept; on-demand refresh is a no-op.
       refreshAccountUsage: () => Effect.void,
+      // Grok holds a mid-turn prompt on the ACP semaphore, below any
+      // handle this adapter owns, so there is nothing here to take back.
+      withdrawQueuedTurn: () => Effect.succeed(false),
       streamEvents,
     } satisfies GrokAdapterShape;
   });

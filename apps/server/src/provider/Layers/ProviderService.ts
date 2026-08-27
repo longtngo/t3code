@@ -917,6 +917,33 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const withdrawQueuedTurn: ProviderServiceMethod<"withdrawQueuedTurn"> = Effect.fn(
+    "withdrawQueuedTurn",
+  )(function* (input) {
+    // Deliberately no recovery: the queue this withdraws from lives in the
+    // adapter's memory, so a thread whose session is gone has nothing queued.
+    // Recovering one here would start a session in order to tell the caller
+    // that it holds nothing.
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.withdrawQueuedTurn",
+      allowRecovery: false,
+    });
+    if (!routed.isActive) {
+      return false;
+    }
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "withdraw-queued-turn",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": input.threadId,
+      "provider.message_id": input.messageId,
+    });
+    return yield* routed.adapter.withdrawQueuedTurn({
+      threadId: routed.threadId,
+      messageId: input.messageId,
+    });
+  });
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1294,6 +1321,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    withdrawQueuedTurn,
     respondToRequest,
     respondToUserInput,
     stopSession,

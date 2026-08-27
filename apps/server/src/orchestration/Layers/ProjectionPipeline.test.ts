@@ -392,6 +392,79 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-withdrawn-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("deletes the row for a withdrawn message", () =>
+      Effect.gen(function* () {
+        // The strip hides a held message from the transcript in memory; without
+        // this delete the row survives a reload and comes back as a prompt the
+        // agent never answered.
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-08-27T00:00:00.000Z";
+        const threadId = ThreadId.make("thread-withdrawn");
+
+        for (const messageId of ["message-withdrawn", "message-kept"]) {
+          yield* eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.make(`evt-sent-${messageId}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: now,
+            commandId: CommandId.make(`cmd-sent-${messageId}`),
+            causationEventId: null,
+            correlationId: CommandId.make(`cmd-sent-${messageId}`),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make(messageId),
+              role: "user",
+              text: messageId,
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+
+        yield* eventStore.append({
+          type: "thread.message-withdrawn",
+          eventId: EventId.make("evt-withdrawn"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-withdrawn"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-withdrawn"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("message-withdrawn"),
+            updatedAt: now,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{
+          readonly messageId: string;
+        }>`
+            SELECT message_id AS "messageId"
+            FROM projection_thread_messages
+            WHERE thread_id = ${threadId}
+          `;
+        assert.deepEqual(
+          rows.map((row) => row.messageId),
+          ["message-kept"],
+        );
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-safe-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

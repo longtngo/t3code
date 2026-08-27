@@ -1223,6 +1223,23 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Take a user message back before the provider ever saw it.
+ *
+ * Server-only, and deliberately not in `ClientOrchestrationCommand`: the row
+ * may only be removed once the adapter has actually released the queued turn,
+ * so the sole entry point is the RPC that performs the withdraw first. A
+ * client able to dispatch this directly could delete a message that is about
+ * to run.
+ */
+const ThreadMessageWithdrawCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.withdraw"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadProposedPlanUpsertCommand = Schema.Struct({
   type: Schema.Literal("thread.proposed-plan.upsert"),
   commandId: CommandId,
@@ -1278,6 +1295,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadMessageWithdrawCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
@@ -1312,6 +1330,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.interaction-mode-set",
   "thread.forked",
   "thread.message-sent",
+  "thread.message-withdrawn",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1512,6 +1531,12 @@ export const ThreadMessageSentPayload = Schema.Struct({
   streaming: Schema.Boolean,
   providerMessageId: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadMessageWithdrawnPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
   updatedAt: IsoDateTime,
 });
 
@@ -1720,6 +1745,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
     payload: ThreadMessageSentPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.message-withdrawn"),
+    payload: ThreadMessageWithdrawnPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

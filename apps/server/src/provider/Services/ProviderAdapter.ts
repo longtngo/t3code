@@ -18,6 +18,7 @@ import type {
   ProviderSessionStartInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  MessageId,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
@@ -139,6 +140,23 @@ export interface ProviderAdapterShape<TError> {
    * this as a no-op.
    */
   readonly refreshAccountUsage: () => Effect.Effect<void, TError>;
+
+  /**
+   * Take a queued turn back out of this adapter's queue before it is sent.
+   *
+   * Resolves `true` when the turn was still queued and has been removed, and
+   * `false` when it was not — already sent, never queued, or this provider does
+   * not queue at all. Deliberately not an error: "you were too late" is a
+   * normal outcome of a race the user cannot see, and the caller reports it the
+   * same way whichever reason applies.
+   *
+   * Adapters that hand every turn straight to the provider implement this as a
+   * constant `false`.
+   */
+  readonly withdrawQueuedTurn: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<boolean, TError>;
 
   /**
    * Canonical runtime event stream emitted by this adapter.

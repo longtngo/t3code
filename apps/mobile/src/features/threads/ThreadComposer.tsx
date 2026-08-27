@@ -68,6 +68,7 @@ import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
+import { ComposerHeldMessages, type ComposerHeldMessage } from "./ComposerHeldMessages";
 import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
@@ -107,6 +108,18 @@ export interface ThreadComposerProps {
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
+  /**
+   * Messages the thread is holding until the running turn finishes. Rendered in
+   * the strip above the composer instead of the feed, so this is where the user
+   * sees them at all.
+   */
+  readonly heldMessages: ReadonlyArray<ComposerHeldMessage>;
+  /**
+   * Null when the thread's provider cannot take a queued message back, which
+   * hides the recall action rather than offering one that would fail.
+   */
+  readonly onRecallHeldMessage: ((messageId: string) => void) | null;
+  readonly recallPendingMessageId: string | null;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
@@ -753,6 +766,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             onPress={props.onReconnectEnvironment}
           />
         ) : null}
+
+        <ComposerHeldMessages
+          messages={props.heldMessages}
+          onRecall={props.onRecallHeldMessage}
+          recallPendingId={props.recallPendingMessageId}
+        />
 
         <ComposerSurface
           isDarkMode={isDarkMode}

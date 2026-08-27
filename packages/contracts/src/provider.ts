@@ -4,6 +4,7 @@ import {
   ApprovalRequestId,
   EventId,
   IsoDateTime,
+  MessageId,
   ProviderItemId,
   ThreadId,
   TurnId,
@@ -92,6 +93,14 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
+  /**
+   * The orchestration message this turn was started for.
+   *
+   * Optional because it only reaches adapters that queue: an adapter holding a
+   * turn behind a running one needs a name for it that the client also knows,
+   * or a queued message can be listed but never withdrawn.
+   */
+  messageId: Schema.optional(MessageId),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),

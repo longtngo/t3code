@@ -46,6 +46,63 @@ const baseThread: OrchestrationThread = {
 };
 
 describe("applyThreadDetailEvent", () => {
+  describe("thread.message-withdrawn", () => {
+    const withHeldMessage: OrchestrationThread = {
+      ...baseThread,
+      messages: [
+        {
+          id: MessageId.make("msg-held"),
+          role: "user",
+          text: "held text",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:01.000Z",
+        },
+        {
+          id: MessageId.make("msg-kept"),
+          role: "user",
+          text: "kept text",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:02.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+      ],
+    };
+
+    const withdrawEvent = (messageId: string) =>
+      ({
+        ...baseEventFields,
+        sequence: 2,
+        occurredAt: "2026-04-01T02:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-withdrawn",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make(messageId),
+          updatedAt: "2026-04-01T02:00:00.000Z",
+        },
+      }) as any;
+
+    it("drops only the withdrawn message", () => {
+      const result = applyThreadDetailEvent(withHeldMessage, withdrawEvent("msg-held"));
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages.map((entry) => entry.id)).toEqual(["msg-kept"]);
+      expect(result.thread.updatedAt).toBe("2026-04-01T02:00:00.000Z");
+    });
+
+    it("returns unchanged when the message is not present", () => {
+      // The detail window is paged, so an event can name a message this client
+      // never loaded. Rebuilding the thread for that would churn every consumer
+      // of it for nothing.
+      const result = applyThreadDetailEvent(withHeldMessage, withdrawEvent("msg-absent"));
+      expect(result.kind).toBe("unchanged");
+    });
+  });
+
   describe("project events", () => {
     it("returns unchanged for project.created", () => {
       const result = applyThreadDetailEvent(baseThread, {

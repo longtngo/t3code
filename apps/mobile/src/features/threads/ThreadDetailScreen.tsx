@@ -80,6 +80,9 @@ import {
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
+import { appendRecalledPrompt } from "@t3tools/client-runtime/state/held-messages";
+import { useHeldMessageRecall } from "../../state/use-held-message-recall";
+import type { ComposerHeldMessage } from "./ComposerHeldMessages";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
@@ -88,7 +91,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
-  readonly waitingUserMessageIds: ReadonlySet<string>;
+  readonly heldMessages: ReadonlyArray<ComposerHeldMessage>;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
@@ -217,6 +220,30 @@ const USER_INPUT_TOGGLE_TIMING = {
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const insets = useSafeAreaInsets();
+  const heldMessageRecall = useHeldMessageRecall(props.environmentId, props.selectedThread.id);
+  /**
+   * Whether the adapter actually holding this queue can give a turn back. Keyed
+   * on the live session's instance: the queue belongs to the adapter the running
+   * turn is bound to, not to whatever the picker currently shows.
+   */
+  const heldRecallSupported =
+    (props.serverConfig?.providers ?? []).find(
+      (provider) => provider.instanceId === props.selectedThread.session?.providerInstanceId,
+    )?.supportsQueuedMessageRecall === true;
+  const { draftMessage, onChangeDraftMessage } = props;
+  const recallHeldMessage = useCallback(
+    (messageId: string) => {
+      const message = props.heldMessages.find((entry) => entry.id === messageId);
+      if (!message) return;
+      void heldMessageRecall.run({ id: message.id, text: message.text }).then((recalled) => {
+        if (recalled === null) return;
+        // Appends: the draft is not cleared until the send lands, and the user
+        // may well have started typing the next thing already.
+        onChangeDraftMessage(appendRecalledPrompt(draftMessage, recalled));
+      });
+    },
+    [draftMessage, heldMessageRecall, onChangeDraftMessage, props.heldMessages],
+  );
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const liveKeyboardHeight = useKeyboardState((state) => state.height);
   // Android can swallow the IME hide callbacks when the app is backgrounded
@@ -613,7 +640,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
-            waitingUserMessageIds={props.waitingUserMessageIds}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}
@@ -754,6 +780,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
                 queueCount={props.selectedThreadQueueCount}
+                heldMessages={props.heldMessages}
+                onRecallHeldMessage={heldRecallSupported ? recallHeldMessage : null}
+                recallPendingMessageId={heldMessageRecall.pendingId}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}
                 bottomInset={composerBottomInset}

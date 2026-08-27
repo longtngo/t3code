@@ -43,6 +43,7 @@ const fakeCodexAdapter: CodexAdapter.CodexAdapterShape = {
   uploadFeedback: vi.fn(),
   stopAll: vi.fn(),
   refreshAccountUsage: vi.fn(),
+  withdrawQueuedTurn: vi.fn(() => Effect.succeed(false)),
   streamEvents: Stream.empty,
 };
 
@@ -61,6 +62,7 @@ const fakeClaudeAdapter: ClaudeAdapter.ClaudeAdapterShape = {
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
   refreshAccountUsage: vi.fn(),
+  withdrawQueuedTurn: vi.fn(() => Effect.succeed(false)),
   streamEvents: Stream.empty,
 };
 
@@ -79,6 +81,7 @@ const fakeOpenCodeAdapter: OpenCodeAdapter.OpenCodeAdapterShape = {
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
   refreshAccountUsage: vi.fn(),
+  withdrawQueuedTurn: vi.fn(() => Effect.succeed(false)),
   streamEvents: Stream.empty,
 };
 
@@ -97,6 +100,7 @@ const fakeCursorAdapter: CursorAdapter.CursorAdapterShape = {
   rollbackThread: vi.fn(),
   stopAll: vi.fn(),
   refreshAccountUsage: vi.fn(),
+  withdrawQueuedTurn: vi.fn(() => Effect.succeed(false)),
   streamEvents: Stream.empty,
 };
 

@@ -14,6 +14,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  MessageId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -1139,6 +1140,133 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(String(completed.turnId), String(turn.turnId));
         assert.equal(completed.payload.state, "completed");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("withdraws a queued turn, and refuses one that is not queued", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // First send opens the turn; the second and third queue behind it.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-running"),
+        input: "running",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-queued-1"),
+        input: "queued one",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-queued-2"),
+        input: "queued two",
+        attachments: [],
+      });
+
+      const withdrawnQueued = yield* adapter.withdrawQueuedTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-queued-1"),
+      });
+      // The running turn is not in the queue at all, so it cannot be taken back.
+      const withdrawnRunning = yield* adapter.withdrawQueuedTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-running"),
+      });
+      // Withdrawing the same message twice must not report success twice.
+      const withdrawnAgain = yield* adapter.withdrawQueuedTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-queued-1"),
+      });
+
+      assert.equal(withdrawnQueued, true);
+      assert.equal(withdrawnRunning, false);
+      assert.equal(withdrawnAgain, false);
+
+      // The survivor drains when the running turn completes, and a drained turn
+      // is no longer withdrawable — that boundary is the whole race this
+      // guards, and it is observable without reaching into the queue.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        num_turns: 1,
+        session_id: "sdk-session-1",
+        uuid: "result-real",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const withdrawnAfterDrain = yield* adapter.withdrawQueuedTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-queued-2"),
+      });
+      assert.equal(withdrawnAfterDrain, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("refuses to withdraw a queued turn once it has drained", () => {
+    // A turn that has left the queue is on its way to the provider, so
+    // reporting it withdrawn would be a lie the user acts on.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-running"),
+        input: "running",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-draining"),
+        input: "drains next",
+        attachments: [],
+      });
+
+      // Complete the running turn to start the drain, then try to withdraw the
+      // entry it is mid-way through starting.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        num_turns: 1,
+        session_id: "sdk-session-1",
+        uuid: "result-real",
+      } as unknown as SDKMessage);
+
+      // One yield is enough for the drain to complete in this harness, where
+      // startTurnNow does no I/O.
+      yield* Effect.yieldNow;
+      const withdrawn = yield* adapter.withdrawQueuedTurn({
+        threadId: session.threadId,
+        messageId: MessageId.make("message-draining"),
+      });
+
+      assert.equal(withdrawn, false);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

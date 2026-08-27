@@ -49,6 +49,11 @@ export const DeleteProjectionThreadMessagesInput = Schema.Struct({
 });
 export type DeleteProjectionThreadMessagesInput = typeof DeleteProjectionThreadMessagesInput.Type;
 
+export const DeleteProjectionThreadMessageInput = Schema.Struct({
+  messageId: MessageId,
+});
+export type DeleteProjectionThreadMessageInput = typeof DeleteProjectionThreadMessageInput.Type;
+
 /**
  * ProjectionThreadMessageRepositoryShape - Service API for projected thread messages.
  */
@@ -83,6 +88,16 @@ export interface ProjectionThreadMessageRepositoryShape {
    */
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadMessagesInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Delete one projected thread message.
+   *
+   * Used when a message is withdrawn before the provider ran it, so the row
+   * goes away rather than lingering as a prompt nothing ever answered.
+   */
+  readonly deleteByMessageId: (
+    input: DeleteProjectionThreadMessageInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

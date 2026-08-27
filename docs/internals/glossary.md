@@ -39,6 +39,14 @@ The main durable unit of conversation and workspace history. In [the orchestrati
 
 A single user-to-assistant work cycle inside a thread. It starts with user input and ends when the session leaves `running` status, which [projector.ts][4] treats as the authoritative completion signal (`settledTurnStateForSessionStatus`). Checkpoint and diff work may settle afterward without changing when the turn ended. See [the contracts][1] and [ProviderRuntimeIngestion.ts][5].
 
+#### Held message
+
+A user message sent while a turn is running, which the provider adapter queues rather than delivering. Clients derive the set with `waitingUserMessageIds` in [threadSettled.ts][28] — every user message created after the running turn advanced — and render it in a strip above the composer instead of in the transcript, so the thread shows only what the agent has actually seen. A held message can be withdrawn before it is sent; see [Withdraw](#withdraw).
+
+#### Withdraw
+
+Taking a held message back out of an adapter's queue. `ProviderAdapter.withdrawQueuedTurn` answers whether the turn was actually removed, and only a release that happened dispatches the server-only `thread.message.withdraw` command that deletes the message. Adapters that do not queue answer `false` and advertise `supportsQueuedMessageRecall: false`, which is what hides recall in the UI.
+
 #### Activity
 
 A user-visible log item attached to a thread. In [the contracts][1], activities cover important non-message events like approvals, tool actions, and failures. They are projected into thread state in [projector.ts][4].
@@ -203,3 +211,4 @@ A turn that settled while background work was still running, as opposed to one t
 [25]: ../../apps/web/src/lib/notifier.ts
 [26]: ../../apps/server/src/push/WebPushRelay.ts
 [27]: ../../packages/contracts/src/settings.ts
+[28]: ../../packages/client-runtime/src/state/threadSettled.ts

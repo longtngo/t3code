@@ -99,6 +99,10 @@
       "types": "./src/state/projectGrouping.ts",
       "default": "./src/state/projectGrouping.ts"
     },
+    "./state/held-messages": {
+      "types": "./src/state/heldMessages.ts",
+      "default": "./src/state/heldMessages.ts"
+    },
     "./state/host-metrics": {
       "types": "./src/state/hostMetrics.ts",
       "default": "./src/state/hostMetrics.ts"

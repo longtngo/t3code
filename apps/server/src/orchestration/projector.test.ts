@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -1145,6 +1146,117 @@ describe("orchestration projector", () => {
  * "completed". The SQL projection and the client reducer both record
  * "interrupted" for the same turn.
  */
+describe("orchestration projector withdrawn messages", () => {
+  const createdAt = "2026-08-27T00:00:00.000Z";
+  const sentAt = "2026-08-27T00:00:01.000Z";
+  const withdrawnAt = "2026-08-27T00:00:02.000Z";
+
+  const seed = Effect.fn("seedWithdrawModel")(function* () {
+    const afterProject = yield* projectEvent(
+      createEmptyReadModel(createdAt),
+      makeEvent({
+        sequence: 1,
+        type: "project.created",
+        aggregateKind: "project",
+        aggregateId: "project-1",
+        occurredAt: createdAt,
+        commandId: "cmd-project",
+        payload: {
+          projectId: "project-1",
+          title: "demo",
+          workspaceRoot: "/tmp/demo",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      }),
+    );
+    const afterThread = yield* projectEvent(
+      afterProject,
+      makeEvent({
+        sequence: 2,
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: createdAt,
+        commandId: "cmd-thread",
+        payload: {
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "demo",
+          modelSelection: {
+            provider: ProviderDriverKind.make("claude"),
+            model: "opus",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      }),
+    );
+    return yield* projectEvent(
+      afterThread,
+      makeEvent({
+        sequence: 3,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: sentAt,
+        commandId: "cmd-message",
+        payload: {
+          threadId: "thread-1",
+          messageId: "user:msg-1",
+          role: "user",
+          text: "held text",
+          turnId: null,
+          streaming: false,
+          createdAt: sentAt,
+          updatedAt: sentAt,
+        },
+      }),
+    );
+  });
+
+  const withdraw = (model: OrchestrationReadModel, messageId: string) =>
+    projectEvent(
+      model,
+      makeEvent({
+        sequence: 4,
+        type: "thread.message-withdrawn",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: withdrawnAt,
+        commandId: "cmd-withdraw",
+        payload: { threadId: "thread-1", messageId, updatedAt: withdrawnAt },
+      }),
+    );
+
+  effectIt.effect("removes the withdrawn message from the thread", () =>
+    Effect.gen(function* () {
+      const seeded = yield* seed();
+      expect(seeded.threads[0]?.messages.map((entry) => entry.id)).toEqual(["user:msg-1"]);
+
+      const after = yield* withdraw(seeded, "user:msg-1");
+      expect(after.threads[0]?.messages).toEqual([]);
+      expect(after.threads[0]?.updatedAt).toBe(withdrawnAt);
+    }),
+  );
+
+  effectIt.effect("leaves the thread alone when the message is already gone", () =>
+    Effect.gen(function* () {
+      // The withdraw command is idempotent, so a replayed event must not stamp a
+      // new updatedAt on a thread nothing changed in.
+      const seeded = yield* seed();
+      const after = yield* withdraw(seeded, "user:msg-absent");
+      expect(after.threads[0]?.messages.map((entry) => entry.id)).toEqual(["user:msg-1"]);
+      expect(after.threads[0]?.updatedAt).toBe(seeded.threads[0]?.updatedAt);
+    }),
+  );
+});
+
 describe("orchestration projector turn state", () => {
   const CREATED = "2026-02-23T08:00:00.000Z";
   const STARTED = "2026-02-23T08:00:05.000Z";

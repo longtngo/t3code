@@ -71,6 +71,12 @@ import {
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import {
+  ComposerQueuedBadge,
+  ComposerQueuedDrawer,
+  type ComposerQueuedMessage,
+} from "./ComposerQueuedMessages";
+import { appendRecalledPrompt } from "@t3tools/client-runtime/state/held-messages";
+import {
   ComposerTasksBadge,
   ComposerTasksDrawer,
   type ComposerTaskStep,
@@ -569,6 +575,9 @@ export interface ChatComposerHandle {
 // Props
 // --------------------------------------------------------------------------
 
+/** Unreachable: the recall control only renders when a handler exists. */
+const NO_RECALL = (_messageId: string): void => {};
+
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
@@ -601,6 +610,20 @@ export interface ChatComposerProps {
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
   externalDrawerAttached: boolean;
+
+  /**
+   * Messages the thread is holding until the running turn finishes. Rendered in
+   * the queued strip instead of the transcript, so this is where the user sees
+   * them at all.
+   */
+  queuedMessages: ReadonlyArray<ComposerQueuedMessage>;
+  /**
+   * Absent when the thread's provider cannot take a queued message back, which
+   * hides the recall action rather than offering one that would fail.
+   */
+  onRecallQueuedMessage?: ((messageId: string) => Promise<string | null>) | undefined;
+  recallPendingMessageId?: string | null | undefined;
+
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -703,6 +726,9 @@ export interface ChatComposerProps {
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const {
+    queuedMessages,
+    onRecallQueuedMessage,
+    recallPendingMessageId,
     composerDraftTarget,
     environmentId,
     attachmentUploadsCapabilityKnown,
@@ -1111,6 +1137,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
+  const [isQueuedDrawerOpen, setIsQueuedDrawerOpen] = useState(false);
   const [dismissedTasksTurnId, setDismissedTasksTurnId] = useState<TurnId | null>(null);
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
@@ -2598,6 +2625,65 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsTasksDrawerOpen(false);
   }, [activeThreadId]);
 
+  const toggleQueuedDrawer = useCallback(() => {
+    setIsQueuedDrawerOpen((open) => !open);
+  }, []);
+  /**
+   * Recall the message, then put its text back where the user can edit it.
+   *
+   * The append happens here rather than in the caller because this is where the
+   * live draft is: the composer clears its draft before the send RPC, so by the
+   * time a recall lands the user has usually typed something new, and that
+   * newer text is the one that must survive.
+   */
+  const recallQueuedMessage = useCallback(
+    (messageId: string) => {
+      if (!onRecallQueuedMessage) return;
+      void onRecallQueuedMessage(messageId).then((recalled) => {
+        if (recalled === null) {
+          toastManager.add({
+            type: "warning",
+            title: "Message could not be taken back",
+            description: "It had already been sent to the agent.",
+            data: { hideCopyButton: true },
+          });
+          return;
+        }
+        // Recall brings the text back, not the files. The attachments were
+        // claimed into the thread when the message was created and the withdraw
+        // sweeps them; re-hydrating them into the composer's image model is a
+        // separate piece of work, so say so rather than let them vanish quietly.
+        const attachmentCount =
+          queuedMessages.find((entry) => entry.id === messageId)?.attachmentCount ?? 0;
+        if (attachmentCount > 0) {
+          toastManager.add({
+            type: "warning",
+            title: `Attachment${attachmentCount === 1 ? "" : "s"} not restored`,
+            description: `The text came back, but ${attachmentCount === 1 ? "the file" : `all ${String(attachmentCount)} files`} will need attaching again.`,
+            data: { hideCopyButton: true },
+          });
+        }
+        const nextPrompt = appendRecalledPrompt(promptRef.current, recalled);
+        if (nextPrompt === promptRef.current) return;
+        promptRef.current = nextPrompt;
+        setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+        setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
+        setComposerTrigger(null);
+      });
+    },
+    [composerDraftTarget, onRecallQueuedMessage, queuedMessages],
+  );
+  // Nothing left to show closes the drawer, so it cannot linger empty after the
+  // turn ends and the queue drains.
+  useEffect(() => {
+    if (queuedMessages.length === 0) {
+      setIsQueuedDrawerOpen(false);
+    }
+  }, [queuedMessages.length]);
+  useEffect(() => {
+    setIsQueuedDrawerOpen(false);
+  }, [activeThreadId]);
+
   // Close the stash menu whenever the trigger-driven command menu opens so
   // the two popovers never stack in the same layer, and when the user
   // resumes typing (the menu is a transient picker, not a panel).
@@ -3281,7 +3367,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           steps={visibleTaskSteps}
         />
       ) : null}
+      {isQueuedDrawerOpen && !hasBlockingComposerTopDrawer && queuedMessages.length > 0 ? (
+        <ComposerQueuedDrawer
+          messages={queuedMessages}
+          onCollapse={toggleQueuedDrawer}
+          onRecall={onRecallQueuedMessage ? recallQueuedMessage : NO_RECALL}
+          recallPendingId={recallPendingMessageId ?? null}
+          recallSupported={onRecallQueuedMessage !== undefined}
+        />
+      ) : null}
       <div className="relative">
+        {showShoulderTabs && queuedMessages.length > 0 ? (
+          <ComposerQueuedBadge
+            count={queuedMessages.length}
+            hasTrailingShoulder
+            onToggle={toggleQueuedDrawer}
+            placement="shoulder"
+          />
+        ) : null}
         {showShoulderTabs && visibleTasksProgress && visibleTaskSteps ? (
           <ComposerTasksBadge
             expanded={false}

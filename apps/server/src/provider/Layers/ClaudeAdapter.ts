@@ -349,6 +349,14 @@ interface ClaudeSessionContext {
    * one-at-a-time as each active turn completes successfully.
    */
   readonly pendingTurns: Array<PendingTurnRequest>;
+  /**
+   * The queued turn `drainNextPendingTurn` is currently starting.
+   *
+   * It peeks at `pendingTurns[0]` and only dequeues once the turn is
+   * established, so during that gap the entry is in the array but is no longer
+   * withdrawable — it is already on its way to the provider.
+   */
+  drainingTurnId: TurnId | null;
   readonly taskAgents: Map<string, ClaudeTaskAgentState>;
   /**
    * Authoritative subagent models from assistant snapshots that arrived before
@@ -4774,6 +4782,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         inFlightTools,
         claudeTasks,
         pendingTurns: [],
+        drainingTurnId: null,
         taskAgents,
         pendingTaskModels,
         workflowMemberFingerprints,
@@ -4992,8 +5001,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // before it sets turnState, and keeping this item in the queue during that
     // gap keeps a concurrent sendTurn on the queue path (pendingTurns is
     // non-empty) instead of letting it start a second, racing turn.
-    yield* startTurnNow(context, next.turnId, next.input);
-    context.pendingTurns.shift();
+    context.drainingTurnId = next.turnId;
+    try {
+      yield* startTurnNow(context, next.turnId, next.input);
+      context.pendingTurns.shift();
+    } finally {
+      context.drainingTurnId = null;
+    }
+  });
+
+  /**
+   * Take a queued turn back before it is sent.
+   *
+   * The find and the splice are one synchronous block with no yield between
+   * them, so a concurrent `sendTurn` or drain cannot interleave and leave the
+   * queue half-updated.
+   *
+   * The `drainingTurnId` half of the predicate covers the gap inside
+   * `drainNextPendingTurn`, where the entry is still queued while its turn is
+   * already being started. That gap is real in production, where `startTurnNow`
+   * performs I/O, but the test harness completes a drain within a single yield,
+   * so this clause is reasoned rather than covered — removing it does not
+   * redden any test.
+   */
+  const withdrawQueuedTurn: ClaudeAdapterShape["withdrawQueuedTurn"] = Effect.fn(
+    "withdrawQueuedTurn",
+  )(function* (input) {
+    const context = sessions.get(input.threadId);
+    if (!context) return false;
+    const index = context.pendingTurns.findIndex(
+      (pending) =>
+        pending.input.messageId === input.messageId && pending.turnId !== context.drainingTurnId,
+    );
+    if (index < 0) return false;
+    context.pendingTurns.splice(index, 1);
+    return true;
   });
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
@@ -5227,6 +5269,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     hasSession,
     stopAll,
     refreshAccountUsage: refreshAccountUsageNow,
+    withdrawQueuedTurn,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },
