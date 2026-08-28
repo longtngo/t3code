@@ -305,11 +305,28 @@ const makeBinaryPathSetting = (fallback: string) =>
 
 export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch" | "folder";
 
+export interface ProviderSettingsFormOption {
+  readonly value: string;
+  readonly label: string;
+}
+
 export interface ProviderSettingsFormAnnotation {
   readonly control?: ProviderSettingsFormControl | undefined;
   readonly placeholder?: string | undefined;
   readonly hidden?: boolean | undefined;
   readonly clearWhenEmpty?: "omit" | "persist" | undefined;
+  /**
+   * Renders the field as a dropdown over exactly these choices, instead of a text input.
+   *
+   * Deliberately not a `control` variant. `control` is a tag the renderer has to know
+   * about, and `folder` is already proof of how that fails: it is annotated but has no
+   * render branch, so it silently falls through to a text input. Presence of `options` is
+   * the whole condition, so the field cannot be half-wired.
+   *
+   * Include an empty-valued entry when the field is optional - it is the row that clears
+   * the setting, and it works because a native `<select>` can hold `""`.
+   */
+  readonly options?: readonly ProviderSettingsFormOption[] | undefined;
 }
 
 export interface ProviderSettingsFormSchemaAnnotation {
@@ -423,6 +440,32 @@ const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000|(?:[1-9]\d|1
 /** Claude Code's own accepted range for the key; outside it the value is dropped. */
 export const CLAUDE_AUTO_COMPACT_WINDOW_MIN = 100_000;
 export const CLAUDE_AUTO_COMPACT_WINDOW_MAX = 1_000_000;
+
+/**
+ * Claude Code's built-in output styles, as of CLI 2.1.250. An output style is part of
+ * the CLI's system prompt, so it outweighs anything injected as context.
+ *
+ * Feeds both the settings-form dropdown and the pattern that validates the stored value,
+ * so the two can never disagree about what is selectable. The CLI itself types the key as
+ * a plain string and silently ignores a name it does not know - measured, rc=0 with no
+ * warning - so a value that is not on this list reaches the model as no style at all.
+ */
+export const CLAUDE_OUTPUT_STYLES = ["Concise", "Explanatory", "Learning", "Proactive"] as const;
+/**
+ * A pattern matching exactly one of `choices`, or the empty string.
+ *
+ * The choices are quoted, because they are data rather than a hand-written pattern. This
+ * is a function, not two lines at the call site, so that the quoting has somewhere to be
+ * tested: with choices that are all plain letters the quoted and unquoted patterns are
+ * character-for-character identical, so no test built from the real choices could tell
+ * them apart - but a choice named `Concise.v2` would silently also admit `ConciseXv2`.
+ */
+export const optionalOneOfPattern = (choices: readonly string[]): RegExp =>
+  new RegExp(
+    `^(?:|${choices.map((choice) => choice.replaceAll(/[$()*+.?[\\\]^{|}]/g, String.raw`\$&`)).join("|")})$`,
+  );
+
+const CLAUDE_OUTPUT_STYLE_PATTERN = optionalOneOfPattern(CLAUDE_OUTPUT_STYLES);
 
 /**
  * Turn a stored `autoCompactWindow` setting into the token count Claude Code
@@ -544,9 +587,52 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    outputStyle: TrimmedString.check(Schema.isPattern(CLAUDE_OUTPUT_STYLE_PATTERN)).pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      // Same recovery, and the same reasoning, as `autoCompactWindow` above - but the two
+      // blobs this schema decodes fail differently without it, and both are worse than
+      // falling back to "no style":
+      //
+      //   - on `providers.claudeAgent` the bad value fails the whole `ServerSettings`
+      //     document, and `loadSettingsFromDisk` answers that by keeping
+      //     DEFAULT_SERVER_SETTINGS and writing them back. Measured: a custom
+      //     `binaryPath` reverted to "claude".
+      //   - on `providerInstances.*.config` - the blob the settings form actually writes -
+      //     it fails the per-driver decode in `ProviderInstanceRegistryLive`, which marks
+      //     the whole Claude instance unavailable.
+      //
+      // It is also what lets `CLAUDE_OUTPUT_STYLES` grow: a fifth style written by a newer
+      // build has to be survivable by an older one, which a rollback is enough to cause.
+      Schema.catchDecoding(() => Effect.succeed(Option.some(""))),
+      Schema.annotateKey({
+        title: "Output style",
+        description:
+          "Part of Claude's system prompt, so it outweighs CLAUDE.md. Leave unset to defer " +
+          "to your own ~/.claude/settings.json.",
+        providerSettingsForm: {
+          clearWhenEmpty: "omit",
+          // The empty row is named after the file it defers to. "Claude's default" would
+          // be wrong: `--setting-sources` still passes user, project and local, so leaving
+          // this unset hands the choice to the user's own settings file, not to Claude's
+          // built-in default - and "Use Claude's own setting" is close enough to the wrong
+          // phrase to read as the same claim.
+          options: [
+            { value: "", label: "Use ~/.claude/settings.json" },
+            ...CLAUDE_OUTPUT_STYLES.map((style) => ({ value: style, label: style })),
+          ],
+        },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "configDirPath", "autoCompactWindow", "launchArgs"],
+    order: [
+      "binaryPath",
+      "homePath",
+      "configDirPath",
+      "autoCompactWindow",
+      "outputStyle",
+      "launchArgs",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1134,6 +1220,13 @@ const ClaudeSettingsPatch = Schema.Struct({
   // schema error instead of a generic whole-settings failure.
   autoCompactWindow: Schema.optionalKey(
     TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
+  ),
+  // Guards a hand-written patch and the legacy `providers.claudeAgent` blob. It is NOT
+  // what protects the settings form: that writes `providerInstances.*.config`, which is
+  // `Schema.Unknown` and reaches no per-driver schema until spawn. The form's dropdown is
+  // what keeps an unusable value out of this setting.
+  outputStyle: Schema.optionalKey(
+    TrimmedString.check(Schema.isPattern(CLAUDE_OUTPUT_STYLE_PATTERN)),
   ),
 });
 

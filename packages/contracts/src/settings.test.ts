@@ -6,7 +6,9 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  CLAUDE_OUTPUT_STYLES,
   DEFAULT_SERVER_SETTINGS,
+  optionalOneOfPattern,
   defaultEnabledForDriver,
   resolveClaudeAutoCompactWindow,
   resolveProviderInstanceEnabled,
@@ -78,6 +80,76 @@ describe("ClaudeSettings auto-compaction", () => {
       decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
     ).toBeDefined();
   });
+});
+
+describe("ClaudeSettings output style", () => {
+  it("sends no style when none is configured", () => {
+    expect(decodeClaudeSettings({}).outputStyle).toBe("");
+  });
+
+  it.each([...CLAUDE_OUTPUT_STYLES])("accepts a built-in output style: %s", (value) => {
+    expect(decodeClaudeSettings({ outputStyle: value }).outputStyle).toBe(value);
+  });
+
+  it("trims a padded style rather than discarding it", () => {
+    expect(decodeClaudeSettings({ outputStyle: "  Concise  " }).outputStyle).toBe("Concise");
+  });
+
+  it.each(["concise", "CONCISE", "NoSuchStyleXyz", "Creative", "custom"])(
+    "recovers an unknown style to no style rather than failing the document: %s",
+    (value) => {
+      // Same containment as `autoCompactWindow`, and the two blobs this schema
+      // decodes fail differently without it: the legacy `providers.claudeAgent`
+      // blob takes the whole settings file down (which `loadSettingsFromDisk`
+      // answers by reverting to defaults), while `providerInstances.*.config`
+      // marks the Claude instance unavailable. Both are worse than "no style".
+      expect(decodeClaudeSettings({ outputStyle: value }).outputStyle).toBe("");
+    },
+  );
+
+  it("keeps the rest of the file when the style is unreadable", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        claudeAgent: { outputStyle: "Creative", binaryPath: "/custom/claude" },
+      },
+    });
+    expect(decoded.providers.claudeAgent.outputStyle).toBe("");
+    expect(decoded.providers.claudeAgent.binaryPath).toBe("/custom/claude");
+  });
+
+  it.each(["concise", "NoSuchStyleXyz", "custom"])(
+    "rejects an unknown style at the patch boundary: %s",
+    (value) => {
+      // Guards a hand-written patch and the legacy blob. It is NOT what guards
+      // the settings form, which writes an instance `config` blob typed as
+      // `Schema.Unknown` — the form's dropdown is what does that.
+      expect(() =>
+        decodeServerSettingsPatch({ providers: { claudeAgent: { outputStyle: value } } }),
+      ).toThrow();
+    },
+  );
+
+  it("anchors a choice containing pattern syntax to itself", () => {
+    // Quoting is a no-op for today's four names, which is the whole hazard: no
+    // test built from the real list can tell a quoted pattern from an unquoted
+    // one, so the pattern builder is tested on a choice that can.
+    const pattern = optionalOneOfPattern(["Concise.v2"]);
+    expect(pattern.test("Concise.v2")).toBe(true);
+    expect(pattern.test("ConciseXv2")).toBe(false);
+    expect(pattern.test("")).toBe(true);
+    expect(pattern.test("Concise")).toBe(false);
+  });
+
+  it.each(["", ...CLAUDE_OUTPUT_STYLES])(
+    "accepts a selectable style at the patch boundary: %s",
+    (value) => {
+      // Every style the form can offer, so a narrowed pattern that admits only one of
+      // them cannot pass.
+      expect(
+        decodeServerSettingsPatch({ providers: { claudeAgent: { outputStyle: value } } }),
+      ).toBeDefined();
+    },
+  );
 });
 
 describe("ClientSettings word wrap", () => {

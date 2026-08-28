@@ -15,6 +15,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  CLAUDE_OUTPUT_STYLES,
   MessageId,
   ProviderDriverKind,
   ProviderItemId,
@@ -509,6 +510,49 @@ describe("ClaudeAdapterLive", () => {
   // one field it is about.
   const querySettings = (settings: string | Record<string, unknown> | undefined) =>
     typeof settings === "object" && settings !== null ? settings : {};
+
+  // Every style, not one of them. A single hardcoded name is satisfied by a spawn path
+  // that forwards only that name and drops the other three.
+  for (const style of CLAUDE_OUTPUT_STYLES) {
+    it.effect(`passes the configured output style to Claude: ${style}`, () => {
+      const harness = makeHarness({ claudeConfig: { outputStyle: style } });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+
+        const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+        assert.equal(settings.outputStyle, style);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  it.effect("omits the output style key entirely when no style is configured", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // Absence, not falsiness. An unconditional spread would send
+      // `{ outputStyle: "" }`, which passes a falsy check while making the CLI
+      // receive a `--settings` flag it would otherwise never be given.
+      const settings = querySettings(harness.getLastCreateQueryInput()?.options.settings);
+      assert.equal(Object.hasOwn(settings, "outputStyle"), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("defaults the auto-compaction window to the model's own window at 1M", () => {
     const harness = makeHarness();

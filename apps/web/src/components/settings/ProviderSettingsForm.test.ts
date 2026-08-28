@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { CLAUDE_OUTPUT_STYLES, ProviderDriverKind } from "@t3tools/contracts";
 
 import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
 import {
@@ -7,6 +7,7 @@ import {
   nextProviderConfigWithFieldValue,
   readProviderConfigBoolean,
   readProviderConfigString,
+  selectedOptionValue,
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
@@ -49,8 +50,51 @@ describe("ProviderSettingsForm helpers", () => {
       // subject (autoCompactWindow shows up for Claude) still applies.
       "configDirPath",
       "autoCompactWindow",
+      "outputStyle",
       "launchArgs",
     ]);
+  });
+
+  it("offers the output style as a closed set of choices", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    expect(claude).toBeDefined();
+
+    // The key list above would pass on a field whose options never reached the
+    // renderer, which is exactly how `folder` behaves today. The renderer
+    // branches on `options` being present, so that is what has to be asserted.
+    const outputStyle = deriveProviderSettingsFields(claude!).find(
+      (field) => field.key === "outputStyle",
+    );
+    expect(outputStyle?.options?.map((option) => option.value)).toEqual([
+      "",
+      ...CLAUDE_OUTPUT_STYLES,
+    ]);
+    expect(outputStyle?.options?.map((option) => option.label)).toEqual([
+      "Use ~/.claude/settings.json",
+      ...CLAUDE_OUTPUT_STYLES,
+    ]);
+    expect(outputStyle?.clearWhenEmpty).toBe("omit");
+  });
+
+  it("shows the empty choice for a stored value that is not on the list", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    const outputStyle = deriveProviderSettingsFields(claude!).find(
+      (field) => field.key === "outputStyle",
+    );
+    expect(outputStyle).toBeDefined();
+
+    // The config blob is `Schema.Unknown`, so a hand-edited file or one written
+    // by a build with more choices can hold a value this build does not offer.
+    // A native select renders nothing selected for that, which reads as unset
+    // while the blob still holds the old value.
+    expect(selectedOptionValue({ outputStyle: "Explanatory" }, outputStyle!)).toBe("Explanatory");
+    expect(selectedOptionValue({ outputStyle: "Creative" }, outputStyle!)).toBe("");
+    expect(selectedOptionValue({}, outputStyle!)).toBe("");
+    // Matched on value, not label. The empty row is the only option whose label
+    // differs from its value, so it is the only case that can tell them apart.
+    expect(selectedOptionValue({ outputStyle: "Use ~/.claude/settings.json" }, outputStyle!)).toBe(
+      "",
+    );
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {

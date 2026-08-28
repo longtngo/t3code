@@ -4862,6 +4862,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
         ...(autoCompactWindow ? { autoCompactWindow } : {}),
+        // An output style is part of Claude Code's system prompt, so it outweighs
+        // anything injected as context. Omitted entirely when unset, which leaves the
+        // user's own ~/.claude/settings.json in charge - `settingSources` still passes
+        // user, project and local. A value outside the known set never gets this far:
+        // `ClaudeSettings` recovers it to "" at decode time.
+        ...(claudeSettings.outputStyle ? { outputStyle: claudeSettings.outputStyle } : {}),
       };
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
       // The attachments dir grant lets the agent Read/copy pasted images at
