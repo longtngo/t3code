@@ -134,9 +134,16 @@ export interface ProviderServiceShape {
    * numbers onto it. Every other adapter still refreshes session-scoped, and a
    * thread with no binding falls back to that for all of them.
    *
-   * Resolves with the total number of `account.usage.updated` events emitted.
+   * Resolves with the number of `account.usage.updated` events emitted and,
+   * when a `threadId` was given, whether THAT thread was among them. The two
+   * are different questions and only the second one answers "did the button I
+   * pressed do anything": the total goes above zero as soon as any adapter
+   * emits for any live session, including ones the user is not looking at.
    */
-  readonly refreshAccountUsage: (threadId?: ThreadId) => Effect.Effect<number>;
+  readonly refreshAccountUsage: (threadId?: ThreadId) => Effect.Effect<{
+    readonly emitted: number;
+    readonly requestedThreadServed: boolean | null;
+  }>;
 
   /**
    * Put a line into a thread's provider transcript without starting a turn.

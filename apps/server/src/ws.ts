@@ -1946,7 +1946,7 @@ const makeWsRpcLayer = (
             // how many of those the press actually produced.
             providerService
               .refreshAccountUsage(input.threadId)
-              .pipe(Effect.map((emitted) => ({ ok: true as const, emitted }))),
+              .pipe(Effect.map((result) => ({ ok: true as const, ...result }))),
             { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.getResourceQueue]: (_input) =>

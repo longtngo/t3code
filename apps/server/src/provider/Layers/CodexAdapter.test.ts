@@ -1729,6 +1729,12 @@ usageLayer("CodexAdapterLive account usage", (it) => {
       NodeAssert.ok(usageEvent);
       if (usageEvent?.type === "account.usage.updated") {
         NodeAssert.equal(usageEvent.payload.codex?.primary?.utilization, 33);
+        // A push carries its own `fetchedAt`. The vitals popover takes the
+        // newest usage activity and reads the field off it, treating an absent
+        // one as "age unknown" - so a live push without it would blank the age
+        // label a poll had just set, leaving fresher numbers looking less
+        // trustworthy than stale ones. The event time IS the fetch time here.
+        NodeAssert.equal(usageEvent.payload.fetchedAt, "2026-01-01T00:00:00.000Z");
       }
     }),
   );

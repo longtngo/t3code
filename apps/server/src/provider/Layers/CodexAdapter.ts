@@ -1437,7 +1437,14 @@ function mapToRuntimeEvents(
       {
         type: "account.usage.updated",
         ...runtimeEventBase(event, canonicalThreadId),
-        payload: usage,
+        // A push IS its own fetch, so the event time is the honest stamp. It
+        // has to be carried explicitly all the same: the vitals popover reads
+        // `fetchedAt` off the payload, takes the newest activity, and treats a
+        // missing field as "age unknown". Without this a live push arriving
+        // after a poll would blank the age label the poll had just given the
+        // refresh control, leaving fresher numbers looking less trustworthy
+        // than stale ones.
+        payload: { ...usage, fetchedAt: event.createdAt },
       },
     ];
   }

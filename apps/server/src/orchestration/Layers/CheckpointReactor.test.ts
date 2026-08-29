@@ -127,7 +127,7 @@ function createProviderServiceHarness(
         },
       }),
     rollbackConversation,
-    refreshAccountUsage: () => Effect.succeed(0),
+    refreshAccountUsage: () => Effect.succeed({ emitted: 0, requestedThreadServed: null }),
     appendSessionNote: () => Effect.succeed(false),
     uploadFeedback: () => unsupported(),
     get streamEvents() {

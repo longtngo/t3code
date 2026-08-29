@@ -544,13 +544,21 @@ export const WsThreadWithdrawQueuedMessageRpc = Rpc.make(WS_METHODS.threadWithdr
  * some providers is none of them — so the client should always send it when it
  * has one.
  *
- * `emitted` counts the `account.usage.updated` events the press produced. The
- * UI does not render it; it exists so that "polled fine, reached nobody" is
- * distinguishable from "worked", which `{ok:true}` alone never was.
+ * `emitted` counts the `account.usage.updated` events the press produced, and
+ * `requestedThreadServed` says whether the named thread was one of them - null
+ * when no thread was named. Neither is rendered; they exist so that "polled
+ * fine, reached nobody" is distinguishable from "worked", which `{ok:true}`
+ * alone never was. The count on its own cannot answer it: it rises as soon as
+ * any adapter emits for any live session, including threads nobody is looking
+ * at.
  */
 export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
   payload: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
-  success: Schema.Struct({ ok: Schema.Literal(true), emitted: Schema.Number }),
+  success: Schema.Struct({
+    ok: Schema.Literal(true),
+    emitted: Schema.Number,
+    requestedThreadServed: Schema.NullOr(Schema.Boolean),
+  }),
   error: EnvironmentAuthorizationError,
 });
 

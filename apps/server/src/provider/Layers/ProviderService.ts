@@ -1227,18 +1227,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               cause,
             }).pipe(Effect.as(0)),
           ),
+          Effect.map((count) => [instanceId, count] as const),
         ),
       );
-      const total = emitted.reduce((sum, count) => sum + count, 0);
-      // The count is the whole point of the log line: a refresh that polls
-      // successfully and reaches nobody used to be indistinguishable from one
-      // that worked, because the RPC answered `ok` either way.
+      const total = emitted.reduce((sum, [, count]) => sum + count, 0);
+      // The OWNER's count, not the total, is what answers "did the thread I was
+      // looking at get anything". A sum cannot: a Cursor thread whose poll
+      // returned null reports 1 as soon as Claude emits for some other live
+      // session, which is precisely the false-success this line exists to make
+      // visible. Only the owning adapter was given the threadId, so its own
+      // count going above zero is the same statement as the thread being
+      // served.
+      const requestedThreadServed =
+        threadId === undefined
+          ? null
+          : (emitted.find(([instanceId]) => instanceId === ownerInstanceId)?.[1] ?? 0) > 0;
       yield* Effect.logDebug("provider.account-usage.refresh-emitted", {
         threadId: threadId ?? null,
         ownerInstanceId: ownerInstanceId ?? null,
         emitted: total,
+        requestedThreadServed,
       });
-      return total;
+      return { emitted: total, requestedThreadServed };
     });
   const appendSessionNote: ProviderService.ProviderService["Service"]["appendSessionNote"] =
     Effect.fn("appendSessionNote")(function* (input) {

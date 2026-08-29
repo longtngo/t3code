@@ -159,7 +159,7 @@ function createProviderServiceHarness() {
       });
     },
     rollbackConversation: () => unsupported(),
-    refreshAccountUsage: () => Effect.succeed(0),
+    refreshAccountUsage: () => Effect.succeed({ emitted: 0, requestedThreadServed: null }),
     appendSessionNote: (input) =>
       Effect.sync(() => {
         sessionNotes.push(input);

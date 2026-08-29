@@ -518,15 +518,82 @@ it.effect("refreshAccountUsage gives the thread only to the adapter it is bound 
     claude.refreshAccountUsage.mockImplementation(() => Effect.succeed(2));
     codex.refreshAccountUsage.mockImplementation(() => Effect.succeed(1));
 
-    const emitted = yield* providerService.refreshAccountUsage(boundThreadId);
+    const result = yield* providerService.refreshAccountUsage(boundThreadId);
     yield* Scope.close(scope, Exit.void);
 
     assert.deepStrictEqual(claude.refreshAccountUsage.mock.calls[0], [boundThreadId]);
     assert.deepStrictEqual(codex.refreshAccountUsage.mock.calls[0], [undefined]);
-    // Summed across adapters: the RPC reports it so a refresh that reached
-    // nobody is distinguishable from one that worked.
-    assert.equal(emitted, 3);
+    // Summed across adapters, and separately whether the asking thread was one
+    // of them - which the sum cannot answer.
+    assert.equal(result.emitted, 3);
+    assert.equal(result.requestedThreadServed, true);
   }),
+);
+
+it.effect(
+  "refreshAccountUsage does not call a thread served when only other adapters emitted",
+  () =>
+    Effect.gen(function* () {
+      // The false success this exists to catch: the asking thread's own provider
+      // has nothing to report - no credentials, a poll that returned null - while
+      // another adapter emits for some unrelated live session. A summed count
+      // reads 1 and looks like the press worked.
+      const codex = makeFakeCodexAdapter();
+      const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const registry = makeAdapterRegistryMock({
+        [CODEX_DRIVER]: codex.adapter,
+        [CLAUDE_AGENT_DRIVER]: claude.adapter,
+      });
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const boundThreadId = ThreadId.make("thread-bound-to-claude-empty");
+      const providerLayer = Layer.mergeAll(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(serverConfigTestLayer),
+          Layer.provideMerge(AnalyticsService.layerTest),
+          Layer.provide(
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+          ),
+        ),
+        directoryLayer,
+        runtimeRepositoryLayer,
+        NodeServices.layer,
+      );
+      const scope = yield* Scope.make();
+      const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+      const providerService = yield* ProviderService.ProviderService.pipe(
+        Effect.provide(runtimeServices),
+      );
+
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        yield* directory.upsert({
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId: boundThreadId,
+        });
+      }).pipe(Effect.provide(runtimeServices));
+
+      // The owner emits nothing; an unrelated adapter emits for its own sessions.
+      claude.refreshAccountUsage.mockImplementation(() => Effect.succeed(0));
+      codex.refreshAccountUsage.mockImplementation(() => Effect.succeed(4));
+
+      const result = yield* providerService.refreshAccountUsage(boundThreadId);
+      yield* Scope.close(scope, Exit.void);
+
+      assert.equal(result.emitted, 4);
+      assert.equal(result.requestedThreadServed, false);
+    }),
 );
 
 it.effect("refreshAccountUsage with an unbound thread falls back to every adapter", () =>
