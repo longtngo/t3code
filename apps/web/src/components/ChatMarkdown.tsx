@@ -1653,7 +1653,18 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
 
   const canOpenInEditor = onOpen !== undefined;
   const canOpenInBrowser = onOpenInBrowser !== undefined;
-  const canOpenInPanel = threadRef !== undefined && Boolean(workspaceRelativePath);
+  // Matches what `handleOpenInFilePreview` can actually do, which is more than
+  // upstream's version of it could. Upstream (#7140) gated this on a workspace-relative
+  // path because its handler only opened those; the fork's handler falls back to the
+  // read-only trusted view for any absolute path a thread owns, so requiring a relative
+  // one made a working capability unreachable. A chip for a file outside the workspace
+  // -- a report under ~/reports, a temp file -- lost its primary action, and tapping it
+  // opened the context menu, which carries neither "View in side panel" nor "Open in
+  // new tab". Shell actions hid it: with an editor available the chip had a primary
+  // action anyway, so it only showed on web and mobile.
+  const canOpenInWorkspacePanel = threadRef !== undefined && Boolean(workspaceRelativePath);
+  const canOpenInPanel =
+    canOpenInWorkspacePanel || (threadRef !== undefined && isAbsoluteFilePath(targetPath));
   const hasPrimaryAction = hasMarkdownFilePrimaryAction({
     canOpenInEditor,
     canOpenInBrowser,
@@ -1663,7 +1674,13 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     iconPath,
     canOpenInEditor,
     canOpenInBrowser,
-    canOpenInPanel,
+    // The NARROW sense on purpose. This picks between the integrated browser and the
+    // panel, and out here the panel can only offer a read-only source view -- for an
+    // .html file the rendered browser view is the better answer, and was already the
+    // one being given. Passing the widened value would quietly flip that: the widened
+    // flag says "something can open this", which is what the chip's affordance needs,
+    // not "the editable panel can address it", which is what this choice needs.
+    canOpenInPanel: canOpenInWorkspacePanel,
   });
 
   return (
