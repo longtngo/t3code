@@ -46,10 +46,8 @@ export const ComposerHeldMessages = memo(function ComposerHeldMessages(props: {
         className="flex-row items-center gap-2 px-3 py-2 active:opacity-70"
       >
         <Text className="font-t3-bold text-sm tabular-nums text-foreground">{count}</Text>
-        <Text className="flex-1 font-t3-medium text-sm text-neutral-600 dark:text-neutral-400">
-          waiting to send
-        </Text>
-        <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+        <Text className="flex-1 font-t3-medium text-sm text-foreground-muted">waiting to send</Text>
+        <Text className="font-t3-medium text-xs text-foreground-muted">
           {isExpanded ? "Hide" : "Show"}
         </Text>
       </Pressable>
@@ -63,7 +61,7 @@ export const ComposerHeldMessages = memo(function ComposerHeldMessages(props: {
               <Text className="min-w-0 flex-1 font-t3-medium text-xs text-foreground">
                 {message.text}
                 {message.attachmentCount > 0 ? (
-                  <Text className="text-neutral-600 dark:text-neutral-400">
+                  <Text className="text-foreground-muted">
                     {` (${String(message.attachmentCount)} attachment${
                       message.attachmentCount === 1 ? "" : "s"
                     })`}

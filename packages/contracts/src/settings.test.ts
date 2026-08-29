@@ -262,6 +262,12 @@ describe("ClientSettings sidebar", () => {
     );
   });
 
+  it("keeps unpin confirmation opt-in and patchable", () => {
+    expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
+    expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);
+    expect(() => decodeClientSettingsPatch({ confirmThreadUnpin: "yes" })).toThrow();
+  });
+
   it("allows auto-settle by inactivity to be disabled", () => {
     expect(
       decodeClientSettings({ sidebarAutoSettleAfterDays: null }).sidebarAutoSettleAfterDays,
@@ -640,6 +646,12 @@ describe("settings schema / patch parity", () => {
       // Read once at startup as a privilege-escalation guard; deliberately not
       // editable over the settings RPC. See ServerSettingsPatch's own comment.
       "disableAuthentication",
+      // Upstream #8569: the environment's default theme is owned by `t3 theme set`,
+      // which rewrites settings.json directly (apps/server/src/cli/theme.ts) and
+      // removes both keys when cleared. Clients only READ them, so routing them
+      // through the patch RPC would give two writers for one pair of fields.
+      "defaultTheme",
+      "defaultThemeSetAt",
     ];
 
     expect(

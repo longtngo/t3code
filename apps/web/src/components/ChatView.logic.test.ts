@@ -38,6 +38,7 @@ import {
   shouldDockDraftHeroForSubmission,
   shouldShowComposerIntentBanner,
   shouldReleaseTimelineAnchorForToolActivity,
+  shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
   isChatSurfaceFocused,
   nextEscapeAction,
@@ -595,6 +596,31 @@ describe("shouldShowComposerIntentBanner", () => {
     expect(
       shouldShowComposerIntentBanner({ ...base, composerHasContent: true, hasCondition: false }),
     ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanFollowUpPrompt", () => {
+  const base = {
+    pendingUserInputCount: 0,
+    interactionMode: "plan" as const,
+    latestTurnSettled: true,
+    hasActionableProposedPlan: true,
+    hasComposerAttachments: false,
+  };
+
+  it("shows plan actions for a settled actionable plan without attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
+  });
+
+  it("hides plan actions while the composer has staged attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
+  });
+
+  it("preserves the existing plan follow-up gates", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
   });
 });
 

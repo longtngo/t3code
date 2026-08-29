@@ -1186,7 +1186,7 @@ describe("ClaudeAdapterLive", () => {
         mimeType: "image/png",
         sizeBytes: 4,
       };
-      const attachmentPath = NodePath.join(attachmentsDir, attachmentRelativePath(attachment));
+      const attachmentPath = NodePath.join(attachmentsDir, attachmentRelativePath(attachment)!);
       NodeFS.mkdirSync(NodePath.dirname(attachmentPath), { recursive: true });
       NodeFS.writeFileSync(attachmentPath, Uint8Array.from([1, 2, 3, 4]));
 
@@ -3551,6 +3551,214 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(stoppedTaskEvent.payload.taskType, "local_agent");
         assert.equal(stoppedTaskEvent.payload.title, "Agent A");
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // FORK: upstream #8610 asserts `getContextUsage` is never called. This adapter still
+  // calls it -- it is the only source of the compaction facts the Vitals gauge renders --
+  // so the call-count assertion is dropped and the stub is not installed. What survives is
+  // the behaviour the test is really about: with no context-usage answer, the emitted usage
+  // comes from the LATEST ASSISTANT FRAME, not the cumulative result total.
+  it.effect("completes with the latest assistant frame usage, not the result total", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-result-usage",
+        uuid: "assistant-result-usage-1",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-result-usage-1",
+          role: "assistant",
+          content: [],
+          usage: {
+            input_tokens: 80,
+            output_tokens: 20,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-result-usage",
+        uuid: "assistant-result-usage-2",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-result-usage-2",
+          role: "assistant",
+          content: [],
+          usage: {
+            input_tokens: 180,
+            output_tokens: 20,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-result-usage",
+        uuid: "assistant-result-usage-3",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-result-usage-3",
+          role: "assistant",
+          content: [],
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1234,
+        duration_api_ms: 1200,
+        num_turns: 1,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-result-usage",
+        usage: {
+          input_tokens: 400,
+          output_tokens: 50,
+        },
+        modelUsage: {
+          "claude-opus-4-6": {
+            contextWindow: 200000,
+            maxOutputTokens: 64000,
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvent = runtimeEvents.findLast(
+        (event) => event.type === "thread.token-usage.updated",
+      );
+      assert.equal(usageEvent?.type, "thread.token-usage.updated");
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        assert.deepEqual(usageEvent.payload.usage, {
+          usedTokens: 200,
+          lastUsedTokens: 200,
+          totalProcessedTokens: 450,
+          inputTokens: 180,
+          outputTokens: 20,
+          maxTokens: 200000,
+        });
+      }
+      assert.equal(
+        runtimeEvents.find((event) => event.type === "turn.completed")?.type,
+        "turn.completed",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("preserves compacted usage when completion follows an older assistant frame", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-compacted-usage",
+        uuid: "assistant-compacted-usage",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-compacted-usage",
+          role: "assistant",
+          content: [],
+          usage: {
+            input_tokens: 180,
+            output_tokens: 20,
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          pre_tokens: 200,
+          post_tokens: 40,
+        },
+        session_id: "sdk-session-compacted-usage",
+        uuid: "compact-boundary-usage",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1234,
+        duration_api_ms: 1200,
+        num_turns: 2,
+        result: "done",
+        stop_reason: "end_turn",
+        session_id: "sdk-session-compacted-usage",
+        usage: {
+          input_tokens: 400,
+          output_tokens: 50,
+        },
+        modelUsage: {
+          "claude-opus-4-6": {
+            contextWindow: 200000,
+            maxOutputTokens: 64000,
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const finalUsageEvent = runtimeEvents.findLast(
+        (event) => event.type === "thread.token-usage.updated",
+      );
+      assert.equal(finalUsageEvent?.type, "thread.token-usage.updated");
+      if (finalUsageEvent?.type === "thread.token-usage.updated") {
+        // FORK: upstream expects `lastUsedTokens: 200`, the PRE-compact figure.
+        // `compactBoundaryTokenUsageSnapshot` here deliberately resets it to
+        // `post_tokens` -- carrying the pre-compact value forward would leave the
+        // Vitals meter pinned at the old usage and defeat the reset the compaction
+        // exists to show. The subject of the test, that the post-compact
+        // `usedTokens` survives a completion carrying an older assistant frame,
+        // is unchanged.
+        assert.deepEqual(finalUsageEvent.payload.usage, {
+          usedTokens: 40,
+          lastUsedTokens: 40,
+          totalProcessedTokens: 450,
+          maxTokens: 200000,
+        });
+      }
+      assert.equal(
+        runtimeEvents.find((event) => event.type === "turn.completed")?.type,
+        "turn.completed",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

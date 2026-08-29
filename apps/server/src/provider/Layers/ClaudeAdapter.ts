@@ -178,6 +178,8 @@ interface ClaudeTurnState {
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
+  latestAssistantUsage: unknown | undefined;
+  compactedSinceLatestAssistantUsage: boolean;
   nextSyntheticAssistantBlockIndex: number;
   /** Last emitted thinking-token display bucket; throttles per-delta emission. */
   lastThinkingTokensBucket?: string;
@@ -1671,6 +1673,8 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   }
 
   for (const attachment of input.attachments ?? []) {
+    // Claude ingests images only. Generic files reach the agent through the
+    // path line ProviderService puts in the prompt.
     if (attachment.type !== "image") {
       continue;
     }
@@ -2680,6 +2684,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       context.lastKnownTotalProcessedTokens = accumulatedTotalProcessedTokens;
     }
 
+    // FORK: upstream #8610 stopped calling `getContextUsage` here, on the grounds that its
+    // token-count fallback can make extra model requests. This fork keeps the call: it is the
+    // ONLY source of the compaction facts (`autocompactSource`, `autoCompactThreshold`,
+    // `isAutoCompactEnabled`) that the Vitals gauge's compaction note and marker render from,
+    // and it runs once per turn end behind a one-second timeout. Upstream's
+    // `latestAssistantSnapshot` is adopted below it as the next-best fallback.
     const contextUsageSnapshot = yield* queryCurrentContextUsage(
       context,
       accumulatedTotalProcessedTokens ?? context.lastKnownTotalProcessedTokens,
@@ -2706,12 +2716,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.lastKnownCompaction,
         )
       : undefined;
+    const latestAssistantSnapshot = normalizeClaudeActiveTokenUsage(
+      context.turnState?.latestAssistantUsage,
+      maxTokens,
+      accumulatedTotalProcessedTokens ?? context.lastKnownTotalProcessedTokens,
+      context.lastKnownCompaction,
+    );
     const lastGoodUsage = context.lastKnownTokenUsage;
     const usageSnapshot: ThreadTokenUsageSnapshot | undefined =
       contextUsageSnapshot ??
-      (resultTotalOnly && lastGoodUsage
-        ? reWindowedTokenUsageSnapshot(lastGoodUsage, maxTokens, accumulatedTotalProcessedTokens)
-        : resultIterationSnapshot) ??
+      latestAssistantSnapshot ??
+      (context.turnState?.compactedSinceLatestAssistantUsage
+        ? undefined
+        : resultTotalOnly && lastGoodUsage
+          ? reWindowedTokenUsageSnapshot(lastGoodUsage, maxTokens, accumulatedTotalProcessedTokens)
+          : resultIterationSnapshot) ??
       (lastGoodUsage
         ? reWindowedTokenUsageSnapshot(lastGoodUsage, maxTokens, accumulatedTotalProcessedTokens)
         : undefined);
@@ -3368,6 +3387,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
         capturedProposedPlanKeys: new Set(),
+        latestAssistantUsage: undefined,
+        compactedSinceLatestAssistantUsage: false,
         nextSyntheticAssistantBlockIndex: -1,
       };
       context.session = {
@@ -3428,6 +3449,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (context.turnState) {
       context.turnState.items.push(message.message);
+      if (
+        normalizeClaudeActiveTokenUsage(
+          message.message.usage,
+          context.lastKnownContextWindow,
+          context.lastKnownTotalProcessedTokens,
+        )
+      ) {
+        context.turnState.latestAssistantUsage = message.message.usage;
+        context.turnState.compactedSinceLatestAssistantUsage = false;
+      }
       yield* backfillAssistantTextBlocksFromSnapshot(context, message);
     }
 
@@ -3670,6 +3701,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // Drop the pre-compact total-processed high-water mark so a later
         // result cannot re-emit it and re-pollute the freshly reset meter.
         context.lastKnownTotalProcessedTokens = undefined;
+        if (context.turnState) {
+          context.turnState.latestAssistantUsage = undefined;
+          context.turnState.compactedSinceLatestAssistantUsage = true;
+        }
         yield* emitThreadTokenUsage(
           context,
           compactBoundaryTokenUsageSnapshot(
@@ -5199,6 +5234,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       assistantTextBlocks: new Map(),
       assistantTextBlockOrder: [],
       capturedProposedPlanKeys: new Set(),
+      latestAssistantUsage: undefined,
+      compactedSinceLatestAssistantUsage: false,
       nextSyntheticAssistantBlockIndex: -1,
     };
 

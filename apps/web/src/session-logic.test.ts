@@ -935,6 +935,28 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("drops runtime warnings with no displayable content, keeps ones with a preview", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "warning-noise",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Claude system message 'background_tasks_changed' (no displayable text content)",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "warning-signal",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "Reconnecting... 2/5",
+        tone: "info",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.map((entry) => entry.id)).toEqual(["warning-signal"]);
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2318,5 +2340,12 @@ describe("session activity performance", () => {
       if (after[index] === before[index]) reused += 1;
     }
     expect(reused).toBe(before.length);
+    // Reuse alone would also hold if the appended activity derived nothing, so the
+    // new row is checked too (adopted from upstream #8585).
+    expect(after.at(-1)).toMatchObject({
+      id: "benchmark-tool-appended",
+      command: "git diff",
+      toolLifecycleStatus: "completed",
+    });
   });
 });
