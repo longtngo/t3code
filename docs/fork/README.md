@@ -25,8 +25,8 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-26, against `origin/main`: **307 files added, 269 modified, 3 deleted.**
-Concentrated in `apps/server` (208) and `apps/web` (167).
+As of 2026-08-29 (23rd reconcile), against `origin/main`. Concentrated in `apps/server`
+and `apps/web`.
 
 ## Invariants a merge must not break
 
@@ -196,7 +196,9 @@ covers ground that route does not: **workspace member repositories** — attachi
 its integration branch, removing it. (Both surfaces carry a grouping-rule control, so grouping is
 _not_ the fork-only part; verified against the running app on 2026-08-11.) The project row
 therefore carries **both** buttons: an ellipsis opening the fork dialog and a gear navigating to
-upstream's page. Collapsing them to one drops multi-repo workspace management entirely.
+upstream's page. Since upstream #5931 that row is a `ComboboxItem`, not a `MenuRadioItem` — the
+23rd reconcile rebuilt the fork's button onto upstream's combobox, inside its `project ? …`
+guard, and dropped the then-dead `Menu*` import. Collapsing them to one drops multi-repo workspace management entirely.
 Consolidating the two is real work, not merge work.
 
 ### 7. `interruptTurn` is the COOPERATIVE rung; `stopSession` is the hard one
@@ -276,6 +278,83 @@ rejected: the fork derives the snapshot **and** the account-usage view the Vital
 `activeThreadActivities`, which stays the prop the parent passes. `compactDisabled` /
 `compactDisabledReason` / `onCompactContext` are adopted — `compactThreadContext` consumes them,
 so they are live, not vestigial.
+
+### 12. The Claude adapter still calls `getContextUsage`; upstream deleted it
+
+Upstream #8610 removed `queryCurrentContextUsage` and `normalizeClaudeContextUsageApiSnapshot`
+outright, on the grounds that `getContextUsage`'s token-count fallback can make extra model
+requests. This fork keeps the call. It is the **only** source of the compaction facts —
+`autocompactSource`, `autoCompactThreshold`, `isAutoCompactEnabled` — that
+`packages/contracts/src/providerRuntime.ts` carries on the wire and that the Vitals gauge's
+compaction note and marker render from (`VitalsGauge.tsx`, `lib/contextWindow.ts`). Deleting it
+compiles, passes, and leaves the note permanently blank.
+
+Upstream's replacement is **adopted underneath it**, not instead of it. `latestAssistantUsage`
+is tracked per assistant frame and `compactedSinceLatestAssistantUsage` guards the
+post-compaction window, so the precedence reads
+`contextUsageSnapshot ?? latestAssistantSnapshot ?? …`. The fork's snapshot wins when the CLI
+answers; upstream's is the next-best fallback when it times out.
+
+Three things upstream removed **outside every conflict marker**, all restored, all of which
+break the build if lost again (the good case): `getContextUsage?` on `ClaudeQueryRuntime`, the
+`SDKControlGetContextUsageResponse` type import, and `import * as Option from "effect/Option"`.
+
+Two of upstream's tests are **retargeted, not deleted**:
+
+- `completes with result usage without querying current context usage` asserts
+  `getContextUsageCalls === 0`. Renamed to
+  `completes with the latest assistant frame usage, not the result total`, with the stub and the
+  call-count assertion dropped; the behaviour it is really about still holds here.
+- `preserves compacted usage when completion follows an older assistant frame` expects
+  `lastUsedTokens: 200`, the PRE-compact figure. `compactBoundaryTokenUsageSnapshot` deliberately
+  resets it to `post_tokens`, because carrying the old value forward pins the meter at the usage
+  the compaction just cleared. Retargeted to `40`.
+
+Both also used a fixed `Stream.take(N)` sized to upstream's event count. This adapter emits a
+token-usage event per assistant frame, so a fixed count truncates before the result-driven
+update and the assertion silently reads an early event. They collect through `turn.completed`
+and read the **last** usage event instead.
+
+### 13. The provider-settings re-seed is UPSTREAM's, deliberately
+
+Fork commit `8fe3190f5` fixed a silent data loss in `ProviderInstanceCard` ("applying a
+local-LLM preset appeared to do nothing, then undid itself") with a render-phase `seededRef` +
+`environmentKey` value comparison. Upstream #8472 later fixed the same class with a `useEffect`,
+`previousEnvironmentRef` and `lastPublishedEnvironmentRef` + `providerEnvironmentsEqual`.
+
+Upstream's is the superset — it remembers what this card last published, so its own round-trip
+cannot re-seed the draft, and it runs in an effect rather than during render. The 23rd reconcile
+merged **both** mechanisms into the file before this was noticed; they are collapsed to
+upstream's. Only the fork's half-typed-row guard survives, as `if (published === null) return;`
+on the publish path. `environmentKey` was deleted with the code it served.
+
+**Restoring the fork's `seededRef` block is re-adding a second re-seed, not restoring a fix.**
+
+### 14. Upstream keeps reintroducing raw NUL bytes; a guard test catches it
+
+`apps/web/src/components/chat/composerSourceBytes.test.ts` fails if any `.ts`/`.tsx` under
+`apps/web/src` contains a raw NUL byte. This is not style: a raw NUL makes the file opaque to
+the tools a reconcile is audited with — BSD `sed` aborts mid-file and returns a plausible
+truncated answer, `grep` prints `Binary file … matches` and nothing else. Both have already
+misled a reconcile on this fork.
+
+The fork converted all six in `ChatComposer.tsx` to `\0` escapes, which produce the identical
+string. Upstream's copy still uses raw bytes, so **every reconcile that touches that file will
+bring them back**, and the offending line reads as ordinary spaces in every diff, dump and grep
+you would use to check. Only `cat -v` shows it. The guard is the thing that catches it; the
+23rd reconcile is where it first did.
+
+`apps/server/src/orchestration/ActivityPayloadProjection.ts` carries two raw NULs on **both**
+sides and is not covered by the guard. Open follow-up: extend the guard past `apps/web/src`.
+
+### 15. `defaultTheme` / `defaultThemeSetAt` are deliberately unpatchable
+
+Upstream #8569 added both to `ServerSettings` and not to `ServerSettingsPatch`, which trips the
+fork's patch-parity guard in `packages/contracts/src/settings.test.ts` (the guard exists because
+a field missing from the mirror silently drops edits — that is how `localModels` was found). It
+is deliberate here: `t3 theme set` (`apps/server/src/cli/theme.ts`) rewrites `settings.json`
+directly and removes both keys when cleared, and clients only ever read them. They are listed in
+`deliberatelyUnpatchable` rather than mirrored, so there is one writer, not two.
 
 ### 11. One `environmentId` for markdown rendered without a thread
 
