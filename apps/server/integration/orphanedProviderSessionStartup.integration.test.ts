@@ -121,6 +121,7 @@ const startupDependencies = Layer.mergeAll(
     rollbackConversation: () => Effect.die("unused"),
     // FORK: this shape carries `refreshAccountUsage`; upstream's mock predates it.
     refreshAccountUsage: () => Effect.succeed(0),
+    appendSessionNote: () => Effect.succeed(false),
     uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),

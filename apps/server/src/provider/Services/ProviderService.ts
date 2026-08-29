@@ -139,6 +139,18 @@ export interface ProviderServiceShape {
   readonly refreshAccountUsage: (threadId?: ThreadId) => Effect.Effect<number>;
 
   /**
+   * Put a line into a thread's provider transcript without starting a turn.
+   *
+   * Routes to the adapter the thread is bound to. Resolves `false` when the
+   * note could not be taken - no binding, no live session, or a provider
+   * without the channel - so the caller can fall back to a real turn.
+   */
+  readonly appendSessionNote: (input: {
+    readonly threadId: ThreadId;
+    readonly text: string;
+  }) => Effect.Effect<boolean>;
+
+  /**
    * Upload a thread and return the provider's shareable feedback identifier.
    */
   readonly uploadFeedback: (

@@ -168,6 +168,26 @@ export interface ProviderAdapterShape<TError> {
   }) => Effect.Effect<boolean, TError>;
 
   /**
+   * Put a line into the session's transcript WITHOUT starting a turn.
+   *
+   * The agent reads it on its next real turn and never spends one answering
+   * it. That is the whole point: a background task launched by one of the
+   * thread's own subagents used to start a turn on the main thread, and over
+   * six days those turns re-sent 370.7M tokens of conversation to earn a reply
+   * whose median length was 49 characters.
+   *
+   * Resolves `true` when the note was accepted, `false` when this adapter
+   * cannot take one - no live session, a queue already shutting down, or a
+   * provider with no such channel. Deliberately not an error: the caller's
+   * answer to "no" is to start a turn the old way, which is a fallback rather
+   * than a failure.
+   */
+  readonly appendSessionNote: (input: {
+    readonly threadId: ThreadId;
+    readonly text: string;
+  }) => Effect.Effect<boolean, TError>;
+
+  /**
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;

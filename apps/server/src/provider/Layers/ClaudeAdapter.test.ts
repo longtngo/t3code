@@ -1716,6 +1716,73 @@ describe("ClaudeAdapterLive", () => {
     });
   });
 
+  it.effect("appendSessionNote puts a silent message on the prompt stream", () => {
+    // `shouldQuery: false` is the whole mechanism: the SDK appends the message
+    // to the transcript and does NOT run the model, so the agent reads it on
+    // whatever turn comes next. Verified against Claude CLI 2.1.250 in three
+    // conditions - mid-conversation, idle with no turn running (the only state
+    // the caller fires in), and across a teardown and `--resume` - each time
+    // producing zero assistant turns with the content still reaching the model.
+    return Effect.gen(function* () {
+      const harness = makeHarness();
+
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-sonnet-4-5",
+          },
+          runtimeMode: "full-access",
+        });
+
+        const accepted = yield* adapter.appendSessionNote({
+          threadId: THREAD_ID,
+          text: "Background task bash-1, launched by one of your subagents, completed.",
+        });
+        assert.equal(accepted, true);
+
+        const message = yield* Effect.promise(() =>
+          readFirstPromptMessage(harness.getLastCreateQueryInput()),
+        );
+        assert.equal(
+          (message as { shouldQuery?: boolean } | undefined)?.shouldQuery,
+          false,
+          "without shouldQuery:false the note starts a turn, which is the cost being removed",
+        );
+        const content = message?.message.content;
+        assert.equal(
+          typeof content === "string" ? content : (content?.[0] as { text?: string })?.text,
+          "Background task bash-1, launched by one of your subagents, completed.",
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  });
+
+  it.effect("appendSessionNote refuses when the thread has no live session", () => {
+    // The caller's answer to "no" is to start a real turn, so this must be a
+    // plain false rather than a failure or a silently-swallowed note.
+    return Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const accepted = yield* adapter.appendSessionNote({
+          threadId: ThreadId.make("thread-never-started"),
+          text: "note",
+        });
+        assert.equal(accepted, false);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  });
+
   it.effect("on-demand refreshAccountUsage emits for a thread with no live session", () => {
     // The reported bug: the refresh fanned out over live sessions only, so a
     // press on an idle thread polled the provider and then updated nothing,

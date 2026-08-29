@@ -1304,6 +1304,11 @@ export function makeCursorAdapter(
       hasSession,
       stopAll,
       refreshAccountUsage: refreshAccountUsageNow,
+      // No transcript-append channel: this provider's session input is a turn
+      // or nothing. `subagentOwned` background tasks are Claude-only today, so
+      // nothing reaches this, but the caller falls back to a real turn if it
+      // ever does.
+      appendSessionNote: () => Effect.succeed(false),
       // Cursor holds a mid-turn prompt on the ACP semaphore, below any
       // handle this adapter owns, so there is nothing here to take back.
       withdrawQueuedTurn: () => Effect.succeed(false),

@@ -357,6 +357,7 @@ describe("ProviderCommandReactor", () => {
       },
       rollbackConversation: () => unsupported(),
       refreshAccountUsage: () => Effect.succeed(0),
+      appendSessionNote: () => Effect.succeed(false),
       uploadFeedback: () => unsupported(),
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);

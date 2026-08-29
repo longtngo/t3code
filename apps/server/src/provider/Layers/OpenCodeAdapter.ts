@@ -1766,6 +1766,11 @@ export function makeOpenCodeAdapter(
       // is ever emitted. Zero rather than void so a caller logging the emit count
       // reads the same shape from every adapter.
       refreshAccountUsage: () => Effect.succeed(0),
+      // No transcript-append channel: this provider's session input is a turn
+      // or nothing. `subagentOwned` background tasks are Claude-only today, so
+      // nothing reaches this, but the caller falls back to a real turn if it
+      // ever does.
+      appendSessionNote: () => Effect.succeed(false),
       // OpenCode's own server queues into the busy session, so the turn is
       // already gone by the time it is queued.
       withdrawQueuedTurn: () => Effect.succeed(false),

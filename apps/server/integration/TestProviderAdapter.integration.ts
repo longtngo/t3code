@@ -499,6 +499,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       // is ever emitted. Zero rather than void so a caller logging the emit count
       // reads the same shape from every adapter.
       refreshAccountUsage: () => Effect.succeed(0),
+      appendSessionNote: () => Effect.succeed(false),
       withdrawQueuedTurn: () => Effect.succeed(false),
       streamEvents: Stream.fromQueue(runtimeEvents),
     };

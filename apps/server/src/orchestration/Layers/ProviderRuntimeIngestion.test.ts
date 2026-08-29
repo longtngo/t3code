@@ -130,6 +130,11 @@ function createProviderServiceHarness() {
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+  // Silent transcript notes the ingestion sends instead of starting a turn.
+  // Recorded rather than dropped: "no wake message appeared" is also what a
+  // broken wake looks like, so a test needs the positive half too.
+  const sessionNotes: Array<{ readonly threadId: ThreadId; readonly text: string }> = [];
+  const sessionNoteAccepted = { value: true };
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
@@ -155,6 +160,11 @@ function createProviderServiceHarness() {
     },
     rollbackConversation: () => unsupported(),
     refreshAccountUsage: () => Effect.succeed(0),
+    appendSessionNote: (input) =>
+      Effect.sync(() => {
+        sessionNotes.push(input);
+        return sessionNoteAccepted.value;
+      }),
     uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -193,6 +203,10 @@ function createProviderServiceHarness() {
     service,
     emit,
     setSession,
+    sessionNotes,
+    setSessionNoteAccepted: (accepted: boolean) => {
+      sessionNoteAccepted.value = accepted;
+    },
   };
 }
 
@@ -365,6 +379,8 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
       listTurnActivity: () => Effect.runPromise(ingestion.listTurnActivity),
       pendingTasks: () => Effect.runPromise(pendingRepo.list()),
+      sessionNotes: provider.sessionNotes,
+      setSessionNoteAccepted: provider.setSessionNoteAccepted,
     };
   }
 
@@ -4144,28 +4160,23 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const foreignThread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "user:task-wakeup:evt-bg-task-subagent",
-      ),
-    );
-    const foreign = foreignThread.messages.find(
-      (message: ProviderRuntimeTestMessage) =>
-        message.id === "user:task-wakeup:evt-bg-task-subagent",
-    );
-    expect(foreign?.text).toContain(
+    // The subagent-owned completion goes into the transcript, not into a turn.
+    // `drain` waits on the ingestion queue rather than a sleep, so this is the
+    // point where the event has definitely been processed.
+    await harness.drain();
+    expect(harness.sessionNotes.length).toBe(1);
+    const note = harness.sessionNotes[0];
+    expect(note?.threadId).toBe(asThreadId("thread-1"));
+    expect(note?.text).toContain(
       "Background task bash-foreign-1, launched by one of your subagents, completed.",
     );
-    expect(foreign?.text).toContain("Run mutants M01-M07");
-    // The false premise is the whole defect: told this, agents spend a turn
-    // proving the task is not theirs.
-    expect(foreign?.text).not.toContain("Continue the work that was waiting on this task.");
-    expect(foreign?.text).toContain("nothing of yours is blocked on it");
+    expect(note?.text).toContain("Run mutants M01-M07");
+    expect(note?.text).not.toContain("Continue the work that was waiting on this task.");
+    expect(note?.text).toContain("nothing of yours is blocked on it");
 
     // Positive control: an unstamped completion still wakes with the original
-    // wording, so the assertions above cannot pass by the message being empty
-    // or the wake being suppressed.
+    // wording, so the assertions above cannot pass by the wake path being
+    // broken for everything rather than diverted for this one case.
     harness.emit({
       type: "task.completed",
       eventId: asEventId("evt-bg-task-own"),
@@ -4190,6 +4201,16 @@ describe("ProviderRuntimeIngestion", () => {
     expect(own?.text).toContain("Background task bash-own-1 completed.");
     expect(own?.text).toContain("Continue the work that was waiting on this task.");
     expect(own?.text).not.toContain("launched by one of your subagents");
+    // And it took the turn, not the note channel.
+    expect(harness.sessionNotes.length).toBe(1);
+    // The subagent-owned one left no wake message behind at all - that is the
+    // turn this whole change exists to stop spending.
+    expect(
+      ownThread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "user:task-wakeup:evt-bg-task-subagent",
+      ),
+    ).toBe(false);
 
     // The stamp must also land on the persisted activity row. Nothing in the
     // wake path reads it there, so only this assertion holds the allowlist
@@ -4202,6 +4223,88 @@ describe("ProviderRuntimeIngestion", () => {
       payload: { taskId: "bash-foreign-1", subagentOwned: true },
     });
     expect(activityFor("evt-bg-task-own")?.payload).not.toHaveProperty("subagentOwned");
+  });
+
+  it("falls back to a wake turn when the transcript note cannot be taken", async () => {
+    // No live session, a queue shutting down, a provider without the channel.
+    // The completion must still reach the coordinator - a silent append that
+    // silently fails is strictly worse than the turn it replaced.
+    const harness = await createHarness();
+    harness.setSessionNoteAccepted(false);
+
+    harness.emit({
+      type: "task.completed",
+      eventId: asEventId("evt-bg-task-note-refused"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        taskId: "bash-refused-1",
+        status: "completed",
+        summary: "Run mutants M01-M07",
+        subagentOwned: true,
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "user:task-wakeup:evt-bg-task-note-refused",
+      ),
+    );
+    const wake = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "user:task-wakeup:evt-bg-task-note-refused",
+    );
+    expect(wake?.text).toContain(
+      "Background task bash-refused-1, launched by one of your subagents, completed.",
+    );
+    // It was attempted first - the fallback must not be the only path taken.
+    expect(harness.sessionNotes.length).toBe(1);
+  });
+
+  it("T3CODE_SUBAGENT_SILENT_NOTES=0 puts subagent completions back on the turn path", async () => {
+    // The kill switch has to work without a redeploy, so it is read where the
+    // branch is taken rather than captured at module load.
+    const previous = process.env.T3CODE_SUBAGENT_SILENT_NOTES;
+    process.env.T3CODE_SUBAGENT_SILENT_NOTES = "0";
+    try {
+      const harness = await createHarness();
+      harness.emit({
+        type: "task.completed",
+        eventId: asEventId("evt-bg-task-switch-off"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          taskId: "bash-switch-off-1",
+          status: "completed",
+          summary: "Run mutants M01-M07",
+          subagentOwned: true,
+        },
+      });
+
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "user:task-wakeup:evt-bg-task-switch-off",
+        ),
+      );
+      expect(
+        thread.messages.find(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "user:task-wakeup:evt-bg-task-switch-off",
+        )?.text,
+      ).toContain("launched by one of your subagents");
+      // The note channel was never reached, rather than reached and refused.
+      expect(harness.sessionNotes.length).toBe(0);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.T3CODE_SUBAGENT_SILENT_NOTES;
+      } else {
+        process.env.T3CODE_SUBAGENT_SILENT_NOTES = previous;
+      }
+    }
   });
 
   it("does not wake a thread for turn-scoped or stopped task completions", async () => {

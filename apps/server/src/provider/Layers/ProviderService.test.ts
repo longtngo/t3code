@@ -238,6 +238,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     refreshAccountUsage,
+    appendSessionNote: () => Effect.succeed(false),
     withdrawQueuedTurn,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -276,6 +277,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     uploadFeedback,
     stopAll,
     refreshAccountUsage,
+    appendSessionNote: () => Effect.succeed(false),
   };
 }
 

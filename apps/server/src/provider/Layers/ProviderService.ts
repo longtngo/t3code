@@ -1240,6 +1240,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       return total;
     });
+  const appendSessionNote: ProviderService.ProviderService["Service"]["appendSessionNote"] =
+    Effect.fn("appendSessionNote")(function* (input) {
+      // Every "no" here is answered by the caller starting a real turn, so no
+      // branch of this fails: an unbound thread, a provider without the
+      // channel, and a torn-down session are all just `false`.
+      const bindingOption = yield* directory
+        .getBinding(input.threadId)
+        .pipe(Effect.orElseSucceed(() => Option.none<never>()));
+      const instanceId = Option.getOrUndefined(bindingOption)?.providerInstanceId;
+      if (instanceId === undefined) return false;
+      const adapter = yield* registry
+        .getByInstance(instanceId)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (adapter === undefined) return false;
+      return yield* adapter
+        .appendSessionNote({ threadId: input.threadId, text: input.text })
+        .pipe(Effect.orElseSucceed(() => false));
+    });
+
   const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1354,6 +1373,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getInstanceInfo,
     rollbackConversation,
     refreshAccountUsage,
+    appendSessionNote,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

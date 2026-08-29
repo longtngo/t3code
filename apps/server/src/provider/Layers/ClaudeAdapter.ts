@@ -5235,6 +5235,56 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
   });
 
+  /**
+   * Offer a note to the live prompt stream with `shouldQuery: false`.
+   *
+   * The SDK appends it to the transcript and does NOT run the model, so the
+   * agent reads it on whatever turn comes next. Measured against Claude CLI
+   * 2.1.250 in three conditions - mid-conversation, while idle with no turn
+   * running (which is the only state the caller fires in), and across a
+   * session teardown and `--resume` - the silent message produced zero
+   * assistant turns and its content still reached the model on the next
+   * querying message.
+   *
+   * No `turn.started`, no `turnState`, no session-status change: this is not a
+   * turn and must not look like one to the orchestration layer.
+   */
+  const appendSessionNote: ClaudeAdapterShape["appendSessionNote"] = Effect.fn("appendSessionNote")(
+    function* (input) {
+      // `requireSession`, not a bare `sessions.get`, and the difference is
+      // load-bearing rather than defensive. `stopSessionInternal` closes the
+      // SDK query and sets `stopped` early but only removes the context from
+      // `sessions` at the very end, past several yield points - so mid-teardown
+      // a lookup finds a context whose queue still accepts an offer into a
+      // consumer that is already gone. That offer returns true, the caller
+      // reads it as delivered and skips its fallback turn, and the completion
+      // reaches nobody at all: strictly worse than the turn this path avoids.
+      //
+      // Going through `requireSession` rather than repeating its predicate is
+      // the point. A copy drifts; every other session-touching method on this
+      // adapter already asks that one question, and now so does this.
+      const context = yield* requireSession(input.threadId).pipe(
+        Effect.map((session) => session as ClaudeSessionContext | undefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (!context) return false;
+      const message = {
+        type: "user",
+        session_id: "",
+        parent_tool_use_id: null,
+        message: { role: "user", content: [{ type: "text", text: input.text }] },
+        shouldQuery: false,
+      } as unknown as SDKUserMessage;
+      // A queue already shut down rejects the offer outright. That is also a
+      // "no" rather than a fault: the caller starts a real turn instead, which
+      // is exactly what it did before this channel existed.
+      return yield* Queue.offer(context.promptQueue, { type: "message", message }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    },
+  );
+
   // Start the next queued follow-up turn, if any. Called after a turn completes
   // successfully so queued messages run one-at-a-time in FIFO order.
   const drainNextPendingTurn = Effect.fn("drainNextPendingTurn")(function* (
@@ -5521,6 +5571,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     hasSession,
     stopAll,
     refreshAccountUsage: refreshAccountUsageNow,
+    appendSessionNote,
     withdrawQueuedTurn,
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);

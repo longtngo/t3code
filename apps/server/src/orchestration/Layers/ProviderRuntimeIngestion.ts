@@ -131,6 +131,18 @@ const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
 const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+/**
+ * T3CODE_SUBAGENT_SILENT_NOTES=0 puts subagent-owned background-task
+ * completions back on the turn-start path.
+ *
+ * Read per event rather than captured at module load, unlike the guard above.
+ * The point of a kill switch is that someone reaching for it is already having
+ * a bad time, and this way it takes effect on the next completion instead of
+ * on the next server start.
+ */
+const subagentSilentNotesEnabled = (): boolean =>
+  // oxlint-disable-next-line t3code/no-global-process-runtime
+  process.env.T3CODE_SUBAGENT_SILENT_NOTES !== "0";
 
 // Synthetic turns are auto-started for assistant/subagent responses that arrive
 // between user prompts; the stall watchdog must never inject a user-visible
@@ -1934,13 +1946,16 @@ const make = Effect.gen(function* () {
       const statusLabel = event.payload.status === "failed" ? "failed" : "completed";
       // A task launched by one of the thread's own subagents settles on the
       // same session stream as the main agent's own background work, so both
-      // land here. Only the wording differs, and it has to: the closing line
-      // below asserts the thread was waiting on this task, which for a
-      // subagent's task is false. Told that, agents spend a turn establishing
-      // the task is not theirs ("isn't one of mine - no output file in this
-      // session's task directory"). Told the truth, the same wake is useful -
-      // it is how a coordinator follows work it delegated, and it arrives while
-      // the subagent is still running, so nothing else reports it.
+      // land here. Attributing it correctly (an earlier fix) stopped agents
+      // spending the turn establishing the task was not theirs - but it did not
+      // stop them spending the turn. Over six days those turns re-sent 370.7M
+      // tokens of conversation to earn a reply whose median length was 49
+      // characters, and 80.1% of all wake turns were this kind.
+      //
+      // So a subagent-owned completion goes into the transcript WITHOUT a turn.
+      // The coordinator reads it on whatever turn it takes next, which is what
+      // preserves the 35% of these wakes that do real supervision work; it just
+      // stops paying a full context re-send per completion to hear about them.
       const subagentOwned = event.payload.subagentOwned === true;
       const wakeText = [
         subagentOwned
@@ -1952,6 +1967,29 @@ const make = Effect.gen(function* () {
           ? "This is progress on work you delegated; nothing of yours is blocked on it."
           : "Continue the work that was waiting on this task.",
       ].join("\n");
+
+      if (subagentOwned && subagentSilentNotesEnabled()) {
+        const appended = yield* providerService
+          .appendSessionNote({ threadId: thread.id, text: wakeText })
+          .pipe(Effect.orElseSucceed(() => false));
+        if (appended) {
+          yield* Effect.logDebug("provider.subagent-note.appended", {
+            threadId: thread.id,
+            taskId: event.payload.taskId,
+          });
+          return;
+        }
+        // No live session, a queue shutting down, or a provider without the
+        // channel. Fall through to the turn, so the coordinator is never worse
+        // informed than it was before this path existed. This log is also the
+        // signal that a CLI upgrade stopped honouring `shouldQuery`: the
+        // append would keep succeeding, but every wake would start a turn
+        // again and the ratio of this line to the appended one would flip.
+        yield* Effect.logWarning("provider.subagent-note.append-failed", {
+          threadId: thread.id,
+          taskId: event.payload.taskId,
+        });
+      }
 
       yield* dispatchWithFreshCommandId({
         type: "thread.turn.start",
