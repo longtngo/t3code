@@ -317,7 +317,7 @@ const makeBinaryPathSetting = (fallback: string) =>
     Schema.withDecodingDefault(Effect.succeed(fallback)),
   );
 
-export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch" | "folder";
+export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch";
 
 export interface ProviderSettingsFormOption {
   readonly value: string;
@@ -539,7 +539,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         title: "Claude HOME path",
         description:
           "Custom HOME used when running this Claude instance. Keeps .claude.json and .claude separate.",
-        providerSettingsForm: { control: "folder", placeholder: "~", clearWhenEmpty: "omit" },
+        providerSettingsForm: { placeholder: "~", clearWhenEmpty: "omit" },
       }),
     ),
     configDirPath: TrimmedString.pipe(
@@ -549,7 +549,6 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         description:
           "Sets CLAUDE_CONFIG_DIR for this instance. Gives it a separate login (on macOS the Keychain credential is keyed by this path), so two instances can use different Claude accounts. Leave blank to use the default ~/.claude.",
         providerSettingsForm: {
-          control: "folder",
           placeholder: "~/.claude-personal",
           clearWhenEmpty: "omit",
         },
