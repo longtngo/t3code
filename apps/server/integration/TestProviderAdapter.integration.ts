@@ -495,7 +495,10 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       readThread,
       rollbackThread,
       stopAll,
-      refreshAccountUsage: () => Effect.void,
+      // No account-usage concept for this provider: nothing to poll, so nothing
+      // is ever emitted. Zero rather than void so a caller logging the emit count
+      // reads the same shape from every adapter.
+      refreshAccountUsage: () => Effect.succeed(0),
       withdrawQueuedTurn: () => Effect.succeed(false),
       streamEvents: Stream.fromQueue(runtimeEvents),
     };

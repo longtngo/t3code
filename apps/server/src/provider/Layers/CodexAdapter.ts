@@ -68,6 +68,7 @@ import {
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
+import { makeAccountUsageBroadcast } from "../accountUsageBroadcast.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeAccountUsagePoll, normalizeCodexRateLimitsNotification } from "./CodexUsage.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
@@ -1717,7 +1718,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const emitUsageForSession = (
     context: CodexAdapterSessionContext,
     payload: AccountUsageUpdatedPayload,
-  ) =>
+  ) => emitUsageForThread(context.threadId, payload);
+
+  const emitUsageForThread = (threadId: ThreadId, payload: AccountUsageUpdatedPayload) =>
     Effect.gen(function* () {
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
@@ -1725,22 +1728,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         eventId: stamp.eventId,
         provider: PROVIDER,
         createdAt: stamp.createdAt,
-        threadId: context.threadId,
+        threadId,
         payload,
       });
     });
 
-  const refreshAccountUsage = Effect.gen(function* () {
-    const payload = yield* pollAccountUsage;
-    if (payload === null) return;
-    yield* Ref.set(lastUsageRef, payload);
-    for (const context of sessions.values()) {
-      yield* emitUsageForSession(context, payload);
-    }
+  const broadcastAccountUsage = makeAccountUsageBroadcast({
+    poll: pollAccountUsage,
+    lastUsageRef,
+    liveThreadIds: () => Array.from(sessions.values(), (context) => context.threadId),
+    emitForThread: (threadId, payload) => emitUsageForThread(threadId, payload),
   });
 
-  const refreshAccountUsageNow: CodexAdapterShape["refreshAccountUsage"] = () =>
-    refreshAccountUsage;
+  const refreshAccountUsage = Effect.asVoid(broadcastAccountUsage());
+
+  const refreshAccountUsageNow: CodexAdapterShape["refreshAccountUsage"] = (threadId) =>
+    broadcastAccountUsage(threadId);
 
   const accountUsageScope = yield* Effect.scope;
 

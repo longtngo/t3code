@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -7,6 +7,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   type ContextWindowSnapshot,
   deriveCompactionMarker,
+  describeMissingContextUsage,
   formatContextWindowTokens,
 } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
@@ -661,8 +662,16 @@ export function VitalsDetail(props: {
   providerDisplayName?: string | null | undefined;
   /** Selected model for this thread, named beside the window size. */
   modelDisplayName?: string | null | undefined;
+  /**
+   * The driver the thread's SESSION ran on, which is what decides whether a
+   * missing context block is "no data yet" or "this provider never reports
+   * it". Deliberately not the model picker's selection: the picker moves
+   * without the thread following it.
+   */
+  sessionProvider?: string | null | undefined;
 }) {
   const { context, accountUsage, host, now, timestampFormat } = props;
+  const missingContextReason = context ? null : describeMissingContextUsage(props.sessionProvider);
   const hasWindows = Boolean(
     accountUsage?.fiveHour ||
     accountUsage?.sevenDay ||
@@ -678,6 +687,16 @@ export function VitalsDetail(props: {
           providerDisplayName={props.providerDisplayName}
           modelDisplayName={props.modelDisplayName}
         />
+      ) : missingContextReason ? (
+        // An absence with no explanation reads as breakage - which is exactly
+        // how this popover got reported as broken. Three of the five drivers
+        // are in this state permanently, so the sentence is worth its line.
+        <div className={BLOCK_CLASS}>
+          <span className={CAP_CLASS}>Context</span>
+          <div className="mt-1.5 text-pretty text-[11px] text-muted-foreground/70">
+            {missingContextReason}
+          </div>
+        </div>
       ) : null}
       {hasWindows && accountUsage ? (
         <LimitsBlock
@@ -704,6 +723,7 @@ export function VitalsGauge(props: {
   refreshUsage?: { run: () => void; pending: boolean } | undefined;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
+  sessionProvider?: string | null | undefined;
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
@@ -763,6 +783,7 @@ export function VitalsGauge(props: {
           refreshUsage={props.refreshUsage}
           providerDisplayName={props.providerDisplayName}
           modelDisplayName={props.modelDisplayName}
+          sessionProvider={props.sessionProvider}
         />
       </PopoverPopup>
     </Popover>
@@ -795,14 +816,21 @@ function useNow(intervalMs: number): number {
  */
 export function VitalsGaugeConnected(props: {
   environmentId: EnvironmentId;
+  /**
+   * The thread on screen. The refresh reaches threads with a live provider
+   * session on its own; this is what lets it reach an idle one, which is the
+   * state most threads sit in.
+   */
+  threadId?: ThreadId | null | undefined;
   context: ContextWindowSnapshot | null;
   accountUsage: AccountUsageView | null;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
+  sessionProvider?: string | null | undefined;
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
-  const refreshUsage = useAccountUsageRefresh(props.environmentId);
+  const refreshUsage = useAccountUsageRefresh(props.environmentId, props.threadId);
   return (
     <VitalsGauge
       context={props.context}
@@ -811,6 +839,7 @@ export function VitalsGaugeConnected(props: {
       refreshUsage={refreshUsage}
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
+      sessionProvider={props.sessionProvider}
     />
   );
 }

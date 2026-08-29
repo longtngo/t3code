@@ -213,7 +213,9 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       }),
   );
 
-  const refreshAccountUsage = vi.fn((): Effect.Effect<void, ProviderAdapterError> => Effect.void);
+  const refreshAccountUsage = vi.fn(
+    (_threadId?: ThreadId): Effect.Effect<number, ProviderAdapterError> => Effect.succeed(0),
+  );
   const withdrawQueuedTurn = vi.fn(
     (): Effect.Effect<boolean, ProviderAdapterError> => Effect.succeed(false),
   );
@@ -450,6 +452,136 @@ it.effect("refreshAccountUsage asks every provider even when one of them fails",
     assert.equal(Exit.isSuccess(refreshExit), true);
     assert.equal(codex.refreshAccountUsage.mock.calls.length, 1);
     assert.equal(claude.refreshAccountUsage.mock.calls.length, 1);
+  }),
+);
+
+it.effect("refreshAccountUsage gives the thread only to the adapter it is bound to", () =>
+  Effect.gen(function* () {
+    // Every adapter is still polled - account usage is account-global and the
+    // background poller wants all of it. But only the OWNING adapter is told
+    // which thread asked. Hand the threadId to all of them and each emits its
+    // own provider's numbers onto one thread, last writer wins.
+    const codex = makeFakeCodexAdapter();
+    const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    const registry = makeAdapterRegistryMock({
+      [CODEX_DRIVER]: codex.adapter,
+      [CLAUDE_AGENT_DRIVER]: claude.adapter,
+    });
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const boundThreadId = ThreadId.make("thread-bound-to-claude");
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    const providerService = yield* ProviderService.ProviderService.pipe(
+      Effect.provide(runtimeServices),
+    );
+
+    // Written through the BUILT layer, not a second `Effect.provide` of the
+    // same layer value: an in-memory persistence layer is built per
+    // `Layer.build`, so a binding upserted outside this one lands in a
+    // different database and the lookup reads empty.
+    yield* Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      yield* directory.upsert({
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: boundThreadId,
+      });
+    }).pipe(Effect.provide(runtimeServices));
+
+    claude.refreshAccountUsage.mockImplementation(() => Effect.succeed(2));
+    codex.refreshAccountUsage.mockImplementation(() => Effect.succeed(1));
+
+    const emitted = yield* providerService.refreshAccountUsage(boundThreadId);
+    yield* Scope.close(scope, Exit.void);
+
+    assert.deepStrictEqual(claude.refreshAccountUsage.mock.calls[0], [boundThreadId]);
+    assert.deepStrictEqual(codex.refreshAccountUsage.mock.calls[0], [undefined]);
+    // Summed across adapters: the RPC reports it so a refresh that reached
+    // nobody is distinguishable from one that worked.
+    assert.equal(emitted, 3);
+  }),
+);
+
+it.effect("refreshAccountUsage with an unbound thread falls back to every adapter", () =>
+  Effect.gen(function* () {
+    // No binding is not an error - the button is not worth a dialog - so every
+    // adapter refreshes session-scoped exactly as it did before threadId
+    // existed.
+    const codex = makeFakeCodexAdapter();
+    const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+    const registry = makeAdapterRegistryMock({
+      [CODEX_DRIVER]: codex.adapter,
+      [CLAUDE_AGENT_DRIVER]: claude.adapter,
+    });
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    const providerService = yield* ProviderService.ProviderService.pipe(
+      Effect.provide(runtimeServices),
+    );
+
+    // A different thread IS bound, so the lookup has something to find and a
+    // pass here cannot come from an empty directory.
+    yield* Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      yield* directory.upsert({
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: ThreadId.make("some-other-thread"),
+      });
+    }).pipe(Effect.provide(runtimeServices));
+
+    yield* providerService.refreshAccountUsage(ThreadId.make("thread-with-no-binding"));
+    yield* Scope.close(scope, Exit.void);
+
+    assert.deepStrictEqual(claude.refreshAccountUsage.mock.calls[0], [undefined]);
+    assert.deepStrictEqual(codex.refreshAccountUsage.mock.calls[0], [undefined]);
   }),
 );
 

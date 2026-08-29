@@ -535,9 +535,22 @@ export const WsThreadWithdrawQueuedMessageRpc = Rpc.make(WS_METHODS.threadWithdr
   error: EnvironmentAuthorizationError,
 });
 
+/**
+ * On-demand account-usage refresh.
+ *
+ * `threadId` names the thread whose UI asked. It is optional because the
+ * environment-wide press and the background poller have no thread, but a press
+ * that omits it only reaches threads with a LIVE provider session — which for
+ * some providers is none of them — so the client should always send it when it
+ * has one.
+ *
+ * `emitted` counts the `account.usage.updated` events the press produced. The
+ * UI does not render it; it exists so that "polled fine, reached nobody" is
+ * distinguishable from "worked", which `{ok:true}` alone never was.
+ */
 export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
-  payload: Schema.Struct({}),
-  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  payload: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
+  success: Schema.Struct({ ok: Schema.Literal(true), emitted: Schema.Number }),
   error: EnvironmentAuthorizationError,
 });
 

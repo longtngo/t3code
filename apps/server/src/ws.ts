@@ -1937,13 +1937,16 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "provider" },
           ),
-        [WS_METHODS.accountUsageRefresh]: (_input) =>
+        [WS_METHODS.accountUsageRefresh]: (input) =>
           observeRpcEffect(
             WS_METHODS.accountUsageRefresh,
             // The service already logs and swallows a per-provider failure, so this
             // reports success once every provider has been asked. The refreshed
-            // numbers arrive separately, as `account.usage.updated`.
-            providerService.refreshAccountUsage().pipe(Effect.as({ ok: true as const })),
+            // numbers arrive separately, as `account.usage.updated`; `emitted` is
+            // how many of those the press actually produced.
+            providerService
+              .refreshAccountUsage(input.threadId)
+              .pipe(Effect.map((emitted) => ({ ok: true as const, emitted }))),
             { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.getResourceQueue]: (_input) =>

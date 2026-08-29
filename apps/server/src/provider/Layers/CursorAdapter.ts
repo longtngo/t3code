@@ -80,6 +80,7 @@ import {
 } from "../acp/CursorAcpExtension.ts";
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
+import { makeAccountUsageBroadcast } from "../accountUsageBroadcast.ts";
 import { makeAccountUsagePoll } from "./CursorUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -404,10 +405,7 @@ export function makeCursorAdapter(
       });
     const usagePollInterval = options?.usagePollInterval ?? Duration.seconds(60);
 
-    const emitUsageForSession = (
-      context: CursorSessionContext,
-      payload: AccountUsageUpdatedPayload,
-    ) =>
+    const emitUsageForThread = (threadId: ThreadId, payload: AccountUsageUpdatedPayload) =>
       Effect.gen(function* () {
         const stamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
@@ -415,22 +413,27 @@ export function makeCursorAdapter(
           eventId: stamp.eventId,
           provider: PROVIDER,
           createdAt: stamp.createdAt,
-          threadId: context.threadId,
+          threadId,
           payload,
         });
       });
 
-    const refreshAccountUsage = Effect.gen(function* () {
-      const payload = yield* pollAccountUsage;
-      if (payload === null) return;
-      yield* Ref.set(lastUsageRef, payload);
-      for (const context of sessions.values()) {
-        yield* emitUsageForSession(context, payload);
-      }
+    const emitUsageForSession = (
+      context: CursorSessionContext,
+      payload: AccountUsageUpdatedPayload,
+    ) => emitUsageForThread(context.threadId, payload);
+
+    const broadcastAccountUsage = makeAccountUsageBroadcast({
+      poll: pollAccountUsage,
+      lastUsageRef,
+      liveThreadIds: () => Array.from(sessions.keys()),
+      emitForThread: emitUsageForThread,
     });
 
-    const refreshAccountUsageNow: CursorAdapterShape["refreshAccountUsage"] = () =>
-      refreshAccountUsage;
+    const refreshAccountUsage = Effect.asVoid(broadcastAccountUsage());
+
+    const refreshAccountUsageNow: CursorAdapterShape["refreshAccountUsage"] = (threadId) =>
+      broadcastAccountUsage(threadId);
 
     const accountUsageScope = yield* Effect.scope;
 

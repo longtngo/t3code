@@ -1199,22 +1199,46 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const refreshAccountUsage: ProviderService.ProviderService["Service"]["refreshAccountUsage"] =
-    Effect.fn("refreshAccountUsage")(function* () {
+    Effect.fn("refreshAccountUsage")(function* (threadId?: ThreadId) {
       const currentAdapters = yield* getAdapterEntries;
-      yield* Effect.forEach(
-        currentAdapters,
-        ([instanceId, adapter]) =>
-          adapter.refreshAccountUsage().pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("provider.account-usage.refresh-failed", {
-                instanceId,
-                provider: adapter.provider,
-                cause,
-              }),
-            ),
+      // Which adapter owns the asking thread. Only that one is told about it:
+      // handing the threadId to every adapter would let each of them emit its
+      // own provider's numbers onto one thread, and the last writer would win.
+      // A thread with no binding resolves to undefined and every adapter
+      // refreshes session-scoped, exactly as before.
+      const ownerInstanceId =
+        threadId === undefined
+          ? undefined
+          : yield* directory.getBinding(threadId).pipe(
+              Effect.map(
+                Option.match({
+                  onNone: () => undefined,
+                  onSome: (binding) => binding.providerInstanceId ?? undefined,
+                }),
+              ),
+              Effect.orElseSucceed(() => undefined),
+            );
+      const emitted = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
+        adapter.refreshAccountUsage(instanceId === ownerInstanceId ? threadId : undefined).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.account-usage.refresh-failed", {
+              instanceId,
+              provider: adapter.provider,
+              cause,
+            }).pipe(Effect.as(0)),
           ),
-        { discard: true },
+        ),
       );
+      const total = emitted.reduce((sum, count) => sum + count, 0);
+      // The count is the whole point of the log line: a refresh that polls
+      // successfully and reaches nobody used to be indistinguishable from one
+      // that worked, because the RPC answered `ok` either way.
+      yield* Effect.logDebug("provider.account-usage.refresh-emitted", {
+        threadId: threadId ?? null,
+        ownerInstanceId: ownerInstanceId ?? null,
+        emitted: total,
+      });
+      return total;
     });
   const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
     function* (rawInput) {

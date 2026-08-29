@@ -12,6 +12,7 @@
 // @effect-diagnostics globalDate:off
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -167,6 +168,14 @@ const readRateLimits = (
     ),
   );
 
+/** See {@link makeAccountUsagePoll}. */
+const stampFetchedAt = (
+  payload: AccountUsageUpdatedPayload | null,
+): Effect.Effect<AccountUsageUpdatedPayload | null> =>
+  payload === null
+    ? Effect.succeed(null)
+    : Effect.map(DateTime.now, (at) => ({ ...payload, fetchedAt: DateTime.formatIso(at) }));
+
 /**
  * Build the best-effort poll effect: spawn a short-lived app-server, read rate
  * limits, normalize. Returns `null` when auth is missing or the request fails.
@@ -177,6 +186,13 @@ export const makeAccountUsagePoll = (
   readRateLimits(deps).pipe(
     Effect.scoped,
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, deps.spawner),
+    // Stamped at the poll, for the same reason as Cursor's: the carrying
+    // event's `createdAt` is re-stamped on every re-broadcast, so only this
+    // says how old the figures are. Note the LIVE
+    // `account/rateLimits/updated` notification path deliberately does not
+    // stamp - it is pushed by Codex as it happens, and its event time is its
+    // fetch time.
+    Effect.flatMap(stampFetchedAt),
     Effect.tapError((error) =>
       Effect.logDebug("Codex usage poll failed", {
         detail: error instanceof CodexUsageFetchError ? error.detail : "unknown",

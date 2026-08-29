@@ -4,9 +4,12 @@ import * as NodeOS from "node:os";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Duration from "effect/Duration";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   cursorStateDbPath,
@@ -20,6 +23,7 @@ import {
   unixMsToIso,
   type RawAuthUsageResponse,
   type RawCurrentPeriodUsageResponse,
+  makeAccountUsagePoll,
 } from "./CursorUsage.ts";
 
 describe("CursorUsage.normalizeCurrentPeriodUsage", () => {
@@ -268,4 +272,48 @@ describe("CursorUsage.cursorStateDbPath", () => {
       new RegExp(`${NodeOS.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
     );
   });
+});
+
+describe("CursorUsage.makeAccountUsagePoll", () => {
+  const dashboardResponse: RawCurrentPeriodUsageResponse = {
+    billingCycleStart: "1780445696000",
+    billingCycleEnd: "1783037696000",
+    planUsage: { autoPercentUsed: 7, apiPercentUsed: 100, totalPercentUsed: 22 },
+    spendLimitUsage: { pooledLimit: 1000000, pooledUsed: 395760, limitType: "team" },
+  };
+
+  it.effect("stamps fetchedAt so the UI can say how old the numbers are", () =>
+    Effect.gen(function* () {
+      // Without this the vitals popover's refresh control has no label - its
+      // text IS the snapshot age - so it renders as a bare icon that never
+      // changes and a press looks like it did nothing. Measured on real data:
+      // 0 of 4 Cursor payloads carried the field, against 15 Claude ones.
+      // `it.effect` runs on a TestClock that starts at the epoch, so the stamp
+      // is exact rather than a window: advance to a known instant and the
+      // payload must carry that instant, which is what proves the value is the
+      // FETCH time and not something re-derived at emission.
+      yield* TestClock.adjust(Duration.millis(1_760_000_000_000));
+      const payload = yield* makeAccountUsagePoll({
+        env: { CURSOR_ACCESS_TOKEN: "test-access" },
+        httpClient: Option.some(
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify(dashboardResponse), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              ),
+            ),
+          ),
+        ),
+        spawner: Option.none(),
+        fileSystem: Option.none(),
+      });
+
+      assert.isNotNull(payload);
+      assert.equal(payload?.fetchedAt, "2025-10-09T08:53:20.000Z");
+    }),
+  );
 });

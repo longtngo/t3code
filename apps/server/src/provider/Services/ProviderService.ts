@@ -127,8 +127,16 @@ export interface ProviderServiceShape {
    * `account.usage.updated` runtime event (the same path the background poller
    * uses). Per-adapter failures are logged and swallowed so one misbehaving
    * provider can't fail the whole refresh.
+   *
+   * `threadId` is the thread whose UI asked. It is resolved to the ONE adapter
+   * that thread is bound to and handed only to that adapter, so a refresh
+   * pressed on a Cursor thread cannot make the Claude adapter stamp Claude's
+   * numbers onto it. Every other adapter still refreshes session-scoped, and a
+   * thread with no binding falls back to that for all of them.
+   *
+   * Resolves with the total number of `account.usage.updated` events emitted.
    */
-  readonly refreshAccountUsage: () => Effect.Effect<void>;
+  readonly refreshAccountUsage: (threadId?: ThreadId) => Effect.Effect<number>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

@@ -47,6 +47,37 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
   }
 }
 
+/**
+ * Driver kinds that never report context-window usage, so their popover shows
+ * a reason instead of an empty space where the context block would be.
+ *
+ * Measured against `cursor-agent 2026.08.25-3e8eec8`: a raw ACP client saw no
+ * `usage_update` notification and a `session/prompt` result with no `usage`
+ * member, and the ACP schema defines both — the agent simply does not send
+ * them. Grok and OpenCode reach the UI the same way: `context-window.updated`
+ * is projected only from `thread.token-usage.updated`, which only the Claude
+ * and Codex adapters emit.
+ *
+ * This is deliberately keyed on the PROVIDER, not on the snapshot being
+ * absent. A started Claude thread can have zero context activities too, and
+ * telling that user their provider does not report usage would be false.
+ */
+const PROVIDERS_WITHOUT_CONTEXT_USAGE = new Set(["cursor", "grok", "opencode"]);
+
+/**
+ * The one-line explanation for a missing context block, or `null` when the
+ * provider does report usage (in which case an absent snapshot just means the
+ * thread has not produced one yet, and the popover shows nothing).
+ *
+ * `provider` must be the driver the thread's SESSION ran on, not the model
+ * picker's current selection — the picker moves without the thread following
+ * it, and gating on it would blame Cursor for a thread that ran on Claude.
+ */
+export function describeMissingContextUsage(provider: string | null | undefined): string | null {
+  if (!provider || !PROVIDERS_WITHOUT_CONTEXT_USAGE.has(provider)) return null;
+  return `${formatProviderDisplayName(provider)} does not report context usage.`;
+}
+
 export function deriveLatestContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {

@@ -465,6 +465,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeAccountUsage: AccountUsageView | null;
   activeThreadProviderDisplayName: string | null;
+  activeThreadId: ThreadId | null;
+  activeThreadSessionProvider: string | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -497,10 +499,12 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     <>
       <VitalsGaugeConnected
         environmentId={props.environmentId}
+        threadId={props.activeThreadId}
         context={props.activeContextWindow}
         accountUsage={props.activeAccountUsage}
         providerDisplayName={props.activeThreadProviderDisplayName}
         modelDisplayName={props.activeThreadModelDisplayName}
+        sessionProvider={props.activeThreadSessionProvider}
       />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
@@ -3525,10 +3529,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <div className="flex shrink-0 items-center gap-2">
                   <VitalsGaugeConnected
                     environmentId={environmentId}
+                    threadId={activeThread?.id ?? null}
                     context={activeContextWindow}
                     accountUsage={activeAccountUsage}
                     providerDisplayName={activeThreadProviderDisplayName}
                     modelDisplayName={activeThreadModelDisplayName}
+                    sessionProvider={activeThread?.session?.providerName ?? null}
                   />
                   {phase === "running" ? (
                     // The composer footer is not rendered at all while collapsed,
@@ -3983,6 +3989,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeAccountUsage={activeAccountUsage}
                     activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
+                    activeThreadId={activeThread?.id ?? null}
+                    activeThreadSessionProvider={activeThread?.session?.providerName ?? null}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     showPlanFollowUpPrompt={

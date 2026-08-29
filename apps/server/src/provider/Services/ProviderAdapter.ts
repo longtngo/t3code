@@ -134,12 +134,21 @@ export interface ProviderAdapterShape<TError> {
    *
    * Account usage (OAuth 5h/7d limits + extra credit spend) is otherwise
    * emitted only by a per-adapter background poller. This lets callers trigger
-   * an on-demand poll; the fresh snapshot is fanned out to active sessions via
-   * the adapter's `account.usage.updated` runtime event, so this resolves with
-   * no value. Adapters whose provider has no account-usage concept implement
-   * this as a no-op.
+   * an on-demand poll; the fresh snapshot is fanned out via the adapter's
+   * `account.usage.updated` runtime event.
+   *
+   * `threadId` is the thread whose UI asked, and it is emitted for whether or
+   * not this adapter holds a live session for it. Without it the fan-out
+   * reaches active sessions only, and a press on an idle thread updates
+   * nothing while still answering `ok` — every Cursor session measured
+   * `stopped`, and 451 of 458 Claude ones, so "idle" is the common case rather
+   * than the edge.
+   *
+   * Resolves with the number of events emitted, which is what makes a
+   * reached-nobody refresh visible in a log. Adapters whose provider has no
+   * account-usage concept resolve 0.
    */
-  readonly refreshAccountUsage: () => Effect.Effect<void, TError>;
+  readonly refreshAccountUsage: (threadId?: ThreadId) => Effect.Effect<number, TError>;
 
   /**
    * Take a queued turn back out of this adapter's queue before it is sent.

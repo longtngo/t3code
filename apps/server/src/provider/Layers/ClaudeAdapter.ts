@@ -104,6 +104,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { makeAccountUsageBroadcast } from "../accountUsageBroadcast.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeAccountUsagePoll } from "./OAuthUsage.ts";
 import { releaseOldTurnItems } from "./turnItemRetention.ts";
@@ -2102,13 +2103,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     });
   const usagePollInterval = options?.usagePollInterval ?? Duration.seconds(60);
 
-  const emitUsageForSession = (
-    context: ClaudeSessionContext,
-    payload: AccountUsageUpdatedPayload,
-  ) =>
+  const emitUsageForThread = (threadId: ThreadId, payload: AccountUsageUpdatedPayload) =>
     Effect.gen(function* () {
-      const threadId = context.session.threadId;
-      if (!threadId) return;
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
         type: "account.usage.updated",
@@ -2120,19 +2116,31 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     });
 
-  const refreshAccountUsage = Effect.gen(function* () {
-    const payload = yield* pollAccountUsage;
-    if (payload === null) return;
-    yield* Ref.set(lastUsageRef, payload);
-    for (const context of sessions.values()) {
-      yield* emitUsageForSession(context, payload);
-    }
+  const emitUsageForSession = (
+    context: ClaudeSessionContext,
+    payload: AccountUsageUpdatedPayload,
+  ) => {
+    const threadId = context.session.threadId;
+    return threadId ? emitUsageForThread(threadId, payload) : Effect.void;
+  };
+
+  const broadcastAccountUsage = makeAccountUsageBroadcast({
+    poll: pollAccountUsage,
+    lastUsageRef,
+    liveThreadIds: () =>
+      Array.from(sessions.values())
+        .map((context) => context.session.threadId)
+        .filter((threadId): threadId is ThreadId => Boolean(threadId)),
+    emitForThread: emitUsageForThread,
   });
 
+  const refreshAccountUsage = Effect.asVoid(broadcastAccountUsage());
+
   // Public adapter method: force an on-demand poll+broadcast, reusing the same
-  // fetch/emit path as the background poller above.
-  const refreshAccountUsageNow: ClaudeAdapterShape["refreshAccountUsage"] = () =>
-    refreshAccountUsage;
+  // fetch/emit path as the background poller above. `threadId` is the thread
+  // whose UI asked, which may have no live session at all.
+  const refreshAccountUsageNow: ClaudeAdapterShape["refreshAccountUsage"] = (threadId) =>
+    broadcastAccountUsage(threadId);
 
   // Adapter-lifetime scope for forking a one-shot usage poll when a session
   // starts with an empty cache (see startSession), so the fiber outlives the

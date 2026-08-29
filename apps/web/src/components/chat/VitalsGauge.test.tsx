@@ -229,6 +229,60 @@ describe("VitalsGauge detail", () => {
     expect(markup).toContain("MEM");
   });
 
+  it("explains a missing context block when the session's provider never reports usage", () => {
+    // Silently omitting it is what got this popover reported as broken. Cursor
+    // reports no token usage at all over ACP - a raw ACP client against
+    // cursor-agent 2026.08.25 saw no `usage_update` and a prompt result with no
+    // `usage` member - so the absence is permanent and worth naming.
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={null}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+        sessionProvider="cursor"
+      />,
+    );
+    expect(markup).toContain("Cursor does not report context usage.");
+  });
+
+  it("stays silent for a provider that does report usage but has no snapshot yet", () => {
+    // "No snapshot" and "provider never reports" are different states, and the
+    // database holds started Claude threads with zero context activities. A
+    // gate keyed on absence alone would tell those users something false.
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={null}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+        sessionProvider="claudeAgent"
+      />,
+    );
+    expect(markup).not.toContain("does not report context usage");
+  });
+
+  it("does not blame the picker's provider for a thread that ran on another one", () => {
+    // The gate is the SESSION's provider. Passing the model picker's selection
+    // instead would put "Cursor does not report context usage" on a thread
+    // that ran its whole life on Claude and merely has the picker parked
+    // elsewhere - the picker moves without the thread following it.
+    const markup = renderToStaticMarkup(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+        sessionProvider="cursor"
+      />,
+    );
+    expect(markup).not.toContain("does not report context usage");
+    expect(markup).toContain("Context");
+  });
+
   it("omits the usage-limits block when no windows are present", () => {
     const markup = renderToStaticMarkup(
       <VitalsDetail

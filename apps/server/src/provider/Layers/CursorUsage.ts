@@ -16,6 +16,7 @@ import * as NodeOS from "node:os";
 
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -612,6 +613,25 @@ export interface AccountUsagePollDeps {
  * normalize usage. Returns `null` when no token is available, the HTTP client
  * is missing, or the request fails.
  */
+/**
+ * Stamp when these numbers came off Cursor's API.
+ *
+ * Distinct from the carrying event's `createdAt`, which is re-stamped on every
+ * emission - including the re-broadcast of a cached payload when a session
+ * starts. Only this answers "how old is what I am looking at", which is what
+ * the vitals popover's refresh control uses as its label; without it the
+ * control renders as a bare icon that never changes, and pressing it looks
+ * like nothing happened. Stamped at the poll rather than per fetch helper so
+ * the dashboard endpoint and the enterprise `/auth/usage` fallback both carry
+ * it.
+ */
+const stampFetchedAt = (
+  payload: AccountUsageUpdatedPayload | null,
+): Effect.Effect<AccountUsageUpdatedPayload | null> =>
+  payload === null
+    ? Effect.succeed(null)
+    : Effect.map(DateTime.now, (at) => ({ ...payload, fetchedAt: DateTime.formatIso(at) }));
+
 export const makeAccountUsagePoll = (
   deps: AccountUsagePollDeps,
 ): Effect.Effect<AccountUsageUpdatedPayload | null> => {
@@ -627,6 +647,7 @@ export const makeAccountUsagePoll = (
           ),
       }),
     ),
+    Effect.flatMap(stampFetchedAt),
     Effect.tapError((error) =>
       Effect.logDebug("Cursor usage poll failed", {
         detail: error instanceof CursorUsageFetchError ? error.detail : "token resolution failed",

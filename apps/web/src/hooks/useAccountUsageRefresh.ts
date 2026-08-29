@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useCallback, useState } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -17,7 +17,16 @@ export interface AccountUsageRefresh {
  * `account.usage.updated` activity, on their own path, and waiting for them here
  * would mean inventing a correlation the protocol does not carry.
  */
-export function useAccountUsageRefresh(environmentId: EnvironmentId): AccountUsageRefresh {
+export function useAccountUsageRefresh(
+  environmentId: EnvironmentId,
+  /**
+   * The thread being shown. Optional only because the gauge renders without
+   * one; when it is absent the refresh reaches threads with a live provider
+   * session and no others, which is how a press on an idle thread came to do
+   * nothing at all.
+   */
+  threadId?: ThreadId | null,
+): AccountUsageRefresh {
   const [pending, setPending] = useState(false);
   const refresh = useAtomCommand(accountUsageEnvironment.refresh, {
     label: "account-usage:refresh",
@@ -25,9 +34,12 @@ export function useAccountUsageRefresh(environmentId: EnvironmentId): AccountUsa
   const run = useCallback(() => {
     if (pending) return;
     setPending(true);
-    void refresh({ environmentId, input: {} }).finally(() => {
+    void refresh({
+      environmentId,
+      input: threadId ? { threadId } : {},
+    }).finally(() => {
       setPending(false);
     });
-  }, [environmentId, pending, refresh]);
+  }, [environmentId, pending, refresh, threadId]);
   return { run, pending };
 }

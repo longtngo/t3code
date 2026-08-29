@@ -1762,7 +1762,10 @@ export function makeOpenCodeAdapter(
       rollbackThread,
       stopAll,
       // OpenCode has no account-usage concept; on-demand refresh is a no-op.
-      refreshAccountUsage: () => Effect.void,
+      // No account-usage concept for this provider: nothing to poll, so nothing
+      // is ever emitted. Zero rather than void so a caller logging the emit count
+      // reads the same shape from every adapter.
+      refreshAccountUsage: () => Effect.succeed(0),
       // OpenCode's own server queues into the busy session, so the turn is
       // already gone by the time it is queued.
       withdrawQueuedTurn: () => Effect.succeed(false),

@@ -1716,6 +1716,50 @@ describe("ClaudeAdapterLive", () => {
     });
   });
 
+  it.effect("on-demand refreshAccountUsage emits for a thread with no live session", () => {
+    // The reported bug: the refresh fanned out over live sessions only, so a
+    // press on an idle thread polled the provider and then updated nothing,
+    // while the RPC still answered ok. Measured on a developer machine, EVERY
+    // Cursor session and 451 of 458 Claude sessions were `stopped`, so "no
+    // live session" is the ordinary case rather than the edge.
+    return Effect.gen(function* () {
+      const usageSnapshot = {
+        fiveHour: { utilization: 11, resetsAt: "2026-06-10T00:00:00Z" },
+        sevenDay: { utilization: 6, resetsAt: "2026-06-15T00:00:00Z" },
+        extra: null,
+      };
+      const harness = makeHarness({
+        pollAccountUsage: Effect.succeed(usageSnapshot),
+        usagePollInterval: Duration.minutes(999),
+      });
+      const idleThreadId = ThreadId.make("thread-with-no-session");
+
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const usageFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "account.usage.updated"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const emitted = yield* adapter.refreshAccountUsage(idleThreadId);
+        // Asserted BEFORE joining the fiber, deliberately. A regression here
+        // emits nothing, and a test that reaches for the event first would
+        // report the whole thing as a 120s timeout instead of `expected 0 to
+        // equal 1` - a red run either way, but only one of them says why.
+        assert.equal(emitted, 1);
+
+        const usageEvent = Array.from(yield* Fiber.join(usageFiber))[0];
+        assert.equal(usageEvent?.threadId, idleThreadId);
+        assert.deepStrictEqual(usageEvent?.payload, usageSnapshot);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  });
+
   it.effect("starting a session with an empty cache forks a prompt on-demand poll", () => {
     // RED-without-fix: with the gated background tick, a session starting while
     // the usage cache is empty must trigger an on-demand poll at start (not wait
