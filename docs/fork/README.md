@@ -344,8 +344,15 @@ bring them back**, and the offending line reads as ordinary spaces in every diff
 you would use to check. Only `cat -v` shows it. The guard is the thing that catches it; the
 23rd reconcile is where it first did.
 
-`apps/server/src/orchestration/ActivityPayloadProjection.ts` carries two raw NULs on **both**
-sides and is not covered by the guard. Open follow-up: extend the guard past `apps/web/src`.
+**Closed 2026-08-29.** `apps/server/src/sourceBytes.test.ts` is the sibling guard, rooted at
+`apps/server/src`. `ActivityPayloadProjection.ts` used two raw NULs the same way — as dedup-key
+delimiters — and is now escaped. A repo-wide scan (`perl -ne 'print if /\x00/'` over every
+`.ts`/`.tsx` in `apps` and `packages`) returns no offenders, so the two guards cover every source
+tree that has ever carried one. The walker is duplicated between them on purpose: it is a dozen
+lines, and a package to hold it would be more machinery than the thing it holds.
+
+Both guards were verified by planting a raw NUL and watching them go red before being trusted
+green — an absence assertion that has never been seen to fail is not evidence.
 
 ### 15. `defaultTheme` / `defaultThemeSetAt` are deliberately unpatchable
 
@@ -382,15 +389,21 @@ were wrong when written, and the comment is what seeded the doc. If a reconcile 
 wording from upstream, it is still wrong.)
 
 The two menus deliberately differ: the in-DOM one carries "View in side panel" and "Open in new
-tab", the native one carries "Open in integrated browser" and "Copy relative path". What must not
-differ is a **shared** item's condition. The reveal item closed that gap on 2026-08-26; it uses
-`onReveal && revealLabel` inline at both sites, and nothing enforces the pairing, so change both.
+tab", the native one carries "Open in integrated browser" and "Copy relative path". Everything
+else comes from one `sharedFileMenuItems` array, which both menus map — the native menu at
+`ChatMarkdown.tsx:1599`, the in-DOM menu at `:1771`. That sharing is the enforcement: a shared
+item cannot drift between the two, because there is only ever one of it.
 
-Do not extract that condition into a shared `boolean` predicate. At the **native** site
-`ContextMenuItem.label` is a required `string`, and the inline truthiness test is what narrows
-`revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native site
-stops compiling. (At the in-DOM site the test is only defensive — a `MenuItem` child is a
-`ReactNode`.) A shared _object_ would narrow correctly, if the pairing ever needs enforcing.
+**Corrected 2026-08-29.** This section previously said the reveal item "uses `onReveal &&
+revealLabel` inline at both sites, and nothing enforces the pairing, so change both". There is
+**one** such site — `:1563`, inside `sharedFileMenuItems` — and the shared array is precisely what
+enforces the pairing. Change it once. (The substance was right: the reveal item does appear in
+both menus. Only the count and the "nothing enforces" claim were wrong.)
+
+Do not extract that condition into a shared `boolean` predicate. `ContextMenuItem.label` is a
+required `string` on the native side, and the inline truthiness test is what narrows
+`revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native mapping
+stops compiling. A shared _object_ would narrow correctly, if the condition ever needs reusing.
 
 ## Probing an invariant that asserts ABSENCE
 
