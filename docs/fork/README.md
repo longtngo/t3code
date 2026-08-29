@@ -405,6 +405,40 @@ required `string` on the native side, and the inline truthiness test is what nar
 `revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native mapping
 stops compiling. A shared _object_ would narrow correctly, if the condition ever needs reusing.
 
+### 16. The socket TOS guard is load-bearing until Node >= 26.5.1
+
+`apps/server/src/processGuards.ts` makes `net.Socket#setTypeOfService` non-fatal, and `bin.ts`
+installs it inside the entrypoint guard so importing `cli` from a test patches nothing.
+
+It is not defensive programming. On macOS a TCP socket whose connection was aborted at the
+protocol layer - peer RST, or connect refused - keeps an open fd and still reports `AF_INET` from
+`getsockname`, but `setsockopt(IP_TOS)` returns EINVAL. Node's **synchronous**
+`setTypeOfService` throws on that; its own **deferred** path in `afterConnect` only _emits_ for
+the identical failure. Bundled undici 8.5.0 calls it unconditionally on the first HTTP/1.1 write
+to every plain-HTTP socket, from inside the socket's `connect` event - so the throw carries **zero
+application frames** and nothing in the Effect error channel can catch it. It killed this server
+five times, taking every in-flight turn with it. HTTPS is immune: `TLSWrap` has no such method.
+
+Upstream fixed it: nodejs/undici#5544 -> #5547, undici 8.8.0, first shipped in **Node v26.5.1**.
+This box runs 26.3.1. **Delete the guard once the minimum Node is >= 26.5.1** - the removal
+condition is in the file.
+
+Two things this deliberately is NOT:
+
+- **Not a blanket `uncaughtException` handler.** That was the obvious fix and it is wrong here.
+  This server is event-sourced; resuming after an _unknown_ fatal restarts a process whose decider
+  or projector may be mid-transition, trading a visible restart for silent state corruption in the
+  one system that cannot tolerate it. The guard rethrows anything whose `syscall` is not
+  `setTypeOfService`, and a test asserts that.
+- **Not silent.** `monitorFatalExceptions` registers `uncaughtExceptionMonitor`, which records the
+  fatal and does **not** prevent the exit. Registering `uncaughtException` there instead would
+  silently convert this into the crash suppressor above, so the test asserts the event _name_.
+
+Verified by building it and running it, not by reading it: against a server that accepts and then
+RSTs sub-millisecond, the unpatched arm crashes with the production stack (exit 1) and the guarded
+arm survives 35,615 attempts (exit 0), suppressing 1 real EINVAL while every request still fails
+as `ECONNRESET`.
+
 ## Probing an invariant that asserts ABSENCE
 
 Half the entries above say a thing must **not** be there. Three of them were probed with
