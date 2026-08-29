@@ -1091,6 +1091,13 @@ describe("OrchestrationEngine", () => {
         : never;
     const events: StoredEvent[] = [];
     let nextSequence = 1;
+    // The production store defaults this to 1,000 and pages to it silently. The fake
+    // honours it for the same reason, and records what it was asked for: the reconcile
+    // below rebuilds the read model from exactly these events and republishes each one,
+    // so a capped read would corrupt the model and drop subscribers' events with nothing
+    // failing. Recording the argument is what makes a regression to the default visible.
+    const productionDefaultReadLimit = 1_000;
+    const requestedReadLimits: number[] = [];
 
     const nonTransactionalStore: OrchestrationEventStoreShape = {
       append(event) {
@@ -1102,8 +1109,11 @@ describe("OrchestrationEngine", () => {
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
       },
-      readFromSequence(sequenceExclusive) {
-        return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
+      readFromSequence(sequenceExclusive, limit = productionDefaultReadLimit) {
+        requestedReadLimits.push(limit);
+        return Stream.fromIterable(
+          events.filter((event) => event.sequence > sequenceExclusive).slice(0, limit),
+        );
       },
       readAll() {
         return Stream.fromIterable(events);
@@ -1199,6 +1209,16 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("already archived");
+
+    // "already archived" above proves the reconcile saw the archive event in THIS run,
+    // where one dispatch appended one event. It would keep proving that if the read
+    // silently capped at 1,000, because the cap is never reached here -- so assert the
+    // request itself. Every reconcile read must ask for everything.
+    expect(requestedReadLimits.length).toBeGreaterThan(0);
+    expect(requestedReadLimits).not.toContain(productionDefaultReadLimit);
+    for (const limit of requestedReadLimits) {
+      expect(limit).toBe(Number.MAX_SAFE_INTEGER);
+    }
 
     await runtime.dispose();
   });

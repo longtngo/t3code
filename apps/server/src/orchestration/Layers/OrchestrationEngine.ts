@@ -143,8 +143,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       aggregateKind: aggregateRef.aggregateKind,
     } as const;
     const reconcileReadModelAfterDispatchFailure = Effect.gen(function* () {
+      // Every event this dispatch appended, with no cap: the read model is rebuilt
+      // from exactly these and each one is republished below, so a truncated read
+      // would corrupt the model AND silently drop subscribers' events. The default
+      // limit is 1,000, which one dispatch has never approached -- but the bound
+      // would be incidental rather than stated, and this is the failure path, where
+      // being quietly wrong is hardest to notice. `#7538` made the same call
+      // explicit in `ProjectionPipeline`; this was the only other site relying on
+      // the default. The stream pages internally, so the cost is the events that
+      // actually exist.
       const persistedEvents = yield* Stream.runCollect(
-        eventStore.readFromSequence(dispatchStartSequence),
+        eventStore.readFromSequence(dispatchStartSequence, Number.MAX_SAFE_INTEGER),
       ).pipe(Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)));
       if (persistedEvents.length === 0) {
         return;
