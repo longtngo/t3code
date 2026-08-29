@@ -134,6 +134,13 @@ class StatusRemoteRefreshCacheKey extends Data.Class<{
   remoteName: string;
 }> {}
 
+/**
+ * Whether a background upstream fetch actually refreshed, or failed and is now in
+ * the failure backoff. The cache loader returns this instead of failing, so a
+ * cached failure is a cached *value* and reading it cannot re-log the cause.
+ */
+type StatusRemoteRefreshOutcome = "refreshed" | "failed";
+
 export function statusUpstreamRefreshFailureCooldown(
   consecutiveFailures: number,
 ): Duration.Duration {
@@ -1294,23 +1301,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ) {
     return yield* fetchRemoteForStatus(cacheKey.gitCommonDir, cacheKey.remoteName).pipe(
       Effect.tap(() => Effect.sync(() => clearStatusRemoteRefreshFailures(cacheKey))),
-      Effect.tapError((error) =>
-        Effect.suspend(() => {
+      Effect.map((): StatusRemoteRefreshOutcome => "refreshed"),
+      // The loader must SUCCEED with an outcome rather than fail. Callers wrap it
+      // in `Effect.ignoreCause({ log: true })`, so a cached *failure* is
+      // re-propagated and re-logged in full on every read for the whole cooldown
+      // -- up to 15 minutes. Backoff throttles re-fetching; nothing throttles
+      // re-logging, and that asymmetry produced 40,000+ identical stack traces
+      // and a 128 MB server.log while the fetch itself was correctly backing off.
+      Effect.catch((error) =>
+        Effect.suspend((): Effect.Effect<StatusRemoteRefreshOutcome> => {
           const consecutiveFailures = recordStatusRemoteRefreshFailure(cacheKey);
           // Surface the transition into failure once per outage (not on every
           // retry), with a compact reason, so an operator can see WHY a remote's
           // ahead/behind status stopped refreshing instead of guessing.
-          if (consecutiveFailures !== 1) return Effect.void;
+          if (consecutiveFailures !== 1) return Effect.succeed("failed");
           return Effect.logWarning("git.status.upstreamRefreshFailing").pipe(
             Effect.annotateLogs({
               gitCommonDir: cacheKey.gitCommonDir,
               remoteName: cacheKey.remoteName,
               reason: error.detail,
             }),
+            Effect.as("failed" as const),
           );
         }),
       ),
-      Effect.as(true as const),
     );
   });
 
@@ -1320,8 +1334,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // backed off. Status reads swallow this failure and use the last fetched
     // refs, so repeated thread mounts cannot turn a slow or unavailable remote
     // into a repository-wide Git subprocess storm.
+    //
+    // This reads the OUTCOME, not `Exit.isSuccess`. The loader above now succeeds
+    // either way, so keying on the exit alone would hand every failed entry the
+    // 15-second success interval and convert the log storm into a real fetch
+    // storm -- the exact regression this pair of changes exists to avoid.
     timeToLive: (exit, cacheKey) =>
-      Exit.isSuccess(exit)
+      Exit.isSuccess(exit) && exit.value === "refreshed"
         ? STATUS_UPSTREAM_REFRESH_INTERVAL
         : statusUpstreamRefreshFailureCooldown(
             statusRemoteRefreshFailureCounts.get(statusRemoteRefreshFailureKey(cacheKey)) ?? 1,

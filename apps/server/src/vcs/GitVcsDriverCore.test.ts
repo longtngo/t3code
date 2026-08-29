@@ -1263,12 +1263,26 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           // A second read moments later is served from the cached outcome, so it does
           // not re-hit the remote. (This shows the entry is cached; the failure-vs-
           // success TTL magnitude is asserted separately by the backoff unit tests.)
+          const messagesBeforeSecondRead = logMessages.length;
           yield* driver.statusDetails(cwd);
           const afterSecond = yield* fetchInvocations;
           assert.equal(
             afterSecond,
             afterFirst,
             "the cached outcome should suppress the repeat fetch",
+          );
+
+          // Backoff suppresses the repeat FETCH. It does not, on its own, suppress
+          // the repeat LOG: if the loader fails rather than returning an outcome,
+          // the cache stores a failed Exit, every read re-propagates it, and
+          // `Effect.ignoreCause({ log: true })` prints the whole cause again -- for
+          // the entire cooldown, which reaches 15 minutes. That is what produced
+          // 40,000+ identical stack traces and a 128 MB server.log while the fetch
+          // itself was correctly backing off.
+          assert.equal(
+            logMessages.length,
+            messagesBeforeSecondRead,
+            "a read served from the cached failure must not re-log it",
           );
         }).pipe(
           Effect.provide(Logger.layer([captureLogger], { mergeWithExisting: false })),
