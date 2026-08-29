@@ -45,6 +45,25 @@ const openServer = (host?: string): Effect.Effect<NodeNet.Server, NetService.Net
     return closeServer(server);
   });
 
+/**
+ * Listen on one explicit {port, host}, or `null` when it is already taken.
+ * Unlike {@link openServer} the port is chosen by the caller, which is what
+ * lets a test park a listener on ONE address family.
+ */
+const openServerOn = (port: number, host: string): Effect.Effect<NodeNet.Server | null> =>
+  Effect.callback<NodeNet.Server | null>((resume) => {
+    const server = NodeNet.createServer();
+    let settled = false;
+    const settle = (value: NodeNet.Server | null) => {
+      if (settled) return;
+      settled = true;
+      resume(Effect.succeed(value));
+    };
+    server.once("error", () => settle(null));
+    server.listen(port, host, () => settle(server));
+    return closeServer(server);
+  });
+
 it.layer(NetService.layer)("NetService", (it) => {
   describe("Net helpers", () => {
     it.effect("reserveLoopbackPort returns a positive loopback port", () =>
@@ -69,6 +88,31 @@ it.layer(NetService.layer)("NetService", (it) => {
           }),
         closeServer,
       ),
+    );
+
+    it.effect("reserveLoopbackPort returns a port both loopback families accept", () =>
+      Effect.gen(function* () {
+        const net = yield* NetService.NetService;
+        // The two helpers used to disagree about the same number: the reserve
+        // binds ONE family, `isPortAvailableOnLoopback` demands both, and the
+        // kernel keeps a separate ephemeral space per family. Arm that by
+        // parking IPv6-only listeners on the ports the v4 allocator is about to
+        // walk through, so a single-family reserve lands on one of them.
+        const probe = yield* net.reserveLoopbackPort("127.0.0.1");
+        const held = yield* Effect.forEach(
+          [1, 2, 3, 4, 5].map((offset) => probe + offset),
+          (port) => openServerOn(port, "::1"),
+          { concurrency: "unbounded" },
+        );
+        const parked = held.filter((server) => server !== null);
+        const parkedPorts = new Set([1, 2, 3, 4, 5].map((offset) => probe + offset));
+
+        const port = yield* net.reserveLoopbackPort();
+        yield* Effect.forEach(parked, closeServer, { discard: true });
+
+        assert.equal(parkedPorts.has(port), false);
+        assert.equal(yield* net.isPortAvailableOnLoopback(port), true);
+      }),
     );
 
     it.effect("findAvailablePort returns preferred when it is free", () =>

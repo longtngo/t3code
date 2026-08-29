@@ -151,10 +151,10 @@ export const make = () => {
     });
 
   /**
-   * Reserve an ephemeral loopback port and release it immediately.
-   * Returns the reserved port number.
+   * Bind an ephemeral port on ONE host and release it. Single-family, so the
+   * port it returns is only known to be free on `host`.
    */
-  const reserveLoopbackPort = (host = "127.0.0.1"): Effect.Effect<number, NetError> =>
+  const reserveEphemeralPortOnHost = (host: string): Effect.Effect<number, NetError> =>
     Effect.callback<number, NetError>((resume) => {
       const probe = NodeNet.createServer();
       let settled = false;
@@ -185,6 +185,37 @@ export const make = () => {
         closeServer(probe);
       });
     });
+
+  /**
+   * Reserve an ephemeral loopback port and release it immediately.
+   *
+   * The bind is single-family, but {@link isPortAvailableOnLoopback} - which
+   * every consumer of this port ends up going through - requires the port to be
+   * free on BOTH 127.0.0.1 and ::1. The kernel keeps a separate ephemeral space
+   * per family, so a v4 bind will hand out a port that already has an IPv6-only
+   * listener, and the two helpers then disagree about the very same number.
+   * Measured on this machine: port 58153 was free on 127.0.0.1 and occupied on
+   * ::1 by a `tcp6 *.58153` listener, which is exactly how `findAvailablePort`
+   * came to reject the port `reserveLoopbackPort` had just handed it.
+   *
+   * So re-draw until both families agree. An explicit `host` means the caller
+   * wants that family specifically and is left alone.
+   */
+  const reserveLoopbackPort = (host?: string): Effect.Effect<number, NetError> =>
+    host !== undefined
+      ? reserveEphemeralPortOnHost(host)
+      : Effect.gen(function* () {
+          let port = yield* reserveEphemeralPortOnHost("127.0.0.1");
+          // Bounded: a host with no usable IPv6 answers EADDRNOTAVAIL, which
+          // canListenOnHost already counts as available, so exhausting these
+          // means real contention rather than a missing stack. Returning the
+          // last draw then leaves the caller no worse off than before.
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            if (yield* isPortAvailableOnLoopback(port)) return port;
+            port = yield* reserveEphemeralPortOnHost("127.0.0.1");
+          }
+          return port;
+        });
 
   return {
     canListenOnHost,
