@@ -35,7 +35,7 @@ import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+import { encodeJsonStringForDiagnostics } from "./diagnosticsJson.ts";
 const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
@@ -105,11 +105,6 @@ export class OpenCodeRuntimeError extends Data.TaggedError(OPENCODE_RUNTIME_ERRO
 }> {
   static readonly is = (u: unknown): u is OpenCodeRuntimeError =>
     P.isTagged(u, OPENCODE_RUNTIME_ERROR_TAG);
-}
-
-function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
-  const result = encodeUnknownJsonStringExit(input);
-  return Exit.isSuccess(result) ? result.value : undefined;
 }
 
 export function openCodeRuntimeErrorDetail(cause: unknown): string {

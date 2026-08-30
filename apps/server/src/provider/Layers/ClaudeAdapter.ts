@@ -108,7 +108,7 @@ import { makeAccountUsageBroadcast } from "../accountUsageBroadcast.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeAccountUsagePoll } from "./OAuthUsage.ts";
 import { releaseOldTurnItems } from "./turnItemRetention.ts";
-const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+import { encodeJsonStringForDiagnostics } from "../diagnosticsJson.ts";
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
@@ -129,11 +129,6 @@ type ClaudeToolResultStreamKind = Extract<
   "command_output" | "file_change_output"
 >;
 type ClaudeSdkEffort = NonNullable<ClaudeQueryOptions["effort"]>;
-
-function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
-  const result = encodeUnknownJsonStringExit(input);
-  return Exit.isSuccess(result) ? result.value : undefined;
-}
 
 type PromptQueueItem =
   | {
