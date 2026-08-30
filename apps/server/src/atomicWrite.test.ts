@@ -12,9 +12,7 @@ import { writeFileStringAtomically } from "./atomicWrite.ts";
  * A partial write to any of them is unrecoverable for the user, so the temp-file
  * + rename contract is worth pinning directly rather than only through callers.
  */
-const withTempDirectory = <A, E, R>(
-  use: (directory: string) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R | FileSystem.FileSystem> =>
+const withTempDirectory = <A, E, R>(use: (directory: string) => Effect.Effect<A, E, R>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
