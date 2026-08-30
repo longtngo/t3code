@@ -2441,6 +2441,148 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  // Codex names itself: "Unknown pending Codex approval request". The projector's
+  // approval predicate matched only the generic phrasings, so this cleared
+  // nowhere and the thread kept a blocking approval the user could not answer -
+  // and, because the decider reads the same rule, could not be settled either.
+  // The user-input twin below was already covered, which is what made this an
+  // oversight rather than a decision.
+  it.effect("clears a stale Codex approval request from projected shell summaries", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-stale-codex-approval-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:00.000Z",
+        commandId: CommandId.make("cmd-stale-codex-approval-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-codex-approval-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-stale-user-input"),
+          title: "Project Stale User Input",
+          workspaceRoot: "/tmp/project-stale-user-input",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T12:35:00.000Z",
+          updatedAt: "2026-02-26T12:35:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-stale-codex-approval-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-codex-approval"),
+        occurredAt: "2026-02-26T12:35:01.000Z",
+        commandId: CommandId.make("cmd-stale-codex-approval-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-codex-approval-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-codex-approval"),
+          projectId: ProjectId.make("project-stale-user-input"),
+          title: "Thread Stale User Input",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T12:35:01.000Z",
+          updatedAt: "2026-02-26T12:35:01.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-stale-codex-approval-3"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-codex-approval"),
+        occurredAt: "2026-02-26T12:35:02.000Z",
+        commandId: CommandId.make("cmd-stale-codex-approval-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-codex-approval-3"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-codex-approval"),
+          activity: {
+            id: EventId.make("activity-stale-codex-approval-requested"),
+            tone: "info",
+            kind: "approval.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "approval-request-stale-1",
+              questions: [
+                {
+                  id: "sandbox_mode",
+                  header: "Sandbox",
+                  question: "Which mode should be used?",
+                  options: [
+                    {
+                      label: "workspace-write",
+                      description: "Allow workspace writes only",
+                    },
+                  ],
+                },
+              ],
+            },
+            turnId: null,
+            createdAt: "2026-02-26T12:35:02.000Z",
+          },
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-stale-codex-approval-4"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-codex-approval"),
+        occurredAt: "2026-02-26T12:35:03.000Z",
+        commandId: CommandId.make("cmd-stale-codex-approval-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-codex-approval-4"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-codex-approval"),
+          activity: {
+            id: EventId.make("activity-stale-codex-approval-failed"),
+            tone: "error",
+            kind: "provider.approval.respond.failed",
+            summary: "Provider approval response failed",
+            payload: {
+              requestId: "approval-request-stale-1",
+              detail:
+                "Provider adapter request failed (codex) for item/tool/requestApproval: Unknown pending Codex approval request: approval-request-stale-1",
+            },
+            turnId: null,
+            createdAt: "2026-02-26T12:35:03.000Z",
+          },
+        },
+      });
+
+      const threadRows = yield* sql<{
+        readonly pendingApprovalCount: number;
+      }>`
+        SELECT pending_approval_count AS "pendingApprovalCount"
+        FROM projection_threads
+        WHERE thread_id = 'thread-stale-codex-approval'
+      `;
+      assert.deepEqual(threadRows, [{ pendingApprovalCount: 0 }]);
+    }),
+  );
+
   it.effect("clears stale pending user input from projected shell summaries", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

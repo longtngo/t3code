@@ -47,6 +47,10 @@ import {
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
 import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import {
+  isUnknownPendingApprovalDetail,
+  isUnknownPendingUserInputDetail,
+} from "../staleRequestDetail.ts";
+import {
   resolveSourceControlWriterModelSelection,
   ServerSettingsService,
 } from "../../serverSettings.ts";
@@ -282,41 +286,22 @@ function findProviderAdapterRequestError(
   return isProviderAdapterRequestError(failReason?.error) ? failReason.error : undefined;
 }
 
-function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+// The adapter error carries the provider's own words; when the cause is shaped
+// differently the pretty-printed cause still contains them.
+const matchesCause = (
+  cause: Cause.Cause<ProviderServiceError>,
+  matches: (detail: string) => boolean,
+): boolean => {
   const error = findProviderAdapterRequestError(cause);
-  if (error) {
-    const detail = error.detail.toLowerCase();
-    return (
-      detail.includes("unknown pending approval request") ||
-      detail.includes("unknown pending permission request") ||
-      // Codex names itself in the message, so the generic phrasings miss it.
-      detail.includes("unknown pending codex approval request")
-    );
-  }
-  const message = Cause.pretty(cause).toLowerCase();
-  return (
-    message.includes("unknown pending approval request") ||
-    message.includes("unknown pending permission request") ||
-    message.includes("unknown pending codex approval request")
-  );
+  return matches(error ? error.detail : Cause.pretty(cause));
+};
+
+function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  return matchesCause(cause, isUnknownPendingApprovalDetail);
 }
 
 function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
-  const error = findProviderAdapterRequestError(cause);
-  if (error) {
-    const detail = error.detail.toLowerCase();
-    return (
-      detail.includes("unknown pending user-input request") ||
-      detail.includes("unknown pending user input request") ||
-      detail.includes("unknown pending codex user input request")
-    );
-  }
-  const message = Cause.pretty(cause).toLowerCase();
-  return (
-    message.includes("unknown pending user-input request") ||
-    message.includes("unknown pending user input request") ||
-    message.includes("unknown pending codex user input request")
-  );
+  return matchesCause(cause, isUnknownPendingUserInputDetail);
 }
 
 function stalePendingRequestDetail(

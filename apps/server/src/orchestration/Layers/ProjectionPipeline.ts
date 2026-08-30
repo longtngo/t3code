@@ -45,6 +45,10 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
 import {
+  isStalePendingApprovalDetail,
+  isStalePendingUserInputDetail,
+} from "../staleRequestDetail.ts";
+import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
@@ -120,14 +124,7 @@ function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
 }
 
 function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
-  if (detail === null) {
-    return false;
-  }
-  return (
-    detail.includes("stale pending approval request") ||
-    detail.includes("unknown pending approval request") ||
-    detail.includes("unknown pending permission request")
-  );
+  return isStalePendingApprovalDetail(detail);
 }
 
 // A full refresh loads all thread history, so skip events that cannot change the summary.
@@ -187,10 +184,7 @@ function derivePendingUserInputCountFromActivities(
     if (
       activity.kind === "provider.user-input.respond.failed" &&
       detail !== null &&
-      (detail.includes("stale pending user-input request") ||
-        detail.includes("unknown pending user-input request") ||
-        detail.includes("unknown pending user input request") ||
-        detail.includes("unknown pending codex user input request"))
+      isStalePendingUserInputDetail(detail)
     ) {
       openRequestIds.delete(requestId);
     }

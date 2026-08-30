@@ -24,6 +24,7 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { isQueuedTurnStart, latestTurnTimestampMs } from "@t3tools/shared/queuedTurnStart";
+import { isStaleRequestDetail } from "./staleRequestDetail.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -41,17 +42,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
  * rejected on threads whose shell flags read as clear.
  */
 function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): boolean {
-  const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
-  if (detail === null) return false;
-  return (
-    detail.includes("stale pending approval request") ||
-    detail.includes("unknown pending approval request") ||
-    detail.includes("unknown pending permission request") ||
-    detail.includes("stale pending user-input request") ||
-    detail.includes("unknown pending user-input request") ||
-    detail.includes("unknown pending user input request") ||
-    detail.includes("unknown pending codex user input request")
-  );
+  return isStaleRequestDetail(typeof payload?.detail === "string" ? payload.detail : null);
 }
 
 // Scans the read model's activities, which the projector caps at the most
