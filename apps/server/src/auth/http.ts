@@ -39,6 +39,7 @@ import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import { requestIsHttps } from "./requestScheme.ts";
 
 const CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
@@ -247,6 +248,9 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 httpOnly: true,
                 path: "/",
                 sameSite: "lax",
+                // Omitted on plaintext, or the browser would drop the cookie and
+                // local HTTP sessions could never log in.
+                ...(requestIsHttps(request) ? { secure: true } : {}),
               }),
             ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
 
