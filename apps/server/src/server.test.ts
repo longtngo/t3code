@@ -3319,6 +3319,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("challenges with DPoP when a DPoP-bound request is rejected", () =>
+    Effect.gen(function* () {
+      // A DPoP client that gets a 401 needs `www-authenticate: DPoP` to know it
+      // should retry with a proof rather than fall back to bearer. The header is
+      // appended conditionally and nothing asserted either arm of that condition.
+      yield* buildAppUnderTest();
+
+      const url = yield* getHttpServerUrl("/api/connect/relay-config");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { authorization: "DPoP not-a-real-token", "content-type": "application/json" },
+        body: jsonRequestBody({}),
+      });
+
+      assert.equal(response.status, 401);
+      assert.equal(response.headers["www-authenticate"], "DPoP");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not send a DPoP challenge to a bearer client", () =>
+    Effect.gen(function* () {
+      // The control. Advertising DPoP to a plain bearer client would tell it to
+      // retry with a scheme it never used, so the condition has to discriminate.
+      yield* buildAppUnderTest();
+
+      const url = yield* getHttpServerUrl("/api/connect/relay-config");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { authorization: "Bearer not-a-real-token", "content-type": "application/json" },
+        body: jsonRequestBody({}),
+      });
+
+      assert.equal(response.status, 401);
+      assert.isUndefined(response.headers["www-authenticate"]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The second arm of the challenge condition - a `dpop` header on /oauth/token -
+  // is NOT covered here. It fires only when the failure is an
+  // EnvironmentAuthInvalidError, and a malformed grant on that endpoint fails as
+  // a request error first, so a test posting a bad grant asserts nothing about
+  // DPoP. Covering it needs a request that authenticates far enough to fail on
+  // the proof itself.
+
   it.effect("rejects cloud mint requests without the exact connect scope", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
