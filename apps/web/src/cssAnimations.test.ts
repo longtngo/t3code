@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+// @effect-diagnostics nodeBuiltinImport:off - reads a stylesheet at test time, no Effect runtime.
+import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
@@ -10,7 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
  * permanent GPU cost for as long as the element is mounted. Those must at least
  * stand still under `prefers-reduced-motion: reduce`.
  */
-const CSS = readFileSync(new URL("./index.css", import.meta.url), "utf8");
+const CSS = NodeFS.readFileSync(new URL("./index.css", import.meta.url), "utf8");
 
 /** Properties whose animation forces paint rather than compositing. */
 const REPAINTING = [
