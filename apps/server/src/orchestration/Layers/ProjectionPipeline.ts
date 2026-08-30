@@ -955,9 +955,29 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+
+          // Diffs settle asynchronously, so a checkpoint for an older turn can land
+          // while a newer turn is already the latest. Advance only when this turn is
+          // at least as new, ordered by checkpointTurnCount — the same key
+          // `thread.reverted` below uses to pick the surviving latest turn.
+          const currentLatestTurnId = existingRow.value.latestTurnId;
+          let latestTurnId = event.payload.turnId;
+          if (currentLatestTurnId !== null && currentLatestTurnId !== event.payload.turnId) {
+            const turns = yield* projectionTurnRepository.listByThreadId({
+              threadId: event.payload.threadId,
+            });
+            const currentLatest = turns.find((turn) => turn.turnId === currentLatestTurnId);
+            if (
+              currentLatest?.checkpointTurnCount != null &&
+              currentLatest.checkpointTurnCount > event.payload.checkpointTurnCount
+            ) {
+              latestTurnId = currentLatestTurnId;
+            }
+          }
+
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: event.payload.turnId,
+            latestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);

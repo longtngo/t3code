@@ -1799,6 +1799,123 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("keeps the newer latest turn when an older turn's diff completes late", () =>
+    Effect.gen(function* () {
+      // Diffs settle asynchronously, so a checkpoint for turn 1 can land after turn 2
+      // already became the latest turn. The row must not walk backwards: clients read
+      // latest_turn_id to decide whether a thread has settled, so a regression here
+      // resurrects a finished turn in the sidebar and the thread view.
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-late-diff");
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      const diffCompleted = (
+        suffix: string,
+        turn: string,
+        checkpointTurnCount: number,
+        occurredAt: string,
+      ) =>
+        ({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make(`evt-late-diff-${suffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.make(`cmd-late-diff-${suffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-late-diff-${suffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            turnId: TurnId.make(turn),
+            checkpointTurnCount,
+            checkpointRef: CheckpointRef.make(
+              `refs/t3/checkpoints/thread-late-diff/turn/${checkpointTurnCount}`,
+            ),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make(`assistant-${turn}`),
+            completedAt: occurredAt,
+          },
+        }) as Parameters<typeof eventStore.append>[0];
+
+      const latestTurnIdRow = () =>
+        sql<{ readonly latestTurnId: string | null }>`
+          SELECT latest_turn_id AS "latestTurnId"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-late-diff-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-late-diff"),
+        occurredAt: "2026-03-01T12:00:00.000Z",
+        commandId: CommandId.make("cmd-late-diff-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-diff-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-late-diff"),
+          title: "Project Late Diff",
+          workspaceRoot: "/tmp/project-late-diff",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-03-01T12:00:00.000Z",
+          updatedAt: "2026-03-01T12:00:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-late-diff-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-03-01T12:00:01.000Z",
+        commandId: CommandId.make("cmd-late-diff-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-late-diff-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-late-diff"),
+          title: "Thread Late Diff",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-03-01T12:00:01.000Z",
+          updatedAt: "2026-03-01T12:00:01.000Z",
+        },
+      });
+
+      // Turn 1 then turn 2, in order. The second advance is the control: without it a
+      // guard that simply refused every change would pass the regression assertion.
+      yield* appendAndProject(diffCompleted("1", "turn-1", 1, "2026-03-01T12:00:02.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-1" }]);
+
+      yield* appendAndProject(diffCompleted("2", "turn-2", 2, "2026-03-01T12:00:03.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-2" }]);
+
+      // The late one. Turn 1's diff re-completes after turn 2 already won.
+      yield* appendAndProject(diffCompleted("1-late", "turn-1", 1, "2026-03-01T12:00:04.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-2" }]);
+
+      // Re-completing the current latest turn is still allowed.
+      yield* appendAndProject(diffCompleted("2-again", "turn-2", 2, "2026-03-01T12:00:05.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-2" }]);
+    }),
+  );
+
   it.effect("settles a superseded running turn when a new turn becomes active", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
