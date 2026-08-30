@@ -139,6 +139,7 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+import { useStreamingMarkdownText } from "./streamingMarkdownText";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -1217,7 +1218,10 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const streamedText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  // ChatMarkdown is memoized on its props, so holding `text` steady between
+  // commits is what actually skips the re-parse.
+  const messageText = useStreamingMarkdownText(streamedText, Boolean(row.message.streaming));
 
   return (
     <>
