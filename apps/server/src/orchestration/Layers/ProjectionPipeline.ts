@@ -961,10 +961,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               threadId: event.payload.threadId,
             });
             const currentLatest = turns.find((turn) => turn.turnId === currentLatestTurnId);
-            if (
-              currentLatest?.checkpointTurnCount != null &&
-              currentLatest.checkpointTurnCount > event.payload.checkpointTurnCount
-            ) {
+            const incoming = turns.find((turn) => turn.turnId === event.payload.turnId);
+            // A turn only gets a checkpointTurnCount once its own diff settles, so
+            // the turn that is still running - the newest by construction, made
+            // latest by `thread.session-set` above - has none. Reading that missing
+            // count as "older" is a second route to the same rewind, so fall back to
+            // requestedAt, which every turn row carries.
+            const currentIsNewer =
+              currentLatest !== undefined &&
+              (currentLatest.checkpointTurnCount != null
+                ? currentLatest.checkpointTurnCount > event.payload.checkpointTurnCount
+                : incoming === undefined || currentLatest.requestedAt > incoming.requestedAt);
+            if (currentIsNewer) {
               latestTurnId = currentLatestTurnId;
             }
           }
