@@ -17,7 +17,8 @@
  *
  * Kept as substring patterns because they are matched against detail strings
  * already persisted in the event log; a structured marker could only cover new
- * events.
+ * events. For the same reason a phrasing stays on this list after the code that
+ * emitted it is gone.
  */
 
 /**
@@ -34,6 +35,9 @@ const UNKNOWN_PENDING_APPROVAL_DETAILS = [
 
 const UNKNOWN_PENDING_USER_INPUT_DETAILS = [
   "unknown pending user-input request",
+  // No adapter emits the unhyphenated form today: it was thrown by the
+  // pre-app-server Codex runtime and renamed when that landed. Events from
+  // before then are still in the log and still have to be recognised.
   "unknown pending user input request",
   "unknown pending codex user input request",
 ] as const;
