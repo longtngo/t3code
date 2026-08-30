@@ -182,6 +182,10 @@
     "./state/title-regeneration-failures": {
       "types": "./src/state/titleRegenerationFailures.ts",
       "default": "./src/state/titleRegenerationFailures.ts"
+    },
+    "./state/stop-ladder": {
+      "types": "./src/state/stopLadder.ts",
+      "default": "./src/state/stopLadder.ts"
     }
   },
   "scripts": {
