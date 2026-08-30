@@ -3347,7 +3347,11 @@ describe("ProviderCommandReactor", () => {
     // path (startSession never registers a live session), so only the dedup
     // Cache keeps this at exactly one continuation.
     await runtime!.runPromise(respond("b"));
-    await runtime!.runPromise(Effect.sleep("200 millis"));
+    // The assertion is a negative ("no second turn"), which no waitFor can express.
+    // Drain the reactor instead of sleeping: once its queue is empty the second
+    // answer has been fully processed, so one call is a settled result rather than
+    // a race that a slow machine could flip.
+    await harness.drain();
     expect(harness.sendTurn.mock.calls.length).toBe(1);
     expect(harness.respondToUserInput).not.toHaveBeenCalled();
   });
