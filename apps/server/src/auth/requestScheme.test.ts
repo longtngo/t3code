@@ -37,4 +37,15 @@ describe("requestIsHttps", () => {
     expect(requestIsHttps(request({ "x-forwarded-proto": "" }))).toBe(false);
     expect(requestIsHttps(request({}, "not a url"))).toBe(false);
   });
+  it("does not let a forwarded http downgrade an https request url", () => {
+    // The one direction that costs something. Stripping Secure would let the
+    // cookie travel in clear text; the reverse (a spoofed https) only breaks
+    // the sender's own login.
+    expect(
+      requestIsHttps(request({ "x-forwarded-proto": "http" }, "https://app.t3.codes/api")),
+    ).toBe(true);
+    expect(
+      requestIsHttps(request({ "x-forwarded-proto": "http, https" }, "https://app.t3.codes/api")),
+    ).toBe(true);
+  });
 });
