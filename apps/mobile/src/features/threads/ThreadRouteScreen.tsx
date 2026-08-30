@@ -75,6 +75,8 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
+import { nextStopAction } from "@t3tools/client-runtime/state/stop-ladder";
+import type { ArmedStopEscalation } from "@t3tools/client-runtime/state/stop-ladder";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -214,6 +216,11 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
+  // A ref, not state: the arming decides the NEXT press and must never trigger
+  // a render. Decided from a timestamp rather than a countdown so a backgrounded
+  // app, whose timers are throttled, still sees the arming as expired.
+  const armedStopEscalationRef = useRef<ArmedStopEscalation | null>(null);
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -486,6 +493,33 @@ function ThreadRouteContent(
     ) {
       return;
     }
+
+    // Same ladder web uses: the first press asks the turn to stop, a deliberate
+    // second press inside the band force-stops the session. Without the second
+    // rung a turn wedged inside a tool is unrecoverable from a phone - the
+    // server's stall watchdog abstains while the open-tool set is non-empty, so
+    // there is nothing else to fall back on.
+    const action = nextStopAction({
+      threadId: selectedThread.id,
+      armed: armedStopEscalationRef.current,
+      nowMs: Date.now(),
+    });
+
+    if (action === "ignore") {
+      // Too soon after the first press to be a decision; leave the arming so a
+      // deliberate press a moment later still escalates.
+      return;
+    }
+
+    if (action === "hardStop") {
+      armedStopEscalationRef.current = null;
+      return stopThreadSession({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id, recoverAfterStop: true },
+      });
+    }
+
+    armedStopEscalationRef.current = { threadId: selectedThread.id, atMs: Date.now() };
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
@@ -495,7 +529,7 @@ function ThreadRouteContent(
           : {}),
       },
     });
-  }, [interruptThreadTurn, selectedThread]);
+  }, [interruptThreadTurn, selectedThread, stopThreadSession]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
