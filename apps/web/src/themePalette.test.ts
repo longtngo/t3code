@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
+import {
+  BUILT_IN_THEMES,
+  RESERVED_THEME_IDS,
+  UNPUBLISHABLE_THEME_IDS,
+} from "@t3tools/shared/themePalettes";
 
 import {
   applyThemeColorPreview,
@@ -1079,5 +1083,88 @@ describe("singleAppearanceOf", () => {
     const { variants: _pair, ...base } = T3_CHAT_THEME;
     expect(singleAppearanceOf({ ...base, id: "x", appearance: "dark" })).toBe("dark");
     expect(singleAppearanceOf(T3_CHAT_THEME)).toBe(null);
+  });
+});
+
+describe("reserved theme ids", () => {
+  // installCustomTheme, updateCustomTheme and parseThemeFile each gate on
+  // RESERVED_THEME_IDS independently, and nothing asserted any of them held. A
+  // custom theme taking a built-in's id would shadow it wherever ids resolve.
+  const stubStorage = () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+      },
+    });
+    invalidateCustomThemes();
+  };
+
+  const restore = () => {
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  };
+
+  // A literal definition, NOT parseThemeFile: that helper rejects reserved ids
+  // itself, so building fixtures with it made these tests pass even with
+  // installCustomTheme's own gate removed. `canvas` is required or the theme is
+  // rejected for colour reasons before the id is ever examined.
+  // Borrow a real built-in's colours and change only the id, so nothing can be
+  // rejected for being an incomplete palette. Built explicitly rather than via
+  // parseThemeFile: that helper rejects reserved ids itself, so fixtures made
+  // with it passed even with installCustomTheme's own gate removed.
+  const baseTheme = BUILT_IN_THEMES[0]!;
+  const themeWithId = (id: string) => ({
+    ...baseTheme,
+    id,
+    label: "Impostor",
+  });
+
+  it("refuses to install a theme under a reserved id", () => {
+    stubStorage();
+    // "system" is a preference sentinel and "grove" a shipped built-in: two
+    // different reasons an id is reserved, so both are worth pinning.
+    for (const id of ["system", "grove", "light", "dark"]) {
+      expect(RESERVED_THEME_IDS.has(id), `${id} should be reserved`).toBe(true);
+      expect(() => installCustomTheme(themeWithId(id))).toThrow(/reserved/i);
+    }
+    expect(getCustomThemes()).toEqual([]);
+    restore();
+  });
+
+  it("refuses to update a theme onto a reserved id", () => {
+    stubStorage();
+    expect(() => updateCustomTheme(themeWithId("grove"))).toThrow(/reserved/i);
+    restore();
+  });
+
+  it("refuses to parse a theme file carrying a reserved id", () => {
+    // The separate gate on the import path, which is how a reserved id would
+    // most plausibly arrive - a downloaded .json rather than a code call.
+    expect(() =>
+      parseThemeFile({
+        version: THEME_FILE_VERSION,
+        id: "grove",
+        name: "Impostor",
+        appearance: "dark",
+        colors: { canvas: "#101014", accent: "#5b6cff" },
+      }),
+    ).toThrow(/reserved/i);
+  });
+
+  it("still installs an id that is merely unpublishable, not reserved", () => {
+    // The control. UNPUBLISHABLE is a superset of RESERVED; its extra member (the
+    // mobile default) is legitimate to hold locally and simply cannot be
+    // published. Installing it must NOT throw, or the two sets are conflated.
+    stubStorage();
+    const unpublishableOnly = [...UNPUBLISHABLE_THEME_IDS].filter(
+      (id) => !RESERVED_THEME_IDS.has(id),
+    );
+    expect(unpublishableOnly.length).toBeGreaterThan(0);
+    for (const id of unpublishableOnly) {
+      expect(() => installCustomTheme(themeWithId(id))).not.toThrow();
+    }
+    restore();
   });
 });
