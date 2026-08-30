@@ -2489,6 +2489,14 @@ code {
     linear-gradient(#000 0 0);
   mask-composite: exclude;
   animation: ultrathink-rainbow 10s linear infinite;
+
+  /* background-position and filter both repaint every frame, unlike the
+     transform-driven shimmer above, and this frame is on screen for as long as
+     ultrathink is enabled. Hold the gradient still when motion is unwelcome. */
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    background-position: 0% 50%;
+  }
 }
 
 .ultrathink-frame > * {
@@ -2497,6 +2505,11 @@ code {
 
 .ultrathink-chroma {
   animation: ultrathink-chroma-shift 10s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    filter: saturate(1.2);
+  }
 }
 
 @keyframes preview-loading-progress {
