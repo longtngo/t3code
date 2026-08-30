@@ -115,6 +115,10 @@
       "types": "./src/orchestrationTiming.ts",
       "import": "./src/orchestrationTiming.ts"
     },
+    "./queuedTurnStart": {
+      "types": "./src/queuedTurnStart.ts",
+      "import": "./src/queuedTurnStart.ts"
+    },
     "./remote": {
       "types": "./src/remote.ts",
       "import": "./src/remote.ts"
