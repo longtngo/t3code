@@ -57,10 +57,10 @@ const appendDpopChallengeHeader = HttpEffect.appendPreResponseHandler((_request,
 const appendDpopChallengeOnUnauthorized = (error: EnvironmentAuthInvalidError) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const usesDpop =
-      (request.originalUrl.startsWith("/oauth/token") && request.headers.dpop !== undefined) ||
-      request.headers.authorization?.startsWith("DPoP ") === true;
-    if (usesDpop) {
+    // Only requests carrying a DPoP-bound access token reach here. /oauth/token
+    // is where one is obtained, so it has no authenticated middleware and never
+    // runs this - it raises its own challenge inline when a proof fails.
+    if (request.headers.authorization?.startsWith("DPoP ") === true) {
       yield* appendDpopChallengeHeader;
     }
     return yield* error;

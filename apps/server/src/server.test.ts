@@ -3356,12 +3356,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  // The second arm of the challenge condition - a `dpop` header on /oauth/token -
-  // is NOT covered here. It fires only when the failure is an
-  // EnvironmentAuthInvalidError, and a malformed grant on that endpoint fails as
-  // a request error first, so a test posting a bad grant asserts nothing about
-  // DPoP. Covering it needs a request that authenticates far enough to fail on
-  // the proof itself.
+  it.effect("challenges with DPoP when a token exchange fails on its proof", () =>
+    Effect.gen(function* () {
+      // Proof verification failing raises its own challenge inline rather than
+      // going through appendDpopChallengeOnUnauthorized, and that inline path
+      // was untested too. The sibling test above covers the shared helper.
+      yield* buildAppUnderTest();
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+        body: yield* HttpBody.json({}),
+      });
+      const credential = (yield* credentialResponse.json) as { readonly credential: string };
+      const tokenUrl = yield* getHttpServerUrl("/oauth/token");
+
+      const exchange = (dpop: string) =>
+        fetchEffect(tokenUrl, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", dpop },
+          body: new URLSearchParams({
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+            subject_token: credential.credential,
+            subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
+            requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            scope: "orchestration:read",
+          }).toString(),
+        });
+
+      const response = yield* exchange("not-a-real-proof");
+
+      assert.equal(response.status, 401);
+      assert.equal(response.headers["www-authenticate"], "DPoP");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
 
   it.effect("rejects cloud mint requests without the exact connect scope", () =>
     Effect.gen(function* () {
