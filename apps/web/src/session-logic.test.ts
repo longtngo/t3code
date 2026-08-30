@@ -2400,3 +2400,34 @@ describe("shared sorted-activities view", () => {
     expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual(workLogOrder);
   });
 });
+
+describe("deriveTimelineEntries ordering", () => {
+  // A message and its first activity routinely share a createdAt, so the sort's
+  // stability - and therefore the order rows are appended in - decides what the
+  // user sees. Nothing pinned that before, which made the single-array rewrite
+  // of this function unverifiable.
+  const at = "2026-02-23T00:00:01.000Z";
+  const message = { id: "m1", role: "assistant", text: "hi", createdAt: at, turnId: null } as never;
+  const proposedPlan = { id: "p1", createdAt: at } as never;
+  const turnPlan = { id: "tp1", createdAt: at } as never;
+  const workEntry = { id: "w1", createdAt: at, label: "Read", tone: "tool" } as never;
+
+  it("breaks createdAt ties as message, proposed plan, turn plan, work", () => {
+    const entries = deriveTimelineEntries([message], [proposedPlan], [workEntry], [turnPlan]);
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "message",
+      "proposed-plan",
+      "turn-plan",
+      "work",
+    ]);
+  });
+
+  it("still orders by createdAt when timestamps differ", () => {
+    // The control: ties are resolved by position, everything else by timestamp.
+    const later = { ...(message as object), id: "m2", createdAt: "2026-02-23T00:00:09.000Z" };
+    const entries = deriveTimelineEntries([later as never, message], [], [workEntry], []);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["m1", "w1", "m2"]);
+  });
+});

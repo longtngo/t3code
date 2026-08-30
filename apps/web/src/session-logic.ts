@@ -1887,33 +1887,36 @@ export function deriveTimelineEntries(
   workEntries: ReadonlyArray<WorkLogEntry>,
   turnPlans: ReadonlyArray<TurnPlanEntry> = [],
 ): TimelineEntry[] {
-  const messageRows: TimelineEntry[] = messages.map((message) => ({
-    id: message.id,
-    kind: "message",
-    createdAt: message.createdAt,
-    message,
-  }));
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  }));
-  const turnPlanRows: TimelineEntry[] = turnPlans.map((turnPlan) => ({
-    id: turnPlan.id,
-    kind: "turn-plan",
-    createdAt: turnPlan.createdAt,
-    turnPlan,
-  }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
-    id: entry.id,
-    kind: "work",
-    createdAt: entry.createdAt,
-    entry,
-  }));
-  return [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
+  // Built into one array rather than four mapped arrays spread into a fifth.
+  // ChatView rebuilds the timeline whenever the work log changes, which is on
+  // essentially every activity append during a turn, so the intermediate
+  // allocations recur for the whole length of a stream.
+  //
+  // Push order is load-bearing: the sort below is stable and `createdAt`
+  // collisions are common (a message and its first activity share a timestamp),
+  // so rows must be appended in the same order the old concatenation produced -
+  // messages, proposed plans, turn plans, work - or ties resolve differently.
+  const rows: TimelineEntry[] = [];
+  for (const message of messages) {
+    rows.push({ id: message.id, kind: "message", createdAt: message.createdAt, message });
+  }
+  for (const proposedPlan of proposedPlans) {
+    rows.push({
+      id: proposedPlan.id,
+      kind: "proposed-plan",
+      createdAt: proposedPlan.createdAt,
+      proposedPlan,
+    });
+  }
+  for (const turnPlan of turnPlans) {
+    rows.push({ id: turnPlan.id, kind: "turn-plan", createdAt: turnPlan.createdAt, turnPlan });
+  }
+  for (const entry of workEntries) {
+    rows.push({ id: entry.id, kind: "work", createdAt: entry.createdAt, entry });
+  }
+  // `sort`, not `toSorted`: `rows` is local and unaliased, so the extra copy
+  // `toSorted` makes has no observable benefit.
+  return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 export function inferCheckpointTurnCountByTurnId(
