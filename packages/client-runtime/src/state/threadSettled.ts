@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import { isQueuedTurnStart, latestTurnTimestampMs } from "@t3tools/shared/queuedTurnStart";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
@@ -102,7 +103,7 @@ export function threadLastActivityAt(
  * messages with no latestTurn at all), not pending work. Without this bound
  * such threads would be permanently unsettleable.
  */
-export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
+export { QUEUED_TURN_START_GRACE_MS } from "@t3tools/shared/queuedTurnStart";
 
 /**
  * A user message no turn has picked up yet: the turn.start command was
@@ -118,23 +119,12 @@ export function hasQueuedTurnStart(
   options: { readonly now: string },
 ): boolean {
   if (shell.latestUserMessageAt == null) return false;
-  // A failed session start clears the queued state: the failure is already
-  // visible (status edge / error).
-  if (shell.session?.status === "error") return false;
-  const messageAt = Date.parse(shell.latestUserMessageAt);
-  if (Number.isNaN(messageAt)) return false;
-  const nowMs = Date.parse(options.now);
-  if (Number.isNaN(nowMs)) return false;
-  // Bounded on both sides: message timestamps originate on whichever device
-  // sent the message, so a clock ahead of this one yields a negative age
-  // that would otherwise hold the queued state for the whole skew. Mirrors
-  // the decider's guard.
-  if (Math.abs(nowMs - messageAt) > QUEUED_TURN_START_GRACE_MS) return false;
-  const turn = shell.latestTurn;
-  if (turn === null) return true;
-  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
-    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
-  );
+  return isQueuedTurnStart({
+    latestUserMessageAtMs: Date.parse(shell.latestUserMessageAt),
+    latestTurnAtMs: latestTurnTimestampMs(shell.latestTurn),
+    sessionStatus: shell.session?.status,
+    nowMs: Date.parse(options.now),
+  });
 }
 
 /**

@@ -23,13 +23,12 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { isQueuedTurnStart, latestTurnTimestampMs } from "@t3tools/shared/queuedTurnStart";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 // Session adoption takes seconds; a user message still unadopted after this
 // window is a failed/stale start, not pending work. Mirrors the client's
-// QUEUED_TURN_START_GRACE_MS in client-runtime threadSettled.ts.
-const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
@@ -118,30 +117,16 @@ function threadHasQueuedTurnStart(
   },
   occurredAt: string,
 ): boolean {
-  const latestUserMessageAtMs = thread.messages.reduce(
-    (latest, message) =>
-      message.role === "user" ? Math.max(latest, Date.parse(message.createdAt)) : latest,
-    Number.NEGATIVE_INFINITY,
-  );
-  const latestTurnAtMs =
-    thread.latestTurn === null
-      ? Number.NEGATIVE_INFINITY
-      : Math.max(
-          ...[
-            thread.latestTurn.requestedAt,
-            thread.latestTurn.startedAt,
-            thread.latestTurn.completedAt,
-          ].map((candidate) =>
-            candidate == null ? Number.NEGATIVE_INFINITY : Date.parse(candidate),
-          ),
-        );
-  const queuedAgeMs = Date.parse(occurredAt) - latestUserMessageAtMs;
-  return (
-    thread.session?.status !== "error" &&
-    Number.isFinite(latestUserMessageAtMs) &&
-    latestUserMessageAtMs > latestTurnAtMs &&
-    Math.abs(queuedAgeMs) <= QUEUED_TURN_START_GRACE_MS
-  );
+  return isQueuedTurnStart({
+    latestUserMessageAtMs: thread.messages.reduce(
+      (latest, message) =>
+        message.role === "user" ? Math.max(latest, Date.parse(message.createdAt)) : latest,
+      Number.NEGATIVE_INFINITY,
+    ),
+    latestTurnAtMs: latestTurnTimestampMs(thread.latestTurn),
+    sessionStatus: thread.session?.status,
+    nowMs: Date.parse(occurredAt),
+  });
 }
 
 function withEventBase(
