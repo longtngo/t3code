@@ -174,6 +174,11 @@ export const ServerProvider = Schema.Struct({
   // taken back before it is sent. Absent means no, so a client talking to an
   // older server offers recall nowhere rather than offering it everywhere.
   supportsQueuedMessageRecall: Schema.optional(Schema.Boolean),
+  // Whether this provider emits token-usage events at all, which is what the
+  // context meter is built from. Absent means yes, so a client talking to an
+  // older server keeps today's behaviour: show nothing rather than wrongly
+  // telling the user their provider cannot report usage.
+  reportsContextUsage: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,

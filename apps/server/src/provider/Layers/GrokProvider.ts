@@ -42,6 +42,7 @@ const GROK_PRESENTATION = {
   showInteractionModeToggle: false,
   // Its adapter has no queue to take a turn back out of.
   supportsQueuedMessageRecall: false,
+  reportsContextUsage: false,
   requiresNewThreadForModelChange: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
