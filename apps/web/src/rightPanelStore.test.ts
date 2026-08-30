@@ -724,12 +724,36 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().openTerminal(refA, "term-1");
     useRightPanelStore.getState().openBrowser(refA, "tab-a");
     useRightPanelStore.getState().openBrowser(refA, "tab-b");
-    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, ["tab-b", "tab-c"]);
+    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, ["tab-b", "tab-c"], true);
 
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
         (surface) => surface.id,
       ),
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
+  });
+
+  it("drops preview surfaces on a client that cannot render them", () => {
+    // Preview is a desktop Chromium <webview>, but the server keeps tab metadata
+    // for every client so it survives reconnects. A browser opening a thread that
+    // was previewed on desktop used to rebuild the tab chrome anyway.
+    useRightPanelStore.getState().openTerminal(refA, "term-1");
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, ["tab-a"], false);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual(["terminal:term-1"]);
+    // And it must not leave the panel pointing at a surface that is gone.
+    expect(state.activeSurfaceId).toBe("terminal:term-1");
+  });
+
+  it("closes the panel when preview was the only surface on an unsupported client", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, ["tab-a"], false);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toEqual([]);
+    expect(state.isOpen).toBe(false);
+    expect(state.activeSurfaceId).toBeNull();
   });
 });

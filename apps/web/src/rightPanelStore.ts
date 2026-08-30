@@ -132,7 +132,11 @@ interface RightPanelStoreState {
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeAllSurfaces: (ref: ScopedThreadRef) => void;
-  reconcileBrowserSurfaces: (ref: ScopedThreadRef, tabIds: readonly string[]) => void;
+  reconcileBrowserSurfaces: (
+    ref: ScopedThreadRef,
+    tabIds: readonly string[],
+    previewSupported: boolean,
+  ) => void;
   reconcileFileSurfaces: (ref: ScopedThreadRef, workspaceAvailable: boolean) => void;
   show: (ref: ScopedThreadRef) => void;
   close: (ref: ScopedThreadRef) => void;
@@ -612,9 +616,32 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               : { ...current, isOpen: false, surfaces: [], activeSurfaceId: null },
           ),
         })),
-      reconcileBrowserSurfaces: (ref, tabIds) =>
+      reconcileBrowserSurfaces: (ref, tabIds, previewSupported) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            // Preview is a desktop Chromium <webview>. The server keeps per-thread
+            // tab metadata for every client so it survives reconnects, so a browser
+            // reaching a thread that was previewed on desktop would otherwise
+            // rebuild tab chrome it can never render - and could land on it, since
+            // the fallback below picks a preview surface. Drop them instead, the
+            // same way reconcileFileSurfaces drops file surfaces with no workspace.
+            if (!previewSupported) {
+              const withoutPreview = current.surfaces.filter(
+                (surface) => surface.kind !== "preview",
+              );
+              if (withoutPreview.length === current.surfaces.length) return current;
+              const stillExists = withoutPreview.some(
+                (surface) => surface.id === current.activeSurfaceId,
+              );
+              return {
+                ...current,
+                isOpen: withoutPreview.length > 0 ? current.isOpen : false,
+                surfaces: withoutPreview,
+                activeSurfaceId: stillExists
+                  ? current.activeSurfaceId
+                  : (withoutPreview.at(-1)?.id ?? null),
+              };
+            }
             const validIds = new Set(tabIds.map((tabId) => `browser:${tabId}`));
             const nonBrowser = current.surfaces.filter((surface) => surface.kind !== "preview");
             const existingBrowser = current.surfaces.filter(
