@@ -30,7 +30,7 @@ const REPAINTING = [
   "mask-position",
 ];
 
-const keyframeBlocks = (): Map<string, string> => {
+const keyframeBlocks = (CSS: string): Map<string, string> => {
   const blocks = new Map<string, string>();
   const re = /@keyframes\s+([\w-]+)\s*\{/g;
   let match: RegExpExecArray | null;
@@ -48,7 +48,7 @@ const keyframeBlocks = (): Map<string, string> => {
 };
 
 /** The CSS rule body containing `position`, so a nested @media is visible. */
-const enclosingRule = (position: number): string => {
+const enclosingRule = (CSS: string, position: number): string => {
   let start = position;
   let depth = 0;
   while (start > 0) {
@@ -69,10 +69,13 @@ const enclosingRule = (position: number): string => {
   return CSS.slice(start, end);
 };
 
-const infiniteAnimations = () => {
-  const frames = keyframeBlocks();
+const infiniteAnimations = (CSS: string) => {
+  const frames = keyframeBlocks(CSS);
   const found: Array<{ name: string; repaints: string[]; guarded: boolean }> = [];
-  const re = /animation:\s*([\w-]+)[^;]*\binfinite\b[^;]*;/g;
+  // `animation:` is only one of the two ways this stylesheet declares one. The
+  // Tailwind `--animate-*` custom properties (index.css) carry the same
+  // shorthand and were invisible to an `animation:`-only scan.
+  const re = /(?:animation|--animate-[\w-]+):\s*([\w-]+)[^;]*\binfinite\b[^;]*;/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(CSS)) !== null) {
     const name = match[1]!;
@@ -84,7 +87,7 @@ const infiniteAnimations = () => {
     found.push({
       name,
       repaints,
-      guarded: enclosingRule(match.index).includes("prefers-reduced-motion"),
+      guarded: enclosingRule(CSS, match.index).includes("prefers-reduced-motion"),
     });
   }
   return found;
@@ -94,16 +97,30 @@ describe("continuously repainting animations", () => {
   it("finds the infinite animations it is meant to police", () => {
     // The detector must be able to see something, or a clean result below is
     // vacuous: an empty scan and a compliant stylesheet look identical.
-    const all = infiniteAnimations();
+    const all = infiniteAnimations(CSS);
     expect(all.length).toBeGreaterThan(3);
     expect(all.some((entry) => entry.repaints.length > 0)).toBe(true);
   });
 
   it("guards every infinite animation that repaints with prefers-reduced-motion", () => {
-    const offenders = infiniteAnimations()
+    const offenders = infiniteAnimations(CSS)
       .filter((entry) => entry.repaints.length > 0 && !entry.guarded)
       .map((entry) => `${entry.name} (animates ${entry.repaints.join(", ")})`);
 
     expect(offenders).toEqual([]);
+  });
+
+  it("sees an animation declared only as a --animate-* variable", () => {
+    // Liveness for the second declaration form. Without this the scan above
+    // could miss every variable-defined animation and still look clean.
+    const crafted = `
+      @theme { --animate-evil: evil-spin 1s infinite linear; }
+      @keyframes evil-spin { from { filter: blur(0); } to { filter: blur(4px); } }
+    `;
+    expect(infiniteAnimations(crafted)).toEqual([
+      { name: "evil-spin", repaints: ["filter"], guarded: false },
+    ]);
+    // And the real stylesheet's variable-declared animations are now in scope.
+    expect(infiniteAnimations(CSS).map((entry) => entry.name)).toContain("skeleton");
   });
 });
