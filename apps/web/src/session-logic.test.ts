@@ -2349,3 +2349,54 @@ describe("session activity performance", () => {
     });
   });
 });
+
+describe("shared sorted-activities view", () => {
+  // ChatView runs five derives against one threadActivities reference per
+  // streaming event. Each used to sort independently; they now share one sorted
+  // array keyed on array identity. These pin the two properties that makes safe.
+  const unordered = (): OrchestrationThreadActivity[] => [
+    makeActivity({ id: "third", kind: "tool.completed", summary: "c", sequence: 3 }),
+    makeActivity({ id: "first", kind: "tool.completed", summary: "a", sequence: 1 }),
+    makeActivity({ id: "second", kind: "tool.completed", summary: "b", sequence: 2 }),
+  ];
+
+  it("derives the same order however many times it is called", () => {
+    const activities = unordered();
+    const first = deriveWorkLogEntries(activities).map((entry) => entry.id);
+    const second = deriveWorkLogEntries(activities).map((entry) => entry.id);
+
+    expect(first).toEqual(["first", "second", "third"]);
+    expect(second).toEqual(first);
+  });
+
+  it("does not serve one array's order to a different array", () => {
+    // The invalidation arm. With a single module-level "last sorted" slot rather
+    // than identity keying, the second call would return the first array's rows -
+    // the classic failure mode for a memo like this.
+    const activities = unordered();
+    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+
+    const different = [
+      makeActivity({ id: "beta", kind: "tool.completed", summary: "beta", sequence: 2 }),
+      makeActivity({ id: "alpha", kind: "tool.completed", summary: "alpha", sequence: 1 }),
+    ];
+    expect(deriveWorkLogEntries(different).map((entry) => entry.id)).toEqual(["alpha", "beta"]);
+  });
+
+  it("gives two different derives the same ordering for one activity list", () => {
+    // Sharing one sorted array is what guarantees the five derives agree.
+    const activities = unordered();
+    const workLogOrder = deriveWorkLogEntries(activities).map((entry) => entry.id);
+    const planOrder = deriveTurnPlans(activities);
+
+    expect(workLogOrder).toEqual(["first", "second", "third"]);
+    // No plan activities here, so turn plans is empty - the point is that reading
+    // the shared array did not disturb the order the work log sees.
+    expect(planOrder).toEqual([]);
+    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual(workLogOrder);
+  });
+});

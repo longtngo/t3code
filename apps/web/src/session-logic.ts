@@ -434,7 +434,7 @@ export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = activitiesInOrder(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -543,7 +543,7 @@ export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = activitiesInOrder(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -691,7 +691,7 @@ export function deriveActivePlanState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActivePlanState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = activitiesInOrder(activities);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
   // Prefer plan from the current turn; fall back to the most recent plan from any turn
   // so that TodoWrite tasks persist across follow-up messages.
@@ -732,7 +732,7 @@ export interface TurnPlanEntry {
 export function deriveTurnPlans(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): TurnPlanEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = activitiesInOrder(activities);
   const byTurn = new Map<
     string,
     { activities: OrchestrationThreadActivity[]; entry: TurnPlanEntry }
@@ -871,7 +871,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = activitiesInOrder(activities);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -1838,6 +1838,34 @@ function compareActivitiesByOrder(
   }
 
   return left.id.localeCompare(right.id);
+}
+
+/**
+ * The activity list in render order, sorted at most once per array identity.
+ *
+ * ChatView runs five derives (work log, turn plans, active plan, pending
+ * approvals, pending user inputs) against the same `threadActivities` reference,
+ * each in its own useMemo, so every streaming event used to pay five O(n log n)
+ * sorts of the same data. Threads reach thousands of activities.
+ *
+ * Keyed on array identity, which is sound because the shell reducer replaces the
+ * activity list rather than mutating it in place; a caller that mutated an array
+ * and re-derived would see the previous order. No derive mutates the result, so
+ * one array can be shared by all of them.
+ */
+const sortedActivitiesByIdentity = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ReadonlyArray<OrchestrationThreadActivity>
+>();
+
+function activitiesInOrder(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const cached = sortedActivitiesByIdentity.get(activities);
+  if (cached !== undefined) return cached;
+  const ordered = activities.toSorted(compareActivitiesByOrder);
+  sortedActivitiesByIdentity.set(activities, ordered);
+  return ordered;
 }
 
 function compareActivityLifecycleRank(kind: string): number {
