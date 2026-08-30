@@ -1004,3 +1004,88 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 });
+
+describe("streaming appends into a populated thread", () => {
+  // The reducer replaces the streamed message BY INDEX. Every pre-existing test
+  // streams into a thread whose target message is the only one, so writing to
+  // slot 0 unconditionally passed them all. These pin the index.
+  const message = (id: string, text: string, streaming = false) => ({
+    id: MessageId.make(id),
+    role: "assistant" as const,
+    text,
+    turnId: null,
+    streaming,
+    createdAt: "2026-04-01T00:00:01.000Z",
+    updatedAt: "2026-04-01T00:00:01.000Z",
+  });
+
+  const populated: OrchestrationThread = {
+    ...baseThread,
+    messages: [
+      message("msg-older-1", "first"),
+      message("msg-older-2", "second"),
+      message("msg-streaming", "Hel", true),
+    ],
+  };
+
+  const chunk = (id: string, text: string, streaming: boolean) =>
+    ({
+      ...baseEventFields,
+      sequence: 5,
+      occurredAt: "2026-04-01T03:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.message-sent",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        messageId: MessageId.make(id),
+        role: "assistant",
+        text,
+        turnId: null,
+        streaming,
+        createdAt: "2026-04-01T00:00:01.000Z",
+        updatedAt: "2026-04-01T03:00:00.000Z",
+      },
+    }) as never;
+
+  it("appends the chunk to the streaming message and leaves earlier ones untouched", () => {
+    const result = applyThreadDetailEvent(populated, chunk("msg-streaming", "lo", true));
+    expect(result.kind).toBe("updated");
+    if (result.kind !== "updated") return;
+
+    expect(result.thread.messages.map((entry) => entry.text)).toEqual(["first", "second", "Hello"]);
+    // Order must survive the replacement, not just contents.
+    expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+      "msg-older-1",
+      "msg-older-2",
+      "msg-streaming",
+    ]);
+  });
+
+  it("finishes the stream without disturbing earlier messages", () => {
+    const result = applyThreadDetailEvent(populated, chunk("msg-streaming", "Hello there", false));
+    expect(result.kind).toBe("updated");
+    if (result.kind !== "updated") return;
+
+    expect(result.thread.messages.map((entry) => entry.text)).toEqual([
+      "first",
+      "second",
+      "Hello there",
+    ]);
+    expect(result.thread.messages[2]?.streaming).toBe(false);
+  });
+
+  it("appends a brand new message rather than overwriting an existing slot", () => {
+    const result = applyThreadDetailEvent(populated, chunk("msg-new", "fresh", true));
+    expect(result.kind).toBe("updated");
+    if (result.kind !== "updated") return;
+
+    expect(result.thread.messages.map((entry) => entry.id)).toEqual([
+      "msg-older-1",
+      "msg-older-2",
+      "msg-streaming",
+      "msg-new",
+    ]);
+    expect(result.thread.messages[0]?.text).toBe("first");
+  });
+});

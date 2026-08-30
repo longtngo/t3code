@@ -311,27 +311,30 @@ export function applyThreadDetailEvent(
         updatedAt: event.payload.updatedAt,
       };
 
-      const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-      const messages = existingMessage
-        ? Arr.map(thread.messages, (entry) =>
-            entry.id !== message.id
-              ? entry
-              : {
-                  ...entry,
-                  text: message.streaming
-                    ? `${entry.text}${message.text}`
-                    : message.text.length > 0
-                      ? message.text
-                      : entry.text,
-                  streaming: message.streaming,
-                  ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
-                  ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
-                  ...(message.attachments !== undefined
-                    ? { attachments: message.attachments }
-                    : {}),
-                },
-          )
-        : Arr.append(thread.messages, message);
+      // Streaming appends land on the newest message, so scan from the end and
+      // replace by index. The previous shape cost two full passes per chunk - a
+      // `find` to test existence, then a `map` invoking a closure on every entry
+      // to rebuild an array that differs in one slot - on threads that reach
+      // thousands of messages, for every token. Message ids are unique, so
+      // searching from either end finds the same entry; from the end finds it
+      // immediately.
+      const existingIndex = thread.messages.findLastIndex((entry) => entry.id === message.id);
+      const existingMessage = existingIndex === -1 ? undefined : thread.messages[existingIndex];
+      const messages =
+        existingMessage === undefined
+          ? Arr.append(thread.messages, message)
+          : thread.messages.with(existingIndex, {
+              ...existingMessage,
+              text: message.streaming
+                ? `${existingMessage.text}${message.text}`
+                : message.text.length > 0
+                  ? message.text
+                  : existingMessage.text,
+              streaming: message.streaming,
+              ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
+              ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
+              ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            });
       // Update latestTurn for assistant messages bound to a turn. A completed
       // assistant message only settles the turn once the session is no longer
       // running it — providers may emit several assistant messages per turn
