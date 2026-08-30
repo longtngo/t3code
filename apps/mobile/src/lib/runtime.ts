@@ -9,6 +9,9 @@ import { managedRelayClientLayer } from "../features/cloud/managedRelayLayer";
 import { resolveCloudPublicConfig } from "../features/cloud/publicConfig";
 import { tracingLayer } from "../features/observability/tracing";
 import * as Persistence from "../persistence/layer";
+import { disposeOnFoundationReplace, type FoundationHotModule } from "./foundation-fast-refresh";
+
+declare const module: { readonly hot?: FoundationHotModule } | undefined;
 
 function configuredRelayUrl(): string {
   return resolveCloudPublicConfig().relay.url ?? "http://relay.invalid";
@@ -53,3 +56,7 @@ export const runtimeContextLayer: Layer.Layer<
   Layer.Success<RuntimeLayerSource>,
   Layer.Error<RuntimeLayerSource>
 > = Layer.effectContext(runtime.contextEffect);
+
+disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () =>
+  runtime.dispose(),
+);

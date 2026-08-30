@@ -405,6 +405,23 @@ required `string` on the native side, and the inline truthiness test is what nar
 `revealLabel`; a boolean-returning call is opaque to control-flow analysis and the native mapping
 stops compiling. A shared _object_ would narrow correctly, if the condition ever needs reusing.
 
+### 17. The composer branch warning replaced upstream's branch-mismatch banner
+
+Fork commit `cfdf25504` ("warn in the composer before a turn writes to another thread's branch")
+removed upstream's `shouldShowBranchMismatchBanner` from `ChatView.logic.ts` and the banner it
+drove from `ChatView.tsx`. Upstream still has both and still calls the helper.
+
+That makes it invariant-4 shaped, but with a twist worth its own entry: the deletion is presented
+by a merge as an **upstream import addition**. The 24th reconcile's only conflict was upstream
+adding two names to the `./ChatView.logic` import list —
+`shouldShowBranchMismatchBanner` (a fork deletion) beside `shoulderTabReserve` (genuinely new
+and genuinely used, called at `ChatView.tsx:4762`). Taking both compiles and passes: the import
+resolves to nothing, and nothing renders the banner.
+
+**The mechanical tell:** after resolving, the merged `ChatView.logic.ts` exported the name
+**zero** times while the merged `ChatView.tsx` still referenced it once. When a conflict is an
+import list, count exports against references rather than reading the marker.
+
 ### 16. The socket TOS guard is load-bearing until Node >= 26.5.1
 
 `apps/server/src/processGuards.ts` makes `net.Socket#setTypeOfService` non-fatal, and `bin.ts`
