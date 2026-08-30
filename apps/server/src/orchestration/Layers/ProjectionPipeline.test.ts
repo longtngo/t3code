@@ -1916,6 +1916,135 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("keeps a running turn latest when an older turn's diff completes late", () =>
+    Effect.gen(function* () {
+      // The sibling test above covers two turns that have both checkpointed. This
+      // is the same rewind reached the other way: `thread.session-set` makes the
+      // NEW turn latest while it is still running, and a running turn has no
+      // checkpointTurnCount yet. A guard that reads a missing count as "older"
+      // lets turn 1's late diff take the row back.
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-running-latest");
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      const latestTurnIdRow = () =>
+        sql<{ readonly latestTurnId: string | null }>`
+          SELECT latest_turn_id AS "latestTurnId"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-running-latest-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-running-latest"),
+        occurredAt: "2026-03-02T12:00:00.000Z",
+        commandId: CommandId.make("cmd-running-latest-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-running-latest-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-running-latest"),
+          title: "Project Running Latest",
+          workspaceRoot: "/tmp/project-running-latest",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-03-02T12:00:00.000Z",
+          updatedAt: "2026-03-02T12:00:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-running-latest-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-03-02T12:00:01.000Z",
+        commandId: CommandId.make("cmd-running-latest-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-running-latest-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-running-latest"),
+          title: "Thread Running Latest",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-03-02T12:00:01.000Z",
+          updatedAt: "2026-03-02T12:00:01.000Z",
+        },
+      });
+
+      const diffCompleted = (suffix: string, turn: string, occurredAt: string) =>
+        ({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make(`evt-running-latest-${suffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.make(`cmd-running-latest-${suffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-running-latest-${suffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            turnId: TurnId.make(turn),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-running-latest/turn/1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make(`assistant-${turn}`),
+            completedAt: occurredAt,
+          },
+        }) as Parameters<typeof eventStore.append>[0];
+
+      yield* appendAndProject(diffCompleted("1", "turn-1", "2026-03-02T12:00:02.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-1" }]);
+
+      // Turn 2 starts. This one event both makes it latest and writes its turn
+      // row with a null checkpointTurnCount.
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-running-latest-session"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-03-02T12:00:03.000Z",
+        commandId: CommandId.make("cmd-running-latest-session"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-running-latest-session"),
+        metadata: {},
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: TurnId.make("turn-2"),
+            lastError: null,
+            updatedAt: "2026-03-02T12:00:03.000Z",
+          },
+        },
+      });
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-2" }]);
+
+      // The late one, while turn 2 is still running.
+      yield* appendAndProject(diffCompleted("1-late", "turn-1", "2026-03-02T12:00:04.000Z"));
+      assert.deepEqual(yield* latestTurnIdRow(), [{ latestTurnId: "turn-2" }]);
+    }),
+  );
+
   it.effect("settles a superseded running turn when a new turn becomes active", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

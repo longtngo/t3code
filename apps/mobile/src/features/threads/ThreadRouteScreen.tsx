@@ -485,6 +485,17 @@ function ThreadRouteContent(
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
   }, [navigation]);
+  // Web re-arms from scratch when the session leaves "running" (ChatView.tsx).
+  // Without the same reset here the arming outlives the wedge it belonged to,
+  // and a Stop on the NEXT turn, still inside the escalation band, force-stops
+  // a session the user only asked to interrupt.
+  const activeSessionStatus = selectedThread?.session?.status ?? null;
+  useEffect(() => {
+    if (activeSessionStatus !== "running") {
+      armedStopEscalationRef.current = null;
+    }
+  }, [activeSessionStatus, selectedThread?.id]);
+
   const handleStopThread = useCallback(() => {
     if (
       !selectedThread ||
