@@ -1894,7 +1894,11 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore
       .getState()
-      .reconcileBrowserSurfaces(activeThreadRef, Object.keys(activePreviewState.sessions));
+      .reconcileBrowserSurfaces(
+        activeThreadRef,
+        Object.keys(activePreviewState.sessions),
+        isPreviewSupportedInRuntime(),
+      );
   }, [activePreviewState.sessions, activeThreadRef]);
 
   useEffect(() => {
