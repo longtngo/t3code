@@ -669,9 +669,12 @@ export function VitalsDetail(props: {
    * without the thread following it.
    */
   sessionProvider?: string | null | undefined;
+  reportsContextUsage?: boolean | undefined;
 }) {
   const { context, accountUsage, host, now, timestampFormat } = props;
-  const missingContextReason = context ? null : describeMissingContextUsage(props.sessionProvider);
+  const missingContextReason = context
+    ? null
+    : describeMissingContextUsage(props.sessionProvider, props.reportsContextUsage);
   const hasWindows = Boolean(
     accountUsage?.fiveHour ||
     accountUsage?.sevenDay ||
@@ -724,6 +727,7 @@ export function VitalsGauge(props: {
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
   sessionProvider?: string | null | undefined;
+  reportsContextUsage?: boolean | undefined;
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
@@ -784,6 +788,7 @@ export function VitalsGauge(props: {
           providerDisplayName={props.providerDisplayName}
           modelDisplayName={props.modelDisplayName}
           sessionProvider={props.sessionProvider}
+          reportsContextUsage={props.reportsContextUsage}
         />
       </PopoverPopup>
     </Popover>
@@ -827,6 +832,7 @@ export function VitalsGaugeConnected(props: {
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
   sessionProvider?: string | null | undefined;
+  reportsContextUsage?: boolean | undefined;
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
@@ -840,6 +846,7 @@ export function VitalsGaugeConnected(props: {
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
       sessionProvider={props.sessionProvider}
+      reportsContextUsage={props.reportsContextUsage}
     />
   );
 }

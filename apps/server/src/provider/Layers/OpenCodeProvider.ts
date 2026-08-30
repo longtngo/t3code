@@ -32,6 +32,7 @@ const OPENCODE_PRESENTATION = {
   showInteractionModeToggle: false,
   // Its adapter has no queue to take a turn back out of.
   supportsQueuedMessageRecall: false,
+  reportsContextUsage: false,
 } as const;
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{

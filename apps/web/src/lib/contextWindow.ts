@@ -62,6 +62,7 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
  * absent. A started Claude thread can have zero context activities too, and
  * telling that user their provider does not report usage would be false.
  */
+/** Fallback only; the server now advertises this per instance. */
 const PROVIDERS_WITHOUT_CONTEXT_USAGE = new Set(["cursor", "grok", "opencode"]);
 
 /**
@@ -73,8 +74,18 @@ const PROVIDERS_WITHOUT_CONTEXT_USAGE = new Set(["cursor", "grok", "opencode"]);
  * picker's current selection — the picker moves without the thread following
  * it, and gating on it would blame Cursor for a thread that ran on Claude.
  */
-export function describeMissingContextUsage(provider: string | null | undefined): string | null {
-  if (!provider || !PROVIDERS_WITHOUT_CONTEXT_USAGE.has(provider)) return null;
+export function describeMissingContextUsage(
+  provider: string | null | undefined,
+  /**
+   * The provider's own answer, from `ServerProvider.reportsContextUsage`.
+   * `undefined` means an older server that does not advertise the capability,
+   * in which case the driver list below is the fallback.
+   */
+  reportsContextUsage?: boolean | undefined,
+): string | null {
+  if (!provider) return null;
+  if (reportsContextUsage === true) return null;
+  if (reportsContextUsage !== false && !PROVIDERS_WITHOUT_CONTEXT_USAGE.has(provider)) return null;
   return `${formatProviderDisplayName(provider)} does not report context usage.`;
 }
 

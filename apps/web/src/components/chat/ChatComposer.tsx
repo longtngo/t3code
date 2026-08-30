@@ -1007,6 +1007,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [providerStatuses, settings],
   );
+  /**
+   * Whether the provider the SESSION is bound to reports token usage at all.
+   * Keyed on the session's instance rather than the composer's selection, for
+   * the same reason queued-message recall is: the picker moves without the
+   * thread following it, so gating on the selection would blame the wrong
+   * provider. `undefined` when the server does not advertise the capability,
+   * which leaves the client's driver-list fallback in charge.
+   */
+  const activeSessionReportsContextUsage = useMemo(
+    () =>
+      providerStatuses.find(
+        (status) => status.instanceId === activeThread?.session?.providerInstanceId,
+      )?.reportsContextUsage,
+    [providerStatuses, activeThread?.session?.providerInstanceId],
+  );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
     activeThread?.session?.providerInstanceId ??
@@ -3940,6 +3955,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     providerDisplayName={activeThreadProviderDisplayName}
                     modelDisplayName={activeThreadModelDisplayName}
                     sessionProvider={activeThread?.session?.providerName ?? null}
+                    reportsContextUsage={activeSessionReportsContextUsage}
                   />
                   {phase === "running" ? (
                     // The composer footer is not rendered at all while collapsed,

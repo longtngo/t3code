@@ -5,6 +5,7 @@ import {
   type ContextWindowSnapshot,
   deriveCompactionMarker,
   deriveLatestContextWindowSnapshot,
+  describeMissingContextUsage,
   formatContextWindowTokens,
 } from "./contextWindow";
 
@@ -154,5 +155,41 @@ describe("deriveCompactionMarker", () => {
     // Equal means the marker would sit on the bar's end cap, claiming a
     // boundary that carries no information.
     expect(deriveCompactionMarker(snapshot({ autoCompactThreshold: 1_000_000 }))).toBeNull();
+  });
+});
+
+describe("describeMissingContextUsage", () => {
+  // Which providers report usage is the server's knowledge now, advertised per
+  // instance as `reportsContextUsage`. The driver list in this module survives
+  // only as a fallback for a server too old to send it, so the precedence
+  // between the two is the thing worth pinning - and none of it was tested.
+  it("says nothing when the provider reports usage", () => {
+    expect(describeMissingContextUsage("claudeAgent", true)).toBeNull();
+  });
+
+  it("explains the gap when the provider says it does not", () => {
+    expect(describeMissingContextUsage("cursor", false)).toMatch(/does not report context usage/);
+  });
+
+  it("believes the provider over the built-in list", () => {
+    // "cursor" is on the fallback list; an explicit `true` must still win, or a
+    // provider that starts reporting usage stays mislabelled until a client ships.
+    expect(describeMissingContextUsage("cursor", true)).toBeNull();
+    // And the reverse, for a driver absent from the list.
+    expect(describeMissingContextUsage("claudeAgent", false)).toMatch(
+      /does not report context usage/,
+    );
+  });
+
+  it("falls back to the driver list when the server is silent", () => {
+    expect(describeMissingContextUsage("cursor", undefined)).toMatch(
+      /does not report context usage/,
+    );
+    expect(describeMissingContextUsage("claudeAgent", undefined)).toBeNull();
+  });
+
+  it("says nothing without a provider, whatever the capability says", () => {
+    expect(describeMissingContextUsage(null, false)).toBeNull();
+    expect(describeMissingContextUsage(undefined, false)).toBeNull();
   });
 });

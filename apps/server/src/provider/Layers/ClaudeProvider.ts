@@ -53,6 +53,7 @@ const CLAUDE_PRESENTATION = {
   // Its adapter queues turns behind a running one, so a queued turn has a
   // name and can be spliced back out. See ClaudeAdapter.withdrawQueuedTurn.
   supportsQueuedMessageRecall: true,
+  reportsContextUsage: true,
 } as const;
 const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";
 const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";

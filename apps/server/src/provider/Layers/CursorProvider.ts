@@ -56,6 +56,7 @@ const CURSOR_PRESENTATION = {
   showInteractionModeToggle: true,
   // Its adapter has no queue to take a turn back out of.
   supportsQueuedMessageRecall: false,
+  reportsContextUsage: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
