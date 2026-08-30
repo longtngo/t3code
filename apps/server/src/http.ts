@@ -12,6 +12,7 @@ import {
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import { summarizeOtlpTraceData } from "./observability/otlpTraceSummary.ts";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -236,7 +237,7 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
       Effect.catch((cause) =>
         Effect.logWarning("Failed to decode browser OTLP traces", {
           cause,
-          bodyJson,
+          ...summarizeOtlpTraceData(bodyJson),
         }),
       ),
     );
