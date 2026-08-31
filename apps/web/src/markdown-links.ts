@@ -143,6 +143,19 @@ export function rewriteMarkdownFileUriHref(href: string | undefined): string | n
   return `${target.path}${target.hash}`;
 }
 
+/**
+ * Whether an absolute path sits under a root a real filesystem uses.
+ *
+ * Exported for the chat prose linkifier, which needs the same answer this
+ * module's own link gate needs. Sharing it is the point: the reported defect was
+ * a folder that chipped inside backticks and stayed dead text in prose, which is
+ * two gates disagreeing about what a path is.
+ */
+export function isKnownFilesystemRootPath(path: string): boolean {
+  if (WINDOWS_DRIVE_PATH_PATTERN.test(path)) return true;
+  return POSIX_FILE_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 function looksLikePosixFilesystemPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
   if (POSIX_FILE_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;

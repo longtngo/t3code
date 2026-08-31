@@ -128,4 +128,18 @@ describe("rehypeChatFilePathLinks", () => {
       "text: both changed",
     ]);
   });
+
+  it("leaves a path inside a literal Codex citation directive alone", () => {
+    // Regression: the existing ChatMarkdown cases used `.xlsx`, which the curated
+    // allow-list already excluded, so they passed while an allow-listed extension
+    // in the same position chipped. Both spellings must stay literal.
+    for (const value of [
+      'Created :codex-file-citation{path="/tmp/project/outputs/report.ts"',
+      ':codex-file-citation-extra{path="/tmp/project/outputs/report.xlsx"}',
+    ]) {
+      const tree = element("root", [element("p", [text(value)])]);
+      rehypeChatFilePathLinks({ cwd: "/tmp/project" })(tree);
+      expect(JSON.stringify(tree)).not.toContain("dataChatFilePath");
+    }
+  });
 });

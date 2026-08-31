@@ -51,11 +51,29 @@ function anchorNode(href: string, label: string): HastNode {
 }
 
 /**
+ * A Codex file-citation directive that survived into a text node.
+ *
+ * A WELL-FORMED citation is rewritten to a markdown link before this plugin runs,
+ * so text still carrying the literal directive is one of the cases the renderer
+ * deliberately leaves alone: unfinished mid-stream, malformed, escaped, or a
+ * similarly-named directive. Its `path="…"` argument must not be linkified —
+ * chipping it makes a half-arrived citation flash a link that then re-renders,
+ * and turns text the renderer promised to keep literal into a control.
+ *
+ * Predates the prose-gate widening: any path with an allow-listed extension
+ * inside such a directive already chipped. The widening only made it reachable
+ * for extensions the allow-list omits, which is how the existing tests — written
+ * against `.xlsx` — passed while the defect was live.
+ */
+const CODEX_FILE_CITATION_DIRECTIVE = /:codex-file-citation/;
+
+/**
  * Split one text node into alternating plain-text and anchor nodes. Returns
  * `null` when the text holds no resolvable path, so the caller can leave the
  * original node untouched rather than rebuild an identical one.
  */
 function linkifyTextValue(value: string, options: ChatFilePathResolution): HastNode[] | null {
+  if (CODEX_FILE_CITATION_DIRECTIVE.test(value)) return null;
   const mentions = findChatFilePathMentions(value, options);
   if (mentions.length === 0) return null;
 

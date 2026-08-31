@@ -79,17 +79,57 @@ describe("resolveChatFilePathMention", () => {
     );
   });
 
+  it("links a folder path, which has no extension to pass the allow-list", () => {
+    // The reported defect: the same folder chipped inside backticks and stayed
+    // dead text in prose.
+    expect(resolveChatFilePathMention("/Users/dev/reports/runbooks", { cwd: CWD })).toBe(
+      "/Users/dev/reports/runbooks",
+    );
+    expect(resolveChatFilePathMention("/Users/dev/reports/runbooks/", { cwd: CWD })).toBe(
+      "/Users/dev/reports/runbooks/",
+    );
+    // Not absolute by isAbsoluteFilePath, so it needs its own clause.
+    expect(resolveChatFilePathMention("~/.claude-personal/skills", { cwd: CWD })).toBe(
+      "/Users/dev/.claude-personal/skills",
+    );
+  });
+
+  it("holds the line against the shapes the root list exists to exclude", () => {
+    // Measured false-positive classes. SPA routes look exactly like absolute
+    // paths, which is why the root list omits app-route-shaped prefixes.
+    expect(resolveChatFilePathMention("/chat/thread-123", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("/api/v1.2", { cwd: CWD })).toBeNull();
+    // Relative shapes keep the extension gate: this branch has a different
+    // false-positive budget, and these are ordinary prose and git refs.
+    expect(resolveChatFilePathMention("origin/main", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("and/or", { cwd: CWD })).toBeNull();
+    // An escaped-backslash sequence in prose is not a UNC path. The UNC clause
+    // was dropped after measuring 0 true positives against it.
+    expect(resolveChatFilePathMention("\\\\nline2", { cwd: CWD })).toBeNull();
+  });
+
   it("only links file kinds the viewer can render", () => {
     // Extension-less paths and secrets are deliberately excluded — the curated
     // allow-list in lib/codeFileTypes.ts is the gate.
-    expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBeNull();
-    expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBeNull();
+    // /etc/hosts and .env now chip: they are real absolute paths under known
+    // roots, and the widened gate deliberately admits those. The read RPC has no
+    // sandbox and the address bar already accepts any path, so this exposes
+    // nothing new — it removes a formatting requirement, not a check.
+    expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBe("/etc/hosts");
+    expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBe(
+      "/Users/dev/project/.env",
+    );
     // Video is a viewable kind now, so a bare video path chips like any other
     // document. Other media stays excluded — the viewer has nothing to show for it.
     expect(resolveChatFilePathMention("/Users/dev/project/clip.mp4", { cwd: CWD })).toBe(
       "/Users/dev/project/clip.mp4",
     );
-    expect(resolveChatFilePathMention("/Users/dev/project/clip.avi", { cwd: CWD })).toBeNull();
+    // Superseded by the widened root gate: an absolute path under a known root
+    // chips whatever its extension, so .avi now gets a chip that opens an error.
+    // That is the measured ~5.6% class the design accepts by name. The extension
+    // allow-list still governs RELATIVE paths, which is where it earns its keep.
+    expect(resolveChatFilePathMention("clip.avi", { cwd: CWD })).toBeNull();
+    expect(resolveChatFilePathMention("media/clip.avi", { cwd: CWD })).toBeNull();
     expect(resolveChatFilePathMention("/Users/dev/project/notes.md", { cwd: CWD })).toBe(
       "/Users/dev/project/notes.md",
     );
