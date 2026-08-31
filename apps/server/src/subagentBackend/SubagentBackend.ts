@@ -25,7 +25,7 @@ import * as Stream from "effect/Stream";
 
 import {
   CursorSettings,
-  type ProviderInstanceId,
+  ProviderInstanceId,
   type ServerSettings,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
@@ -192,14 +192,22 @@ export const writeBackendFile = Effect.fn("subagentBackend.write")(function* (
 const decodeCursorSettings = Schema.decodeUnknownSync(CursorSettings);
 
 /** Best-effort decode: an instance already gated on `driver === "cursor"` should always
- * conform, but a hand-edited settings file should degrade to Cursor's own defaults
- * rather than throw. */
-function decodeCursorInstanceConfig(config: unknown): CursorSettings {
+ * conform, but a hand-edited settings file should degrade rather than throw. Returns null
+ * on a config that will not decode, because the alternative — Cursor's schema defaults —
+ * silently yields `binaryPath: "cursor-agent"`, a binary the user never configured and
+ * which need not be the one they run. Refusing to dispatch beats dispatching to a guess. */
+function decodeCursorInstanceConfig(config: unknown): CursorSettings | null {
   try {
     return decodeCursorSettings(config ?? {});
   } catch {
-    return decodeCursorSettings({});
+    return null;
   }
+}
+
+/** Narrows a flag-file instance id to the branded slug, or null when it does not conform. */
+function validInstanceIdOrNull(value: string | null): ProviderInstanceId | null {
+  if (value === null) return null;
+  return Schema.is(ProviderInstanceId)(value) ? value : null;
 }
 
 /** Enabled Cursor instances this machine can dispatch subagents to. */
@@ -228,7 +236,7 @@ interface InvalidCursorInstance {
 
 /** The file must never name a provider this machine cannot dispatch to: absent,
  * disabled, and wrong-driver instances are all rejected the same way. */
-function validateCursorInstance(
+export function validateCursorInstance(
   settings: ServerSettings,
   instanceId: string | undefined,
 ): ValidCursorInstance | InvalidCursorInstance {
@@ -241,11 +249,14 @@ function validateCursorInstance(
   if (instance === undefined) return { ok: false, reason };
   if (instance.enabled !== true) return { ok: false, reason };
   if (instance.driver !== SUBAGENT_BACKEND_CURSOR) return { ok: false, reason };
-  return {
-    ok: true,
-    instanceId: instanceId as ProviderInstanceId,
-    config: decodeCursorInstanceConfig(instance.config),
-  };
+  const config = decodeCursorInstanceConfig(instance.config);
+  if (config === null) {
+    return {
+      ok: false,
+      reason: `Instance "${instanceId}" has a Cursor config that could not be read.`,
+    };
+  }
+  return { ok: true, instanceId: instanceId as ProviderInstanceId, config };
 }
 
 /**
@@ -328,7 +339,12 @@ export function buildState(
 ) {
   return {
     backend: persisted.backend,
-    instanceId: persisted.instanceId as ProviderInstanceId | null,
+    // Validated, not cast: unlike the other `ProviderInstanceId` sites in this module —
+    // which read keys of `settings.providerInstances`, already checked on settings decode —
+    // this value comes from the flag FILE, which is hand-editable. An id that does not match
+    // the branded slug pattern would otherwise fail success-encoding at the RPC boundary
+    // instead of degrading, taking the whole panel down over one bad character.
+    instanceId: validInstanceIdOrNull(persisted.instanceId),
     model: persisted.model,
     instances: cursorInstances(settings),
     models,
