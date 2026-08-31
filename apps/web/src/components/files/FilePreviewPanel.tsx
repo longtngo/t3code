@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   isWorkspaceImagePreviewPath,
+  isWorkspaceAudioPreviewPath,
   isWorkspaceVideoPreviewPath,
 } from "@t3tools/shared/filePreview";
 import { VirtualizedFile, type SelectedLineRange } from "@pierre/diffs";
@@ -195,11 +196,18 @@ function WorkspaceImagePreview(props: {
   );
 }
 
-function WorkspaceVideoPreview(props: {
+/**
+ * Audio and video share everything except the element: the same asset-URL mint,
+ * the same revision suffix, the same "it failed, say so" path. Only the tag and
+ * the sizing differ, so they are one component rather than two copies of the
+ * machinery around them.
+ */
+function WorkspaceMediaPreview(props: {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef;
   readonly absolutePath: string;
   readonly workspaceMutationId: string | null;
+  readonly kind: "video" | "audio";
 }) {
   const assetUrl = useAssetUrlState(props.environmentId, {
     _tag: "workspace-file",
@@ -216,7 +224,7 @@ function WorkspaceVideoPreview(props: {
   if (assetUrl._tag === "Failure" || (videoUrl !== null && failedUrl === videoUrl)) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-        Unable to play workspace video.
+        Unable to play workspace {props.kind}.
       </div>
     );
   }
@@ -225,14 +233,24 @@ function WorkspaceVideoPreview(props: {
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
       {/* No autoPlay: this is a file browser, and a path that starts blaring audio
           is a defect. `preload="metadata"` fetches the moov atom and nothing more. */}
-      <video
-        className="max-h-full max-w-full object-contain"
-        src={videoUrl}
-        controls
-        playsInline
-        preload="metadata"
-        onError={() => setFailedUrl(videoUrl)}
-      />
+      {props.kind === "audio" ? (
+        <audio
+          className="w-full max-w-lg"
+          src={videoUrl}
+          controls
+          preload="metadata"
+          onError={() => setFailedUrl(videoUrl)}
+        />
+      ) : (
+        <video
+          className="max-h-full max-w-full object-contain"
+          src={videoUrl}
+          controls
+          playsInline
+          preload="metadata"
+          onError={() => setFailedUrl(videoUrl)}
+        />
+      )}
     </div>
   ) : (
     <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
@@ -892,6 +910,7 @@ export default function FilePreviewPanel({
   });
   const isImage = relativePath !== null && isWorkspaceImagePreviewPath(relativePath);
   const isVideo = relativePath !== null && isWorkspaceVideoPreviewPath(relativePath);
+  const isAudio = relativePath !== null && isWorkspaceAudioPreviewPath(relativePath);
   const isAssetPreview = relativePath !== null && rendersFromAssetUrl(relativePath);
   const file = useProjectFileQuery(environmentId, cwd, relativePath, !isAssetPreview);
   // Same rule as the trusted viewer: a failed read is a directory candidate, and
@@ -1133,13 +1152,14 @@ export default function FilePreviewPanel({
               alt={relativePath}
               workspaceMutationId={workspaceMutationId}
             />
-          ) : relativePath && isVideo && absolutePath ? (
-            <WorkspaceVideoPreview
+          ) : relativePath && (isVideo || isAudio) && absolutePath ? (
+            <WorkspaceMediaPreview
               key={absolutePath}
               environmentId={environmentId}
               threadRef={threadRef}
               absolutePath={absolutePath}
               workspaceMutationId={workspaceMutationId}
+              kind={isVideo ? "video" : "audio"}
             />
           ) : listingPath !== null && listing.data !== null ? (
             <DirectoryListingView

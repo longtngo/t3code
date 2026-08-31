@@ -1,6 +1,6 @@
 import {
   isWorkspaceImagePreviewPath,
-  isWorkspaceVideoPreviewPath,
+  isWorkspaceMediaPreviewPath,
 } from "@t3tools/shared/filePreview";
 
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
@@ -11,7 +11,7 @@ export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i
  * be previewed as text", which is the error a workspace video used to show.
  */
 export const rendersFromAssetUrl = (path: string): boolean =>
-  isWorkspaceImagePreviewPath(path) || isWorkspaceVideoPreviewPath(path);
+  isWorkspaceImagePreviewPath(path) || isWorkspaceMediaPreviewPath(path);
 
 export function setMarkdownTaskChecked(
   markdown: string,

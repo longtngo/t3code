@@ -39,6 +39,38 @@ export const WORKSPACE_VIDEO_PREVIEW_EXTENSIONS = [
  * `headers` because `HttpServerResponse.file` drops its `contentType` option, so
  * the served type can only ever be one the allow-list above admits.
  */
+/**
+ * Audio files the viewer will play. Separate from the video list because the two
+ * render different elements, but reached through `isWorkspaceMediaPreviewPath`
+ * everywhere the distinction does not matter.
+ *
+ * `.opus` and `.oga` are Ogg containers and carry `audio/ogg`, which is what the
+ * decoders actually key on; `.m4a` is an MP4 container, so it takes `audio/mp4`
+ * for the same reason `.m4v` takes `video/mp4`.
+ */
+export const WORKSPACE_AUDIO_PREVIEW_EXTENSIONS = [
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+] as const;
+
+/** Content type per audio extension, pinned for the same reason video's is. */
+export const AUDIO_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
+  ".oga": "audio/ogg",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".wav": "audio/wav",
+};
+
 export const VIDEO_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
   // video/mp4, not the non-IANA video/x-m4v the platform's own Mime table would
   // pick: `.m4v` IS mp4, the responses carry `nosniff`, and apps/web/src/types.ts
@@ -165,6 +197,21 @@ export function isWorkspaceImagePreviewPath(path: string): boolean {
 
 export function isWorkspaceVideoPreviewPath(path: string): boolean {
   return hasPreviewExtension(path, WORKSPACE_VIDEO_PREVIEW_EXTENSIONS);
+}
+
+export function isWorkspaceAudioPreviewPath(path: string): boolean {
+  return hasPreviewExtension(path, WORKSPACE_AUDIO_PREVIEW_EXTENSIONS);
+}
+
+/**
+ * Audio and video together, which is how every consumer actually uses them: both
+ * are bytes the text reader must never see, both need Range so a media element
+ * can seek, and both take the basename-scoped asset claim rather than the
+ * directory-scoped one. Kept as one predicate so a call site cannot pick up video
+ * and quietly miss audio.
+ */
+export function isWorkspaceMediaPreviewPath(path: string): boolean {
+  return isWorkspaceVideoPreviewPath(path) || isWorkspaceAudioPreviewPath(path);
 }
 
 export function isWorkspacePreviewEntryPath(path: string): boolean {

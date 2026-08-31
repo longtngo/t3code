@@ -1,6 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 
+import {
+  AUDIO_CONTENT_TYPE_BY_EXTENSION,
+  VIDEO_CONTENT_TYPE_BY_EXTENSION,
+} from "@t3tools/shared/filePreview";
 import { expect, it } from "@effect/vitest";
 import { Effect, Logger } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -12,7 +16,8 @@ import {
   assetVideoRangeResponse,
   classifyViewerAssetPath,
   classifyViewerPath,
-  viewerVideoContentType,
+  viewerMediaContentType,
+  VIEWER_ASSET_CONTENT_TYPES,
   downloadContentDisposition,
   isGrantableViewerAssetDirectory,
   resolveViewerAssetGrantDecision,
@@ -162,6 +167,26 @@ describe("classifyViewerPath", () => {
     expect(classifyViewerPath("/Users/me/clip.webm")?.kind).toBe("video");
     expect(classifyViewerPath("/Users/me/clip.m4v")?.kind).toBe("video");
     expect(classifyViewerPath("/Users/me/clip.ogv")?.kind).toBe("video");
+  });
+
+  it("classifies audio, which takes the same byte-and-Range branch as video", () => {
+    // Same NUL-byte problem as video, and the same need for Range: seeking a
+    // podcast-length .mp3 fails exactly the way seeking a video does without it.
+    expect(classifyViewerPath("/Users/me/talk.mp3")).toEqual({
+      absolutePath: "/Users/me/talk.mp3",
+      kind: "audio",
+    });
+    for (const path of [
+      "/a/b.WAV",
+      "/a/b.m4a",
+      "/a/b.flac",
+      "/a/b.aac",
+      "/a/b.ogg",
+      "/a/b.oga",
+      "/a/b.opus",
+    ]) {
+      expect(classifyViewerPath(path)?.kind).toBe("audio");
+    }
   });
 
   it("still rejects media it cannot serve, so the 400 is not blanket-removed", () => {
@@ -600,11 +625,11 @@ describe("resolveViewerAssetGrantDecision", () => {
   });
 });
 
-describe("viewerVideoContentType", () => {
+describe("viewerMediaContentType", () => {
   it("pins a type for every video extension the classifier admits", () => {
-    expect(viewerVideoContentType("/Users/me/demo.mp4")).toEqual({ "Content-Type": "video/mp4" });
-    expect(viewerVideoContentType("/Users/me/demo.WEBM")).toEqual({ "Content-Type": "video/webm" });
-    expect(viewerVideoContentType("/Users/me/clip.mov")).toEqual({
+    expect(viewerMediaContentType("/Users/me/demo.mp4")).toEqual({ "Content-Type": "video/mp4" });
+    expect(viewerMediaContentType("/Users/me/demo.WEBM")).toEqual({ "Content-Type": "video/webm" });
+    expect(viewerMediaContentType("/Users/me/clip.mov")).toEqual({
       "Content-Type": "video/quicktime",
     });
   });
@@ -613,8 +638,8 @@ describe("viewerVideoContentType", () => {
   // labels "Requested range not satisfiable" as video/mp4, which is why this is a
   // separate object rather than part of the shared video header block.
   it("is empty for a path it cannot vouch for, so nothing is asserted by default", () => {
-    expect(viewerVideoContentType("/Users/me/clip.avi")).toEqual({});
-    expect(viewerVideoContentType("/Users/me/Makefile")).toEqual({});
+    expect(viewerMediaContentType("/Users/me/clip.avi")).toEqual({});
+    expect(viewerMediaContentType("/Users/me/Makefile")).toEqual({});
   });
 });
 
@@ -689,6 +714,47 @@ describe("assetVideoRangeResponse", () => {
   });
 });
 
+describe("viewerMediaContentType", () => {
+  // The type must reach the byte responses and NOT the 416/413 ones, whose bodies
+  // are text: spreading it there labels "Requested range not satisfiable" as an
+  // audio file. Same split the video path already had.
+  it("pins a type for both media families", () => {
+    expect(viewerMediaContentType("/a/b.mp4")).toEqual({ "Content-Type": "video/mp4" });
+    expect(viewerMediaContentType("/a/b.mp3")).toEqual({ "Content-Type": "audio/mpeg" });
+    // Containers, not extensions: .m4a is MP4 and .opus is Ogg, and the decoders
+    // key on that rather than on the suffix.
+    expect(viewerMediaContentType("/a/b.m4a")).toEqual({ "Content-Type": "audio/mp4" });
+    expect(viewerMediaContentType("/a/b.opus")).toEqual({ "Content-Type": "audio/ogg" });
+    expect(viewerMediaContentType("/a/b.M4V")).toEqual({ "Content-Type": "video/mp4" });
+  });
+
+  it("stays empty for anything neither map carries", () => {
+    // An empty object leaves the platform's own Mime lookup in place rather than
+    // asserting a type this route cannot vouch for.
+    expect(viewerMediaContentType("/a/b.mkv")).toEqual({});
+    expect(viewerMediaContentType("/a/b.txt")).toEqual({});
+  });
+});
+
+describe("viewer asset content types", () => {
+  // The allow-list stays narrower than what the viewer plays on purpose, but
+  // where it names the same extension it must serve the same type: one file
+  // arriving as two types on two routes is the `.m4v` class of bug review already
+  // caught once.
+  it("agrees with the shared media tables wherever they overlap", () => {
+    let overlapping = 0;
+    for (const [extension, contentType] of Object.entries(VIEWER_ASSET_CONTENT_TYPES)) {
+      const shared =
+        VIDEO_CONTENT_TYPE_BY_EXTENSION[extension] ?? AUDIO_CONTENT_TYPE_BY_EXTENSION[extension];
+      if (shared === undefined) continue;
+      overlapping += 1;
+      expect(contentType).toBe(shared);
+    }
+    // Without this the loop passes vacuously if the overlap ever drops to zero.
+    expect(overlapping).toBeGreaterThan(0);
+  });
+});
+
 describe("assetResponseByteCap", () => {
   // The policy, not the arithmetic: which kinds get an unbounded response bounded.
   it("caps images at the value /viewer already uses", () => {
@@ -742,7 +808,7 @@ describe("viewer route auth ordering", () => {
     expect(routeStart).toBeGreaterThan(-1);
     const route = source.slice(routeStart);
     const authIndex = route.indexOf("authenticateRawRouteWithScope(AuthOrchestrationReadScope)");
-    const videoBranchIndex = route.indexOf('if (kind === "video")');
+    const videoBranchIndex = route.indexOf('if (kind === "video" || kind === "audio")');
     expect(authIndex).toBeGreaterThan(-1);
     expect(videoBranchIndex).toBeGreaterThan(-1);
     expect(authIndex).toBeLessThan(videoBranchIndex);
@@ -751,11 +817,21 @@ describe("viewer route auth ordering", () => {
     expect(route.slice(videoBranchIndex)).toContain("fileSystem.stat(absolutePath)");
   });
 
-  it("never waives authentication for video", () => {
+  it("never waives authentication for any byte kind", () => {
     const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
-    const waiver = source.slice(source.indexOf('if (kind === "image"'));
-    const condition = waiver.slice(0, waiver.indexOf("\n"));
-    expect(condition).toContain('kind === "video"');
+    // Anchored on the waiver call itself rather than on the first kind in the
+    // condition, which is what broke when audio was added: the condition wrapped
+    // and `if (kind === "image"` started matching the image BRANCH instead.
+    const waiverIndex = source.indexOf("!isWaivableLocalRequest(request)");
+    expect(waiverIndex).toBeGreaterThan(-1);
+    const conditionStart = source.lastIndexOf("if (", waiverIndex);
+    expect(conditionStart).toBeGreaterThan(-1);
+    const condition = source.slice(conditionStart, waiverIndex);
+    // Every kind served as raw bytes must be excluded from the local-navigation
+    // waiver; a kind missing here is served to an unauthenticated local caller.
+    for (const kind of ["image", "video", "audio"]) {
+      expect(condition).toContain(`kind === "${kind}"`);
+    }
   });
 });
 

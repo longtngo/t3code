@@ -85,7 +85,7 @@ export interface TrustedFileViewProps {
  * through to `code`, which is what keeps `Makefile` / `Dockerfile` / unlisted
  * extensions viewable through the address bar.
  */
-type TrustedViewKind = "markdown" | "html" | "image" | "video" | "code";
+type TrustedViewKind = "markdown" | "html" | "image" | "video" | "audio" | "code";
 
 /**
  * What a raw-byte view (image, video, rendered HTML) shows for one render.
@@ -133,6 +133,7 @@ export function trustedViewKind(absolutePath: string): TrustedViewKind {
   return classified === "html" ||
     classified === "image" ||
     classified === "video" ||
+    classified === "audio" ||
     classified === "markdown"
     ? classified
     : "code";
@@ -162,7 +163,8 @@ function TrustedFileViewContents({
   // Images, video and rendered HTML stream from the server's /viewer route, so the
   // text read is not merely unnecessary for them — for an image or a video it is
   // the read that fails ("… is binary and cannot be previewed as text").
-  const usesRawBytes = kind === "image" || kind === "video" || (kind === "html" && !showAlternate);
+  const usesRawBytes =
+    kind === "image" || kind === "video" || kind === "audio" || (kind === "html" && !showAlternate);
   const file = useTrustedFileQuery(environmentId, usesRawBytes ? null : absolutePath);
   const contents = file.data?.contents ?? null;
   const markdownHtmlMode = showAlternate && kind === "markdown";
@@ -260,6 +262,21 @@ function TrustedFileViewContents({
               preload="metadata"
               onError={() => setRawMediaFailed(true)}
               className="max-h-full max-w-full rounded"
+            />
+          </div>
+        );
+      }
+      if (kind === "audio") {
+        return (
+          <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+            {/* No autoPlay, for the same reason video has none: the viewer is a
+                file browser, and a path that starts playing on click is a defect. */}
+            <audio
+              src={rawUrlWithReload}
+              controls
+              preload="metadata"
+              onError={() => setRawMediaFailed(true)}
+              className="w-full max-w-lg"
             />
           </div>
         );

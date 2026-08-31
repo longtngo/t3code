@@ -16,7 +16,7 @@ import {
 import {
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
-  isWorkspaceVideoPreviewPath,
+  isWorkspaceMediaPreviewPath,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
@@ -241,12 +241,12 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
               }),
           ),
         );
-      // Video is admitted here rather than by widening `isWorkspacePreviewEntryPath`:
+      // Audio and video are admitted here rather than by widening `isWorkspacePreviewEntryPath`:
       // that predicate is browser ∪ image and also gates the "open in a browser
       // preview" affordances, which a video has no use for.
       if (
         !isWorkspacePreviewEntryPath(resolved.relativePath) &&
-        !isWorkspaceVideoPreviewPath(resolved.relativePath)
+        !isWorkspaceMediaPreviewPath(resolved.relativePath)
       ) {
         return yield* new AssetPreviewTypeValidationError({
           resource: input.resource,
@@ -278,13 +278,13 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      // Video takes the exact branch with images, and the reason is the token, not
+      // Audio and video take the exact branch with images, and the reason is the token, not
       // tidiness: the `workspace-file` alternative is a directory-scoped bearer
-      // grant that would sit in a <video src> attribute for an hour. An entry
+      // grant that would sit in a <video>/<audio> src attribute for an hour. An entry
       // document needs its siblings; a media file needs exactly itself.
       claims =
         isWorkspaceImagePreviewPath(resolved.relativePath) ||
-        isWorkspaceVideoPreviewPath(resolved.relativePath)
+        isWorkspaceMediaPreviewPath(resolved.relativePath)
           ? {
               version: 1,
               kind: "workspace-file-exact",

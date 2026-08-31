@@ -23,6 +23,12 @@ describe("trustedViewKind", () => {
     expect(trustedViewKind("/Users/me/clip.MOV")).toBe("video");
   });
 
+  it("classifies audio, which streams from the byte route like video", () => {
+    expect(trustedViewKind("/a/talk.mp3")).toBe("audio");
+    expect(trustedViewKind("/a/talk.M4A")).toBe("audio");
+    expect(trustedViewKind("/a/talk.flac")).toBe("audio");
+  });
+
   it("still falls back to code for media it cannot play", () => {
     // Admitting video must not turn the fallback into "render anything".
     expect(trustedViewKind("/Users/me/clip.avi")).toBe("code");

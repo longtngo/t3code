@@ -1,5 +1,6 @@
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import {
+  isWorkspaceAudioPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspaceVideoPreviewPath,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
@@ -10,7 +11,7 @@ import {
  * `fileViewerStore`; that store was replaced by the right-panel surface model,
  * so the type lives with the classifier that produces it.
  */
-export type FileViewerKind = "html" | "markdown" | "code" | "image" | "video";
+export type FileViewerKind = "html" | "markdown" | "code" | "image" | "video" | "audio";
 
 /**
  * Curated allow-list of text/code file extensions that get the clickable-chip +
@@ -69,6 +70,7 @@ export function classifyFileViewerKind(path: string): FileViewerKind | null {
   // one surface and a failed text read on another.
   if (isWorkspaceImagePreviewPath(path)) return "image";
   if (isWorkspaceVideoPreviewPath(path)) return "video";
+  if (isWorkspaceAudioPreviewPath(path)) return "audio";
   if (TEXT_FILE_EXTENSIONS.has(ext)) return "code";
   return null;
 }

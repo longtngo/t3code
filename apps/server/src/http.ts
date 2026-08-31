@@ -8,9 +8,11 @@ import {
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import {
+  AUDIO_CONTENT_TYPE_BY_EXTENSION,
   isWorkspaceImagePreviewPath,
-  isWorkspaceVideoPreviewPath,
+  isWorkspaceMediaPreviewPath,
   VIDEO_CONTENT_TYPE_BY_EXTENSION,
+  WORKSPACE_AUDIO_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
   WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
@@ -405,7 +407,7 @@ export type AssetVideoRangeResponse =
  * Video is the only asset kind that needs Range: without it a media element
  * cannot seek — measured on the `/viewer` route, the scrubber moves, `seeked`
  * fires, and playback snaps back to zero. Pure, so the 206/416 arithmetic is
- * testable without a live server, mirroring `viewerVideoContentType`.
+ * testable without a live server, mirroring `viewerMediaContentType`.
  */
 export function assetVideoRangeResponse(
   rangeHeader: string | undefined,
@@ -512,7 +514,7 @@ export const assetRouteLayer = HttpRouter.add(
     // Video answers Range; every other asset keeps the flat 200 it has always
     // had. The size comes from a stat because a range can only be resolved
     // against the real length, and `resolveAsset` reports the path alone.
-    if (isWorkspaceVideoPreviewPath(asset.path)) {
+    if (isWorkspaceMediaPreviewPath(asset.path)) {
       const fileSystem = yield* FileSystem.FileSystem;
       const info = yield* fileSystem.stat(asset.path).pipe(Effect.option);
       if (Option.isNone(info) || info.value.type !== "File") {
@@ -664,20 +666,21 @@ export function isWaivableLocalRequest(request: HttpServerRequest.HttpServerRequ
 }
 
 /** How a `/viewer` request should be served. */
-export type ViewerPathKind = "markdown" | "html" | "text" | "image" | "video";
+export type ViewerPathKind = "markdown" | "html" | "text" | "image" | "video" | "audio";
 
 /**
- * The pinned `Content-Type` for a video path, as a spreadable object.
+ * The pinned `Content-Type` for an audio or video path, as a spreadable object.
  *
- * Separate from the rest of the video headers because it must reach the byte
+ * Separate from the rest of the media headers because it must reach the byte
  * responses and NOT the 416/413 ones, whose bodies are text — spreading it onto
  * those labels "Requested range not satisfiable" as `video/mp4`. Empty for an
- * extension the map does not carry, which leaves the platform's own `Mime`
- * lookup in place rather than asserting a type this route cannot vouch for.
+ * extension neither map carries, which leaves the platform's own `Mime` lookup in
+ * place rather than asserting a type this route cannot vouch for.
  */
-export function viewerVideoContentType(absolutePath: string): Record<string, string> {
+export function viewerMediaContentType(absolutePath: string): Record<string, string> {
   const extension = absolutePath.slice(absolutePath.lastIndexOf(".")).toLowerCase();
-  const contentType = VIDEO_CONTENT_TYPE_BY_EXTENSION[extension];
+  const contentType =
+    VIDEO_CONTENT_TYPE_BY_EXTENSION[extension] ?? AUDIO_CONTENT_TYPE_BY_EXTENSION[extension];
   return contentType ? { "Content-Type": contentType } : {};
 }
 
@@ -701,6 +704,12 @@ const VIEWER_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
  * fires, and playback restarts at zero.
  */
 const VIDEO_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_VIDEO_PREVIEW_EXTENSIONS);
+/**
+ * Audio takes the same branch as video: same NUL-byte problem, and the same need
+ * for Range, since seeking a podcast-length `.mp3` fails exactly the way seeking
+ * a video does without it. Only the element the client renders differs.
+ */
+const AUDIO_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_AUDIO_PREVIEW_EXTENSIONS);
 /**
  * Per-RESPONSE bound, not a transfer bound. It does not reduce bytes served; it
  * converts one stream into sequential round trips. The value matters in both
@@ -742,7 +751,7 @@ const VIEWER_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
  * document, so every extension added here widens what such a document can reach.
  * It must be able to stay narrower than what the viewer will play.
  */
-const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
+export const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".cjs": "text/javascript; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -974,6 +983,7 @@ export function classifyViewerPath(
   if (HTML_EXTENSIONS.has(extension)) return { absolutePath, kind: "html" };
   if (IMAGE_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "image" };
   if (VIDEO_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "video" };
+  if (AUDIO_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "audio" };
   if (TEXT_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "text" };
   return null;
 }
@@ -1023,7 +1033,12 @@ export const viewerRouteLayer = HttpRouter.add(
     // Range, `bytes=0-1` returns literal file bytes, so an unauthenticated video
     // path would be a byte-ranged arbitrary-file read rather than merely an
     // existence oracle.
-    if (kind === "image" || kind === "video" || !isWaivableLocalRequest(request)) {
+    if (
+      kind === "image" ||
+      kind === "video" ||
+      kind === "audio" ||
+      !isWaivableLocalRequest(request)
+    ) {
       yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     }
 
@@ -1080,7 +1095,7 @@ export const viewerRouteLayer = HttpRouter.add(
     // here is after the auth call above on purpose: a `stat` ahead of it would turn
     // 404-vs-416 into an existence oracle and `Content-Range: bytes */N` into a
     // size oracle for a caller with no credentials.
-    if (kind === "video") {
+    if (kind === "video" || kind === "audio") {
       const fileSystem = yield* FileSystem.FileSystem;
       const info = yield* fileSystem.stat(absolutePath).pipe(Effect.option);
       if (Option.isNone(info) || info.value.type !== "File") {
@@ -1088,7 +1103,7 @@ export const viewerRouteLayer = HttpRouter.add(
       }
       const size = Number(info.value.size);
       const rangeHeaders = { ...headers, "Accept-Ranges": "bytes" };
-      const videoHeaders = { ...rangeHeaders, ...viewerVideoContentType(absolutePath) };
+      const videoHeaders = { ...rangeHeaders, ...viewerMediaContentType(absolutePath) };
       const range = resolveViewerRange(
         request.headers["range"],
         size,
