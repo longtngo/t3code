@@ -1,3 +1,5 @@
+import { WORKSPACE_VIDEO_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
+
 /** `id` is positional on purpose: the same attachment can be embedded twice in one body. */
 export type PullRequestBodySegment =
   | { readonly id: string; readonly kind: "markdown"; readonly text: string }
@@ -23,7 +25,15 @@ const VIDEO_TAG_MAX_LINES = 8;
 /** Four spaces open an indented code block, so its contents stay verbatim markdown. */
 const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/u;
 const BARE_URL_PATTERN = /^<?(https?:\/\/\S+?)>?$/u;
-const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|webm|mov|m4v|ogv)(?:$|[?#])/iu;
+/**
+ * Derived from the shared viewer list rather than repeated, so a format the
+ * viewer learns to play is a format a bare URL here renders as video. The
+ * trailing group lets a URL carry a query or fragment after the extension.
+ */
+const VIDEO_EXTENSION_PATTERN = new RegExp(
+  `\\.(?:${WORKSPACE_VIDEO_PREVIEW_EXTENSIONS.map((extension) => extension.slice(1)).join("|")})(?:$|[?#])`,
+  "iu",
+);
 /** A dropped video becomes a bare asset link; a dropped image becomes an `<img>` tag. */
 const GITHUB_ASSET_PATTERN = /^https:\/\/github\.com\/user-attachments\/assets\/[\w-]+$/iu;
 const VIDEO_TAG_SRC_PATTERN = /<(?:video|source)\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/iu;

@@ -16,8 +16,15 @@ export const WORKSPACE_IMAGE_PREVIEW_EXTENSIONS = [
  * lists rather than folded into either: `isWorkspacePreviewEntryPath` (browser ∪
  * image) also gates the "open in a browser preview" affordances, which a video
  * has no use for, so the `/api/assets` mint gate names this predicate directly
- * instead. Matches the set the pull-request markdown renderer already treats as
- * video, so the two cannot disagree about what a video is.
+ * instead. The pull-request markdown renderer derives its own bare-URL pattern
+ * from this list rather than repeating it, so the two cannot disagree about what
+ * a video is.
+ *
+ * Deliberately narrower than the attachment table in `apps/web/src/types.ts`,
+ * which also names `.avi` and `.mkv` — real video an attachment can carry and no
+ * browser can decode from a `<video>`. Those two are NOT one list for that
+ * reason, but they must never disagree where they overlap, which
+ * `apps/web/src/types.test.ts` asserts.
  */
 export const WORKSPACE_VIDEO_PREVIEW_EXTENSIONS = [
   ".m4v",

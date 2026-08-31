@@ -697,6 +697,11 @@ const VIEWER_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
  * answers `null` for anything not here and the route 404s it. There is deliberately
  * no `text/plain` fallback — that fallback is what let a hostile document read
  * arbitrary files under its grant.
+ *
+ * Its media entries overlap the viewer's video list, and folding the two together
+ * was considered and rejected: this is a sub-resource allow-list for a sandboxed
+ * document, so every extension added here widens what such a document can reach.
+ * It must be able to stay narrower than what the viewer will play.
  */
 const VIEWER_ASSET_CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
