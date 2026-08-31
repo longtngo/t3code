@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalFetch:off
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -100,5 +100,78 @@ describe("guardHttpResponseWriteErrors", () => {
     await expect(fetchStatus(port, "/")).resolves.toBe(200);
     expect(responseErrorListeners).toBeGreaterThan(0);
     expect(writeErrors).toEqual([]);
+  });
+
+  it("destroys the connection when a body ends short of its Content-Length", async () => {
+    const guardErrors: unknown[] = [];
+    const shortBodyObserved = Promise.withResolvers<void>();
+    const server = guardHttpResponseWriteErrors(NodeHttp.createServer(), (error) => {
+      guardErrors.push(error);
+      shortBodyObserved.resolve();
+    });
+
+    // A file that shrinks mid-stream produces exactly this: headers already
+    // declared N bytes, the body stops early, and Node considers the response
+    // complete. Left alone the connection returns to the keep-alive pool, and the
+    // next response is written inside what the client is still counting as this
+    // body — measured as a real cross-response desync.
+    server.on("request", (_request, response) => {
+      response.writeHead(200, { "Content-Length": "100", "Content-Type": "text/plain" });
+      response.end("short");
+    });
+
+    const port = await listen(server);
+    // The client sees a truncated body and errors; that is the point, so the
+    // rejection is expected rather than a failure.
+    await new Promise<void>((resolve) => {
+      const request = NodeHttp.get({ host: "127.0.0.1", port, path: "/f" }, (response) => {
+        response.on("data", () => {});
+        response.on("error", () => resolve());
+        response.on("close", () => resolve());
+      });
+      request.on("error", () => resolve());
+    });
+    // Bounded: without the guard nothing ever resolves this, and an unbounded
+    // await turns the failure into a suite-length timeout instead of an assertion.
+    await Promise.race([
+      shortBodyObserved.promise,
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+
+    expect(guardErrors).toHaveLength(1);
+    expect(String(guardErrors[0])).toContain("95 bytes short");
+  });
+
+  it("leaves an honest response and a bodiless status alone", async () => {
+    const guardErrors: unknown[] = [];
+    const server = guardHttpResponseWriteErrors(NodeHttp.createServer(), (error) => {
+      guardErrors.push(error);
+    });
+
+    server.on("request", (request, response) => {
+      if (request.url === "/empty") {
+        // 204 carries no body, so zero bytes against any declared length is
+        // correct rather than truncated.
+        response.writeHead(204, { "Content-Length": "42" });
+        response.end();
+        return;
+      }
+      if (request.url === "/chunked") {
+        // No Content-Length: chunked framing already says where the body ends.
+        response.writeHead(200, { "Content-Type": "text/plain" });
+        response.end("anything");
+        return;
+      }
+      response.writeHead(200, { "Content-Length": "5", "Content-Type": "text/plain" });
+      response.end("exact");
+    });
+
+    const port = await listen(server);
+    for (const path of ["/exact", "/empty", "/chunked"]) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`);
+      await response.arrayBuffer();
+    }
+
+    expect(guardErrors).toEqual([]);
   });
 });
