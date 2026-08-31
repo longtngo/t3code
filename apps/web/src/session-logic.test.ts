@@ -11,7 +11,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
-  deriveTurnPlans,
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
@@ -495,73 +494,6 @@ describe("deriveActivePlanState", () => {
       { durationMs: 3_000, step: "Check", status: "completed" },
     ]);
   });
-});
-
-describe("deriveTurnPlans", () => {
-  it("keeps one entry per turn, anchored at the first snapshot with the latest steps", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "plan-1a",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: {
-          plan: [{ step: "Inspect code", status: "inProgress" }],
-        },
-      }),
-      makeActivity({
-        id: "plan-1b",
-        createdAt: "2026-02-23T00:00:05.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: {
-          plan: [{ step: "Inspect code", status: "completed" }],
-        },
-      }),
-      makeActivity({
-        id: "plan-2a",
-        createdAt: "2026-02-23T00:01:00.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
-        tone: "info",
-        turnId: "turn-2",
-        payload: {
-          plan: [{ step: "Ship it", status: "pending" }],
-        },
-      }),
-    ];
-
-    const turnPlans = deriveTurnPlans(activities);
-    expect(turnPlans).toHaveLength(2);
-    expect(turnPlans[0]).toMatchObject({
-      id: "turn-plan:turn-1",
-      createdAt: "2026-02-23T00:00:01.000Z",
-      turnId: "turn-1",
-    });
-    expect(turnPlans[0]?.plan.steps).toEqual([
-      { durationMs: 4_000, step: "Inspect code", status: "completed" },
-    ]);
-    expect(turnPlans[1]?.plan.steps).toEqual([{ step: "Ship it", status: "pending" }]);
-  });
-
-  it("skips activities without parseable steps", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "plan-bad",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
-        tone: "info",
-        turnId: "turn-1",
-        payload: { plan: [] },
-      }),
-    ];
-    expect(deriveTurnPlans(activities)).toEqual([]);
-  });
 
   it("tracks repeated step labels independently", () => {
     const activities: OrchestrationThreadActivity[] = [
@@ -609,7 +541,7 @@ describe("deriveTurnPlans", () => {
       }),
     ];
 
-    expect(deriveTurnPlans(activities)[0]?.plan.steps).toEqual([
+    expect(deriveActivePlanState(activities, TurnId.make("turn-1"))?.steps).toEqual([
       { durationMs: 4_000, step: "Check", status: "completed" },
       { durationMs: 6_000, step: "Check", status: "completed" },
     ]);
@@ -661,13 +593,13 @@ describe("deriveTurnPlans", () => {
       }),
     ];
 
-    expect(deriveTurnPlans(activities)[0]?.plan.steps).toEqual([
+    expect(deriveActivePlanState(activities, TurnId.make("turn-1"))?.steps).toEqual([
       { durationMs: 5_000, step: "First", status: "completed" },
       { durationMs: 5_000, step: "Second", status: "completed" },
     ]);
   });
 
-  it("drops a turn's chip when a later snapshot clears the plan", () => {
+  it("clears the active plan when a later snapshot has no steps", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "plan-set",
@@ -688,7 +620,7 @@ describe("deriveTurnPlans", () => {
         payload: { plan: [] },
       }),
     ];
-    expect(deriveTurnPlans(activities)).toEqual([]);
+    expect(deriveActivePlanState(activities, TurnId.make("turn-1"))).toBeNull();
   });
 });
 
@@ -915,6 +847,33 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps the latest task progress without emitting plan-update log entries", () => {
+    const activities = [
+      makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),
+      makeActivity({
+        id: "plan-1",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        turnId: "turn-1",
+        sequence: 1,
+        payload: { plan: [{ step: "Verify the composer", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "plan-2",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        turnId: "turn-1",
+        sequence: 2,
+        payload: { plan: [{ step: "Verify the composer", status: "completed" }] },
+      }),
+      makeActivity({ id: "after", kind: "tool.completed", summary: "Ran tests", sequence: 3 }),
+    ];
+    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual(["before", "after"]);
+    expect(deriveActivePlanState(activities, TurnId.make("turn-1"))?.steps).toMatchObject([
+      { step: "Verify the composer", status: "completed" },
+    ]);
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2386,19 +2345,6 @@ describe("shared sorted-activities view", () => {
     ];
     expect(deriveWorkLogEntries(different).map((entry) => entry.id)).toEqual(["alpha", "beta"]);
   });
-
-  it("gives two different derives the same ordering for one activity list", () => {
-    // Sharing one sorted array is what guarantees the five derives agree.
-    const activities = unordered();
-    const workLogOrder = deriveWorkLogEntries(activities).map((entry) => entry.id);
-    const planOrder = deriveTurnPlans(activities);
-
-    expect(workLogOrder).toEqual(["first", "second", "third"]);
-    // No plan activities here, so turn plans is empty - the point is that reading
-    // the shared array did not disturb the order the work log sees.
-    expect(planOrder).toEqual([]);
-    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual(workLogOrder);
-  });
 });
 
 describe("deriveTimelineEntries ordering", () => {
@@ -2412,21 +2358,10 @@ describe("deriveTimelineEntries ordering", () => {
   const turnPlan = { id: "tp1", createdAt: at } as never;
   const workEntry = { id: "w1", createdAt: at, label: "Read", tone: "tool" } as never;
 
-  it("breaks createdAt ties as message, proposed plan, turn plan, work", () => {
-    const entries = deriveTimelineEntries([message], [proposedPlan], [workEntry], [turnPlan]);
-
-    expect(entries.map((entry) => entry.kind)).toEqual([
-      "message",
-      "proposed-plan",
-      "turn-plan",
-      "work",
-    ]);
-  });
-
   it("still orders by createdAt when timestamps differ", () => {
     // The control: ties are resolved by position, everything else by timestamp.
     const later = { ...(message as object), id: "m2", createdAt: "2026-02-23T00:00:09.000Z" };
-    const entries = deriveTimelineEntries([later as never, message], [], [workEntry], []);
+    const entries = deriveTimelineEntries([later as never, message], [], [workEntry]);
 
     expect(entries.map((entry) => entry.id)).toEqual(["m1", "w1", "m2"]);
   });

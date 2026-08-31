@@ -69,10 +69,10 @@ export function shouldShowComposerContextStrip(input: {
  * Callers need both answers and they are not the same. The composer footer
  * shows its collapse toggle whenever the strip is *available*, so the control
  * does not appear and vanish as the strip opens and closes; the shell's
- * `chat-composer-glass-shell-with-context` class and the strip itself follow
- * the *rendered* answer, because that class reserves the dock extension and
- * clips the composer's bottom edge — keyed to availability it would leave a
- * notch cut out of the composer with nothing docked into it.
+ * `ComposerSurface.Shell` `contextStrip` prop and the strip itself follow the
+ * *rendered* answer, because that prop reserves the dock extension and clips
+ * the composer's bottom edge — keyed to availability it would leave a notch
+ * cut out of the composer with nothing docked into it.
  */
 export function shouldRenderComposerContextStrip(input: {
   stripAvailable: boolean;

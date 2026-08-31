@@ -1053,7 +1053,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted");
-    expect(markup).toContain("Work Log");
   });
 
   it("summarizes changed files in one line", () => {
@@ -1210,7 +1209,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("+2 previous log entries");
+    expect(markup).toContain("Ran 2 commands and received 1 update");
     expect(markup).not.toContain('aria-label="Hidden work includes a failure"');
   });
 
@@ -1348,21 +1347,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("tool call failed");
   });
 
-  it("aligns the iconless Thinking row with the working timer", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        isWorking
-        activeTurnStartedAt={MESSAGE_CREATED_AT}
-        timelineEntries={[]}
-      />,
-    );
-
-    expect(markup).toContain("Working for");
-    expect(markup).toContain("Thinking");
-    expect(markup).toContain("gap-1.5 py-0.5 px-1");
-  });
-
   it("renders review comment contexts as structured cards instead of raw tags", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1495,7 +1479,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Load earlier turns");
   });
 
-  it("renders a muted failure marker for failed tool lifecycle entries", () => {
+  it("keeps failed lifecycle entries discoverable in mixed activity summaries", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -1528,8 +1512,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("lucide-circle-alert");
-    expect(markup).toContain('aria-label="Tool call failed"');
+    expect(markup).toContain('aria-label="Received 1 update and used 1 tool, tool call failed"');
     // Ordinary tool failures render muted, not red.
     expect(markup).not.toContain("text-destructive");
   });
@@ -1588,18 +1571,20 @@ describe("work log coalescing (rendered)", () => {
   });
 
   it("collapses a burst behind the group toggle before coalescing is visible", () => {
-    // Documents the reachability boundary honestly. MAX_VISIBLE_WORK_LOG_ENTRIES
-    // is 1, so a burst first collapses to a tail row plus a "+N previous log
-    // entries" toggle; the ×N badge only appears once the user EXPANDS that
-    // group, and expansion is internal component state a static render cannot
-    // set. The count arithmetic itself is covered in MessagesTimeline.logic.test.ts.
+    // Documents the reachability boundary honestly. A burst first collapses into a tool
+    // group whose toggle summarises it ("Received 3 updates"); the coalesced xN badge only
+    // appears once the user EXPANDS that group, and expansion is internal component state a
+    // static render cannot set. The count arithmetic is covered in MessagesTimeline.logic.test.ts.
+    //
+    // Upstream #8734 replaced the old "+N previous log entries" control with this grouping,
+    // so the label moved -- the boundary this test documents did not.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[warning("1"), warning("2"), warning("3")]}
       />,
     );
-    expect(markup).toContain("previous log entries");
+    expect(markup).toContain("Received 3 updates");
     expect(markup.split("Runtime warning").length - 1).toBeLessThan(3);
   });
 

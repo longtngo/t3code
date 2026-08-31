@@ -16,6 +16,7 @@ import { ClockIcon, Undo2Icon, XIcon } from "lucide-react";
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
+import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
 
 export interface ComposerQueuedMessage {
@@ -27,27 +28,17 @@ export interface ComposerQueuedMessage {
 /** Collapsed affordance. Mirrors `ComposerTasksBadge`'s two placements. */
 export const ComposerQueuedBadge = memo(function ComposerQueuedBadge({
   count,
-  hasTrailingShoulder = false,
   onToggle,
-  placement,
 }: {
   readonly count: number;
-  readonly hasTrailingShoulder?: boolean;
   readonly onToggle: () => void;
-  readonly placement: "shoulder" | "inline";
 }) {
   return (
     <button
       type="button"
       aria-expanded="false"
       aria-label={`${String(count)} message${count === 1 ? "" : "s"} waiting to send`}
-      className={cn(
-        "flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground",
-        placement === "shoulder"
-          ? "h-7 rounded-t-md border border-border/60 border-b-0 bg-muted/40 px-2"
-          : "h-6 rounded-md px-1.5",
-        hasTrailingShoulder && "me-1",
-      )}
+      className="flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
       onClick={onToggle}
       // Keeps composer focus while opening, matching the tasks badge.
       onPointerDown={(event) => event.preventDefault()}
@@ -78,62 +69,64 @@ export const ComposerQueuedDrawer = memo(function ComposerQueuedDrawer({
   readonly recallSupported: boolean;
 }) {
   return (
-    <div className="chat-composer-top-drawer" data-chat-composer-queued-drawer="true">
-      <div className="flex items-center gap-1 px-3 py-1.5 sm:px-4">
-        <button
-          type="button"
-          aria-expanded="true"
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left text-xs text-muted-foreground hover:text-foreground"
-          onClick={onCollapse}
-          onPointerDown={(event) => event.preventDefault()}
-        >
-          <ClockIcon aria-hidden className="size-3.5 shrink-0" />
-          <span className="font-medium text-foreground">Waiting to send</span>
-          <span className="tabular-nums">{messages.length}</span>
-        </button>
-        <Button
-          size="icon-micro"
-          variant="ghost-muted"
-          aria-label="Collapse queued messages"
-          className="shrink-0"
-          onClick={onCollapse}
-          onPointerDown={(event) => event.preventDefault()}
-        >
-          <XIcon aria-hidden className="size-3" />
-        </Button>
-      </div>
-      <div className="space-y-1 px-3 pb-3 sm:px-4" role="list">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className="flex items-start gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs"
-            role="listitem"
+    <ComposerBanner.Attachment>
+      <ComposerBanner.Root data-chat-composer-queued-drawer="true">
+        <div className="flex items-center gap-1 px-3 py-1.5 sm:px-4">
+          <button
+            type="button"
+            aria-expanded="true"
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left text-xs text-muted-foreground hover:text-foreground"
+            onClick={onCollapse}
+            onPointerDown={(event) => event.preventDefault()}
           >
-            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">
-              {message.text}
-              {message.attachmentCount > 0 ? (
-                <span className="ms-1.5 text-muted-foreground">
-                  ({message.attachmentCount} attachment
-                  {message.attachmentCount === 1 ? "" : "s"})
-                </span>
+            <ClockIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="font-medium text-foreground">Waiting to send</span>
+            <span className="tabular-nums">{messages.length}</span>
+          </button>
+          <Button
+            size="icon-micro"
+            variant="ghost-muted"
+            aria-label="Collapse queued messages"
+            className="shrink-0"
+            onClick={onCollapse}
+            onPointerDown={(event) => event.preventDefault()}
+          >
+            <XIcon aria-hidden className="size-3" />
+          </Button>
+        </div>
+        <div className="space-y-1 px-3 pb-3 sm:px-4" role="list">
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className="flex items-start gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs"
+              role="listitem"
+            >
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground">
+                {message.text}
+                {message.attachmentCount > 0 ? (
+                  <span className="ms-1.5 text-muted-foreground">
+                    ({message.attachmentCount} attachment
+                    {message.attachmentCount === 1 ? "" : "s"})
+                  </span>
+                ) : null}
+              </span>
+              {recallSupported ? (
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  aria-label="Bring this message back to the composer"
+                  className="shrink-0"
+                  disabled={recallPendingId !== null}
+                  onClick={() => onRecall(message.id)}
+                  onPointerDown={(event) => event.preventDefault()}
+                >
+                  <Undo2Icon aria-hidden className="size-3" />
+                </Button>
               ) : null}
-            </span>
-            {recallSupported ? (
-              <Button
-                size="icon-micro"
-                variant="ghost-muted"
-                aria-label="Bring this message back to the composer"
-                className="shrink-0"
-                disabled={recallPendingId !== null}
-                onClick={() => onRecall(message.id)}
-                onPointerDown={(event) => event.preventDefault()}
-              >
-                <Undo2Icon aria-hidden className="size-3" />
-              </Button>
-            ) : null}
-          </div>
-        ))}
-      </div>
-    </div>
+            </div>
+          ))}
+        </div>
+      </ComposerBanner.Root>
+    </ComposerBanner.Attachment>
   );
 });
