@@ -87,6 +87,46 @@ export interface TrustedFileViewProps {
  */
 type TrustedViewKind = "markdown" | "html" | "image" | "video" | "code";
 
+/**
+ * What a raw-byte view (image, video, rendered HTML) shows for one render.
+ *
+ * A raw-byte kind never issues the text read, so `file.error` is permanently null
+ * for one and the media element's own `onError` is its only failure signal. That
+ * signal used to end at a "could not be played" notice, which made a DIRECTORY
+ * named `demo.mp4` — a real shape, same as `shots.png` — a dead player instead of
+ * the listing the text path has always shown for a folder. Pure so the table is
+ * testable; nothing here guesses from the name, the listing probe answers it.
+ */
+export type RawMediaOutcome = "connecting" | "media" | "listing" | "probing" | "failed";
+
+/**
+ * Whether a path that would not open as a regular file should be probed as a
+ * directory.
+ *
+ * Both failure signals count, and that is the whole fix: the text read reports
+ * through `readError`, but a raw-byte kind never issues that read, so a failed
+ * <img>/<video> is the only signal it can ever produce. Arming on `readError`
+ * alone left every media-named directory permanently unprobed.
+ */
+export function shouldProbeForDirectory(input: {
+  readonly readError: string | null;
+  readonly mediaFailed: boolean;
+}): boolean {
+  return input.readError !== null || input.mediaFailed;
+}
+
+export function rawMediaOutcome(input: {
+  readonly hasUrl: boolean;
+  readonly mediaFailed: boolean;
+  readonly listingHasData: boolean;
+  readonly listingIsPending: boolean;
+}): RawMediaOutcome {
+  if (!input.hasUrl) return "connecting";
+  if (!input.mediaFailed) return "media";
+  if (input.listingHasData) return "listing";
+  return input.listingIsPending ? "probing" : "failed";
+}
+
 export function trustedViewKind(absolutePath: string): TrustedViewKind {
   if (isMarkdownPreviewFile(absolutePath)) return "markdown";
   const classified = classifyFileViewerKind(absolutePath);
@@ -142,9 +182,18 @@ function TrustedFileViewContents({
   // question and the answer: it succeeds for a folder, and for anything else it
   // fails and the read error below stands. Nothing here guesses from the name —
   // `Makefile`, `LICENSE` and `.env` are all files that look like folders.
+  //
+  // A raw-byte kind never issues the text read, so `file.error` is permanently
+  // null for one and `rawMediaFailed` is its only failure signal. Both feed the
+  // probe, because a DIRECTORY named `demo.mp4` is precisely the path that fails
+  // as media and succeeds as a listing.
+  const readFailed = shouldProbeForDirectory({
+    readError: file.error,
+    mediaFailed: rawMediaFailed,
+  });
   const listing = useDirectoryListingQuery(
-    file.error !== null ? environmentId : null,
-    file.error !== null ? absolutePath : null,
+    readFailed ? environmentId : null,
+    readFailed ? absolutePath : null,
   );
   const rawUrlWithReload =
     rawUrl === null ? null : rawReloadToken === 0 ? rawUrl : `${rawUrl}&reload=${rawReloadToken}`;
@@ -157,7 +206,15 @@ function TrustedFileViewContents({
       return <TrustedFileNotice>Connect to an environment to view files.</TrustedFileNotice>;
     }
     if (usesRawBytes) {
-      if (rawUrlWithReload === null) {
+      const outcome = rawMediaOutcome({
+        hasUrl: rawUrlWithReload !== null,
+        mediaFailed: rawMediaFailed,
+        listingHasData: listing.data !== null,
+        listingIsPending: listing.isPending,
+      });
+      // The `rawUrlWithReload === null` half is redundant with the outcome and
+      // present only so the <img>/<video> below narrow to a non-null src.
+      if (outcome === "connecting" || rawUrlWithReload === null) {
         return (
           <TrustedFileNotice>
             <LoaderCircle className="size-4 animate-spin" aria-hidden />
@@ -165,7 +222,24 @@ function TrustedFileViewContents({
           </TrustedFileNotice>
         );
       }
-      if (rawMediaFailed) {
+      if (outcome === "listing") {
+        return (
+          <DirectoryListingView
+            environmentId={environmentId}
+            directoryPath={absolutePath}
+            {...(onOpenListedFile ? { onOpenListedFile } : {})}
+          />
+        );
+      }
+      if (outcome === "probing") {
+        return (
+          <TrustedFileNotice>
+            <LoaderCircle className="size-4 animate-spin" aria-hidden />
+            Loading…
+          </TrustedFileNotice>
+        );
+      }
+      if (outcome === "failed") {
         return (
           <TrustedFileNotice tone="error">
             This file could not be played. It may be missing, too large, or in a format this browser
@@ -329,10 +403,17 @@ function TrustedFileViewContents({
             variant="ghost"
             onClick={() => {
               if (usesRawBytes) {
-                // The notice would otherwise be sticky for the life of the mount,
-                // since the component is keyed on the path.
-                setRawMediaFailed(false);
-                setRawReloadToken((token) => token + 1);
+                if (listing.data !== null) {
+                  // A directory is on screen. Resetting the media state would only
+                  // re-issue the byte request that already failed and flash the
+                  // listing away in between.
+                  listing.refresh();
+                } else {
+                  // The notice would otherwise be sticky for the life of the mount,
+                  // since the component is keyed on the path.
+                  setRawMediaFailed(false);
+                  setRawReloadToken((token) => token + 1);
+                }
               } else if (markdownHtmlMode) rendered.refresh();
               else {
                 file.refresh();
