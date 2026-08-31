@@ -2,11 +2,19 @@
  * cursorModels — enumerates the concrete model ids `cursor-agent --model` accepts.
  *
  * t3code discovers Cursor models over ACP as *base* slugs (35 of them, with Auto
- * as `auto-smart`) for the provider snapshot the chat UI shows. The subagent
- * dispatch toggle instead has to hand the CLI one of its own 204 *concrete* ids
- * (Auto is `auto` there), so it probes `--list-models` directly rather than
- * reusing that snapshot — passing a snapshot slug would ship a default the CLI
- * rejects.
+ * as `auto-smart`) for the provider snapshot the chat UI shows. `--list-models`
+ * advertises a different, larger namespace of 204 *concrete* ids (Auto is `auto`
+ * there); the two overlap in only nine ids.
+ *
+ * An earlier version of this note claimed the CLI rejects the ACP slugs, and that
+ * is why the picker used to offer all 204. Measured 2026-08-30 against CLI
+ * 2026.08.25: it does not. 33 of the 35 slugs are accepted by `--model`, most of
+ * them ids `--list-models` never mentions — the advertised list is narrower than
+ * what the CLI actually takes, so absence from it predicts nothing. The picker now
+ * offers the provider's own list (see `subagentCursorModelOptions` in the web app).
+ *
+ * This probe survives as the fallback the picker uses before the provider snapshot
+ * arrives, and to label a stored id the provider no longer offers.
  *
  * @module subagentBackend/cursorModels
  */

@@ -11,6 +11,7 @@ import {
   subagentBackendRowStatus,
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
+  subagentCursorModelOptions,
 } from "./sidebarSubagentBackend.logic";
 
 function instance(instanceId: string): SubagentBackendInstance {
@@ -189,5 +190,80 @@ describe("subagentCursorInstancesPickable", () => {
         state({ instances: [instance("cursor_default"), instance("cursor_personal")] }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("subagentCursorModelOptions", () => {
+  const cursorState = (overrides: Partial<SubagentBackendState> = {}) =>
+    state({
+      backend: SUBAGENT_BACKEND_CURSOR,
+      instances: [instance("cursor_default")],
+      models: [
+        { id: "auto", label: "Auto (default)" },
+        { id: "claude-opus-5-thinking-high", label: "Claude Opus 5 1M Thinking" },
+      ],
+      ...overrides,
+    });
+
+  it("falls back to the CLI list while the provider snapshot is missing", () => {
+    expect(subagentCursorModelOptions(cursorState(), null)).toEqual([
+      { id: "auto", label: "Auto (default)" },
+      { id: "claude-opus-5-thinking-high", label: "Claude Opus 5 1M Thinking" },
+    ]);
+  });
+
+  it("offers the provider's visible models instead of the CLI list", () => {
+    expect(
+      subagentCursorModelOptions(cursorState(), [
+        { slug: "claude-opus-5", name: "Claude Opus 5" },
+        { slug: "gpt-5.4", name: "GPT-5.4" },
+      ]),
+    ).toEqual([
+      { id: "claude-opus-5", label: "Claude Opus 5" },
+      { id: "gpt-5.4", label: "GPT-5.4" },
+    ]);
+  });
+
+  it("dispatches the provider's Auto under the id the CLI advertises", () => {
+    expect(
+      subagentCursorModelOptions(cursorState(), [{ slug: "auto-smart", name: "Auto" }]),
+    ).toEqual([{ id: "auto", label: "Auto" }]);
+  });
+
+  it("keeps a hidden-but-selected model visible so the control is never blank", () => {
+    expect(
+      subagentCursorModelOptions(cursorState({ model: "claude-opus-5-thinking-high" }), [
+        { slug: "gpt-5.4", name: "GPT-5.4" },
+      ]),
+    ).toEqual([
+      { id: "gpt-5.4", label: "GPT-5.4" },
+      { id: "claude-opus-5-thinking-high", label: "Claude Opus 5 1M Thinking" },
+    ]);
+  });
+
+  it("does not duplicate a selected model the provider still offers", () => {
+    expect(
+      subagentCursorModelOptions(cursorState({ model: "gpt-5.4" }), [
+        { slug: "gpt-5.4", name: "GPT-5.4" },
+      ]),
+    ).toEqual([{ id: "gpt-5.4", label: "GPT-5.4" }]);
+  });
+
+  it("reports an empty picker when the user hid every model", () => {
+    expect(subagentCursorModelOptions(cursorState(), [])).toEqual([]);
+  });
+});
+
+describe("subagentBackendRowStatus model label", () => {
+  it("labels the collapsed row from the offered options, not the CLI list", () => {
+    const rowState = state({
+      backend: SUBAGENT_BACKEND_CURSOR,
+      instances: [instance("cursor_default")],
+      model: "claude-opus-5",
+      models: [{ id: "auto", label: "Auto (default)" }],
+    });
+    expect(
+      subagentBackendRowStatus(rowState, [{ id: "claude-opus-5", label: "Claude Opus 5" }]),
+    ).toEqual({ dot: "on", text: "Claude Opus 5" });
   });
 });

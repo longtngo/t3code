@@ -1,6 +1,7 @@
 import {
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
+  type SubagentBackendModelOption,
   type SubagentBackendSetInput,
   type SubagentBackendState,
 } from "@t3tools/contracts";
@@ -28,19 +29,23 @@ export interface SubagentBackendRowStatus {
  */
 export function subagentBackendRowStatus(
   state: SubagentBackendState | null,
+  options?: ReadonlyArray<SubagentBackendModelOption>,
 ): SubagentBackendRowStatus {
   if (state == null) return { dot: "off", text: "Loading…" };
   if (state.degraded != null) return { dot: "off", text: "Degraded" };
   if (state.instances.length === 0) return { dot: "off", text: "Cursor unavailable" };
   if (state.backend === SUBAGENT_BACKEND_CURSOR) {
-    return { dot: "on", text: subagentModelLabel(state) };
+    return { dot: "on", text: subagentModelLabel(state, options ?? state.models) };
   }
   return { dot: "off", text: "Default" };
 }
 
-function subagentModelLabel(state: SubagentBackendState): string {
+function subagentModelLabel(
+  state: SubagentBackendState,
+  options: ReadonlyArray<SubagentBackendModelOption>,
+): string {
   if (state.model == null) return "Auto";
-  return state.models.find((model) => model.id === state.model)?.label ?? state.model;
+  return options.find((model) => model.id === state.model)?.label ?? state.model;
 }
 
 /** Whether an enabled Cursor instance exists at all — gates the Cursor side of the segmented
@@ -73,4 +78,55 @@ export function subagentBackendApplyInput(
     ...(instanceId !== undefined ? { instanceId } : {}),
     ...(state.model ? { model: state.model } : {}),
   };
+}
+
+/**
+ * The Cursor provider and the `cursor-agent` CLI name Auto differently — `auto-smart` over ACP,
+ * `auto` on the command line. Both are accepted by `--model`, but only `auto` is one the CLI
+ * advertises, so the picker offers the provider's label against the CLI's id.
+ */
+const CURSOR_AUTO_PROVIDER_SLUG = "auto-smart";
+const CURSOR_AUTO_CLI_ID = "auto";
+
+/** One visible model from the Cursor provider, as `getAppModelOptionsForInstance` reports it. */
+export interface SubagentCursorVisibleModel {
+  readonly slug: string;
+  readonly name: string;
+}
+
+/**
+ * The model picker's options: the Cursor provider's own model list, honouring whatever the user
+ * hid or reordered for that instance, rather than the ~200 concrete ids `cursor-agent
+ * --list-models` advertises. The two are separate namespaces that overlap in only nine ids, and
+ * the CLI accepts provider slugs it never advertises, so the provider list is both the shorter
+ * list and the one the user actually curated.
+ *
+ * `visibleModels: null` means the provider snapshot has not arrived yet — distinct from an empty
+ * list, which means the user hid everything. Only the former falls back to the CLI list, since a
+ * picker that silently repopulates itself with 200 entries would misreport the second case as the
+ * first.
+ *
+ * A selected model missing from the list is appended rather than dropped, so a stored value the
+ * provider no longer offers still renders as the current selection instead of a blank control.
+ */
+export function subagentCursorModelOptions(
+  state: SubagentBackendState | null,
+  visibleModels: ReadonlyArray<SubagentCursorVisibleModel> | null,
+): ReadonlyArray<SubagentBackendModelOption> {
+  if (state == null) return [];
+  if (visibleModels == null) return state.models;
+
+  const options: SubagentBackendModelOption[] = visibleModels.map((model) => ({
+    id: model.slug === CURSOR_AUTO_PROVIDER_SLUG ? CURSOR_AUTO_CLI_ID : model.slug,
+    label: model.name,
+  }));
+
+  const selected = state.model;
+  if (selected != null && !options.some((option) => option.id === selected)) {
+    options.push({
+      id: selected,
+      label: state.models.find((model) => model.id === selected)?.label ?? selected,
+    });
+  }
+  return options;
 }

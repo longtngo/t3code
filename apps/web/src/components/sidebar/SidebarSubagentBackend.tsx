@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import { BotIcon, ChevronRightIcon, Loader2Icon } from "lucide-react";
 import {
   ProviderInstanceId,
@@ -7,10 +8,12 @@ import {
 } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
-import { useClientSettings } from "~/hooks/useSettings";
+import { useClientSettings, usePrimarySettings } from "~/hooks/useSettings";
 import { useSubagentBackend } from "~/hooks/useSubagentBackend";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { normalizeProviderAccentColor } from "~/providerInstances";
+import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/providerInstances";
+import { getAppModelOptionsForInstance } from "~/modelSelection";
+import { primaryServerProvidersAtom } from "~/state/server";
 import { WindowRow } from "~/components/chat/VitalsGauge";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
@@ -21,6 +24,7 @@ import {
   subagentBackendRowStatus,
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
+  subagentCursorModelOptions,
 } from "./sidebarSubagentBackend.logic";
 
 const PANEL_ID = "sidebar-subagent-backend-panel";
@@ -67,10 +71,25 @@ export function SidebarSubagentBackend() {
   const { state, usage, pending, set } = useSubagentBackend(environmentId, open);
   const now = usePanelNow(open);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const settings = usePrimarySettings();
+  const providers = useAtomValue(primaryServerProvidersAtom);
+
+  // The picker offers the Cursor provider's own visible models for the selected instance, not
+  // the CLI's advertised id list. `null` while that instance has no snapshot yet, which
+  // `subagentCursorModelOptions` treats differently from a user who hid every model.
+  const visibleModels = useMemo(() => {
+    const instanceId = state?.instanceId;
+    if (instanceId == null) return null;
+    const entry = getProviderInstanceEntry(providers, instanceId);
+    if (entry === undefined) return null;
+    return getAppModelOptionsForInstance(settings, entry, state?.model);
+  }, [providers, settings, state?.instanceId, state?.model]);
+
+  const modelOptions = subagentCursorModelOptions(state, visibleModels);
 
   if (!supported || environmentId == null) return null;
 
-  const status = subagentBackendRowStatus(state);
+  const status = subagentBackendRowStatus(state, modelOptions);
   const cursorAvailable = subagentCursorAvailable(state);
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
@@ -124,6 +143,9 @@ export function SidebarSubagentBackend() {
                 if (value) applyBackend(value);
               }}
             >
+              <Toggle value={SUBAGENT_BACKEND_DEFAULT} disabled={controlsDisabled}>
+                Default
+              </Toggle>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -141,12 +163,15 @@ export function SidebarSubagentBackend() {
                   </TooltipPopup>
                 )}
               </Tooltip>
-              <Toggle value={SUBAGENT_BACKEND_DEFAULT} disabled={controlsDisabled}>
-                Default
-              </Toggle>
             </ToggleGroup>
 
-            {instancesPickable && state ? (
+            {isCursor ? null : (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Subagents run on the same provider and model as the thread that spawns them.
+              </p>
+            )}
+
+            {isCursor && instancesPickable && state ? (
               <Select
                 value={state.instanceId ?? ""}
                 onValueChange={(instanceId: string | null) => {
@@ -157,7 +182,7 @@ export function SidebarSubagentBackend() {
                     ...(state.model ? { model: state.model } : {}),
                   });
                 }}
-                disabled={controlsDisabled || !isCursor}
+                disabled={controlsDisabled}
               >
                 <SelectTrigger size="sm" aria-label="Cursor instance">
                   <SelectValue placeholder="Instance" />
@@ -184,31 +209,33 @@ export function SidebarSubagentBackend() {
               </Select>
             ) : null}
 
-            {/* Visible but disabled when off, so the setting stays discoverable rather than
-                vanishing along with the thing it configures. */}
-            <Select
-              value={state?.model ?? ""}
-              onValueChange={(model: string | null) => {
-                if (!model || state == null) return;
-                set({
-                  backend: SUBAGENT_BACKEND_CURSOR,
-                  ...(state.instanceId ? { instanceId: state.instanceId } : {}),
-                  model,
-                });
-              }}
-              disabled={controlsDisabled || !isCursor || (state?.models.length ?? 0) === 0}
-            >
-              <SelectTrigger size="sm" aria-label="Cursor model">
-                <SelectValue placeholder="Model" />
-              </SelectTrigger>
-              <SelectPopup>
-                {(state?.models ?? []).map((model) => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
+            {/* Cursor-only configuration, hidden rather than disabled while the backend is
+                `default`: with nothing to configure, a dead control is just noise. */}
+            {isCursor ? (
+              <Select
+                value={state?.model ?? ""}
+                onValueChange={(model: string | null) => {
+                  if (!model || state == null) return;
+                  set({
+                    backend: SUBAGENT_BACKEND_CURSOR,
+                    ...(state.instanceId ? { instanceId: state.instanceId } : {}),
+                    model,
+                  });
+                }}
+                disabled={controlsDisabled || modelOptions.length === 0}
+              >
+                <SelectTrigger size="sm" aria-label="Cursor model">
+                  <SelectValue placeholder="Model" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {modelOptions.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            ) : null}
 
             {state?.degraded ? (
               <div className="text-[11px] leading-snug text-amber-500">{state.degraded}</div>
