@@ -4,7 +4,10 @@ import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
+  isWorkspaceVideoPreviewPath,
+  VIDEO_CONTENT_TYPE_BY_EXTENSION,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
+  WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {
@@ -67,5 +70,35 @@ describe("workspace text viewer extensions", () => {
     expect(WORKSPACE_TEXT_VIEWER_EXTENSIONS).toContain(".json");
     expect(WORKSPACE_TEXT_VIEWER_EXTENSIONS).toContain(".py");
     expect(WORKSPACE_TEXT_VIEWER_EXTENSIONS.length).toBeGreaterThan(60);
+  });
+});
+
+describe("workspace video preview paths", () => {
+  it("recognises the five video extensions, case-insensitively and past a query string", () => {
+    expect(isWorkspaceVideoPreviewPath("/Users/me/demo.mp4")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/demo.WEBM")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/clip.mov")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/clip.m4v")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/clip.ogv")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/demo.mp4?raw=1")).toBe(true);
+  });
+
+  it("rejects non-video paths, including lookalikes", () => {
+    expect(isWorkspaceVideoPreviewPath("/Users/me/photo.png")).toBe(false);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/notes.md")).toBe(false);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/mp4")).toBe(false);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/archive.mp4.zip")).toBe(false);
+  });
+
+  it("maps every listed extension to a content type", () => {
+    for (const extension of WORKSPACE_VIDEO_PREVIEW_EXTENSIONS) {
+      expect(VIDEO_CONTENT_TYPE_BY_EXTENSION[extension]).toMatch(/^video\//);
+    }
+  });
+
+  // The /api/assets mint gate. Widening it here would mint a directory-scoped
+  // token for a file the serving side still refuses, which is worse than today.
+  it("leaves the asset-mint entry predicate untouched", () => {
+    expect(isWorkspacePreviewEntryPath("/Users/me/demo.mp4")).toBe(false);
   });
 });

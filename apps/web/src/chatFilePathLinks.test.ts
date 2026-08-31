@@ -84,8 +84,12 @@ describe("resolveChatFilePathMention", () => {
     // allow-list in lib/codeFileTypes.ts is the gate.
     expect(resolveChatFilePathMention("/etc/hosts", { cwd: CWD })).toBeNull();
     expect(resolveChatFilePathMention("/Users/dev/project/.env", { cwd: CWD })).toBeNull();
-    // Non-image media stays excluded; the viewer has nothing to show for it.
-    expect(resolveChatFilePathMention("/Users/dev/project/clip.mp4", { cwd: CWD })).toBeNull();
+    // Video is a viewable kind now, so a bare video path chips like any other
+    // document. Other media stays excluded — the viewer has nothing to show for it.
+    expect(resolveChatFilePathMention("/Users/dev/project/clip.mp4", { cwd: CWD })).toBe(
+      "/Users/dev/project/clip.mp4",
+    );
+    expect(resolveChatFilePathMention("/Users/dev/project/clip.avi", { cwd: CWD })).toBeNull();
     expect(resolveChatFilePathMention("/Users/dev/project/notes.md", { cwd: CWD })).toBe(
       "/Users/dev/project/notes.md",
     );

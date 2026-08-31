@@ -1,6 +1,7 @@
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import {
   isWorkspaceImagePreviewPath,
+  isWorkspaceVideoPreviewPath,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 
@@ -9,7 +10,7 @@ import {
  * `fileViewerStore`; that store was replaced by the right-panel surface model,
  * so the type lives with the classifier that produces it.
  */
-export type FileViewerKind = "html" | "markdown" | "code" | "image";
+export type FileViewerKind = "html" | "markdown" | "code" | "image" | "video";
 
 /**
  * Curated allow-list of text/code file extensions that get the clickable-chip +
@@ -67,6 +68,7 @@ export function classifyFileViewerKind(path: string): FileViewerKind | null {
   // asset + viewer routes already share, so an extension can never be viewable on
   // one surface and a failed text read on another.
   if (isWorkspaceImagePreviewPath(path)) return "image";
+  if (isWorkspaceVideoPreviewPath(path)) return "video";
   if (TEXT_FILE_EXTENSIONS.has(ext)) return "code";
   return null;
 }

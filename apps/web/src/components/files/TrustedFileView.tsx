@@ -85,12 +85,15 @@ export interface TrustedFileViewProps {
  * through to `code`, which is what keeps `Makefile` / `Dockerfile` / unlisted
  * extensions viewable through the address bar.
  */
-type TrustedViewKind = "markdown" | "html" | "image" | "code";
+type TrustedViewKind = "markdown" | "html" | "image" | "video" | "code";
 
 export function trustedViewKind(absolutePath: string): TrustedViewKind {
   if (isMarkdownPreviewFile(absolutePath)) return "markdown";
   const classified = classifyFileViewerKind(absolutePath);
-  return classified === "html" || classified === "image" || classified === "markdown"
+  return classified === "html" ||
+    classified === "image" ||
+    classified === "video" ||
+    classified === "markdown"
     ? classified
     : "code";
 }
@@ -116,10 +119,10 @@ function TrustedFileViewContents({
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const rawUrl = viewerHttpUrl(environmentHttpBaseUrl, absolutePath);
 
-  // Images and rendered HTML stream from the server's /viewer route, so the text
-  // read is not merely unnecessary for them — for an image it is the read that
-  // fails ("… is binary and cannot be previewed as text").
-  const usesRawBytes = kind === "image" || (kind === "html" && !showAlternate);
+  // Images, video and rendered HTML stream from the server's /viewer route, so the
+  // text read is not merely unnecessary for them — for an image or a video it is
+  // the read that fails ("… is binary and cannot be previewed as text").
+  const usesRawBytes = kind === "image" || kind === "video" || (kind === "html" && !showAlternate);
   const file = useTrustedFileQuery(environmentId, usesRawBytes ? null : absolutePath);
   const contents = file.data?.contents ?? null;
   const markdownHtmlMode = showAlternate && kind === "markdown";
@@ -130,6 +133,10 @@ function TrustedFileViewContents({
   // Bumped by Reload for the raw-byte views, whose bytes the server sends with
   // `no-store` but which the <img>/<iframe> would otherwise not re-request.
   const [rawReloadToken, setRawReloadToken] = useState(0);
+  // A raw-byte kind never issues the text read, so `file.error` stays null and the
+  // error branch below cannot see a failed <video>. Without this, a 404, 413, 416
+  // or 401 renders as a silent dead player.
+  const [rawMediaFailed, setRawMediaFailed] = useState(false);
   // A read only fails on a path the server could not open as a regular file, so
   // every failure is a directory candidate. Asking for the listing is both the
   // question and the answer: it succeeds for a folder, and for anything else it
@@ -156,6 +163,31 @@ function TrustedFileViewContents({
             <LoaderCircle className="size-4 animate-spin" aria-hidden />
             Connecting…
           </TrustedFileNotice>
+        );
+      }
+      if (rawMediaFailed) {
+        return (
+          <TrustedFileNotice tone="error">
+            This file could not be played. It may be missing, too large, or in a format this browser
+            cannot decode.
+          </TrustedFileNotice>
+        );
+      }
+      if (kind === "video") {
+        return (
+          <div className="flex min-h-0 flex-1 items-center justify-center bg-black/90 p-4">
+            {/* No autoPlay: the expanded-image dialog is an explicit "play this"
+                gesture, but the viewer is a file browser, and a report path that
+                starts playing audio on click is a defect. */}
+            <video
+              src={rawUrlWithReload}
+              controls
+              playsInline
+              preload="metadata"
+              onError={() => setRawMediaFailed(true)}
+              className="max-h-full max-w-full rounded"
+            />
+          </div>
         );
       }
       if (kind === "image") {
@@ -296,8 +328,12 @@ function TrustedFileViewContents({
             size="xs"
             variant="ghost"
             onClick={() => {
-              if (usesRawBytes) setRawReloadToken((token) => token + 1);
-              else if (markdownHtmlMode) rendered.refresh();
+              if (usesRawBytes) {
+                // The notice would otherwise be sticky for the life of the mount,
+                // since the component is keyed on the path.
+                setRawMediaFailed(false);
+                setRawReloadToken((token) => token + 1);
+              } else if (markdownHtmlMode) rendered.refresh();
               else {
                 file.refresh();
                 // The read stays failed for a directory, so refreshing it alone

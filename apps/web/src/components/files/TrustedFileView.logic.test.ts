@@ -13,6 +13,16 @@ describe("trustedViewKind", () => {
     expect(trustedViewKind("/Users/me/logo.svg")).toBe("image");
   });
 
+  it("classifies video, which streams from the byte route like an image", () => {
+    expect(trustedViewKind("/Users/me/demo.mp4")).toBe("video");
+    expect(trustedViewKind("/Users/me/clip.MOV")).toBe("video");
+  });
+
+  it("still falls back to code for media it cannot play", () => {
+    // Admitting video must not turn the fallback into "render anything".
+    expect(trustedViewKind("/Users/me/clip.avi")).toBe("code");
+  });
+
   it("keeps .mdx as markdown, which the shared classifier alone would drop", () => {
     // classifyFileViewerKind covers only md|markdown; losing mdx here would demote
     // it from rendered markdown to source.

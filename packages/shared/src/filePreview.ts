@@ -12,6 +12,38 @@ export const WORKSPACE_IMAGE_PREVIEW_EXTENSIONS = [
 ] as const;
 
 /**
+ * Video files the viewer will play. Kept separate from the browser and image
+ * lists rather than folded into either: `isWorkspacePreviewEntryPath` (browser ∪
+ * image) is the `/api/assets` mint gate, and video is deliberately not served
+ * there yet. Matches the set the pull-request markdown renderer already treats as
+ * video, so the two cannot disagree about what a video is.
+ */
+export const WORKSPACE_VIDEO_PREVIEW_EXTENSIONS = [
+  ".m4v",
+  ".mov",
+  ".mp4",
+  ".ogv",
+  ".webm",
+] as const;
+
+/**
+ * Content type per video extension. The `/viewer` route pins this through
+ * `headers` because `HttpServerResponse.file` drops its `contentType` option, so
+ * the served type can only ever be one the allow-list above admits.
+ */
+export const VIDEO_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  // video/mp4, not the non-IANA video/x-m4v the platform's own Mime table would
+  // pick: `.m4v` IS mp4, the responses carry `nosniff`, and apps/web/src/types.ts
+  // already made this call for attachments. Two tables disagreeing on one
+  // extension is the drift this shared list exists to prevent.
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".mp4": "video/mp4",
+  ".ogv": "video/ogg",
+  ".webm": "video/webm",
+};
+
+/**
  * Text/code files the viewer will open: the chip + side-panel treatment in the
  * client, and the raw `/viewer` route on the server.
  *
@@ -121,6 +153,10 @@ export function isWorkspaceBrowserPreviewPath(path: string): boolean {
 
 export function isWorkspaceImagePreviewPath(path: string): boolean {
   return hasPreviewExtension(path, WORKSPACE_IMAGE_PREVIEW_EXTENSIONS);
+}
+
+export function isWorkspaceVideoPreviewPath(path: string): boolean {
+  return hasPreviewExtension(path, WORKSPACE_VIDEO_PREVIEW_EXTENSIONS);
 }
 
 export function isWorkspacePreviewEntryPath(path: string): boolean {

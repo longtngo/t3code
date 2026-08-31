@@ -21,9 +21,9 @@ describe("classifyFileViewerKind", () => {
   });
 
   it("returns null for unsupported, binary, secret, and extension-less files", () => {
-    // photo.png used to belong here; images are now a viewable kind of their own.
+    // photo.png used to belong here; images are now a viewable kind of their own,
+    // and video.mp4 left for the same reason.
     expect(classifyFileViewerKind("archive.zip")).toBeNull();
-    expect(classifyFileViewerKind("video.mp4")).toBeNull();
     expect(classifyFileViewerKind(".env")).toBeNull(); // dotfile / secret
     expect(classifyFileViewerKind("Makefile")).toBeNull(); // no extension
     expect(classifyFileViewerKind("/a/b/")).toBeNull(); // directory
@@ -79,8 +79,12 @@ describe("classifyFileViewerKind — images", () => {
     }
   });
 
-  it("leaves non-image binaries unclassified", () => {
-    expect(classifyFileViewerKind("a.mp4")).toBeNull();
+  it("classifies video, and still leaves other binaries unclassified", () => {
+    expect(classifyFileViewerKind("a.mp4")).toBe("video");
+    expect(classifyFileViewerKind("a.MOV")).toBe("video");
+    // The negative half of the original assertion, kept: admitting video must not
+    // become "admit any binary".
     expect(classifyFileViewerKind("a.zip")).toBeNull();
+    expect(classifyFileViewerKind("a.avi")).toBeNull();
   });
 });

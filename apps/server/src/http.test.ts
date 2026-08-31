@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+
 import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
 
@@ -5,6 +8,7 @@ import {
   assetResponseHeaders,
   classifyViewerAssetPath,
   classifyViewerPath,
+  viewerVideoContentType,
   downloadContentDisposition,
   isGrantableViewerAssetDirectory,
   resolveViewerAssetGrantDecision,
@@ -145,8 +149,26 @@ describe("classifyViewerPath", () => {
     expect(classifyViewerPath("/a/logo.svg")?.kind).toBe("image");
   });
 
+  it("classifies video, which streams bytes rather than being read as text", () => {
+    expect(classifyViewerPath("/Users/me/demo.mp4")).toEqual({
+      absolutePath: "/Users/me/demo.mp4",
+      kind: "video",
+    });
+    expect(classifyViewerPath("/Users/me/clip.MOV")?.kind).toBe("video");
+    expect(classifyViewerPath("/Users/me/clip.webm")?.kind).toBe("video");
+    expect(classifyViewerPath("/Users/me/clip.m4v")?.kind).toBe("video");
+    expect(classifyViewerPath("/Users/me/clip.ogv")?.kind).toBe("video");
+  });
+
+  it("still rejects media it cannot serve, so the 400 is not blanket-removed", () => {
+    expect(classifyViewerPath("/Users/me/clip.avi")).toBeNull();
+    expect(classifyViewerPath("/Users/me/clip.mkv")).toBeNull();
+    expect(classifyViewerPath("/Users/me/archive.zip")).toBeNull();
+  });
+
   it("rejects unsupported, secret, and extension-less files", () => {
-    expect(classifyViewerPath("/Users/me/video.mp4")).toBeNull();
+    // `video.mp4` used to be asserted null here; video is a served kind of its own
+    // now, and the case it stood for lives in the two assertions above.
     expect(classifyViewerPath("/Users/me/secret.env")).toBeNull();
     expect(classifyViewerPath("/Users/me/Makefile")).toBeNull();
     // A dot in a parent directory is not an extension of the final segment.
@@ -571,5 +593,64 @@ describe("resolveViewerAssetGrantDecision", () => {
         join,
       }),
     ).toBe(false);
+  });
+});
+
+describe("viewerVideoContentType", () => {
+  it("pins a type for every video extension the classifier admits", () => {
+    expect(viewerVideoContentType("/Users/me/demo.mp4")).toEqual({ "Content-Type": "video/mp4" });
+    expect(viewerVideoContentType("/Users/me/demo.WEBM")).toEqual({ "Content-Type": "video/webm" });
+    expect(viewerVideoContentType("/Users/me/clip.mov")).toEqual({
+      "Content-Type": "video/quicktime",
+    });
+  });
+
+  // The 416 and 413 bodies are text. Spreading a video Content-Type onto them
+  // labels "Requested range not satisfiable" as video/mp4, which is why this is a
+  // separate object rather than part of the shared video header block.
+  it("is empty for a path it cannot vouch for, so nothing is asserted by default", () => {
+    expect(viewerVideoContentType("/Users/me/clip.avi")).toEqual({});
+    expect(viewerVideoContentType("/Users/me/Makefile")).toEqual({});
+  });
+});
+
+describe("viewer route auth ordering", () => {
+  // Guards the invariant, not the implementation: everything reachable before
+  // `authenticateRawRouteWithScope` must be pure string work over the URL. A stat
+  // ahead of it turns 404-vs-416 into an existence oracle and `Content-Range:
+  // bytes */N` into a size oracle, for a caller with no credentials at all.
+  it("classifies a video path without touching the filesystem", () => {
+    const classified = classifyViewerPath("/definitely/does/not/exist/anywhere.mp4");
+    expect(classified).toEqual({
+      absolutePath: "/definitely/does/not/exist/anywhere.mp4",
+      kind: "video",
+    });
+  });
+
+  // Pins the ORDER, not just the condition. A mutation run showed the waiver
+  // assertion below survives both "delete the auth call entirely" and "move the
+  // stat ahead of it" — the two failures whose whole cost is an unauthenticated
+  // existence and size oracle. This asserts the video branch's first filesystem
+  // call comes after the auth call in the route body.
+  it("authenticates before the video branch touches the filesystem", () => {
+    const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
+    const routeStart = source.indexOf("export const viewerRouteLayer");
+    expect(routeStart).toBeGreaterThan(-1);
+    const route = source.slice(routeStart);
+    const authIndex = route.indexOf("authenticateRawRouteWithScope(AuthOrchestrationReadScope)");
+    const videoBranchIndex = route.indexOf('if (kind === "video")');
+    expect(authIndex).toBeGreaterThan(-1);
+    expect(videoBranchIndex).toBeGreaterThan(-1);
+    expect(authIndex).toBeLessThan(videoBranchIndex);
+    // And the branch really is the thing that stats, so the ordering above is
+    // about the call that matters rather than an unrelated landmark.
+    expect(route.slice(videoBranchIndex)).toContain("fileSystem.stat(absolutePath)");
+  });
+
+  it("never waives authentication for video", () => {
+    const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
+    const waiver = source.slice(source.indexOf('if (kind === "image"'));
+    const condition = waiver.slice(0, waiver.indexOf("\n"));
+    expect(condition).toContain('kind === "video"');
   });
 });

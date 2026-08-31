@@ -8,8 +8,10 @@ import {
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import {
+  VIDEO_CONTENT_TYPE_BY_EXTENSION,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
+  WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import { summarizeOtlpTraceData } from "./observability/otlpTraceSummary.ts";
@@ -66,6 +68,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 import { WebPushRelay } from "./push/WebPushRelay.ts";
 import { registerPushSubscription } from "./push/register.ts";
+import { resolveViewerRange } from "./viewerRange.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const PUSH_SUBSCRIPTIONS_PATH = "/api/push/subscriptions";
@@ -483,7 +486,22 @@ export function isWaivableLocalRequest(request: HttpServerRequest.HttpServerRequ
 }
 
 /** How a `/viewer` request should be served. */
-export type ViewerPathKind = "markdown" | "html" | "text" | "image";
+export type ViewerPathKind = "markdown" | "html" | "text" | "image" | "video";
+
+/**
+ * The pinned `Content-Type` for a video path, as a spreadable object.
+ *
+ * Separate from the rest of the video headers because it must reach the byte
+ * responses and NOT the 416/413 ones, whose bodies are text — spreading it onto
+ * those labels "Requested range not satisfiable" as `video/mp4`. Empty for an
+ * extension the map does not carry, which leaves the platform's own `Mime`
+ * lookup in place rather than asserting a type this route cannot vouch for.
+ */
+export function viewerVideoContentType(absolutePath: string): Record<string, string> {
+  const extension = absolutePath.slice(absolutePath.lastIndexOf(".")).toLowerCase();
+  const contentType = VIDEO_CONTENT_TYPE_BY_EXTENSION[extension];
+  return contentType ? { "Content-Type": contentType } : {};
+}
 
 /**
  * Images are served as bytes, so they never reach the text reader — its NUL-byte
@@ -498,6 +516,28 @@ const IMAGE_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_IMAGE_PREVIEW_EXTENSIO
  * a heap risk), but an unbounded stream over Tailscale is an unexplained stall.
  */
 const VIEWER_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+/**
+ * Video is served as bytes for the same reason images are — the text reader's
+ * NUL-byte guard rejects it — but unlike images it also needs Range, because
+ * without it a media element cannot seek: measured, the scrubber moves, `seeked`
+ * fires, and playback restarts at zero.
+ */
+const VIDEO_VIEWER_EXTENSIONS = new Set<string>(WORKSPACE_VIDEO_PREVIEW_EXTENSIONS);
+/**
+ * Per-RESPONSE bound, not a transfer bound. It does not reduce bytes served; it
+ * converts one stream into sequential round trips. The value matters in both
+ * directions: measured on a 561 MB video over a 60 ms link, a 64 KB clamp drops
+ * playback to 0.616x realtime with 37 rebuffers and an 84x slower seek, while
+ * 8 MiB is indistinguishable from no clamp at all.
+ */
+const VIEWER_MAX_VIDEO_RESPONSE_BYTES = 8 * 1024 * 1024;
+/**
+ * Stat-based cap for the branch that has no range to bound it. A rangeless GET —
+ * `curl`, "Open in new tab", a malformed or multi-range header — would otherwise
+ * stream an arbitrarily large file, which is exactly what the image cap exists to
+ * prevent.
+ */
+const VIEWER_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 /**
  * `HttpServerResponse.file` silently DROPS its `contentType` option — the platform
  * derives the type from the path via `Mime` — so the type is pinned through
@@ -750,6 +790,7 @@ export function classifyViewerPath(
   if (MARKDOWN_EXTENSIONS.has(extension)) return { absolutePath, kind: "markdown" };
   if (HTML_EXTENSIONS.has(extension)) return { absolutePath, kind: "html" };
   if (IMAGE_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "image" };
+  if (VIDEO_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "video" };
   if (TEXT_VIEWER_EXTENSIONS.has(extension)) return { absolutePath, kind: "text" };
   return null;
 }
@@ -795,7 +836,11 @@ export const viewerRouteLayer = HttpRouter.add(
     // (the checks above are `!== undefined` guarded, so absence keeps the waiver),
     // and any other 127.0.0.1 port, which is the SAME SITE for a `SameSite=Lax`
     // cookie. Requiring the scope closes both without touching the text paths.
-    if (kind === "image" || !isWaivableLocalRequest(request)) {
+    // Video joins images in never being waived, and the reason is stronger: with
+    // Range, `bytes=0-1` returns literal file bytes, so an unauthenticated video
+    // path would be a byte-ranged arbitrary-file read rather than merely an
+    // existence oracle.
+    if (kind === "image" || kind === "video" || !isWaivableLocalRequest(request)) {
       yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
     }
 
@@ -845,6 +890,53 @@ export const viewerRouteLayer = HttpRouter.add(
         // otherwise escape as an unhandled failure.
         Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })),
       );
+    }
+
+    // Video carries the image branch's two re-added guards (regular file, size
+    // bound) and adds Range, without which a media element cannot seek. Everything
+    // here is after the auth call above on purpose: a `stat` ahead of it would turn
+    // 404-vs-416 into an existence oracle and `Content-Range: bytes */N` into a
+    // size oracle for a caller with no credentials.
+    if (kind === "video") {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const info = yield* fileSystem.stat(absolutePath).pipe(Effect.option);
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+      const size = Number(info.value.size);
+      const rangeHeaders = { ...headers, "Accept-Ranges": "bytes" };
+      const videoHeaders = { ...rangeHeaders, ...viewerVideoContentType(absolutePath) };
+      const range = resolveViewerRange(
+        request.headers["range"],
+        size,
+        VIEWER_MAX_VIDEO_RESPONSE_BYTES,
+      );
+      if (range === "unsatisfiable") {
+        return HttpServerResponse.text("Requested range not satisfiable", {
+          status: 416,
+          headers: { ...rangeHeaders, "Content-Range": `bytes */${size}` },
+        });
+      }
+      // Only the rangeless branch needs the stat cap; a range is already bounded by
+      // VIEWER_MAX_VIDEO_RESPONSE_BYTES no matter how large the file is.
+      if (range === undefined && size > VIEWER_MAX_VIDEO_BYTES) {
+        return HttpServerResponse.text("Video too large to preview", { status: 413 });
+      }
+      return yield* HttpServerResponse.file(absolutePath, {
+        ...(range === undefined
+          ? { status: 200, headers: videoHeaders }
+          : {
+              status: 206,
+              offset: range.start,
+              bytesToRead: range.end - range.start + 1,
+              headers: {
+                ...videoHeaders,
+                "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
+              },
+            }),
+        // Same funnel as the image branch: a file that vanished between stat and
+        // open fails with a PlatformError this route has no other handler for.
+      }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })));
     }
 
     const workspaceFileSystem = yield* WorkspaceFileSystem;
