@@ -184,6 +184,68 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("issues exact workspace URLs for video previews", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-video-workspace-",
+      });
+      const mediaDirectory = path.join(root, "media");
+      const videoPath = path.join(mediaDirectory, "demo.mp4");
+      yield* fileSystem.makeDirectory(mediaDirectory, { recursive: true });
+      yield* fileSystem.writeFile(videoPath, new Uint8Array([0, 0, 0, 24]));
+      yield* fileSystem.writeFile(path.join(mediaDirectory, "other.mp4"), new Uint8Array([0]));
+      yield* fileSystem.writeFile(path.join(mediaDirectory, "poster.png"), new Uint8Array([137]));
+      const canonicalVideoPath = yield* fileSystem.realPath(videoPath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: videoPath,
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "demo.mp4")).toEqual({
+        kind: "file",
+        path: canonicalVideoPath,
+      });
+      expect(yield* resolveAsset(token, "other.mp4")).toBeNull();
+      // The discriminator between the two claim kinds: a directory-scoped
+      // `workspace-file` token redeems any sibling `PREVIEW_ASSET_EXTENSIONS`
+      // file, and a `.png` next to the video is exactly that.
+      expect(yield* resolveAsset(token, "poster.png")).toBeNull();
+      expect(yield* resolveAsset(token, "../demo.mp4")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("refuses to mint a workspace URL for a non-previewable file", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-mint-gate-",
+      });
+      yield* fileSystem.writeFileString(path.join(root, "notes.txt"), "not previewable");
+
+      const error = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: path.join(root, "notes.txt"),
+        },
+        workspaceRoot: root,
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(AssetPreviewTypeValidationError);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact attachment capabilities by attachment id", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

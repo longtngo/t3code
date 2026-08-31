@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import {
+  isWorkspaceVideoPreviewPath,
   VIDEO_CONTENT_TYPE_BY_EXTENSION,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
@@ -350,6 +351,56 @@ export const pushVapidPublicKeyRouteLayer = HttpRouter.add(
   }),
 );
 
+/**
+ * Same per-response bound as the `/viewer` video branch, for the same measured
+ * reason: a small clamp converts playback into sequential round trips (0.616x
+ * realtime at 64 KB), while 8 MiB is indistinguishable from no clamp at all.
+ */
+const ASSET_MAX_VIDEO_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+export type AssetVideoRangeResponse =
+  | { readonly status: 200; readonly headers: Record<string, string> }
+  | {
+      readonly status: 206;
+      readonly offset: number;
+      readonly bytesToRead: number;
+      readonly headers: Record<string, string>;
+    }
+  | { readonly status: 416; readonly headers: Record<string, string> };
+
+/**
+ * How a video asset answers one request.
+ *
+ * Video is the only asset kind that needs Range: without it a media element
+ * cannot seek — measured on the `/viewer` route, the scrubber moves, `seeked`
+ * fires, and playback snaps back to zero. Pure, so the 206/416 arithmetic is
+ * testable without a live server, mirroring `viewerVideoContentType`.
+ */
+export function assetVideoRangeResponse(
+  rangeHeader: string | undefined,
+  fileSize: number,
+): AssetVideoRangeResponse {
+  const range = resolveViewerRange(rangeHeader, fileSize, ASSET_MAX_VIDEO_RESPONSE_BYTES);
+  if (range === "unsatisfiable") {
+    return {
+      status: 416,
+      headers: { "Accept-Ranges": "bytes", "Content-Range": `bytes */${fileSize}` },
+    };
+  }
+  if (range === undefined) {
+    return { status: 200, headers: { "Accept-Ranges": "bytes" } };
+  }
+  return {
+    status: 206,
+    offset: range.start,
+    bytesToRead: range.end - range.start + 1,
+    headers: {
+      "Accept-Ranges": "bytes",
+      "Content-Range": `bytes ${range.start}-${range.end}/${fileSize}`,
+    },
+  };
+}
+
 export const assetRouteLayer = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -373,18 +424,51 @@ export const assetRouteLayer = HttpRouter.add(
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
+    const headers = assetResponseHeaders(
+      asset.path,
+      asset.download || asset.mimeType !== undefined
+        ? {
+            ...(asset.download ? { download: true } : {}),
+            ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
+            ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
+          }
+        : undefined,
+    );
+
+    // Video answers Range; every other asset keeps the flat 200 it has always
+    // had. The size comes from a stat because a range can only be resolved
+    // against the real length, and `resolveAsset` reports the path alone.
+    if (isWorkspaceVideoPreviewPath(asset.path)) {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const info = yield* fileSystem.stat(asset.path).pipe(Effect.option);
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+      const video = assetVideoRangeResponse(request.headers["range"], Number(info.value.size));
+      if (video.status === 416) {
+        // The asset headers are deliberately left off: spreading the file's
+        // `video/mp4` onto a text body labels "Requested range not satisfiable"
+        // as a video.
+        return HttpServerResponse.text("Requested range not satisfiable", {
+          status: 416,
+          headers: video.headers,
+        });
+      }
+      return yield* HttpServerResponse.file(asset.path, {
+        ...(video.status === 200
+          ? { status: 200 }
+          : { status: 206, offset: video.offset, bytesToRead: video.bytesToRead }),
+        headers: { ...headers, ...video.headers },
+      }).pipe(
+        Effect.orElseSucceed(() =>
+          HttpServerResponse.text("Internal Server Error", { status: 500 }),
+        ),
+      );
+    }
+
     return yield* HttpServerResponse.file(asset.path, {
       status: 200,
-      headers: assetResponseHeaders(
-        asset.path,
-        asset.download || asset.mimeType !== undefined
-          ? {
-              ...(asset.download ? { download: true } : {}),
-              ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
-              ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
-            }
-          : undefined,
-      ),
+      headers,
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

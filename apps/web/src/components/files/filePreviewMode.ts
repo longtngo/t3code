@@ -1,4 +1,17 @@
+import {
+  isWorkspaceImagePreviewPath,
+  isWorkspaceVideoPreviewPath,
+} from "@t3tools/shared/filePreview";
+
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
+
+/**
+ * Files the preview panel renders from their asset URL instead of a text read.
+ * The read is not merely wasteful for them: it comes back "is binary and cannot
+ * be previewed as text", which is the error a workspace video used to show.
+ */
+export const rendersFromAssetUrl = (path: string): boolean =>
+  isWorkspaceImagePreviewPath(path) || isWorkspaceVideoPreviewPath(path);
 
 export function setMarkdownTaskChecked(
   markdown: string,

@@ -52,6 +52,8 @@ import {
   isImagePreviewFile,
   isMarkdownPreviewFile,
   isSvgImagePreviewFile,
+  isVideoPreviewFile,
+  rendersFromAssetUrl,
 } from "./filePath";
 import { useWorkspaceFileAssetUrl } from "./workspaceFileAssetUrl";
 
@@ -82,9 +84,7 @@ function normalizeRouteLine(value: string | null): number | null {
 }
 
 function defaultViewMode(path: string | null): FileViewMode {
-  return path !== null && (isBrowserPreviewFile(path) || isImagePreviewFile(path))
-    ? "preview"
-    : "source";
+  return path !== null && rendersFromAssetUrl(path) ? "preview" : "source";
 }
 
 function FileContent(props: {
@@ -100,6 +100,7 @@ function FileContent(props: {
   const isMarkdown = isMarkdownPreviewFile(props.relativePath);
   const isBrowserFile = isBrowserPreviewFile(props.relativePath);
   const isImageFile = isImagePreviewFile(props.relativePath);
+  const isVideoFile = isVideoPreviewFile(props.relativePath);
 
   if (props.activeMode === "preview" && isImageFile) {
     if (isSvgImagePreviewFile(props.relativePath)) {
@@ -113,7 +114,10 @@ function FileContent(props: {
     );
   }
 
-  if (props.activeMode === "preview" && isBrowserFile) {
+  if (props.activeMode === "preview" && (isBrowserFile || isVideoFile)) {
+    // The WebView plays an mp4 URL natively, so video needs no native player of
+    // its own. Without this branch preview mode falls through to the source path
+    // and shows the binary read error while the header still claims "Preview".
     return <WorkspaceFileWebPreview uri={props.previewUri} />;
   }
 
@@ -489,14 +493,16 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const [previewRevision, setPreviewRevision] = useState(0);
   const isBrowserFile = relativePath !== null && isBrowserPreviewFile(relativePath);
   const isImageFile = relativePath !== null && isImagePreviewFile(relativePath);
+  const isVideoFile = relativePath !== null && isVideoPreviewFile(relativePath);
+  const isAssetPreview = relativePath !== null && rendersFromAssetUrl(relativePath);
   const canPreview =
-    relativePath !== null && (isMarkdownPreviewFile(relativePath) || isBrowserFile || isImageFile);
+    relativePath !== null && (isMarkdownPreviewFile(relativePath) || isAssetPreview);
   const activeMode =
     relativePath !== null && modeOverride?.path === relativePath
       ? modeOverride.mode
       : defaultViewMode(relativePath);
   const resolvedActiveMode = canPreview ? activeMode : "source";
-  const assetPreviewPath = isBrowserFile || isImageFile ? relativePath : null;
+  const assetPreviewPath = isAssetPreview ? relativePath : null;
   const assetPreviewUri = useWorkspaceFileAssetUrl({
     cwd,
     environmentId,
@@ -559,7 +565,9 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
 
   const fileMenuActions = useMemo(() => {
     if (relativePath === null) return [];
-    const canToggleMode = canPreview && !isImageFile;
+    // Media has no useful source view: the text read only ever comes back with
+    // the binary error, so the toggle stays off for video as it is for images.
+    const canToggleMode = canPreview && !isImageFile && !isVideoFile;
     return [
       canToggleMode
         ? ({
@@ -595,7 +603,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             onPress: () => tryOpenExternalUrl(assetPreviewUri, "file-preview"),
           } as const)
         : null,
-      resolvedActiveMode === "preview" && (isBrowserFile || isImageFile)
+      resolvedActiveMode === "preview" && isAssetPreview
         ? ({
             id: "refresh",
             title: "Refresh",
@@ -605,7 +613,16 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           } as const)
         : null,
     ].filter((action) => action !== null);
-  }, [assetPreviewUri, canPreview, isBrowserFile, isImageFile, relativePath, resolvedActiveMode]);
+  }, [
+    assetPreviewUri,
+    canPreview,
+    isAssetPreview,
+    isBrowserFile,
+    isImageFile,
+    isVideoFile,
+    relativePath,
+    resolvedActiveMode,
+  ]);
 
   const androidFileMenuActions = useMemo<MenuAction[]>(
     () =>

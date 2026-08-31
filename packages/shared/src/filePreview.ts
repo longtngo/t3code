@@ -14,8 +14,9 @@ export const WORKSPACE_IMAGE_PREVIEW_EXTENSIONS = [
 /**
  * Video files the viewer will play. Kept separate from the browser and image
  * lists rather than folded into either: `isWorkspacePreviewEntryPath` (browser ∪
- * image) is the `/api/assets` mint gate, and video is deliberately not served
- * there yet. Matches the set the pull-request markdown renderer already treats as
+ * image) also gates the "open in a browser preview" affordances, which a video
+ * has no use for, so the `/api/assets` mint gate names this predicate directly
+ * instead. Matches the set the pull-request markdown renderer already treats as
  * video, so the two cannot disagree about what a video is.
  */
 export const WORKSPACE_VIDEO_PREVIEW_EXTENSIONS = [

@@ -5,7 +5,11 @@ import {
   normalizeFileCommentRange,
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
-import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
+import {
+  isMarkdownPreviewFile,
+  rendersFromAssetUrl,
+  setMarkdownTaskChecked,
+} from "./filePreviewMode";
 
 describe("file comment annotations", () => {
   it("normalizes and formats selected line ranges", () => {
@@ -78,5 +82,22 @@ describe("setMarkdownTaskChecked", () => {
   it("leaves the document unchanged for a stale or invalid marker offset", () => {
     expect(setMarkdownTaskChecked(markdown, 0, true)).toBe(markdown);
     expect(setMarkdownTaskChecked(markdown, 200, true)).toBe(markdown);
+  });
+});
+
+describe("rendersFromAssetUrl", () => {
+  // The panel's text read is gated on this. A video that answers false gets read
+  // as text and renders "is binary and cannot be previewed as text" instead of a
+  // player, which is exactly the bug this branch fixes.
+  it("covers the kinds whose bytes only arrive over /api/assets", () => {
+    expect(rendersFromAssetUrl("media/demo.mp4")).toBe(true);
+    expect(rendersFromAssetUrl("media/clip.MOV")).toBe(true);
+    expect(rendersFromAssetUrl("assets/icon.png")).toBe(true);
+  });
+
+  it("leaves text, markdown and browser documents on the text read", () => {
+    expect(rendersFromAssetUrl("src/main.ts")).toBe(false);
+    expect(rendersFromAssetUrl("README.md")).toBe(false);
+    expect(rendersFromAssetUrl("reports/summary.html")).toBe(false);
   });
 });

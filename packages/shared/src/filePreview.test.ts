@@ -96,9 +96,10 @@ describe("workspace video preview paths", () => {
     }
   });
 
-  // The /api/assets mint gate. Widening it here would mint a directory-scoped
-  // token for a file the serving side still refuses, which is worse than today.
-  it("leaves the asset-mint entry predicate untouched", () => {
+  // `/api/assets` admits video by naming this predicate's sibling explicitly.
+  // Widening the entry predicate instead would also turn on "open in a browser
+  // preview" for video, which is a different feature nobody asked for.
+  it("leaves the browser-preview entry predicate untouched", () => {
     expect(isWorkspacePreviewEntryPath("/Users/me/demo.mp4")).toBe(false);
   });
 });

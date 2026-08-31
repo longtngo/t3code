@@ -4,6 +4,8 @@ import {
   isBrowserPreviewFile,
   isImagePreviewFile,
   isSvgImagePreviewFile,
+  isVideoPreviewFile,
+  rendersFromAssetUrl,
   resolveWorkspaceRelativeFilePath,
 } from "./filePath";
 
@@ -36,8 +38,30 @@ describe("file preview types", () => {
     expect(isImagePreviewFile("src/image.ts")).toBe(false);
   });
 
+  it("recognizes video previews", () => {
+    expect(isVideoPreviewFile("media/demo.mp4")).toBe(true);
+    expect(isVideoPreviewFile("media/clip.MOV")).toBe(true);
+    expect(isVideoPreviewFile("src/player.ts")).toBe(false);
+  });
+
   it("identifies SVG images that need web rendering", () => {
     expect(isSvgImagePreviewFile("assets/diagram.svg#icon")).toBe(true);
     expect(isSvgImagePreviewFile("assets/photo.png")).toBe(false);
+  });
+});
+
+describe("rendersFromAssetUrl", () => {
+  // Drives both the file screen's default view mode and the text preload skip.
+  // A video answering false is preloaded as text and opens on the binary read
+  // error, which is exactly the bug this branch fixes.
+  it("covers every kind the screen previews from its asset URL", () => {
+    expect(rendersFromAssetUrl("media/demo.mp4")).toBe(true);
+    expect(rendersFromAssetUrl("assets/icon.png")).toBe(true);
+    expect(rendersFromAssetUrl("reports/summary.html")).toBe(true);
+  });
+
+  it("leaves text and markdown on the source path", () => {
+    expect(rendersFromAssetUrl("src/main.ts")).toBe(false);
+    expect(rendersFromAssetUrl("README.md")).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
+  isWorkspaceVideoPreviewPath,
 } from "@t3tools/shared/filePreview";
 
 export interface FileBreadcrumb {
@@ -93,6 +94,19 @@ export function isBrowserPreviewFile(path: string): boolean {
 
 export function isImagePreviewFile(path: string): boolean {
   return isWorkspaceImagePreviewPath(path);
+}
+
+export function isVideoPreviewFile(path: string): boolean {
+  return isWorkspaceVideoPreviewPath(path);
+}
+
+/**
+ * Files the file screen previews from their asset URL rather than a text read.
+ * The read is not merely wasteful for them: it comes back "is binary and cannot
+ * be previewed as text", which is the error a workspace video used to show.
+ */
+export function rendersFromAssetUrl(path: string): boolean {
+  return isBrowserPreviewFile(path) || isImagePreviewFile(path) || isVideoPreviewFile(path);
 }
 
 export function isSvgImagePreviewFile(path: string): boolean {

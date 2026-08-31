@@ -4,7 +4,10 @@ import type {
   ResolvedKeybindingsConfig,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  isWorkspaceImagePreviewPath,
+  isWorkspaceVideoPreviewPath,
+} from "@t3tools/shared/filePreview";
 import { VirtualizedFile, type SelectedLineRange } from "@pierre/diffs";
 import { Editor } from "@pierre/diffs/editor";
 import { EditProvider, File, type FileOptions, Virtualizer } from "@pierre/diffs/react";
@@ -57,7 +60,11 @@ import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
 import { fileBreadcrumbs } from "./filePath";
-import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
+import {
+  isMarkdownPreviewFile,
+  rendersFromAssetUrl,
+  setMarkdownTaskChecked,
+} from "./filePreviewMode";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { DirectoryListingView } from "./DirectoryListingView";
@@ -179,6 +186,52 @@ function WorkspaceImagePreview(props: {
         src={imageUrl}
         alt={props.alt}
         onError={() => setFailedUrl(imageUrl)}
+      />
+    </div>
+  ) : (
+    <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
+      <LoaderCircle className="size-5 animate-spin" />
+    </div>
+  );
+}
+
+function WorkspaceVideoPreview(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadRef: ScopedThreadRef;
+  readonly absolutePath: string;
+  readonly workspaceMutationId: string | null;
+}) {
+  const assetUrl = useAssetUrlState(props.environmentId, {
+    _tag: "workspace-file",
+    threadId: props.threadRef.threadId,
+    path: props.absolutePath,
+  });
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const revisionSuffix =
+    props.workspaceMutationId === null
+      ? ""
+      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
+  const videoUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+
+  if (assetUrl._tag === "Failure" || (videoUrl !== null && failedUrl === videoUrl)) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
+        Unable to play workspace video.
+      </div>
+    );
+  }
+
+  return assetUrl._tag === "Success" && videoUrl !== null ? (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+      {/* No autoPlay: this is a file browser, and a path that starts blaring audio
+          is a defect. `preload="metadata"` fetches the moov atom and nothing more. */}
+      <video
+        className="max-h-full max-w-full object-contain"
+        src={videoUrl}
+        controls
+        playsInline
+        preload="metadata"
+        onError={() => setFailedUrl(videoUrl)}
       />
     </div>
   ) : (
@@ -838,7 +891,9 @@ export default function FilePreviewPanel({
     reportFailure: false,
   });
   const isImage = relativePath !== null && isWorkspaceImagePreviewPath(relativePath);
-  const file = useProjectFileQuery(environmentId, cwd, relativePath, !isImage);
+  const isVideo = relativePath !== null && isWorkspaceVideoPreviewPath(relativePath);
+  const isAssetPreview = relativePath !== null && rendersFromAssetUrl(relativePath);
+  const file = useProjectFileQuery(environmentId, cwd, relativePath, !isAssetPreview);
   // Same rule as the trusted viewer: a failed read is a directory candidate, and
   // asking for the listing is the test. Rooted at this panel's own cwd + relative
   // path rather than anything the server resolved, so children relativize back
@@ -882,7 +937,7 @@ export default function FilePreviewPanel({
   );
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
   useWorkspaceMutationRefresh({
-    enabled: relativePath !== null && !isImage && !selectedFilePending,
+    enabled: relativePath !== null && !isAssetPreview && !selectedFilePending,
     mutationId: workspaceMutationId,
     refresh: file.refresh,
     resourceKey: `file:${environmentId}:${cwd}:${relativePath ?? ""}`,
@@ -1078,6 +1133,14 @@ export default function FilePreviewPanel({
               alt={relativePath}
               workspaceMutationId={workspaceMutationId}
             />
+          ) : relativePath && isVideo && absolutePath ? (
+            <WorkspaceVideoPreview
+              key={absolutePath}
+              environmentId={environmentId}
+              threadRef={threadRef}
+              absolutePath={absolutePath}
+              workspaceMutationId={workspaceMutationId}
+            />
           ) : listingPath !== null && listing.data !== null ? (
             <DirectoryListingView
               environmentId={environmentId}
@@ -1182,7 +1245,7 @@ export default function FilePreviewPanel({
                 selectedPathRevealId={revealRequestId}
                 onOpenFile={openFileFromTree}
                 workspaceMutationId={workspaceMutationId}
-                {...(relativePath && !isImage
+                {...(relativePath && !isAssetPreview
                   ? {
                       onRefreshSelectedFile: () => {
                         file.refresh();

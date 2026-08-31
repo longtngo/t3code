@@ -6,6 +6,7 @@ import { describe } from "vite-plus/test";
 
 import {
   assetResponseHeaders,
+  assetVideoRangeResponse,
   classifyViewerAssetPath,
   classifyViewerPath,
   viewerVideoContentType,
@@ -611,6 +612,55 @@ describe("viewerVideoContentType", () => {
   it("is empty for a path it cannot vouch for, so nothing is asserted by default", () => {
     expect(viewerVideoContentType("/Users/me/clip.avi")).toEqual({});
     expect(viewerVideoContentType("/Users/me/Makefile")).toEqual({});
+  });
+});
+
+describe("assetVideoRangeResponse", () => {
+  it("advertises Range on a rangeless response rather than a bare 200", () => {
+    expect(assetVideoRangeResponse(undefined, 3_014_000)).toEqual({
+      status: 200,
+      headers: { "Accept-Ranges": "bytes" },
+    });
+  });
+
+  // The open-ended range is what a media element actually sends first, so this is
+  // the path every <video> takes, not an edge case.
+  it("answers an open-ended range with a 206 clamped to the 8 MiB per-response bound", () => {
+    expect(assetVideoRangeResponse("bytes=0-", 100 * 1024 * 1024)).toEqual({
+      status: 206,
+      offset: 0,
+      bytesToRead: 8 * 1024 * 1024,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes 0-${8 * 1024 * 1024 - 1}/${100 * 1024 * 1024}`,
+      },
+    });
+  });
+
+  it("serves a small file whole and reports the real end byte", () => {
+    expect(assetVideoRangeResponse("bytes=0-", 1024)).toEqual({
+      status: 206,
+      offset: 0,
+      bytesToRead: 1024,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Range": "bytes 0-1023/1024",
+      },
+    });
+  });
+
+  it("returns 416 with a size-only Content-Range for a start past the end", () => {
+    expect(assetVideoRangeResponse("bytes=5000-", 1024)).toEqual({
+      status: 416,
+      headers: { "Accept-Ranges": "bytes", "Content-Range": "bytes */1024" },
+    });
+  });
+
+  // RFC 9110 lets a server answer an unusable Range with the full representation,
+  // which is what the parser's `undefined` means here.
+  it("falls back to the full response for a header it cannot use", () => {
+    expect(assetVideoRangeResponse("bytes=abc-def", 1024).status).toBe(200);
+    expect(assetVideoRangeResponse("bytes=0-1,5-6", 1024).status).toBe(200);
   });
 });
 
