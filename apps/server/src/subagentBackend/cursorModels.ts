@@ -12,6 +12,7 @@
  */
 import type { SubagentBackendModelOption } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -74,6 +75,19 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 /**
+ * Probes currently running, keyed by the same binary path as `cache`.
+ *
+ * The cache alone only shares a probe with callers that arrive AFTER one
+ * finishes. Callers that arrive DURING one all miss — nothing has been written
+ * yet — and each spawns its own. That is the common case rather than a corner:
+ * opening the panel issues a refreshing `get` and flipping the toggle issues a
+ * `set`, both of which probe the same binary, and a ~3.4s probe leaves a wide
+ * window to overlap in. Measured before this existed: three concurrent callers
+ * spawned three processes.
+ */
+const inFlight = new Map<string, Deferred.Deferred<readonly SubagentBackendModelOption[]>>();
+
+/**
  * Returns whatever `listCursorModels` last probed for `binaryPath`, without
  * spawning a probe of its own — including a stale (TTL-expired) entry, since a
  * known-but-old list beats showing nothing while the caller that wants a fresh
@@ -103,11 +117,36 @@ export const listCursorModels = Effect.fn("subagentBackend.listCursorModels")(fu
     return cached.models;
   }
 
-  const stdout = yield* runListModels(binaryPath);
-  const models = parseCursorModelList(stdout);
-  if (models.length === 0) {
-    return cached?.models ?? [];
+  const running = inFlight.get(binaryPath);
+  if (running !== undefined) {
+    return yield* Deferred.await(running);
   }
-  cache.set(binaryPath, { models, expiresAtMs: now + CACHE_TTL_MILLIS });
-  return models;
+
+  const deferred = yield* Deferred.make<readonly SubagentBackendModelOption[]>();
+  inFlight.set(binaryPath, deferred);
+
+  // `onExit` rather than a plain sequence: an interrupted or failed probe must
+  // still clear its slot and release everyone waiting on it, or the first
+  // interruption wedges every later caller for this binary until restart.
+  return yield* Effect.gen(function* () {
+    const stdout = yield* runListModels(binaryPath);
+    const models = parseCursorModelList(stdout);
+    if (models.length === 0) {
+      return cached?.models ?? [];
+    }
+    cache.set(binaryPath, { models, expiresAtMs: now + CACHE_TTL_MILLIS });
+    return models;
+  }).pipe(
+    Effect.onExit((exit) =>
+      Effect.sync(() => {
+        inFlight.delete(binaryPath);
+      }).pipe(
+        Effect.andThen(
+          exit._tag === "Success"
+            ? Deferred.succeed(deferred, exit.value)
+            : Deferred.succeed(deferred, cached?.models ?? []),
+        ),
+      ),
+    ),
+  );
 });
