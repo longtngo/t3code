@@ -436,6 +436,45 @@ export function assetVideoRangeResponse(
   };
 }
 
+/**
+ * Log the refusals a byte-serving route answers with, which are otherwise
+ * completely invisible.
+ *
+ * These routes had three log calls between them and none on the request path, so
+ * a 400, 404, 413 or 416 reached the client as a notice with nothing server-side
+ * to correlate it against — and the access log that would have shown it is off by
+ * default, behind a flag named `logWebSocketEvents`.
+ *
+ * Deliberately a wrapper around the whole handler rather than a call at each of
+ * the ~20 refusal sites: a new branch cannot forget it, and it costs one status
+ * comparison on the success path. Deliberately refusals only, with no per-request
+ * line: these routes stream media, and a line per range request would be its own
+ * problem on a 561 MB file.
+ */
+export function logRouteRefusals<E, R>(
+  route: string,
+): (
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) => Effect.Effect<
+  HttpServerResponse.HttpServerResponse,
+  E,
+  R | HttpServerRequest.HttpServerRequest
+> {
+  return (effect) =>
+    Effect.tap(effect, (response) =>
+      response.status < 400
+        ? Effect.void
+        : Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            yield* Effect.logWarning("Byte route refused a request", {
+              route,
+              status: response.status,
+              path: request.url,
+            });
+          }),
+    );
+}
+
 export const assetRouteLayer = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -527,7 +566,7 @@ export const assetRouteLayer = HttpRouter.add(
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
-  }),
+  }).pipe(logRouteRefusals(ASSET_ROUTE_PREFIX)),
 );
 
 const VIEWER_ROUTE_PREFIX = "/viewer";
@@ -1222,6 +1261,9 @@ export const viewerRouteLayer = HttpRouter.add(
       EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
       EnvironmentInternalError: HttpServerRespondable.toResponse,
     }),
+    // After `catchTags`, so an auth refusal is logged alongside the 404s and 413s
+    // rather than being the one refusal that stays silent.
+    logRouteRefusals(VIEWER_ROUTE_PREFIX),
   ),
 );
 
@@ -1299,7 +1341,7 @@ export const viewerAssetRouteLayer = HttpRouter.add(
         "Content-Type": contentType,
       },
     }).pipe(Effect.orElseSucceed(() => HttpServerResponse.text("Not Found", { status: 404 })));
-  }),
+  }).pipe(logRouteRefusals(VIEWER_ASSET_ROUTE_PREFIX)),
 );
 
 export const attachmentUploadRouteLayer = HttpRouter.add(

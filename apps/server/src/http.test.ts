@@ -2,6 +2,8 @@
 import * as NodeFS from "node:fs";
 
 import { expect, it } from "@effect/vitest";
+import { Effect, Logger } from "effect";
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { describe } from "vite-plus/test";
 
 import {
@@ -17,9 +19,9 @@ import {
   isLocalLoopbackRequest,
   isLoopbackHostname,
   isWaivableLocalRequest,
+  logRouteRefusals,
   resolveDevRedirectUrl,
 } from "./http.ts";
-import type { HttpServerRequest } from "effect/unstable/http";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -754,5 +756,70 @@ describe("viewer route auth ordering", () => {
     const waiver = source.slice(source.indexOf('if (kind === "image"'));
     const condition = waiver.slice(0, waiver.indexOf("\n"));
     expect(condition).toContain('kind === "video"');
+  });
+});
+
+describe("logRouteRefusals", () => {
+  const captureLogs = () => {
+    const logs: Array<{ readonly message: unknown }> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push({ message });
+    });
+    return { logs, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+  };
+
+  const run = (status: number) =>
+    Effect.gen(function* () {
+      const capture = captureLogs();
+      yield* Effect.succeed(HttpServerResponse.text("body", { status })).pipe(
+        logRouteRefusals("/viewer"),
+        Effect.provideService(HttpServerRequest.HttpServerRequest, {
+          url: "/viewer/Users/me/clip.mp4",
+        } as HttpServerRequest.HttpServerRequest),
+        Effect.provide(capture.layer),
+      );
+      return capture.logs;
+    });
+
+  // Refusals are what is invisible today; a per-request line on a route that
+  // streams a 561 MB file in 8 MiB windows would be its own problem.
+  it.effect("logs every refusal status the byte routes answer with", () =>
+    Effect.gen(function* () {
+      for (const status of [400, 404, 413, 416, 500]) {
+        const logs = yield* run(status);
+        expect(logs).toHaveLength(1);
+        expect(String(logs[0]?.message)).toContain("refused");
+      }
+    }),
+  );
+
+  it.effect("stays silent on every success, including a 206 range", () =>
+    Effect.gen(function* () {
+      for (const status of [200, 206, 304]) {
+        expect(yield* run(status)).toEqual([]);
+      }
+    }),
+  );
+
+  // The unit tests above cover the wrapper; nothing in them notices if a route
+  // stops using it. This asserts each byte-serving route is actually wrapped,
+  // which is the seam the whole change lives on.
+  it("wraps every byte-serving route, and leaves the static route alone", () => {
+    const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
+    for (const [layer, prefix] of [
+      ["export const assetRouteLayer", "ASSET_ROUTE_PREFIX"],
+      ["export const viewerRouteLayer", "VIEWER_ROUTE_PREFIX"],
+      ["export const viewerAssetRouteLayer", "VIEWER_ASSET_ROUTE_PREFIX"],
+    ] as const) {
+      const start = source.indexOf(layer);
+      expect(start).toBeGreaterThan(-1);
+      const body = source.slice(start, source.indexOf("export const", start + layer.length));
+      expect(body).toContain(`logRouteRefusals(${prefix})`);
+    }
+    // The static route 404s constantly in normal operation — wrapping it would
+    // turn ordinary traffic into a warning stream.
+    const staticStart = source.indexOf("export const staticAndDevRouteLayer");
+    expect(staticStart).toBeGreaterThan(-1);
+    expect(source.slice(staticStart)).not.toContain("logRouteRefusals");
   });
 });
