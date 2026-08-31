@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import {
+  isWorkspaceImagePreviewPath,
   isWorkspaceVideoPreviewPath,
   VIDEO_CONTENT_TYPE_BY_EXTENSION,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
@@ -357,6 +358,35 @@ export const pushVapidPublicKeyRouteLayer = HttpRouter.add(
  * realtime at 64 KB), while 8 MiB is indistinguishable from no clamp at all.
  */
 const ASSET_MAX_VIDEO_RESPONSE_BYTES = 8 * 1024 * 1024;
+/**
+ * Bounds the branch a range cannot bound. A rangeless GET of a video asset —
+ * "open in new tab", `curl`, a malformed or multi-range header — would otherwise
+ * stream a file of any size in one response. Same value and same reason as the
+ * `/viewer` route's cap: the identical file must not stall on one route and 413
+ * on the other.
+ */
+const ASSET_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * The image equivalent, mirroring `/viewer`'s `VIEWER_MAX_IMAGE_BYTES`. Images
+ * have no Range branch at all, so every image response is the unbounded kind.
+ */
+const ASSET_MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Byte cap for an asset served in one unbounded response, or `null` for a kind
+ * that is deliberately left uncapped.
+ *
+ * Only the kinds `/viewer` also serves are capped, and at the same values, so the
+ * same file cannot stall on one route and 413 on the other. The browser-preview
+ * kinds (`.pdf`, `.htm`, `.html`) are deliberately absent: `/viewer` never served
+ * them, so there is no divergence to close, and a PDF past this bound is ordinary
+ * rather than suspicious — capping it would be a new refusal, not a fix. Video is
+ * absent too; its cap depends on the request's Range, so it lives in
+ * `assetVideoRangeResponse`.
+ */
+export function assetResponseByteCap(path: string): number | null {
+  return isWorkspaceImagePreviewPath(path) ? ASSET_MAX_IMAGE_BYTES : null;
+}
 
 export type AssetVideoRangeResponse =
   | { readonly status: 200; readonly headers: Record<string, string> }
@@ -366,7 +396,8 @@ export type AssetVideoRangeResponse =
       readonly bytesToRead: number;
       readonly headers: Record<string, string>;
     }
-  | { readonly status: 416; readonly headers: Record<string, string> };
+  | { readonly status: 416; readonly headers: Record<string, string> }
+  | { readonly status: 413 };
 
 /**
  * How a video asset answers one request.
@@ -388,7 +419,11 @@ export function assetVideoRangeResponse(
     };
   }
   if (range === undefined) {
-    return { status: 200, headers: { "Accept-Ranges": "bytes" } };
+    // Only the rangeless branch needs the size cap; a range is already bounded by
+    // ASSET_MAX_VIDEO_RESPONSE_BYTES however large the file is.
+    return fileSize > ASSET_MAX_VIDEO_BYTES
+      ? { status: 413 }
+      : { status: 200, headers: { "Accept-Ranges": "bytes" } };
   }
   return {
     status: 206,
@@ -445,6 +480,9 @@ export const assetRouteLayer = HttpRouter.add(
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
       const video = assetVideoRangeResponse(request.headers["range"], Number(info.value.size));
+      if (video.status === 413) {
+        return HttpServerResponse.text("Video too large to preview", { status: 413 });
+      }
       if (video.status === 416) {
         // The asset headers are deliberately left off: spreading the file's
         // `video/mp4` onto a text body labels "Requested range not satisfiable"
@@ -464,6 +502,23 @@ export const assetRouteLayer = HttpRouter.add(
           HttpServerResponse.text("Internal Server Error", { status: 500 }),
         ),
       );
+    }
+
+    // Images have no Range branch, so nothing else bounds the response. The stat
+    // is the same one the `/viewer` image branch takes, and for the same two
+    // reasons: a size bound, and a regular-file check, because a DIRECTORY named
+    // `foo.png` stats fine, emits a 200 with a bogus content-length, then errors
+    // EISDIR after the headers are already flushed.
+    const byteCap = assetResponseByteCap(asset.path);
+    if (byteCap !== null) {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const info = yield* fileSystem.stat(asset.path).pipe(Effect.option);
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
+      if (Number(info.value.size) > byteCap) {
+        return HttpServerResponse.text("Image too large to preview", { status: 413 });
+      }
     }
 
     return yield* HttpServerResponse.file(asset.path, {

@@ -5,6 +5,7 @@ import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
 
 import {
+  assetResponseByteCap,
   assetResponseHeaders,
   assetVideoRangeResponse,
   classifyViewerAssetPath,
@@ -661,6 +662,57 @@ describe("assetVideoRangeResponse", () => {
   it("falls back to the full response for a header it cannot use", () => {
     expect(assetVideoRangeResponse("bytes=abc-def", 1024).status).toBe(200);
     expect(assetVideoRangeResponse("bytes=0-1,5-6", 1024).status).toBe(200);
+  });
+
+  // The cap bounds the ONE branch a range cannot bound. Both sides are asserted
+  // because a cap applied to the ranged branch too would silently break seeking
+  // in a large file, which is the case Range exists for.
+  it("refuses a rangeless response past the size cap, and only that branch", () => {
+    const overCap = 2 * 1024 * 1024 * 1024 + 1;
+    expect(assetVideoRangeResponse(undefined, overCap)).toEqual({ status: 413 });
+    expect(assetVideoRangeResponse(undefined, 2 * 1024 * 1024 * 1024).status).toBe(200);
+    // A header the parser cannot use degrades to the full response, so it is the
+    // rangeless branch and must be capped with it.
+    expect(assetVideoRangeResponse("bytes=abc-def", overCap)).toEqual({ status: 413 });
+    // A real range over the same file still streams its clamped window.
+    expect(assetVideoRangeResponse("bytes=0-", overCap)).toEqual({
+      status: 206,
+      offset: 0,
+      bytesToRead: 8 * 1024 * 1024,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes 0-${8 * 1024 * 1024 - 1}/${overCap}`,
+      },
+    });
+  });
+});
+
+describe("assetResponseByteCap", () => {
+  // The policy, not the arithmetic: which kinds get an unbounded response bounded.
+  it("caps images at the value /viewer already uses", () => {
+    expect(assetResponseByteCap("/w/logo.png")).toBe(64 * 1024 * 1024);
+    for (const path of [
+      "/w/a.jpg",
+      "/w/a.JPEG",
+      "/w/a.gif",
+      "/w/a.webp",
+      "/w/a.avif",
+      "/w/a.ico",
+    ]) {
+      expect(assetResponseByteCap(path)).toBe(64 * 1024 * 1024);
+    }
+  });
+
+  it("leaves the kinds /viewer never served uncapped, so no new refusal appears", () => {
+    // A PDF past 64 MiB is ordinary. Capping it would be a regression, not a fix.
+    expect(assetResponseByteCap("/w/report.pdf")).toBeNull();
+    expect(assetResponseByteCap("/w/report.html")).toBeNull();
+    expect(assetResponseByteCap("/w/report.htm")).toBeNull();
+  });
+
+  it("leaves video to the Range branch, which bounds it per response", () => {
+    expect(assetResponseByteCap("/w/demo.mp4")).toBeNull();
+    expect(assetResponseByteCap("/w/demo.webm")).toBeNull();
   });
 });
 
