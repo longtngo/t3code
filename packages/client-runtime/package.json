@@ -127,6 +127,10 @@
       "types": "./src/state/resourceQueue.ts",
       "default": "./src/state/resourceQueue.ts"
     },
+    "./state/subagent-backend": {
+      "types": "./src/state/subagentBackend.ts",
+      "default": "./src/state/subagentBackend.ts"
+    },
     "./state/review": {
       "types": "./src/state/review.ts",
       "default": "./src/state/review.ts"

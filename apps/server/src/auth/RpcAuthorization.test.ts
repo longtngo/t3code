@@ -69,4 +69,16 @@ describe("RPC authorization scopes", () => {
       );
     }
   });
+
+  it("requires operate scope to set the subagent backend and read scope to read it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.subagentBackendGet)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.subagentBackendUsage)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.subagentBackendSet)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
 });

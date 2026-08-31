@@ -161,6 +161,7 @@ export const make = Effect.gen(function* () {
       threadTitleRegeneration: true,
       vcsLocalOnlyStatus: true,
       threadPullRequestLinking: true,
+      subagentBackend: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
     },

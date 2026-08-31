@@ -60,6 +60,7 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  SUBAGENT_BACKEND_DEFAULT,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -133,6 +134,8 @@ import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import { readCursorUsage } from "./subagentBackend/cursorUsageRead.ts";
+import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { registerPushSubscription } from "./push/register.ts";
@@ -1353,6 +1356,22 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      // The toggle fails safe like the rest of this feature (see SubagentBackend.ts's
+      // module doc): an unreadable flag file or settings store degrades to this
+      // rather than surfacing a protocol error the client has nothing to do with -
+      // the RPC's error channel only carries authorization failures.
+      const subagentBackendDegraded = (reason: string) => (cause: unknown) =>
+        Effect.logWarning("subagentBackend RPC failed", { reason, cause }).pipe(
+          Effect.as({
+            backend: SUBAGENT_BACKEND_DEFAULT,
+            instanceId: null,
+            model: null,
+            instances: [],
+            models: [],
+            degraded: reason,
+          }),
+        );
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -1996,6 +2015,43 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.getResourceQueue]: (_input) =>
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.subagentBackendGet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.subagentBackendGet,
+            Effect.gen(function* () {
+              const persisted = yield* SubagentBackend.readBackendFile();
+              const settings = yield* serverSettings.getRawSettings;
+              const models = yield* SubagentBackend.modelsForPersistedBackend(
+                persisted,
+                input.refreshModels ?? false,
+              );
+              return SubagentBackend.buildState(persisted, settings, models);
+            }).pipe(
+              Effect.catch(
+                subagentBackendDegraded("The subagent backend state could not be read."),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subagentBackendSet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.subagentBackendSet,
+            Effect.gen(function* () {
+              const persisted = yield* SubagentBackend.setBackend(input);
+              const settings = yield* serverSettings.getRawSettings;
+              const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, true);
+              return SubagentBackend.buildState(persisted, settings, models);
+            }).pipe(
+              Effect.catch(
+                subagentBackendDegraded("The subagent backend selection could not be saved."),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subagentBackendUsage]: (_input) =>
+          observeRpcEffect(WS_METHODS.subagentBackendUsage, readCursorUsage(), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.pushSubscriptionsRegister]: (input) =>

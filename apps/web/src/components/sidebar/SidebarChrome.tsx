@@ -33,6 +33,7 @@ import { nextOpenFooterPanel, type SidebarFooterPanel } from "./sidebarChrome.lo
 import { SidebarLocalModels } from "./SidebarLocalModels";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
+import { SidebarSubagentBackend } from "./SidebarSubagentBackend";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -296,6 +297,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
+      <SidebarSubagentBackend />
       <SidebarUtilityMenu />
     </SidebarFooter>
   );

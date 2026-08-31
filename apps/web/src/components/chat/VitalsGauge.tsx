@@ -222,7 +222,7 @@ function ContextBlock(props: {
   );
 }
 
-function WindowRow(props: {
+export function WindowRow(props: {
   label: string;
   window: UsageWindowView;
   windowMs: number | null;

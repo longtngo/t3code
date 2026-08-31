@@ -138,6 +138,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsUpload]: AuthOrchestrationOperateScope,
   [WS_METHODS.getResourceQueue]: AuthOrchestrationReadScope,
+  [WS_METHODS.subagentBackendGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.subagentBackendUsage]: AuthOrchestrationReadScope,
+  [WS_METHODS.subagentBackendSet]: AuthOrchestrationOperateScope,
   // Operate, not read: it spends the provider's rate limit on demand.
   // Operate, not read: it mutates a thread and cancels queued provider work.
   [WS_METHODS.threadWithdrawQueuedMessage]: AuthOrchestrationOperateScope,

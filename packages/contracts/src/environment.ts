@@ -96,6 +96,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Clients treat missing as unsupported and do not subscribe status for
       attached repositories at all. */
   vcsLocalOnlyStatus: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes the subagent dispatch toggle (subagentBackend.get/set/usage). Absent on
+      servers from before it shipped, so clients must hide the control rather than probe. */
+  subagentBackend: Schema.optionalKey(Schema.Boolean),
   /** Agent-activity publishes (push notifications and Live Activities)
       currently leave this environment: the publish opt-in is enabled and the
       relay link credentials exist. Clients skip seeding a Live Activity when

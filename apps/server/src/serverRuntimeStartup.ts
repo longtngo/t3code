@@ -50,6 +50,7 @@ import {
 import { reconcileInterruptedTurnsOnBoot } from "./orchestration/BootTurnReconciler.ts";
 import { ProviderTurnStallWatchdog } from "./provider/Services/ProviderTurnStallWatchdog.ts";
 import { BackgroundTaskRecoveryWatchdog } from "./provider/Services/BackgroundTaskRecoveryWatchdog.ts";
+import { subagentBackendReconciler } from "./subagentBackend/SubagentBackend.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -395,6 +396,9 @@ export const make = (options?: StartupOptions) =>
           if (process.env.T3CODE_BG_TASK_RECOVERY !== "0") {
             yield* backgroundTaskRecoveryWatchdog.start().pipe(Scope.provide(reactorScope));
           }
+          // Keeps the subagent-dispatch flag file in sync with ServerSettings for
+          // the process lifetime (see SubagentBackend.ts's module doc).
+          yield* subagentBackendReconciler.pipe(Effect.forkScoped, Scope.provide(reactorScope));
         }),
       );
 

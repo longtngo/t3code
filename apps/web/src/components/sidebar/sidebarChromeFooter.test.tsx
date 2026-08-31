@@ -41,6 +41,7 @@ vi.mock("./SidebarResourceQueue", () => ({
   SidebarResourceQueue: () => createElement("li", { "data-panel": "queue" }),
 }));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
+vi.mock("./SidebarSubagentBackend", () => ({ SidebarSubagentBackend: () => null }));
 vi.mock("./SidebarUpdatePill", () => ({
   SidebarUpdatePill: () => null,
   SidebarUpdateArchitectureWarning: () => null,
