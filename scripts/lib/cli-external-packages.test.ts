@@ -153,60 +153,76 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   const isRuntimeExternal = (name: string) =>
     CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => name.startsWith(prefix));
 
-  it.effect("finds the runtime-external packages on disk", () =>
-    Effect.gen(function* () {
-      const installed = yield* readInstalledPackages;
-      const found = [...installed.keys()].filter(isRuntimeExternal);
+  // These two read the pnpm store off disk: ~2,285 package directories walked
+  // and ~1,500 manifests read, sequentially. Idle that is 3-12s; on a shared
+  // machine under contention it has repeatedly blown the global 60s deadline
+  // and failed a gate with nothing actually broken. The deadline is raised HERE
+  // rather than in `vite.config.ts`, because a global raise would also hide a
+  // genuine hang -- one showed up in this repo the same week, wedged at exactly
+  // its timeout. The real fix is to index the store by name and read only the
+  // manifests these assertions need; see the note above `readInstalledPackages`.
+  const STORE_WALK_TIMEOUT_MS = 180_000;
 
-      // Without this the closure check below can pass vacuously: if nothing is
-      // read, nothing is checked. These are the packages whose closure actually
-      // broke WSL, so require them by name.
-      for (const required of ["node-pty", "node-gyp-build-optional-packages", "detect-libc"]) {
-        assert.ok(
-          found.includes(required),
-          `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
-        );
-      }
-    }),
+  it.effect(
+    "finds the runtime-external packages on disk",
+    () =>
+      Effect.gen(function* () {
+        const installed = yield* readInstalledPackages;
+        const found = [...installed.keys()].filter(isRuntimeExternal);
+
+        // Without this the closure check below can pass vacuously: if nothing is
+        // read, nothing is checked. These are the packages whose closure actually
+        // broke WSL, so require them by name.
+        for (const required of ["node-pty", "node-gyp-build-optional-packages", "detect-libc"]) {
+          assert.ok(
+            found.includes(required),
+            `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
+          );
+        }
+      }),
+    STORE_WALK_TIMEOUT_MS,
   );
 
-  it.effect("keeps every runtime dependency of an external package external too", () =>
-    Effect.gen(function* () {
-      const installed = yield* readInstalledPackages;
-      const violations: string[] = [];
-      const seen = new Set<string>();
-      // Seeded from what is actually installed and matches a prefix, so scoped
-      // prefixes like "@yuuang/" and "@ff-labs/" are covered too. Seeding from
-      // the prefix strings themselves would skip every scoped entry, since a
-      // prefix is not a package name.
-      const queue = [...installed.keys()].filter(isRuntimeExternal);
+  it.effect(
+    "keeps every runtime dependency of an external package external too",
+    () =>
+      Effect.gen(function* () {
+        const installed = yield* readInstalledPackages;
+        const violations: string[] = [];
+        const seen = new Set<string>();
+        // Seeded from what is actually installed and matches a prefix, so scoped
+        // prefixes like "@yuuang/" and "@ff-labs/" are covered too. Seeding from
+        // the prefix strings themselves would skip every scoped entry, since a
+        // prefix is not a package name.
+        const queue = [...installed.keys()].filter(isRuntimeExternal);
 
-      for (const name of queue) {
-        if (seen.has(name)) continue;
-        seen.add(name);
+        for (const name of queue) {
+          if (seen.has(name)) continue;
+          seen.add(name);
 
-        const manifest = installed.get(name);
-        if (!manifest) continue;
+          const manifest = installed.get(name);
+          if (!manifest) continue;
 
-        const declared = {
-          ...(manifest.dependencies ?? {}),
-          ...(manifest.optionalDependencies ?? {}),
-          ...(manifest.peerDependencies ?? {}),
-        };
-        for (const dependency of Object.keys(declared)) {
-          if (!isRuntimeExternal(dependency)) {
-            violations.push(`${name} -> ${dependency}`);
+          const declared = {
+            ...(manifest.dependencies ?? {}),
+            ...(manifest.optionalDependencies ?? {}),
+            ...(manifest.peerDependencies ?? {}),
+          };
+          for (const dependency of Object.keys(declared)) {
+            if (!isRuntimeExternal(dependency)) {
+              violations.push(`${name} -> ${dependency}`);
+            }
+            if (!seen.has(dependency)) queue.push(dependency);
           }
-          if (!seen.has(dependency)) queue.push(dependency);
         }
-      }
 
-      assert.deepStrictEqual(
-        violations,
-        [],
-        `these dependencies of external packages would be bundled away and fail to resolve under WSL: ${violations.join(", ")}`,
-      );
-    }),
+        assert.deepStrictEqual(
+          violations,
+          [],
+          `these dependencies of external packages would be bundled away and fail to resolve under WSL: ${violations.join(", ")}`,
+        );
+      }),
+    STORE_WALK_TIMEOUT_MS,
   );
 });
 
