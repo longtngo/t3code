@@ -1,11 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 
+import { expect, it } from "@effect/vitest";
 import {
   AUDIO_CONTENT_TYPE_BY_EXTENSION,
   VIDEO_CONTENT_TYPE_BY_EXTENSION,
 } from "@t3tools/shared/filePreview";
-import { expect, it } from "@effect/vitest";
 import { Effect, Logger } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { describe } from "vite-plus/test";
@@ -27,6 +27,63 @@ import {
   logRouteRefusals,
   resolveDevRedirectUrl,
 } from "./http.ts";
+
+/**
+ * Retargeted from upstream #8919's `assetFileResponse` tests. That competing Range
+ * implementation was dropped in favour of the fork's (which also serves audio,
+ * clamps each response, and caps the rangeless branch), but its EDGE CASES still
+ * apply to the parser that replaced it, and several were uncovered here: a suffix
+ * larger than the file, an end past the file, an inverted range, `bytes=-0`, and
+ * an empty file.
+ */
+describe("asset byte ranges (retargeted from upstream #8919)", () => {
+  const SIZE = 10;
+  const range = (header: string | undefined) => assetVideoRangeResponse(header, SIZE);
+
+  it("serves the requested window, clamping what runs past the file", () => {
+    expect(range("bytes=0-1")).toMatchObject({ status: 206, offset: 0, bytesToRead: 2 });
+    expect(range("bytes=4-")).toMatchObject({ status: 206, offset: 4, bytesToRead: 6 });
+    // Suffix: the last 3 bytes, so the offset is computed from the end.
+    expect(range("bytes=-3")).toMatchObject({ status: 206, offset: 7, bytesToRead: 3 });
+    // A suffix larger than the file is the whole file, not a negative offset.
+    expect(range("bytes=-999999999999999999999999")).toMatchObject({
+      status: 206,
+      offset: 0,
+      bytesToRead: 10,
+    });
+    // An end past the file clamps to the last byte rather than over-reading.
+    expect(range("bytes=8-999999999999999999999999")).toMatchObject({
+      status: 206,
+      offset: 8,
+      bytesToRead: 2,
+    });
+  });
+
+  it("falls back to the full representation for a header it cannot use", () => {
+    // RFC 9110 lets a server answer an unusable Range with the full file. An
+    // inverted range (`bytes=8-2`) is in this class, not the 416 class.
+    for (const header of [
+      undefined,
+      "items=0-1",
+      "bytes=0-1,4-5",
+      "bytes=8-2",
+      "bytes=-",
+      "bytes=bad",
+    ]) {
+      expect(range(header).status).toBe(200);
+    }
+  });
+
+  it("refuses a range that lies outside the file", () => {
+    for (const header of ["bytes=10-", "bytes=-0", "bytes=999999999999999999999999-"]) {
+      expect(range(header)).toMatchObject({ status: 416 });
+    }
+  });
+
+  it("refuses any range against an empty file", () => {
+    expect(assetVideoRangeResponse("bytes=0-1", 0)).toMatchObject({ status: 416 });
+  });
+});
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {

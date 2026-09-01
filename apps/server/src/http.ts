@@ -520,7 +520,15 @@ export const assetRouteLayer = HttpRouter.add(
       if (Option.isNone(info) || info.value.type !== "File") {
         return HttpServerResponse.text("Not Found", { status: 404 });
       }
-      const video = assetVideoRangeResponse(request.headers["range"], Number(info.value.size));
+      // Two guards adopted from upstream #8919, whose competing Range implementation
+      // this branch replaces: a HEAD has no body to range, and an `If-Range` we
+      // cannot validate must degrade to the full representation rather than hand
+      // back bytes from a version the client no longer holds.
+      const rangeHeader =
+        request.method === "GET" && request.headers["if-range"] === undefined
+          ? request.headers["range"]
+          : undefined;
+      const video = assetVideoRangeResponse(rangeHeader, Number(info.value.size));
       if (video.status === 413) {
         return HttpServerResponse.text("Video too large to preview", { status: 413 });
       }

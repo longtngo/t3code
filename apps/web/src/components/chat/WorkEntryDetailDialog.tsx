@@ -1,4 +1,6 @@
 import { FileDiff } from "@pierre/diffs/react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { useMemo } from "react";
 import type { WorkLogEntry } from "../../session-logic";
 import { useTheme } from "../../hooks/useTheme";
@@ -16,7 +18,12 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import {
+  resolveViewedImageAsset,
+  workEntryViewedImagePath,
+} from "@t3tools/client-runtime/work-log/presentation";
 import { formatWorkEntryDetail, type WorkEntryQuestion } from "./workEntryDetail.logic";
+import { ChatMarkdownAssetImage } from "../ChatMarkdown";
 
 const TONE_LABEL: Record<WorkLogEntry["tone"], string> = {
   thinking: "Thinking",
@@ -175,14 +182,33 @@ function EditDetail({ patch }: { patch: string }) {
 export function WorkEntryDetailDialog({
   entry,
   onOpenChange,
+  workspaceRoot,
+  threadRef,
+  onImageExpand,
 }: {
   entry: WorkLogEntry | null;
   onOpenChange: (open: boolean) => void;
+  workspaceRoot?: string | null | undefined;
+  threadRef?: ScopedThreadRef | null | undefined;
+  onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }) {
   const body = useMemo(
     () => (entry ? formatWorkEntryDetail(entry) : { kind: "empty" as const }),
     [entry],
   );
+  // Upstream #8936 rendered a viewed image inline on the row; the fork shows it
+  // here so one surface owns work-entry detail. Resolved from the entry rather
+  // than passed in, so every caller gets it without threading a prop.
+  const viewedImage = useMemo(() => {
+    if (!entry || !threadRef) return null;
+    const path = workEntryViewedImagePath(entry);
+    return path
+      ? resolveViewedImageAsset(path, {
+          threadId: threadRef.threadId,
+          workspaceRoot: workspaceRoot ?? null,
+        })
+      : null;
+  }, [entry, threadRef, workspaceRoot]);
   const heading = entry?.toolTitle ?? entry?.label ?? "";
   // The command body renders the command itself; the edit body's diff shows its file path — so skip
   // the redundant description line / changed-files list for those.
@@ -229,6 +255,19 @@ export function WorkEntryDetailDialog({
                   </li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+
+          {viewedImage && threadRef ? (
+            <div className="mb-3">
+              <ChatMarkdownAssetImage
+                environmentId={threadRef.environmentId}
+                resource={viewedImage.resource}
+                alt={viewedImage.alt}
+                srcFragment={viewedImage.srcFragment}
+                style={{ maxHeight: "24rem" }}
+                {...(onImageExpand ? { onImageExpand } : {})}
+              />
             </div>
           ) : null}
 

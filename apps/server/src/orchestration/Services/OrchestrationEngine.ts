@@ -91,6 +91,16 @@ export interface OrchestrationEngineShape {
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
 
   /**
+   * Number of events currently buffered in the domain-event hub.
+   *
+   * Read by the server's health gauge. A backlog that climbs and does not come
+   * back down is the signature of the subscriber leak that OOM-ed the server:
+   * the hub is unbounded, so a consumer that stops taking pins every event it
+   * has not seen.
+   */
+  readonly hubBacklog: Effect.Effect<number>;
+
+  /**
    * Acquire a live domain-event stream whose subscription starts eagerly — the
    * moment this effect is evaluated — rather than lazily when the stream is run
    * (which is what {@link streamDomainEvents} does).

@@ -23,6 +23,9 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import * as Duration from "effect/Duration";
+
+import { parsePositiveIntEnv } from "./provider/Layers/parsePositiveIntEnv.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -187,6 +190,14 @@ export const resolveWelcomeBase = Effect.gen(function* () {
     projectName,
   } as const;
 });
+
+/** Interval for the event-hub health gauge (0 = disabled via T3CODE_HUB_GAUGE_MS=0). */
+const DEFAULT_HUB_GAUGE_INTERVAL_MS = 60_000;
+
+const hubGaugeIntervalMs =
+  process.env.T3CODE_HUB_GAUGE_MS === "0"
+    ? 0
+    : (parsePositiveIntEnv("T3CODE_HUB_GAUGE_MS") ?? DEFAULT_HUB_GAUGE_INTERVAL_MS);
 
 export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -514,6 +525,33 @@ export const make = (options?: StartupOptions) =>
           },
         }),
       );
+      // Event-hub health gauge. Reports the hub backlog alongside heap usage on
+      // a slow timer so the OOM fix stays observable and a regression is caught
+      // early -- there was essentially no heap telemetry before it.
+      //
+      // It lives here, not in the engine layer, because it is a property of a
+      // RUNNING server rather than of the layer. An interval fiber inside the
+      // layer starts at the test clock's epoch, so any test that warps the
+      // clock to a real timestamp replays the gauge once per interval across
+      // the whole span -- which is what wedged upstream #8600's auto-settle
+      // test for 120s. Out here the clock always advances in real time.
+      if (hubGaugeIntervalMs > 0) {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        yield* Effect.forkScoped(
+          Effect.forever(
+            Effect.gen(function* () {
+              yield* Effect.sleep(Duration.millis(hubGaugeIntervalMs));
+              const memory = process.memoryUsage();
+              yield* Effect.logInfo("orchestration.hub.gauge", {
+                hubBacklog: yield* engine.hubBacklog,
+                heapUsedMb: Math.round(memory.heapUsed / 1_048_576),
+                rssMb: Math.round(memory.rss / 1_048_576),
+              });
+            }),
+          ),
+        );
+      }
+
       yield* Effect.logDebug("startup phase: complete");
     }).pipe(
       Effect.annotateSpans({

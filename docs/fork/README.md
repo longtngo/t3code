@@ -456,6 +456,40 @@ RSTs sub-millisecond, the unpatched arm crashes with the production stack (exit 
 arm survives 35,615 attempts (exit 0), suppressing 1 real EINVAL while every request still fails
 as `ECONNRESET`.
 
+### 18. The event hub is unbounded; every consumer of it must not be
+
+`apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
+**unbounded** `PubSub`. That is deliberate - the dispatch worker must never backpressure on a
+slow reader - and it is exactly why every consumer needs its own bound. Two confirmed OOM
+crash-loops came from this hub, and each fix is a separate piece that a merge can revert on its
+own:
+
+- **`boundedSubscriberStream`** wraps `subscribeDomainEvents`. A forked pump takes from the
+  PubSub subscription _unconditionally_ into a bounded queue (`T3CODE_WS_SUBSCRIBER_BUFFER`,
+  default 4096). A WebSocket consumer that stops draining therefore ends its own subscription
+  cleanly and resubscribes from its last-applied sequence; it can never pin the hub.
+- **`ws.ts` chains coalesce -> bound**, in that order: the thread-live coalescer feeds a
+  `Queue.dropping` of `WS_LIVE_BUFFER_CAPACITY`. Upstream's own coalescer (#8368) is
+  `Queue.unbounded` at _both_ ends, which is the precise shape that OOM-ed this server. Adopting
+  it wholesale reintroduces the crash; the two must stay chained.
+- **`groupedWithin`/`aggregate`/`aggregateWithin`/`aggregateWithinEither` are banned in new
+  code** by `oxlint-plugin-t3code/rules/no-unsafe-stream-aggregate.ts`; the replacement is
+  `batchWithinStackSafe`. They lower to a non-stack-safe `stepToBuffer` schedule loop that pins
+  continuation frames on every _idle_ tick (~1.9 GB/hr, crash every 13-14h). That was the
+  confirmed heap burst - not the `Stream.take` recycle first blamed and later falsified. Note
+  what is NOT true: no patch in `patches/` touches `Stream` any more, so the two allowlisted
+  `ws.ts` shell-coalescing sites are safe by virtue of the **pinned effect version alone**.
+  Re-measure with `scripts/idle-aggregate-probe.ts` on any effect bump.
+
+**The health gauge belongs to the running server, not to the layer.** It reads
+`OrchestrationEngineShape.hubBacklog` and is forked in `serverRuntimeStartup.ts`
+(`T3CODE_HUB_GAUGE_MS`, default 60s, `0` disables). It lived inside the engine layer for one
+release and had to move: an interval fiber constructed with the layer starts at the _test_ clock's
+epoch, so any test that warps the clock to a real timestamp replays the gauge once per interval
+across the whole span. That wedged upstream #8600's auto-settle test at the full 120s timeout
+while the same test passed in 78ms with the gauge disabled. Anything else that wants a timer
+inside this layer inherits the same trap.
+
 ## Probing an invariant that asserts ABSENCE
 
 Half the entries above say a thing must **not** be there. Three of them were probed with

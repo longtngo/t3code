@@ -30,16 +30,21 @@ describe("resolveViewerRange", () => {
   });
 
   it("separates a range the file cannot supply from a header it will not parse", () => {
-    // Past MAX_SAFE_INTEGER the value is not a byte offset this parser will
-    // accept, so it is "no usable range" and the caller serves a full 200 — RFC
-    // 9110 permits ignoring a Range, and the rangeless stat cap bounds it. That is
-    // deliberately NOT the same answer as a range the file genuinely cannot
-    // supply, which must be a 416.
-    expect(resolveViewerRange("bytes=9007199254740993-", SIZE, CAP)).toBeUndefined();
+    // A header this parser will not read is "no usable range", and the caller
+    // serves a full 200 — RFC 9110 permits ignoring a Range, and the rangeless
+    // stat cap bounds it. An inverted spec belongs here rather than with the
+    // 416s: RFC 9110 14.1.1 makes it invalid syntax, not an unsatisfiable ask.
+    expect(resolveViewerRange("bytes=abc-", SIZE, CAP)).toBeUndefined();
+    expect(resolveViewerRange("bytes=100-50", SIZE, CAP)).toBeUndefined();
+    expect(resolveViewerRange("bytes=9007199254740993-50", SIZE, CAP)).toBeUndefined();
+
+    // Deliberately NOT the same answer as a range the file genuinely cannot
+    // supply, which must be a 416 — including a start past MAX_SAFE_INTEGER,
+    // which names a real position no file of this size has.
+    expect(resolveViewerRange("bytes=9007199254740993-", SIZE, CAP)).toBe("unsatisfiable");
     expect(resolveViewerRange(`bytes=${SIZE}-`, SIZE, CAP)).toBe("unsatisfiable");
     expect(resolveViewerRange("bytes=999999999-", SIZE, CAP)).toBe("unsatisfiable");
     expect(resolveViewerRange("bytes=-0", SIZE, CAP)).toBe("unsatisfiable");
-    expect(resolveViewerRange("bytes=100-50", SIZE, CAP)).toBe("unsatisfiable");
   });
 
   it("clamps an over-long forward range by moving end down", () => {

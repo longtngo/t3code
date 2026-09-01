@@ -22,10 +22,21 @@ export interface ViewerByteRange {
   readonly end: number;
 }
 
-function parseInteger(value: string): number | undefined {
+/**
+ * `"overflow"` is distinct from `undefined` on purpose.
+ *
+ * A digit string too large for a safe integer is not malformed — it names a
+ * position past any real file, and each of the three positions clamps somewhere
+ * different. Collapsing it into `undefined` made every such header fall back to
+ * the FULL representation, which quietly defeated the per-response clamp: a
+ * `bytes=8-<huge>` on a 500 MB video sent 500 MB instead of a two-byte tail.
+ * Upstream #8919's BigInt parser has no such cliff; this keeps `number` and
+ * names the overflow instead.
+ */
+function parseInteger(value: string): number | "overflow" | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : "overflow";
 }
 
 /**
@@ -56,19 +67,29 @@ function parseViewerRange(
   if (startPart === "") {
     const suffixLength = parseInteger(endPart);
     if (suffixLength === undefined) return undefined;
-    if (suffixLength === 0 || fileSize === 0) return "unsatisfiable";
+    if (fileSize === 0 || suffixLength === 0) return "unsatisfiable";
+    // A suffix larger than the file is the whole file, not a negative offset.
+    if (suffixLength === "overflow") return { start: 0, end: fileSize - 1, suffix: true };
     return { start: Math.max(fileSize - suffixLength, 0), end: fileSize - 1, suffix: true };
   }
 
   const start = parseInteger(startPart);
   if (start === undefined) return undefined;
-  if (endPart === "") {
-    if (start >= fileSize) return "unsatisfiable";
-    return { start, end: fileSize - 1, suffix: false };
-  }
-  const end = parseInteger(endPart);
+  const end = endPart === "" ? "open" : parseInteger(endPart);
   if (end === undefined) return undefined;
-  if (start > end || start >= fileSize) return "unsatisfiable";
+  // Syntax before satisfiability. An inverted spec is invalid rather than
+  // unsatisfiable (RFC 9110 14.1.1), so the header is ignored and the client
+  // gets the whole representation — not a 416 telling it the file is shorter
+  // than it asked for.
+  // An overflowing start is still larger than any concrete end, so it inverts
+  // the spec exactly as a plain `bytes=100-50` does.
+  const inverted =
+    typeof end === "number" && (start === "overflow" || (typeof start === "number" && start > end));
+  if (inverted) return undefined;
+  // A start past every real file can never be supplied: 416, not a full body.
+  if (start === "overflow" || start >= fileSize) return "unsatisfiable";
+  // An end past the file clamps to the last byte, whether it overflowed or not.
+  if (end === "open" || end === "overflow") return { start, end: fileSize - 1, suffix: false };
   return { start, end: Math.min(end, fileSize - 1), suffix: false };
 }
 

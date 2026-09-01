@@ -399,6 +399,7 @@ describe("ProviderCommandReactor", () => {
             }
             return engine.dispatch(command);
           },
+          hubBacklog: engine.hubBacklog,
           get streamDomainEvents() {
             return engine.streamDomainEvents;
           },

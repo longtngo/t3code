@@ -88,6 +88,7 @@ import {
   projectActivityEvent,
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
+import { makeThreadLiveEventCoalescer } from "./orchestration/ThreadLiveEventCoalescer.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -1378,23 +1379,17 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              // Archive and settle both mean "done with this thread", so a
-              // live provider session must not keep running background work
-              // (PR monitors, dev servers, subagent fleets) after either
-              // lands. The decider rejects settling a starting/running
-              // session, so for settle this only ever stops an idle one; a
-              // stopped session-set does not count as activity, so the stop
-              // cannot un-settle the thread it follows.
-              const parkingCommand =
-                normalizedCommand.type === "thread.archive" ||
-                normalizedCommand.type === "thread.settle"
-                  ? normalizedCommand
-                  : undefined;
-              // Best-effort on purpose: the user's archive/settle must not
+              // Archive removes the thread from the client, so this transport
+              // closes its session and terminals after the command lands.
+              // Settlement cleanup is driven by thread.settled events in the
+              // provider reactor, including settlements that have no client.
+              const archiveCommand =
+                normalizedCommand.type === "thread.archive" ? normalizedCommand : undefined;
+              // Best-effort on purpose: the user's archive must not
               // fail because this cleanup read blipped, so a failed read
               // logs and skips the stop instead of propagating.
-              const shouldStopSessionAfterCommand = parkingCommand
-                ? yield* projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
+              const shouldStopSessionAfterCommand = archiveCommand
+                ? yield* projectionSnapshotQuery.getThreadShellById(archiveCommand.threadId).pipe(
                     Effect.map(
                       Option.match({
                         onNone: () => false,
@@ -1405,7 +1400,7 @@ const makeWsRpcLayer = (
                     Effect.catchCause((cause) =>
                       Effect.logWarning(
                         "failed to read thread session state before session-stop check",
-                        { threadId: parkingCommand.threadId, cause },
+                        { threadId: archiveCommand.threadId, cause },
                       ).pipe(Effect.as(false)),
                     ),
                   )
@@ -1414,59 +1409,53 @@ const makeWsRpcLayer = (
                 Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
               );
               yield* recordClientCommandAnalytics(normalizedCommand);
-              if (parkingCommand) {
-                const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
+              if (archiveCommand) {
                 if (shouldStopSessionAfterCommand) {
                   yield* Effect.gen(function* () {
                     const stopCommand = yield* normalizeDispatchCommand({
                       type: "thread.session.stop",
                       commandId: CommandId.make(
-                        `session-stop-for-${parkingKind}:${parkingCommand.commandId}`,
+                        `session-stop-for-archive:${archiveCommand.commandId}`,
                       ),
-                      threadId: parkingCommand.threadId,
+                      threadId: archiveCommand.threadId,
                       createdAt: yield* nowIso,
-                      // A settled thread can be re-engaged before this stop is
-                      // decided; the decider then drops the stop instead of
-                      // killing the new session. Archive stops stay
-                      // unconditional: turn starts on archived threads are
-                      // rejected, so there is no new session to protect.
+                      // Archive stops are unconditional: turn starts on archived
+                      // threads are rejected, so there is no new session to
+                      // protect. The settle half of this branch (which passed
+                      // `onlyIfSettled`) moved to ThreadSettlementReactor with
+                      // upstream #8600; the fork's guard travels with it and is
+                      // still set there, so nothing is lost by narrowing here.
                       //
-                      // That reasoning omits unarchive. The stop is decided
-                      // synchronously but RUNS when the reactor drains it, so
-                      // unarchiving inside that window leaves a live thread
-                      // whose session this stop then kills. `onlyIfSettled`
-                      // would not help - it is checked at decide time, and the
-                      // race is at drain time. The window is milliseconds and
-                      // unarchive is a menu action on a separate screen, so
-                      // this is named rather than defended against.
-                      ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
+                      // The unarchive race the fork documented remains named
+                      // rather than defended against: the stop is decided
+                      // synchronously but RUNS at drain time, so unarchiving in
+                      // that window leaves a live thread whose session this stop
+                      // kills. `onlyIfSettled` never helped - it is checked at
+                      // decide time. Window is milliseconds; unarchive is a menu
+                      // action on another screen.
                     });
 
                     yield* dispatchNormalizedCommand(stopCommand);
                   }).pipe(
                     Effect.catchCause((cause) =>
-                      Effect.logWarning(`failed to stop provider session during ${parkingKind}`, {
-                        threadId: parkingCommand.threadId,
+                      Effect.logWarning("failed to stop provider session during archive", {
+                        threadId: archiveCommand.threadId,
                         cause,
                       }),
                     ),
                   );
                 }
 
-                // Terminals are user-opened panes, not thread background
-                // work: archive removes the thread from view so they close
-                // with it, but a settled thread stays reachable and may be
-                // un-settled, so its terminals stay up.
-                if (parkingCommand.type === "thread.archive") {
-                  yield* terminalManager.close({ threadId: parkingCommand.threadId }).pipe(
-                    Effect.catch((error) =>
-                      Effect.logWarning("failed to close thread terminals after archive", {
-                        threadId: parkingCommand.threadId,
-                        error: error.message,
-                      }),
-                    ),
-                  );
-                }
+                // Archive removes the thread from view, so its user-opened
+                // terminal panes close with it.
+                yield* terminalManager.close({ threadId: archiveCommand.threadId }).pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning("failed to close thread terminals after archive", {
+                      threadId: archiveCommand.threadId,
+                      error: error.message,
+                    }),
+                  ),
+                );
               }
               return result;
             }).pipe(
@@ -1682,21 +1671,26 @@ const makeWsRpcLayer = (
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event: projectActivityEvent(event),
+                  event,
                 })),
               );
 
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
-              // Bounded (not unbounded) so a stalled/dead socket that stops draining
-              // can never grow this buffer without limit — the confirmed OOM. On
-              // overflow the pump ends the buffer; the ended stream makes the client
-              // resubscribe (with afterSequence) and resync. See
-              // WS_LIVE_BUFFER_CAPACITY / pumpBoundedLiveBuffer.
+              // Upstream #8368's coalescer collapses chatty tool-update frames
+              // (~90% fewer), but it buffers on `Queue.unbounded` at BOTH ends —
+              // the exact shape of this fork's confirmed OOM, where a stalled or
+              // dead socket stops draining and the buffer grows without limit.
+              // So the two are chained rather than chosen between: coalesce
+              // first, then bound. On overflow the pump ends the buffer; the
+              // ended stream makes the client resubscribe (with afterSequence)
+              // and resync. See WS_LIVE_BUFFER_CAPACITY / pumpBoundedLiveBuffer.
+              const coalescer = yield* makeThreadLiveEventCoalescer();
+              yield* Effect.forkScoped(liveStream.pipe(Stream.runForEach(coalescer.offer)));
               const liveBuffer = yield* Queue.dropping<OrchestrationThreadStreamItem, Cause.Done>(
                 WS_LIVE_BUFFER_CAPACITY,
               );
-              yield* Effect.forkScoped(pumpBoundedLiveBuffer(liveStream, liveBuffer));
+              yield* Effect.forkScoped(pumpBoundedLiveBuffer(coalescer.stream, liveBuffer));
               const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
               // When the client already loaded the snapshot over HTTP it passes
@@ -1746,8 +1740,10 @@ const makeWsRpcLayer = (
                     input.requestCompletionMarker === true
                       ? Stream.concat(
                           Stream.fromEffect(
-                            Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                          ).pipe(Stream.drain),
+                            coalescer
+                              .offerAndWait({ kind: "synchronized" as const })
+                              .pipe(Effect.andThen(coalescer.takeAll)),
+                          ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                           bufferedLiveStream,
                         )
                       : bufferedLiveStream;
@@ -1787,8 +1783,10 @@ const makeWsRpcLayer = (
                 input.requestCompletionMarker === true
                   ? Stream.concat(
                       Stream.fromEffect(
-                        Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                      ).pipe(Stream.drain),
+                        coalescer
+                          .offerAndWait({ kind: "synchronized" as const })
+                          .pipe(Effect.andThen(coalescer.takeAll)),
+                      ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
                       bufferedLiveStream,
                     )
                   : bufferedLiveStream;

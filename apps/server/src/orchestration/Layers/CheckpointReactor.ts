@@ -234,8 +234,8 @@ const make = Effect.gen(function* () {
 
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
-      .getThreadDetailById(threadId)
-      .pipe(Effect.map((detail) => Option.getOrNull(detail)));
+      .getThreadDetailById(threadId, { activityKinds: [] })
+      .pipe(Effect.map(Option.getOrUndefined));
   });
 
   const resolveThreadProjects = Effect.fn("resolveThreadProjects")(function* (

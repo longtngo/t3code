@@ -41,7 +41,7 @@ function DraftChatThreadRouteView() {
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(serverThreadRef);
   const canonicalThreadRef = resolveDraftPromotionNavigationTarget({
     serverThreadRef,
-    serverThreadStarted,
+    serverThread,
     backgroundSubmissionPending,
   });
 
