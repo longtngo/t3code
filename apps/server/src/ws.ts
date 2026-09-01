@@ -280,6 +280,26 @@ export function trustedReadErrorMessage(
     | WorkspaceFileSystem.WorkspaceFileSystemError
     | WorkspacePaths.WorkspacePathOutsideRootError,
 ): string {
+  // Only `WorkspaceFileSystemOperationError` carries an errno `cause`. The other
+  // members of the union are tagged errors with no cause at all, so branching on
+  // `cause.code` alone sends every one of them to the generic fallback below --
+  // which is what made a single NUL byte in a text file present as an
+  // indistinguishable "Failed to read", read as a server regression, and cost an
+  // RCA. Their own messages cannot be reused verbatim here: they render the
+  // workspace-relative "file 'X' in 'Y'" template, which for an absolute trusted
+  // read prints the same path twice (the very thing this function exists to fix).
+  switch (error._tag) {
+    case "WorkspaceBinaryFileError":
+      return `'${path}' is not text, so it cannot be previewed.`;
+    case "WorkspacePathNotFileError":
+      return `'${path}' is not a regular file.`;
+    case "WorkspaceFilePathEscapeError":
+    case "WorkspacePathOutsideRootError":
+      return `'${path}' resolves outside the directory it was read from.`;
+    default:
+      break;
+  }
+
   const cause = "cause" in error ? (error.cause as { code?: unknown } | null | undefined) : null;
   const code = typeof cause?.code === "string" ? cause.code : null;
   if (code === "ENOENT") return `File not found: '${path}'.`;

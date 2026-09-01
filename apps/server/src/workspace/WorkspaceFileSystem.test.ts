@@ -10,6 +10,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./WorkspaceFileSystem.ts";
+import { trustedReadErrorMessage } from "../ws.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 
 const ProjectLayer = WorkspaceFileSystem.layer.pipe(
@@ -205,6 +206,34 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
 
         expect(result.contents).toBe("# Report\n\nDone.\n");
         expect(result.truncated).toBe(false);
+      }),
+    );
+
+    it.effect("rejects a file carrying a NUL byte, and says so specifically", () =>
+      Effect.gen(function* () {
+        // Not hypothetical. One stray NUL in a markdown report -- written by a
+        // non-raw Python string turning `\0` into chr(0) -- made the viewer
+        // answer the generic "Failed to read '<path>'", which read as a server
+        // regression and cost an RCA. The guard is right to refuse the file; the
+        // requirement is that the refusal be *nameable*, so the caller can say
+        // "not text" instead of "something went wrong".
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* makeTempDir;
+        yield* writeTextFile(dir, "report.md", "# Report\n\nbefore\u0000after\n");
+
+        const target = path.join(dir, "report.md");
+        const error = yield* workspaceFileSystem
+          .readTrustedFile({ path: target })
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("WorkspaceBinaryFileError");
+        // The whole point: this tag must produce a specific message, not the
+        // fallback. Asserted here against the REAL error the read produces,
+        // rather than one hand-constructed in the mapper's own unit test.
+        expect(trustedReadErrorMessage(target, error)).toBe(
+          `'${target}' is not text, so it cannot be previewed.`,
+        );
       }),
     );
 
