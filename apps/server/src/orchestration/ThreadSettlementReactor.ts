@@ -16,6 +16,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { describeSettlementFailure, makeSettlementFailureLogGate } from "./settlementFailureLog.ts";
 import {
   isAutoSettlementCandidate,
   shouldAutoSettleThread,
@@ -37,6 +38,10 @@ export const make = Effect.gen(function* () {
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
+
+  // Lives here, in `make`'s closure, deliberately: declared inside `sweep` it
+  // would be rebuilt every 60 seconds and the dedupe would be a silent no-op.
+  const failureLog = makeSettlementFailureLogGate();
 
   const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
     const snapshot = yield* snapshots.getShellSnapshot();
@@ -85,10 +90,14 @@ export const make = Effect.gen(function* () {
     });
 
     yield* Effect.forEach(
-      groups.values(),
-      (group) =>
+      groups.entries(),
+      ([lookupGroupKey, group]) =>
         Effect.gen(function* () {
           const pullRequest = yield* pullRequestFor(group[0]!);
+          // A group that answered again may report its next failure. Placed on
+          // the success of the lookup itself, which is the only thing this
+          // catch can be reporting on.
+          failureLog.forget(lookupGroupKey);
           yield* Effect.forEach(
             group,
             (thread) =>
@@ -126,14 +135,38 @@ export const make = Effect.gen(function* () {
             { discard: true },
           );
         }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("automatic thread settlement skipped", {
-                  threadIds: group.map((thread) => thread.id),
-                  cause: Cause.pretty(cause),
-                }),
-          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+            const failure = describeSettlementFailure(Cause.squash(cause));
+            // For a linked-pull-request group this is the thread's own project,
+            // not the linked repository — still the right place to look, but it
+            // is not the repo named in the lookup.
+            const project = projects.get(group[0]!.projectId);
+            // Unconditional, and outside the dedupe: the full cause is what an
+            // operator falls back to, and deleting it outright would make
+            // recovering it a redeploy. `T3CODE_LOG_LEVEL=Debug` is the way in.
+            const detailed = Effect.logDebug("automatic thread settlement skipped", {
+              threadIds: group.map((thread) => thread.id),
+              cause: Cause.pretty(cause),
+            });
+            if (!failureLog.shouldLog(lookupGroupKey, failure.failureKey)) return detailed;
+            return detailed.pipe(
+              Effect.andThen(
+                Effect.logWarning(
+                  "automatic thread settlement skipped; the same failure stays silent until it changes",
+                ).pipe(
+                  Effect.annotateLogs({
+                    threadCount: group.length,
+                    workspaceRoot: project?.workspaceRoot ?? "unknown",
+                    branch: group[0]!.branch ?? "unknown",
+                    errorTag: failure.errorTag,
+                    error: failure.message,
+                    ...(failure.detail === undefined ? {} : { errorDetail: failure.detail }),
+                  }),
+                ),
+              ),
+            );
+          }),
         ),
       { concurrency: 8, discard: true },
     );
