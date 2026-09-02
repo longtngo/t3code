@@ -42,6 +42,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -116,12 +117,36 @@ export class CrewService extends Context.Service<CrewService, CrewServiceShape>(
   "t3/crew/CrewService",
 ) {}
 
+/**
+ * Why a hook's failure has to be expressible.
+ *
+ * The caller wraps every teardown step in a `catchCause` that records
+ * `crew.teardown.step-failed.<n>`. With an uninhabited error channel those codes
+ * are unreachable by construction, so §9 would promise log records no path could
+ * emit — and a hook that swallows its own failure is indistinguishable from one
+ * that worked, which is the state teardown most needs to be able to report.
+ *
+ * Crew's own error type rather than the terminal and provider error unions, so
+ * this interface does not have to name types from the layers it deliberately
+ * cannot depend on.
+ */
+export class CrewTeardownHookError extends Schema.TaggedErrorClass<CrewTeardownHookError>()(
+  "CrewTeardownHookError",
+  { step: Schema.Number, threadId: Schema.String },
+) {
+  override get message() {
+    return `Crew teardown step ${this.step} failed for thread ${this.threadId}.`;
+  }
+}
+
 /** Teardown hooks the service cannot reach directly without a dependency cycle. */
 export interface CrewTeardownHooks {
-  readonly clearRecoveryRecord: (threadId: ThreadId) => Effect.Effect<void>;
-  readonly revokeActiveMcpThread: (threadId: ThreadId) => Effect.Effect<void>;
-  readonly closeTerminals: (threadId: ThreadId) => Effect.Effect<void>;
-  readonly stopSession: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly clearRecoveryRecord: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
+  readonly revokeActiveMcpThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, CrewTeardownHookError>;
+  readonly closeTerminals: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
+  readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
 }
 
 export class CrewTeardownHooksService extends Context.Service<

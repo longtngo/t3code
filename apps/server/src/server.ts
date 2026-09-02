@@ -121,7 +121,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import { CrewDirectoryLive } from "./crew/CrewDirectory.ts";
 import { CrewLogLive } from "./crew/CrewLog.ts";
-import { CrewTeardownHooksNoop } from "./crew/CrewService.ts";
+import { CrewTeardownHooksPartialLive } from "./crew/CrewTeardownHooksLive.ts";
 import { CrewRepositoryLive } from "./crew/CrewRepository.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -428,22 +428,26 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 );
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  Layer.provideMerge(ProviderLayerLive),
-  // The crew panel's read. It needs both `SqlClient` and `ProjectionSnapshotQuery`
-  // — the latter for the derived rendering — so it composes here rather than
-  // beside the other misc services, where the requirement would leak out of the
-  // server layer and every caller would have to satisfy it.
+  // The crew panel's read, plus the teardown hooks. It needs `SqlClient`,
+  // `ProjectionSnapshotQuery` (for the derived rendering), `ProviderService` and
+  // `TerminalManager`, so it composes here rather than beside the other misc
+  // services, where those requirements would leak out of the server layer and
+  // every caller would have to satisfy them.
+  //
+  // Ahead of `ProviderLayerLive` on purpose: B provides into A, so crew has to
+  // be the earlier (consuming) stage to see `ProviderService` at all. Behind it,
+  // `ProviderService` leaks out of the server layer — 48 typecheck errors.
   Layer.provideMerge(
     CrewDirectoryLive.pipe(
       Layer.provideMerge(CrewRepositoryLive),
       Layer.provideMerge(CrewLogLive),
-      // Phase 1 wires the panel's read and its operator actions. The teardown
-      // hooks that reach into the provider and terminal layers are supplied as
-      // no-ops here rather than left unbound, so a missing hook is a visible
-      // no-op in the log rather than a layer that will not build.
-      Layer.provideMerge(CrewTeardownHooksNoop),
+      // Teardown steps 3, 4 and 5 are live. Step 2 (clearRecoveryRecord) is not,
+      // and cannot be from here: see CrewTeardownHooksLive for why the stall
+      // watchdog is the one service crew cannot reach.
+      Layer.provideMerge(CrewTeardownHooksPartialLive),
     ),
   ),
+  Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
