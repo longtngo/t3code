@@ -1,15 +1,18 @@
 /**
- * The durable crew log: its own NDJSON store, in its own directory.
+ * The crew log: crew's own closed set of record codes, written through the
+ * server's logger.
  *
- * Its own directory because `isProviderLogFile` is not purely prefix-scoped — on a
- * prefix miss it sniffs the first 256 bytes for a provider header — so any file
- * carrying that header dropped beside the provider logs would join their
- * retention, and vice versa. Sharing a directory makes each store's retention
- * sweep able to delete the other's files.
+ * `CrewLogLive` calls `Effect.logInfo` and annotates each line with
+ * `crewLogCode`, so records land wherever `serverLogger.ts` sends everything
+ * else — `Logger.consolePretty()` plus the tracer. There is no separate crew
+ * file, no crew directory, and no crew retention sweep. "Durable" here means
+ * only as durable as whatever supervises the server and captures its output.
+ * A dedicated store is a Phase 2 question with its own design; do not read this
+ * module as evidence that one exists.
  *
- * Codes are a closed set (see `CrewLogCode`), not a cross product of tool × reason.
- * The cross product yields 20 codes of which authority can produce 6, and the
- * correspondence test then fails on the 14 that no path emits.
+ * Codes are a closed set (see `CrewLogCode`), not a cross product of tool ×
+ * reason. The cross product yields 20 codes of which authority can produce 6,
+ * and the correspondence test then fails on the 14 that no path emits.
  *
  * Allowed fields, positively: taskId, threadId, reportId, state, counts,
  * durations, byte counts, reason codes. Never `prompt`, `note`, `text`, wake
@@ -94,8 +97,8 @@ export interface CrewLogShape {
 export class CrewLog extends Context.Service<CrewLog, CrewLogShape>()("t3/crew/CrewLog") {}
 
 /**
- * The default sink writes through Effect's logger, which the server already
- * routes to its durable store. Tests substitute a capturing layer.
+ * Writes through Effect's logger, which `serverLogger.ts` routes to the console
+ * logger and the tracer. Tests substitute a capturing layer.
  */
 export const CrewLogLive = Layer.succeed(CrewLog, {
   record: (code, fields) =>

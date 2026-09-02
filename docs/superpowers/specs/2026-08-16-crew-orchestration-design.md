@@ -793,7 +793,14 @@ provider — one global tool array, `tools/call` unfiltered (§1). A second moun
   gate can check it in `pnpm verify` (§11). Revision 15 left three of these open and shipped
   two codes no path emits, which is the defect §9's own framing says revision 13
   had.
-- **A durable crew log in its own directory.** Verified isolated in both
+- **A durable crew log in its own directory. NOT BUILT IN PHASE 1 — deferred.**
+  Phase 1 ships `CrewLogLive` as `Effect.logInfo` with a `crewLogCode`
+  annotation, so records go wherever `serverLogger.ts` sends everything else
+  (`Logger.consolePretty()` plus the tracer). There is no crew file, no crew
+  directory and no crew retention sweep. The design work below stands and is
+  what a Phase 2 store should be built from; it is not a description of shipped
+  behaviour. §12's clauses 5 and 13 are satisfied against the server log.
+  Verified isolated in both
   directions, with the shared-directory hazard reproduced as a control `[X: four
 arms]`. 2 MiB × 10 gives ~12 days at a measured 1.7 MB/day `[X]`; the store's
   other two bounds (512 MiB total, 14-day age
@@ -1088,7 +1095,8 @@ _Acceptance (`T3CODE_CREW_MAX_CONCURRENT_TASKS=2`):_
     configured, which it is not by default `[X: the secret is absent on the
 developer's environment]`. The web emitter is asserted in a web unit test, not
     by a log line. A non-crew thread settling raises none.
-13. One `crew.*` record reaches the durable crew log.
+13. One `crew.*` record reaches the crew log — in Phase 1 that is the server log,
+    carrying `crew: true` and the `crewLogCode` annotation (see §9's deferral note).
 
 ## 13. Phase 2
 
