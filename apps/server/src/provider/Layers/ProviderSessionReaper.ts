@@ -112,6 +112,25 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // A live crew thread is exempt. This is what actually protects a crewmate's
+        // `progress` note: `appendSessionNote` queues the text into an in-process
+        // queue and never touches the binding's `lastSeenAt`, so an idle bridge is
+        // this reaper's ideal target and none of the guards above can see the
+        // queued note.
+        //
+        // Scoped to the two live roles on purpose. `crewmate-closed` is *not*
+        // exempt, because after teardown's zombie-stop attempts the reaper is the
+        // last thing that can stop a crewmate whose `stopSession` failed; an
+        // unscoped exemption would turn that stated residual into a permanent leak.
+        if (thread?.crewRole === "bridge" || thread?.crewRole === "crewmate") {
+          yield* Effect.logDebug("provider.session.reaper.skipped-crew-thread", {
+            threadId: binding.threadId,
+            crewRole: thread.crewRole,
+            idleDurationMs,
+          });
+          continue;
+        }
+
         // The projection's `backgroundLiveness` above covers work the provider
         // process reports; this covers the fork's own registered background
         // tasks, which are tracked in SQLite and outlive a provider restart. The

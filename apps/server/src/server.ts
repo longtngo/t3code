@@ -119,6 +119,10 @@ import { layer as llmServeManagerLayer } from "./llm/LlmServeManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import { CrewDirectoryLive } from "./crew/CrewDirectory.ts";
+import { CrewLogLive } from "./crew/CrewLog.ts";
+import { CrewTeardownHooksNoop } from "./crew/CrewService.ts";
+import { CrewRepositoryLive } from "./crew/CrewRepository.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
@@ -425,6 +429,21 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
+  // The crew panel's read. It needs both `SqlClient` and `ProjectionSnapshotQuery`
+  // — the latter for the derived rendering — so it composes here rather than
+  // beside the other misc services, where the requirement would leak out of the
+  // server layer and every caller would have to satisfy it.
+  Layer.provideMerge(
+    CrewDirectoryLive.pipe(
+      Layer.provideMerge(CrewRepositoryLive),
+      Layer.provideMerge(CrewLogLive),
+      // Phase 1 wires the panel's read and its operator actions. The teardown
+      // hooks that reach into the provider and terminal layers are supplied as
+      // no-ops here rather than left unbound, so a missing hook is a visible
+      // no-op in the log rather than a layer that will not build.
+      Layer.provideMerge(CrewTeardownHooksNoop),
+    ),
+  ),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 

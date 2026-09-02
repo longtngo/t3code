@@ -163,6 +163,7 @@ import * as HostMetrics from "./diagnostics/HostMetrics.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import * as CrewDirectory from "./crew/CrewDirectory.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -830,6 +831,9 @@ const buildAppUnderTest = (options?: {
               running: [],
               waiting: [],
             }),
+          }),
+          Layer.mock(CrewDirectory.CrewDirectory)({
+            list: () => Effect.succeed([]),
           }),
           Layer.mock(HostMetrics.HostMetrics)({
             stream: () => Stream.empty,

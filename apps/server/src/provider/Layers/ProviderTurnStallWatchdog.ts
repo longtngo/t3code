@@ -469,7 +469,13 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
         ),
       );
 
-    return { start, adoptExternalStop } satisfies ProviderTurnStallWatchdogShape;
+    const clearRecoveryRecord = (threadId: ThreadId) => clearRecord(threadId);
+
+    return {
+      start,
+      adoptExternalStop,
+      clearRecoveryRecord,
+    } satisfies ProviderTurnStallWatchdogShape;
   });
 
 export const makeProviderTurnStallWatchdogLive = (options?: ProviderTurnStallWatchdogLiveOptions) =>

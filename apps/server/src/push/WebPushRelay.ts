@@ -462,7 +462,24 @@ const make = Effect.gen(function* () {
         return next;
       });
 
-      if (edges.length > 0) {
+      // A crew thread's completion is crew's business, not the operator's phone.
+      // Matched on ANY non-null role, not on an `open` row: teardown closes the
+      // row at step 1 and archives the thread at step 7, and `stopSession` sits
+      // between them — the projector settles the turn on any exit from `running`,
+      // so tearing down a mid-turn crewmate raises exactly the push this exists to
+      // suppress, in a window where a status-scoped predicate has already dropped
+      // the role.
+      //
+      // The baseline still advances below, so the edge is consumed rather than
+      // left to re-fire once the thread stops being crew.
+      if (edges.length > 0 && shell.crewRole !== undefined) {
+        yield* Effect.logInfo("crew.notification.suppressed.web-push", {
+          threadId,
+          crewRole: shell.crewRole,
+          suppressed: edges.length,
+          code: "crew.notification.suppressed.web-push",
+        });
+      } else if (edges.length > 0) {
         // Read the categories ONLY here. On the first-sight and no-edge paths this
         // function does no I/O at all today, and putting a fallible read there
         // would let a settings hiccup abort before `advanceBaseline` — losing an

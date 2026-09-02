@@ -133,6 +133,7 @@ const startupDependencies = Layer.mergeAll(
   Layer.succeed(ProviderTurnStallWatchdog.ProviderTurnStallWatchdog, {
     start: () => Effect.void,
     adoptExternalStop: () => Effect.void,
+    clearRecoveryRecord: () => Effect.void,
   }),
 );
 

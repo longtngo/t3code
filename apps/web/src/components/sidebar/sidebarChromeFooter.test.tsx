@@ -40,6 +40,9 @@ vi.mock("./SidebarLocalModels", () => ({
 vi.mock("./SidebarResourceQueue", () => ({
   SidebarResourceQueue: () => createElement("li", { "data-panel": "queue" }),
 }));
+vi.mock("./SidebarCrew", () => ({
+  SidebarCrew: () => createElement("li", { "data-panel": "crew" }),
+}));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
 vi.mock("./SidebarSubagentBackend", () => ({ SidebarSubagentBackend: () => null }));
 vi.mock("./SidebarUpdatePill", () => ({

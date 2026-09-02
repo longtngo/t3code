@@ -110,6 +110,7 @@ export function useThreadCompletionNotifications(): void {
         nextTurnId: shell.latestTurn?.turnId ?? null,
         nextState,
         title: shell.title,
+        crewRole: shell.crewRole,
       });
       if (completion) {
         notifyThreadCompletions({

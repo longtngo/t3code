@@ -23,6 +23,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { CrewRole } from "./crew.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -734,6 +735,19 @@ export const OrchestrationThreadShell = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * Why this thread is part of a crew, and for how long. Absent on ordinary
+   * threads — `optionalKey`, and the producer spreads it only when present, so an
+   * ordinary shell is byte-identical to what it was before crew existed.
+   *
+   * Three values rather than two because two consumers need different windows.
+   * The reaper must stop exempting a crew thread as soon as its task closes, or a
+   * crewmate whose teardown failed could never be reaped at all. Notification
+   * suppression must hold *through* teardown, which closes the row before it
+   * archives the thread — a scope keyed on the open row alone has already dropped
+   * the role by the time the push fires.
+   */
+  crewRole: Schema.optionalKey(CrewRole),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 

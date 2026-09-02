@@ -33,6 +33,22 @@ export interface ProviderTurnStallWatchdogShape {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
   }) => Effect.Effect<void>;
+
+  /**
+   * Forget everything this watchdog is tracking for a thread, including a stop it
+   * is already waiting on.
+   *
+   * The opposite of {@link adoptExternalStop}, and needed by any caller that
+   * retires a thread out from under the watchdog. Crew teardown is the first: it
+   * stops the crewmate's session, which makes `activeTurnId` null, and the resume
+   * branch has no archival check — so a stop already pending fires a
+   * `thread.turn.start` against a thread that is stopped, archived and closed.
+   *
+   * Teardown does not *arm* that resurrection. `awaitingStopForTurnId` is written
+   * in exactly two places, this watchdog's own self-trip and `adoptExternalStop`,
+   * neither of which crew calls. It *completes* one the watchdog already armed.
+   */
+  readonly clearRecoveryRecord: (threadId: ThreadId) => Effect.Effect<void>;
 }
 
 export class ProviderTurnStallWatchdog extends Context.Service<

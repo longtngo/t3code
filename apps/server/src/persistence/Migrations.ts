@@ -107,6 +107,7 @@ import Migration0049 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts
 // Upstream's 043 (projection_threads.unsettled_at, #8231) likewise takes the next
 // free id (50) rather than its filename number.
 import Migration0050 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
+import Migration0051 from "./Migrations/051_CrewTasks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +169,7 @@ export const migrationEntries = [
   [48, "AuthSessionClientConnection", Migration0048],
   [49, "ProjectionThreadLinkedPullRequest", Migration0049],
   [50, "ProjectionThreadsUnsettledAt", Migration0050],
+  [51, "CrewTasks", Migration0051],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

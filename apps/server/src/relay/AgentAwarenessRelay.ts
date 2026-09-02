@@ -406,6 +406,21 @@ export const make = Effect.gen(function* () {
       });
 
     const thread = yield* snapshotQuery.getThreadShellById(threadId);
+
+    // Crew threads are not the operator's agent activity — a fleet of crewmates
+    // would otherwise publish as a fleet of the operator's own sessions. Matched
+    // on any non-null role for the same reason as the push relay: teardown drops
+    // the row before it archives the thread, and the settle fires in between.
+    if (Option.isSome(thread) && thread.value.crewRole !== undefined) {
+      yield* Effect.logInfo("crew.notification.suppressed.agent-awareness", {
+        environmentId,
+        threadId,
+        crewRole: thread.value.crewRole,
+        code: "crew.notification.suppressed.agent-awareness",
+      });
+      return;
+    }
+
     const project = Option.isSome(thread)
       ? yield* snapshotQuery.getProjectShellById(thread.value.projectId)
       : Option.none<OrchestrationProjectShell>();

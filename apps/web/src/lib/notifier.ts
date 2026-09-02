@@ -61,9 +61,26 @@ export function classifyThreadCompletion(input: {
   readonly nextTurnId: string | null | undefined;
   readonly nextState: string | null | undefined;
   readonly title: string;
+  /**
+   * The thread's crew role, when it has one.
+   *
+   * A crew thread's completion is crew's business: the bridge learns about it
+   * through a report, and the operator does not want a desktop notification per
+   * crewmate. Matched on ANY non-null role rather than on an open task, because
+   * teardown closes the row before it archives the thread and the settle fires
+   * between the two — a status-scoped predicate has already dropped the role by
+   * the time this runs.
+   *
+   * This half runs in the browser, so no server-side predicate can reach it and
+   * no server log line can witness it. It is asserted in a web unit test.
+   */
+  readonly crewRole?: string | null | undefined;
   // `backgroundActive` is not decided here: this classifies the turn EDGE, while
   // background liveness is thread state the caller reads from the same shell.
 }): Omit<ThreadCompletion, "backgroundActive"> | null {
+  if (input.crewRole != null) {
+    return null;
+  }
   if (input.previousState !== "running") {
     return null;
   }

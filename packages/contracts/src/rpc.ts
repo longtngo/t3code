@@ -229,6 +229,8 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 
+import { CrewReportId, CrewTaskId, CrewTaskView } from "./crew.ts";
+
 export const WS_METHODS = {
   // Project registry methods
   projectsList: "projects.list",
@@ -336,6 +338,10 @@ export const WS_METHODS = {
 
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
+  crewList: "crew.list",
+  crewTeardown: "crew.teardown",
+  crewAnswer: "crew.answer",
+  crewForgetWorktree: "crew.forgetWorktree",
 
   // Subagent dispatch toggle — machine-level Cursor-vs-default switch read by ~/bin/subagent-dispatch
   subagentBackendGet: "subagentBackend.get",
@@ -581,6 +587,45 @@ export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh,
 export const WsGetResourceQueueRpc = Rpc.make(WS_METHODS.getResourceQueue, {
   payload: Schema.Struct({}),
   success: ResourceQueueSnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * The crew panel's read. A unary poll on the `resourceQueue.get` precedent
+ * rather than a stream: crew state changes on a 60s sweep and on operator
+ * actions, so a client-controlled interval maps onto it cleanly and costs no
+ * per-connection subscription.
+ */
+export const WsCrewListRpc = Rpc.make(WS_METHODS.crewList, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ tasks: Schema.Array(CrewTaskView) }),
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * Operator actions on the crew panel. Authority is the RPC scope: the operator is
+ * not a thread, and the panel is scoped to the environment so a task whose bridge
+ * was deleted is still tearable-down.
+ *
+ * All three are idempotent, which is what makes `Re-run teardown` safe on an
+ * already-closed row whose thread is somehow still in a session.
+ */
+export const WsCrewTeardownRpc = Rpc.make(WS_METHODS.crewTeardown, {
+  payload: Schema.Struct({ taskId: CrewTaskId }),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsCrewAnswerRpc = Rpc.make(WS_METHODS.crewAnswer, {
+  payload: Schema.Struct({ reportId: CrewReportId, text: Schema.String }),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Clears `worktreePath`/`branch` from the crew thread. Closed rows only. */
+export const WsCrewForgetWorktreeRpc = Rpc.make(WS_METHODS.crewForgetWorktree, {
+  payload: Schema.Struct({ taskId: CrewTaskId }),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: EnvironmentAuthorizationError,
 });
 
@@ -1433,6 +1478,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadWithdrawQueuedMessageRpc,
   WsAccountUsageRefreshRpc,
   WsGetResourceQueueRpc,
+  WsCrewListRpc,
+  WsCrewTeardownRpc,
+  WsCrewAnswerRpc,
+  WsCrewForgetWorktreeRpc,
   WsSubagentBackendGetRpc,
   WsSubagentBackendSetRpc,
   WsSubagentBackendUsageRpc,

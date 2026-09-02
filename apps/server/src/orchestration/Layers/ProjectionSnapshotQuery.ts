@@ -1,5 +1,6 @@
 import {
   ChatAttachment,
+  CrewRole,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -102,8 +103,42 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     // against pending_background_tasks, decoded as 0/1 and mapped with `> 0`.
     hasPendingBackgroundTask: NonNegativeInt,
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    // Computed column (not a real projection_threads column): the thread's role in
+    // a crew, derived from crew_tasks by the CREW_ROLE_COLUMN subquery below.
+    crewRole: Schema.NullOr(CrewRole),
   }),
 );
+/**
+ * The thread's crew role, correlated against the `crew_tasks` sidecar table.
+ *
+ * Precedence is load-bearing, not cosmetic. A thread can be both a crewmate and a
+ * bridge once crews nest, and `bridge` has to outrank `crewmate-closed` so a
+ * dispatcher whose own task finished is still exempt from the reaper while its
+ * children are alive. `crewmate` outranks `bridge` only because a thread's own task
+ * is the more specific fact about it; both are exempt, so nothing depends on which
+ * of the two wins.
+ *
+ * NULL for ordinary threads, and for a bridge whose every task has closed.
+ */
+const CREW_ROLE_COLUMN = `
+          CASE
+            WHEN EXISTS (
+              SELECT 1 FROM crew_tasks
+              WHERE crew_tasks.crew_thread_id = projection_threads.thread_id
+                AND crew_tasks.status = 'open'
+            ) THEN 'crewmate'
+            WHEN EXISTS (
+              SELECT 1 FROM crew_tasks
+              WHERE crew_tasks.parent_thread_id = projection_threads.thread_id
+                AND crew_tasks.status = 'open'
+            ) THEN 'bridge'
+            WHEN EXISTS (
+              SELECT 1 FROM crew_tasks
+              WHERE crew_tasks.crew_thread_id = projection_threads.thread_id
+            ) THEN 'crewmate-closed'
+            ELSE NULL
+          END AS "crewRole"`;
+
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -516,6 +551,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             SELECT 1 FROM pending_background_tasks
             WHERE pending_background_tasks.thread_id = projection_threads.thread_id
           ) AS "hasPendingBackgroundTask",
+          ${sql.literal(CREW_ROLE_COLUMN)},
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -559,6 +595,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             SELECT 1 FROM pending_background_tasks
             WHERE pending_background_tasks.thread_id = projection_threads.thread_id
           ) AS "hasPendingBackgroundTask",
+          ${sql.literal(CREW_ROLE_COLUMN)},
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -604,6 +641,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             SELECT 1 FROM pending_background_tasks
             WHERE pending_background_tasks.thread_id = projection_threads.thread_id
           ) AS "hasPendingBackgroundTask",
+          ${sql.literal(CREW_ROLE_COLUMN)},
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1056,6 +1094,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             SELECT 1 FROM pending_background_tasks
             WHERE pending_background_tasks.thread_id = projection_threads.thread_id
           ) AS "hasPendingBackgroundTask",
+          ${sql.literal(CREW_ROLE_COLUMN)},
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -2281,6 +2320,7 @@ pending_approval_requests AS (
                       interactionMode: row.interactionMode,
                       branch: row.branch,
                       worktreePath: row.worktreePath,
+                      ...(row.crewRole === null ? {} : { crewRole: row.crewRole }),
                       ...(row.linkedPullRequest === null
                         ? {}
                         : { linkedPullRequest: row.linkedPullRequest }),
@@ -2432,6 +2472,7 @@ pending_approval_requests AS (
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
+                  ...(row.crewRole === null ? {} : { crewRole: row.crewRole }),
                   ...(row.linkedPullRequest === null
                     ? {}
                     : { linkedPullRequest: row.linkedPullRequest }),
@@ -2719,6 +2760,7 @@ pending_approval_requests AS (
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
+        ...(threadRow.value.crewRole === null ? {} : { crewRole: threadRow.value.crewRole }),
         ...(threadRow.value.linkedPullRequest === null
           ? {}
           : { linkedPullRequest: threadRow.value.linkedPullRequest }),

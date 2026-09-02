@@ -323,3 +323,37 @@ describe("notifyThreadCompletions", () => {
     expect(created).toHaveLength(0);
   });
 });
+
+describe("crew completion suppression", () => {
+  const runningToCompleted = {
+    threadId: tid("thread-1"),
+    previousState: "running",
+    nextTurnId: "turn-1",
+    nextState: "completed",
+    title: "A thread",
+  } as const;
+
+  it.each([["bridge"], ["crewmate"], ["crewmate-closed"]])(
+    "a %s thread settling raises no notification",
+    (crewRole) => {
+      expect(classifyThreadCompletion({ ...runningToCompleted, crewRole })).toBeNull();
+    },
+  );
+
+  it("a non-crew thread settling still notifies", () => {
+    // Without this clause a predicate that suppresses unconditionally passes,
+    // and so does the obvious inverted fixture.
+    expect(classifyThreadCompletion({ ...runningToCompleted, crewRole: undefined })).not.toBeNull();
+    expect(classifyThreadCompletion({ ...runningToCompleted, crewRole: null })).not.toBeNull();
+    expect(classifyThreadCompletion(runningToCompleted)).not.toBeNull();
+  });
+
+  it("the suppression is what silences it, not the edge classifier", () => {
+    // Control: the same input differs only in `crewRole`, so a null return can
+    // only be coming from the crew branch.
+    const notified = classifyThreadCompletion(runningToCompleted);
+    const suppressed = classifyThreadCompletion({ ...runningToCompleted, crewRole: "crewmate" });
+    expect(notified?.outcome).toBe("completed");
+    expect(suppressed).toBeNull();
+  });
+});

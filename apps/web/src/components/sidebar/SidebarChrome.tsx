@@ -32,6 +32,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { nextOpenFooterPanel, type SidebarFooterPanel } from "./sidebarChrome.logic";
 import { SidebarLocalModels } from "./SidebarLocalModels";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
+import { SidebarCrew } from "./SidebarCrew";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
 import { SidebarSubagentBackend } from "./SidebarSubagentBackend";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -286,6 +287,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           isOpen={openFooterPanel === "queue"}
           onOpenChange={(open) => setFooterPanelOpen("queue", open)}
         />
+        <SidebarCrew />
         <SidebarUpdatePill />
       </SidebarMenu>
     </div>

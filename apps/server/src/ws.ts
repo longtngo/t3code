@@ -135,6 +135,7 @@ import { llmModelsStream } from "./diagnostics/LlmModels.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
+import * as CrewDirectory from "./crew/CrewDirectory.ts";
 import { readCursorUsage } from "./subagentBackend/cursorUsageRead.ts";
 import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -662,6 +663,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
+      const crewDirectory = yield* CrewDirectory.CrewDirectory;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const hostMetrics = yield* HostMetrics.HostMetrics;
@@ -2035,6 +2037,34 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.crewList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.crewList,
+            crewDirectory.list().pipe(Effect.map((tasks) => ({ tasks }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.crewTeardown]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.crewTeardown,
+            crewDirectory.teardown({ taskId: input.taskId }).pipe(Effect.as({ ok: true as const })),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.crewAnswer]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.crewAnswer,
+            crewDirectory
+              .answer({ reportId: input.reportId, text: input.text })
+              .pipe(Effect.as({ ok: true as const })),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.crewForgetWorktree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.crewForgetWorktree,
+            crewDirectory
+              .forgetWorktree({ taskId: input.taskId })
+              .pipe(Effect.as({ ok: true as const })),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.subagentBackendGet]: (input) =>
           observeRpcEffect(
             WS_METHODS.subagentBackendGet,
