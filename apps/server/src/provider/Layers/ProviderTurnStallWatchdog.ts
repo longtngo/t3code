@@ -257,7 +257,19 @@ const makeProviderTurnStallWatchdog = (options?: ProviderTurnStallWatchdogLiveOp
         if (record.awaitingStopForTurnId !== null) {
           if (!shell || activeTurnId === null) {
             // Session went down — resume the conversation.
-            if (shell) {
+            //
+            // Archived threads are excluded, matching `shouldTrip` above.
+            // `thread.turn.start` accepts an archived thread: the decider
+            // guards it with `requireThread`, not `requireThreadNotArchived`
+            // (decider.ts:982), so without this an archived thread carrying a
+            // pending forceful
+            // stop is resumed on a timer, and `startSession` re-mints its MCP
+            // credential. Crew teardown makes that reachable: step 5 nulls
+            // `activeTurnId` on a thread step 7 then archives.
+            //
+            // The record is still cleared below either way — leaving it set
+            // would re-evaluate this thread every sweep forever.
+            if (shell && shell.archivedAt === null) {
               yield* dispatchResume({
                 shell,
                 stalledTurnId: record.awaitingStopForTurnId,

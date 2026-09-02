@@ -100,6 +100,9 @@ function createHarness(input: {
   readonly options?: ProviderTurnStallWatchdogLiveOptions;
   // Simulates the SDK auto-starting the resumed turn after a forceful stop.
   readonly onTurnStart?: (threadId: ThreadId) => void;
+  // Runs after the harness has applied the stop's own shell mutation, so a test
+  // can put the thread into a state the next sweep will read (archived, say).
+  readonly onSessionStop?: (threadId: ThreadId) => void;
 }) {
   const dispatched: Array<{ type: string; threadId: ThreadId; tone?: string }> = [];
 
@@ -124,6 +127,7 @@ function createHarness(input: {
             });
           }
           input.activity.delete(command.threadId);
+          input.onSessionStop?.(command.threadId);
         }
         if (command.type === "thread.turn.start") {
           input.onTurnStart?.(command.threadId);
@@ -211,6 +215,52 @@ function staleEntry(
 }
 
 describe("ProviderTurnStallWatchdog", () => {
+  it.live("does not resume a thread that was archived while the stop was pending", () =>
+    Effect.gen(function* () {
+      const archived = ThreadId.make("thread-stall-archived");
+      const live = ThreadId.make("thread-stall-live");
+      const nowMs = yield* nowMillis;
+
+      // Both threads stall identically and both get a forceful stop. The only
+      // difference is that one is archived in the window between the stop
+      // landing and the next sweep reading the shell — which is exactly what
+      // crew teardown does: step 5 nulls activeTurnId, step 7 archives.
+      const shells = new Map([
+        [archived, makeShell(archived, { status: "running", activeTurnId: TurnId.make("t-a") })],
+        [live, makeShell(live, { status: "running", activeTurnId: TurnId.make("t-l") })],
+      ]);
+      const harness = createHarness({
+        activity: new Map([
+          [archived, staleEntry(archived, TurnId.make("t-a"), nowMs)],
+          [live, staleEntry(live, TurnId.make("t-l"), nowMs)],
+        ]),
+        shells,
+        onSessionStop: (threadId) => {
+          if (threadId !== archived) return;
+          const shell = shells.get(threadId);
+          if (shell) shells.set(threadId, { ...shell, archivedAt: "2026-09-02T00:00:00.000Z" });
+        },
+      });
+
+      yield* startWatchdog.pipe(Effect.provide(harness.layer));
+
+      // The live thread is the control: it proves the sweep reached the resume
+      // branch at all. Without it, "no turn.start for the archived thread"
+      // would pass on a watchdog that never ran.
+      yield* waitFor(() =>
+        harness.dispatched.some((c) => c.type === "thread.turn.start" && c.threadId === live),
+      );
+
+      const starts = harness.dispatched.filter((c) => c.type === "thread.turn.start");
+      expect(starts.map((c) => String(c.threadId))).toEqual([String(live)]);
+      // Both were stopped, so the archived one really did enter the branch.
+      const stops = harness.dispatched.filter((c) => c.type === "thread.session.stop");
+      expect(stops.map((c) => String(c.threadId)).sort()).toEqual(
+        [String(archived), String(live)].sort(),
+      );
+    }),
+  );
+
   it.live("stops then resumes a stalled active turn", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-stall-happy");
