@@ -162,6 +162,15 @@ export const VcsCreateWorktreeInput = Schema.Struct({
   newRefName: Schema.optional(TrimmedNonEmptyStringSchema),
   baseRefName: Schema.optional(TrimmedNonEmptyStringSchema),
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  /**
+   * Take over a path git still has an admin entry for but whose directory is
+   * gone (`git worktree list` calls it `prunable`).
+   *
+   * Only for recreating a worktree the caller has already found missing. It does
+   * NOT overwrite anything: git refuses `worktree add` on a path that exists,
+   * `--force` or not.
+   */
+  reuseRegisteredPath: Schema.optional(Schema.Boolean),
 });
 export type VcsCreateWorktreeInput = typeof VcsCreateWorktreeInput.Type;
 

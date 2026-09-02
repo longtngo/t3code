@@ -1612,6 +1612,52 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("reuses one registered-but-missing path without touching another", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* makeTmpDir("git-worktrees-");
+        const recreated = pathService.join(root, "recreated");
+        const bystander = pathService.join(root, "bystander");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: recreated,
+          refName: initialBranch,
+          newRefName: "feature/recreated",
+        });
+        yield* driver.createWorktree({
+          cwd,
+          path: bystander,
+          refName: initialBranch,
+          newRefName: "feature/bystander",
+        });
+
+        // Both directories vanish. In production the second stands for a
+        // worktree on an unmounted volume or a network mount - absent at this
+        // instant, not deleted. `git worktree prune` cannot tell them apart and
+        // drops both registrations; `git worktree repair` cannot put them back.
+        yield* fileSystem.remove(recreated, { recursive: true });
+        yield* fileSystem.remove(bystander, { recursive: true });
+
+        yield* driver.createWorktree({
+          cwd,
+          path: recreated,
+          refName: "feature/recreated",
+          reuseRegisteredPath: true,
+        });
+
+        assert.equal(yield* fileSystem.exists(recreated), true);
+        // The bystander keeps its admin entry, so restoring its directory is
+        // still just a matter of the volume coming back.
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.isTrue(registered.includes(bystander));
+      }),
+    );
+
     it.effect("removes the same worktree path twice without failing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

@@ -1719,11 +1719,17 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(harness.pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-project" });
+    // Never prune: it is repo-global and takes no path, so it would drop the
+    // admin entry of every worktree of this project whose directory is absent
+    // right now - an unmounted volume reads identically to a deleted one, and
+    // `git worktree repair` cannot undo it. The recreate takes over its own
+    // registered path instead.
+    expect(harness.pruneWorktrees).not.toHaveBeenCalled();
     expect(harness.createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-project",
       refName: "feature/restore",
       path: worktreePath,
+      reuseRegisteredPath: true,
     });
     expect(harness.createWorktree.mock.invocationCallOrder[0]).toBeLessThan(
       harness.startSession.mock.invocationCallOrder[0]!,

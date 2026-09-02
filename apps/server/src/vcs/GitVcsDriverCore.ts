@@ -2971,9 +2971,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    // `--force` here means only "the path is registered but its directory is
+    // gone, take it over" — the exact situation git's own error points at
+    // ("use 'add -f' to override, or 'prune' or 'remove' to clear"). It cannot
+    // clobber a live worktree: git refuses `add` on an existing path either way.
+    const force = input.reuseRegisteredPath === true ? ["--force"] : [];
     const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", worktreePath, input.refName];
+      ? ["worktree", "add", ...force, "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", ...force, worktreePath, input.refName];
 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",

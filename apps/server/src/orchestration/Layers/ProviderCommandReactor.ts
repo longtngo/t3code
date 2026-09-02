@@ -523,19 +523,29 @@ const make = Effect.gen(function* () {
       branch,
     });
     // A directory deleted without `git worktree remove` leaves an admin entry
-    // that makes `git worktree add` refuse the path; prune clears it.
-    yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
-      Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("provider command reactor failed to recreate worktree", {
-              threadId: thread.id,
-              worktreePath,
-              cause: Cause.pretty(cause),
-            }),
-      ),
-    );
+    // that makes `git worktree add` refuse the path. Take over that one entry
+    // rather than pruning.
+    //
+    // `git worktree prune` is repo-global and takes no path: it drops the admin
+    // entry of EVERY worktree of this project whose directory is absent at that
+    // instant. An unmounted volume, a network mount, or a worktree the user is
+    // mid-way through moving all look identical to a deleted one, and
+    // `git worktree repair` cannot put them back ("unable to locate repository").
+    // The files and the branch survive; the registration does not. This runs on
+    // every turn start, so a single absent mount could take out the rest.
+    yield* gitWorkflow
+      .createWorktree({ cwd, refName: branch, path: worktreePath, reuseRegisteredPath: true })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("provider command reactor failed to recreate worktree", {
+                threadId: thread.id,
+                worktreePath,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      );
   });
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
