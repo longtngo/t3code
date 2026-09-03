@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
-import { ChevronsUpDownIcon } from "lucide-react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type {
@@ -13,7 +12,7 @@ import type {
 
 import { cn } from "../../lib/utils";
 import { DraftInput } from "../ui/draft-input";
-import { Input, inputControlClassName, inputControlShellClassName } from "../ui/input";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -28,9 +27,9 @@ export interface ProviderSettingsFieldModel {
   readonly clearWhenEmpty: "omit" | "persist";
   readonly defaultBooleanValue?: boolean | undefined;
   /**
-   * Present only for closed-set fields. Its presence alone renders the fork's native
-   * dropdown; `control: "select"` additionally routes the field to upstream's Base UI
-   * select, whose first entry is the default and is stored as an omitted key.
+   * Present only for `control: "select"` fields: the closed set of choices to render. The
+   * first entry is the default and is stored as an omitted key; an optional field puts its
+   * clear row (`value: ""`) first.
    */
   readonly options?: readonly ProviderSettingsFormOption[] | undefined;
 }
@@ -112,7 +111,7 @@ export function deriveProviderSettingsFields(
             ? { placeholder: formAnnotation.placeholder }
             : {}),
           clearWhenEmpty: formAnnotation.clearWhenEmpty ?? "omit",
-          ...(formAnnotation.options !== undefined ? { options: formAnnotation.options } : {}),
+          ...(formAnnotation.control === "select" ? { options: formAnnotation.options } : {}),
           ...(formAnnotation.control === "switch"
             ? { defaultBooleanValue: readFieldBooleanDefault(fieldSchema) }
             : {}),
@@ -143,10 +142,10 @@ export function readProviderConfigBoolean(
  *
  * A stored value can be off the list: the config blob is `Schema.Unknown`, so a hand-edited
  * settings file or one written by a build with a longer list of choices puts a string here
- * that this build does not offer. A native `<select>` renders no selection at all for that,
- * which reads as "unset" while the blob still holds the old value. Showing the empty row is
- * the same claim the server will act on, since the driver's own schema recovers an
- * unreadable value to empty at spawn.
+ * that this build does not offer. Displaying the raw string would claim a choice the driver
+ * is not using; the dropdown shows its first row instead. For `outputStyle` that is also what
+ * the server acts on, since Claude's schema recovers an unreadable value to empty at spawn;
+ * a driver without such recovery (Antigravity's `authMethod`) fails its decode instead.
  */
 export function selectedOptionValue(config: unknown, field: ProviderSettingsFieldModel): string {
   const stored = readProviderConfigString(config, field.key);
@@ -212,7 +211,7 @@ function ProviderSettingsSelect({
 }) {
   const options = field.options ?? [];
   const fallback = options[0]?.value ?? "";
-  const current = readProviderConfigString(value, field.key) || fallback;
+  const current = selectedOptionValue(value, field) || fallback;
   const label = options.find((option) => option.value === current)?.label ?? current;
   return (
     <Select
@@ -396,52 +395,6 @@ function ProviderSettingsFieldRow({
             placeholder={field.placeholder}
             spellCheck={false}
           />
-          {description}
-        </label>
-      </FieldFrame>
-    );
-  }
-
-  // A closed set of choices, so the form cannot produce a value the provider will reject.
-  // That matters more here than it looks: the settings form writes an instance's `config`
-  // blob, which is `Schema.Unknown` and is validated by nothing until session spawn, so a
-  // typed-in value that no driver accepts persists, displays back, and silently does
-  // nothing. A native `<select>` is used rather than the Base UI one because it can hold
-  // "" as a real selection, which is how an optional field is cleared.
-  if (field.options !== undefined) {
-    return (
-      <FieldFrame variant={variant}>
-        <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
-          {label}
-          <span
-            className={cn(inputControlShellClassName, variant === "card" && "mt-1.5")}
-            data-slot="input-control"
-          >
-            <select
-              id={inputId}
-              // `appearance-none` is what makes this share the text fields' chrome instead
-              // of the browser's, which is also why the chevron below is not optional: it
-              // is the only thing left telling the user this opens.
-              className={cn(
-                inputControlClassName,
-                "cursor-pointer appearance-none bg-transparent pe-7",
-              )}
-              value={selectedOptionValue(value, field)}
-              onChange={(event) =>
-                onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
-              }
-            >
-              {field.options.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <ChevronsUpDownIcon
-              className="pointer-events-none absolute inset-y-0 end-2 my-auto size-4 opacity-80"
-              aria-hidden
-            />
-          </span>
           {description}
         </label>
       </FieldFrame>

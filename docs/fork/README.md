@@ -654,6 +654,16 @@ own re-implemented line for line (`fileBasename` = `basenamePathSegment`, `works
 = the local `workspaceRelativePath`, `formatFilePathPosition` = `withPosition`), so the fork's copies
 are aliases or gone.
 
+### 27. The provider settings form has one dropdown, upstream's
+
+The fork's native `<select>` (`69212ea7e`) was removed on 2026-09-03 after the premise it rested
+on was measured false. `selectedOptionValue` is fork-only and feeds upstream's
+`ProviderSettingsSelect`; a reconcile that brings back a `field.options !== undefined` branch is
+restoring a deleted duplicate. One line of upstream's component is fork-edited: `current` reads
+`selectedOptionValue(...)` rather than the raw stored string, so an off-list value shows the first
+row (Antigravity's `authMethod` included) instead of a choice the driver will not use; re-picking
+that row still writes the omitted key.
+
 ### 18. The event hub is unbounded; every consumer of it must not be
 
 `apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an

@@ -132,6 +132,18 @@ describe("ClaudeSettings output style", () => {
     },
   );
 
+  it("renders as a select control with the clear row first", () => {
+    const annotations =
+      Schema.resolveAnnotationsKey(ClaudeSettings.fields.outputStyle) ??
+      Schema.resolveAnnotations(ClaudeSettings.fields.outputStyle);
+    const annotation = annotations?.providerSettingsForm;
+    expect(annotation?.control).toBe("select");
+    expect(annotation?.options?.[0]).toEqual({
+      value: "",
+      label: "Use ~/.claude/settings.json",
+    });
+  });
+
   it("anchors a choice containing pattern syntax to itself", () => {
     // Quoting is a no-op for today's four names, which is the whole hazard: no
     // test built from the real list can tell a quoted pattern from an unquoted

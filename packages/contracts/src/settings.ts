@@ -417,16 +417,9 @@ export interface ProviderSettingsFormAnnotation {
   readonly hidden?: boolean | undefined;
   readonly clearWhenEmpty?: "omit" | "persist" | undefined;
   /**
-   * Renders the field as a dropdown over exactly these choices, instead of a text input.
-   *
-   * Presence of `options` alone is enough: the field renders as a native `<select>` that
-   * shares the text fields' chrome. Include an empty-valued entry when the field is
-   * optional - it is the row that clears the setting, and it works because a native
-   * `<select>` can hold `""`.
-   *
-   * `control: "select"` is upstream's variant of the same idea and is also honoured, with
-   * different semantics: no empty row, the first entry is the default, and the default is
-   * stored as an omitted key. Use it only for a required field that always has a value.
+   * Renders the field as a dropdown over exactly these choices (`control: "select"`). The
+   * first entry is the default and is stored as an omitted key; an optional field puts its
+   * clear row (`value: ""`) first.
    */
   readonly options?: readonly ProviderSettingsFormOption[] | undefined;
 }
@@ -712,6 +705,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
           "to your own ~/.claude/settings.json.",
         providerSettingsForm: {
           clearWhenEmpty: "omit",
+          control: "select",
           // The empty row is named after the file it defers to. "Claude's default" would
           // be wrong: `--setting-sources` still passes user, project and local, so leaving
           // this unset hands the choice to the user's own settings file, not to Claude's

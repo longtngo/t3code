@@ -108,8 +108,8 @@ describe("ProviderSettingsForm helpers", () => {
 
     // The config blob is `Schema.Unknown`, so a hand-edited file or one written
     // by a build with more choices can hold a value this build does not offer.
-    // A native select renders nothing selected for that, which reads as unset
-    // while the blob still holds the old value.
+    // The dropdown shows the clear row for that, which for `outputStyle` is what
+    // the driver will do: `catchDecoding` recovers an unreadable value at spawn.
     expect(selectedOptionValue({ outputStyle: "Explanatory" }, outputStyle!)).toBe("Explanatory");
     expect(selectedOptionValue({ outputStyle: "Creative" }, outputStyle!)).toBe("");
     expect(selectedOptionValue({}, outputStyle!)).toBe("");
@@ -117,6 +117,36 @@ describe("ProviderSettingsForm helpers", () => {
     // differs from its value, so it is the only case that can tell them apart.
     expect(selectedOptionValue({ outputStyle: "Use ~/.claude/settings.json" }, outputStyle!)).toBe(
       "",
+    );
+  });
+
+  it("writes a chosen style and omits the key for the clear row, for both select fields", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    const outputStyle = deriveProviderSettingsFields(claude!).find(
+      (field) => field.key === "outputStyle",
+    )!;
+    // The dropdown maps "picked the first row" to "" before calling this, so the
+    // first row and an explicit "" both omit the key.
+    expect(
+      nextProviderConfigWithFieldValue({ binaryPath: "claude" }, outputStyle, "Concise"),
+    ).toEqual({ binaryPath: "claude", outputStyle: "Concise" });
+    expect(
+      nextProviderConfigWithFieldValue(
+        { binaryPath: "claude", outputStyle: "Concise" },
+        outputStyle,
+        "",
+      ),
+    ).toEqual({ binaryPath: "claude" });
+
+    const antigravity = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")];
+    const authMethod = deriveProviderSettingsFields(antigravity!).find(
+      (field) => field.key === "authMethod",
+    )!;
+    expect(authMethod.options?.[0]?.value).not.toBe("");
+    // An all-empty config collapses to no config at all.
+    expect(nextProviderConfigWithFieldValue({}, authMethod, "")).toBeUndefined();
+    expect(nextProviderConfigWithFieldValue({}, authMethod, authMethod.options![1]!.value)).toEqual(
+      { authMethod: authMethod.options![1]!.value },
     );
   });
 

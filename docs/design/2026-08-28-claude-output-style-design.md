@@ -1,5 +1,9 @@
 # Own the Claude `outputStyle` setting — design
 
+**Superseded 2026-09-03** by `docs/design/2026-09-03-provider-settings-single-select-design.md`:
+the native `<select>` is gone; Base UI's Select holds `""` as an ordinary item (run in Chromium),
+and the placeholder colour marks unset.
+
 Date: 2026-08-28
 Branch: `feat/claude-output-style`
 
