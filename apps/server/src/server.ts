@@ -313,8 +313,11 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // `create()`; `ProviderEventLoggers.layer` owns the shared native/canonical
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
+// `provideMerge`, not `provide`: the subagent-backend reconciler forked at startup
+// enumerates live sessions per adapter, so the registry must reach the application
+// context rather than being consumed by `ProviderServiceLive` alone.
 const ProviderLayerLive = ProviderServiceLive.pipe(
-  Layer.provide(ProviderAdapterRegistryLive),
+  Layer.provideMerge(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
 

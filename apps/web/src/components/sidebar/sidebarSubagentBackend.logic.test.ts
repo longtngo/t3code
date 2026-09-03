@@ -12,6 +12,7 @@ import {
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
   subagentCursorModelOptions,
+  threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
 
 function instance(instanceId: string): SubagentBackendInstance {
@@ -96,6 +97,24 @@ describe("subagentBackendRowStatus", () => {
         state({ backend: SUBAGENT_BACKEND_DEFAULT, instances: [instance("cursor_default")] }),
       ),
     ).toEqual({ dot: "off", text: "Default" });
+  });
+
+  it("greys the dot when the master switch is off, whatever the machine-wide file says", () => {
+    // The collapsed row is always mounted, so it is the only thing most users ever see of
+    // this feature. Under master-off no T3 thread offloads, and a green dot there is a lie.
+    // The text is unchanged: the machine-wide file is still live for non-T3 tools.
+    expect(
+      subagentBackendRowStatus(
+        state({
+          backend: SUBAGENT_BACKEND_CURSOR,
+          instances: [instance("cursor_default")],
+          model: "composer-2.5",
+          models: [{ id: "composer-2.5", label: "Composer 2.5" }],
+        }),
+        undefined,
+        false,
+      ),
+    ).toEqual({ dot: "off", text: "Composer 2.5" });
   });
 
   it("reads Default for an unrecognised backend value, per the wire contract", () => {
@@ -265,5 +284,52 @@ describe("subagentBackendRowStatus model label", () => {
     expect(
       subagentBackendRowStatus(rowState, [{ id: "claude-opus-5", label: "Claude Opus 5" }]),
     ).toEqual({ dot: "on", text: "Claude Opus 5" });
+  });
+});
+
+describe("threadOffloadNotes", () => {
+  it("says nothing new when both servers have the master off", () => {
+    expect(
+      threadOffloadNotes({
+        threadMasterEnabled: false,
+        primaryMasterEnabled: false,
+        cursorAvailable: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names the thread's server when only it has the master off", () => {
+    expect(
+      threadOffloadNotes({
+        threadMasterEnabled: false,
+        primaryMasterEnabled: true,
+        cursorAvailable: null,
+      }),
+    ).toEqual(["Subagent offload is switched off on this thread's server."]);
+  });
+
+  it("points at Settings when Cursor is selectable but no instance exists", () => {
+    expect(
+      threadOffloadNotes({
+        threadMasterEnabled: true,
+        primaryMasterEnabled: true,
+        cursorAvailable: false,
+      }),
+    ).toEqual([
+      "Add a Cursor instance in Settings to use Cursor here.",
+      "Applies to Claude Code threads.",
+    ]);
+  });
+
+  it("keeps only the provider note when Cursor is available or unknown", () => {
+    for (const cursorAvailable of [true, null] as const) {
+      expect(
+        threadOffloadNotes({
+          threadMasterEnabled: true,
+          primaryMasterEnabled: true,
+          cursorAvailable,
+        }),
+      ).toEqual(["Applies to Claude Code threads."]);
+    }
   });
 });

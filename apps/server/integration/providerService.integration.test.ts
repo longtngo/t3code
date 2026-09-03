@@ -100,7 +100,10 @@ const makeIntegrationFixture = (options?: { readonly analytics?: Layer.Layer<Ana
       Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers),
     ).pipe(Layer.provide(SqlitePersistenceMemory));
 
-    const layer = makeProviderServiceLive().pipe(Layer.provide(shared));
+    const layer = makeProviderServiceLive().pipe(
+      Layer.provide(shared),
+      Layer.provide(NodeServices.layer),
+    );
 
     return {
       cwd,

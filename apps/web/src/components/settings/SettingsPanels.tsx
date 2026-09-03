@@ -1993,8 +1993,9 @@ export function GeneralSettingsPanel() {
   );
   const observability = useAtomValue(primaryServerObservabilityAtom);
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
-  const supportsAutoSettlement =
-    useAtomValue(primaryServerConfigAtom)?.environment.capabilities.threadAutoSettlement === true;
+  const serverCapabilities = useAtomValue(primaryServerConfigAtom)?.environment.capabilities;
+  const supportsAutoSettlement = serverCapabilities?.threadAutoSettlement === true;
+  const supportsSubagentOffload = serverCapabilities?.subagentBackendThreadModes === true;
   const diagnosticsDescription = formatDiagnosticsDescription({
     localTracingEnabled: observability?.localTracingEnabled ?? false,
     otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
@@ -2302,6 +2303,36 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {supportsSubagentOffload ? (
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("subagent-offload")}
+            description="Let threads send their subagents to Cursor. Off stops T3 Code threads from offloading; the Subagents panel in the sidebar says so, and the machine-wide toggle can still be set to Default. Other tools on this host still read the machine-wide toggle."
+            resetAction={
+              settings.subagentBackendEnabled !==
+              DEFAULT_UNIFIED_SETTINGS.subagentBackendEnabled ? (
+                <SettingResetButton
+                  label="subagent offload"
+                  onClick={() =>
+                    updateSettings({
+                      subagentBackendEnabled: DEFAULT_UNIFIED_SETTINGS.subagentBackendEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.subagentBackendEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ subagentBackendEnabled: Boolean(checked) })
+                }
+                aria-label="Subagent offload"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}

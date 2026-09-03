@@ -70,14 +70,15 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerConfig from "../../config.ts";
+import { threadBackendFilePath } from "../../subagentBackend/ThreadBackendPath.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
-const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
-  Layer.provide(NodeServices.layer),
-);
+const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "provider-service-",
+}).pipe(Layer.provide(NodeServices.layer));
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
@@ -354,6 +355,7 @@ function makeProviderServiceLayer(
   const layer = it.layer(
     Layer.mergeAll(
       makeProviderServiceLive().pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -370,6 +372,9 @@ function makeProviderServiceLayer(
 
       runtimeRepositoryLayer,
       NodeServices.layer,
+      // Same layer instance the service above is provided with, so a test can read the
+      // tmpdir `subagentThreadsDir` the per-thread flag-file writer actually writes into.
+      serverConfigTestLayer,
     ),
   );
 
@@ -406,6 +411,7 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const providerLayer = Layer.mergeAll(
       makeProviderServiceLive().pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -463,6 +469,7 @@ it.effect("refreshAccountUsage asks every provider even when one of them fails",
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const providerLayer = Layer.mergeAll(
       makeProviderServiceLive().pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -517,6 +524,7 @@ it.effect("refreshAccountUsage gives the thread only to the adapter it is bound 
     const boundThreadId = ThreadId.make("thread-bound-to-claude");
     const providerLayer = Layer.mergeAll(
       makeProviderServiceLive().pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -590,6 +598,7 @@ it.effect(
       const boundThreadId = ThreadId.make("thread-bound-to-claude-empty");
       const providerLayer = Layer.mergeAll(
         makeProviderServiceLive().pipe(
+          Layer.provide(NodeServices.layer),
           Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
           Layer.provide(directoryLayer),
           Layer.provide(defaultServerSettingsLayer),
@@ -650,6 +659,7 @@ it.effect("refreshAccountUsage with an unbound thread falls back to every adapte
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const providerLayer = Layer.mergeAll(
       makeProviderServiceLive().pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -1759,6 +1769,81 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, initial.threadId);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
+  // The subprocess reads its flag file through `SUBAGENT_BACKEND_STATE` as soon as it is
+  // up, so "written at some point during the turn" is not good enough: both assertions
+  // below are taken inside `startSession` itself, before the adapter could have spawned.
+  it.effect("writes the thread's subagent flag file before starting a session", () =>
+    Effect.gen(function* () {
+      const { subagentThreadsDir } = yield* ServerConfig.ServerConfig;
+      const threadId = asThreadId("thread-subagent-flag-start");
+      const flagPath = threadBackendFilePath(subagentThreadsDir, threadId);
+      NodeFS.rmSync(flagPath, { force: true });
+
+      const baseStartSession = routing.codex.startSession.getMockImplementation();
+      assert.isDefined(baseStartSession);
+      let existedAtStart: boolean | undefined;
+      routing.codex.startSession.mockImplementationOnce((input) => {
+        existedAtStart = NodeFS.existsSync(flagPath);
+        // Removed from under the starting session: a settings change or a `set` that
+        // lands while `startSession` runs enumerates only sessions the adapter has
+        // already registered, so this thread is invisible to that pass. The post-start
+        // rewrite is what puts it back.
+        NodeFS.rmSync(flagPath, { force: true });
+        return baseStartSession(input);
+      });
+
+      const provider = yield* ProviderService.ProviderService;
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(existedAtStart, true);
+      assert.equal(NodeFS.existsSync(flagPath), true);
+    }),
+  );
+
+  it.effect("writes the thread's subagent flag file before recovering a session", () =>
+    Effect.gen(function* () {
+      const { subagentThreadsDir } = yield* ServerConfig.ServerConfig;
+      const threadId = asThreadId("thread-subagent-flag-recover");
+      const flagPath = threadBackendFilePath(subagentThreadsDir, threadId);
+
+      const provider = yield* ProviderService.ProviderService;
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-subagent-flag-recover",
+        runtimeMode: "full-access",
+      });
+
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+      // Removed after the start-path write, so only the recovery site can put it back.
+      NodeFS.rmSync(flagPath, { force: true });
+
+      const baseStartSession = routing.codex.startSession.getMockImplementation();
+      assert.isDefined(baseStartSession);
+      let existedAtRecover: boolean | undefined;
+      routing.codex.startSession.mockImplementationOnce((input) => {
+        existedAtRecover = NodeFS.existsSync(flagPath);
+        // Same window as the start path: removed from under the recovering session, and
+        // only the post-start rewrite can put it back.
+        NodeFS.rmSync(flagPath, { force: true });
+        return baseStartSession(input);
+      });
+
+      yield* provider.sendTurn({ threadId, input: "resume", attachments: [] });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      assert.equal(existedAtRecover, true);
+      assert.equal(NodeFS.existsSync(flagPath), true);
     }),
   );
 

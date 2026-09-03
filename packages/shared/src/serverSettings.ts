@@ -216,6 +216,12 @@ export function applyServerSettingsPatch(
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),
+    // "inherit" and an absent entry resolve identically (see resolveThreadBackend), so every
+    // merge strips stored "inherit" entries — keeping the map bounded to real overrides and
+    // making a revert to Inherit a delete rather than a permanent no-op key.
+    subagentBackendThreadModes: Object.fromEntries(
+      Object.entries(next.subagentBackendThreadModes).filter(([, mode]) => mode !== "inherit"),
+    ) as ServerSettings["subagentBackendThreadModes"],
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
   };

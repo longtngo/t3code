@@ -42,6 +42,24 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Subagent offload
+
+The Subagents row at the bottom of the sidebar decides where agents send their
+subagents. The top segment is the machine-wide default: Default keeps subagents on
+the same provider and model as the thread, Cursor sends them to the Cursor instance
+you pick.
+
+With a thread open, a second segment appears for that thread alone. Inherit follows
+the machine-wide choice, Cursor offloads this thread even when the default is off,
+and Default keeps this thread's subagents local even when the default is on.
+
+Settings → General has a Subagent offload switch. Turn it off to stop every T3 Code
+thread from offloading. The per-thread segment then disappears, Cursor is greyed out
+in the machine-wide segment while Default stays available, and it all comes back when
+you turn the switch on. Per-thread control reaches Claude Code threads today, and
+needs a Cursor instance in Settings before its Cursor choice does anything. The
+machine-wide choice applies to anything on this machine that reads it.
+
 ## Panel motion
 
 The main sidebar, right panel, and terminal drawer open and close immediately by default. Under

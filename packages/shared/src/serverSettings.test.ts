@@ -2,6 +2,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -587,5 +588,31 @@ describe("serverSettings helpers", () => {
     expect(next.models.map((m) => m.id)).toEqual(["b"]);
     expect(next.providers["mlx-serve"]!.modelsDir).toBeUndefined();
     expect(next.providers.ollama).toBeUndefined();
+  });
+
+  it("strips inherit entries from the thread-mode map after every patch merge", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      subagentBackendThreadModes: {
+        [ThreadId.make("t1")]: "on",
+        [ThreadId.make("t2")]: "off",
+      },
+    } as never;
+
+    // Patching t1 to "inherit" must delete the key, not store the sentinel: an absent
+    // entry and a stored "inherit" resolve identically, so the sentinel would just persist
+    // forever (deepMerge never deletes keys).
+    expect(
+      applyServerSettingsPatch(current, {
+        subagentBackendThreadModes: { [ThreadId.make("t1")]: "inherit" },
+      } as never).subagentBackendThreadModes,
+    ).toEqual({ t2: "off" });
+
+    // An unrelated patch leaves the existing real overrides untouched.
+    expect(
+      applyServerSettingsPatch(current, {
+        subagentBackendThreadModes: { [ThreadId.make("t3")]: "on" },
+      } as never).subagentBackendThreadModes,
+    ).toEqual({ t1: "on", t2: "off", t3: "on" });
   });
 });

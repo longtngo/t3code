@@ -2,10 +2,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { readBackendFile, subagentBackendReconciler, writeBackendFile } from "./SubagentBackend.ts";
 
@@ -36,6 +39,16 @@ const CURSOR = {
   degraded: null,
 };
 
+/** The reconciler now reconciles thread files too, so it needs the session registry and
+ * the threads dir. No instances: this file's subject is the global record. */
+const emptyRegistryLayer = Layer.mock(ProviderAdapterRegistry)({
+  listInstances: () => Effect.succeed([]),
+});
+const supportLayer = Layer.mergeAll(
+  emptyRegistryLayer,
+  serverConfigLayerTest("/tmp", { prefix: "sbt-reconciler-" }),
+);
+
 describe("subagentBackendReconciler", () => {
   it.layer(NodeServices.layer)("subagentBackendReconciler", (it) => {
     it.effect(
@@ -54,7 +67,11 @@ describe("subagentBackendReconciler", () => {
 
           const after = yield* readBackendFile();
           expect(after.backend).toBe("default");
-        }).pipe(Effect.provide(serverSettingsLayerTest({ providerInstances: {} }))),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(serverSettingsLayerTest({ providerInstances: {} }), supportLayer),
+          ),
+        ),
     );
   });
 });

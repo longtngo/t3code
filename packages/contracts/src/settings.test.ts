@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
+import { ThreadId } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
@@ -14,6 +15,7 @@ import {
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
+  subagentBackendThreadMode,
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
@@ -752,6 +754,75 @@ describe("settings schema / patch parity", () => {
         ),
       ].sort(),
     ).toEqual([...deliberatelyUnpatchable].sort());
+  });
+});
+
+describe("subagent offload settings", () => {
+  it("defaults master on and thread modes empty", () => {
+    expect(DEFAULT_SERVER_SETTINGS.subagentBackendEnabled).toBe(true);
+    expect(DEFAULT_SERVER_SETTINGS.subagentBackendThreadModes).toEqual({});
+  });
+
+  it("decodes a settings file written before the fields existed", () => {
+    const decoded = Schema.decodeUnknownSync(ServerSettings)({});
+    expect(decoded.subagentBackendEnabled).toBe(true);
+    expect(decoded.subagentBackendThreadModes).toEqual({});
+  });
+
+  it("degrades an undecodable value to the field default instead of failing the document", () => {
+    // A mode a newer build wrote, or a hand-edited non-boolean master, must cost only its
+    // own field: a failed `ServerSettings` decode makes `loadSettingsFromDisk` keep
+    // DEFAULT_SERVER_SETTINGS and write them back, losing every unrelated setting.
+    const decoded = Schema.decodeUnknownSync(ServerSettings)({
+      subagentBackendThreadModes: { t1: "on-with-model" },
+      subagentBackendEnabled: "true",
+      enableProviderUpdateChecks: false,
+    });
+    expect(decoded.subagentBackendThreadModes).toEqual({});
+    expect(decoded.subagentBackendEnabled).toBe(true);
+    expect(decoded.enableProviderUpdateChecks).toBe(false);
+  });
+
+  it("still rejects an unknown thread mode at the RPC boundary", () => {
+    // Strict validation lives in the patch schema, where a bad value fails only the
+    // update that introduced it and is reported to the user.
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatch)({
+        subagentBackendThreadModes: { t1: "cursor" },
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatch)({ subagentBackendEnabled: "true" }),
+    ).toThrow();
+  });
+
+  it("accepts a single-key thread-mode patch", () => {
+    const patch = Schema.decodeUnknownSync(ServerSettingsPatch)({
+      subagentBackendThreadModes: { t1: "inherit" },
+    });
+    expect(patch.subagentBackendThreadModes).toEqual({ t1: "inherit" });
+  });
+});
+
+describe("subagentBackendThreadMode", () => {
+  const t1 = ThreadId.make("t1");
+  const t2 = ThreadId.make("t2");
+
+  it("reads an explicit entry", () => {
+    expect(subagentBackendThreadMode({ [t1]: "on" }, t1)).toBe("on");
+    expect(subagentBackendThreadMode({ [t1]: "off" }, t1)).toBe("off");
+  });
+
+  it("treats an absent entry as inherit", () => {
+    expect(subagentBackendThreadMode({ [t2]: "on" }, t1)).toBe("inherit");
+  });
+
+  it("does not read an inherited Object.prototype member as a mode", () => {
+    // Thread ids are client-generated and unconstrained; `{}["constructor"]` is a function,
+    // which would match no toggle value and light nothing — the segment must read Inherit.
+    for (const id of ["constructor", "__proto__", "toString", "valueOf"]) {
+      expect(subagentBackendThreadMode({}, ThreadId.make(id))).toBe("inherit");
+    }
   });
 });
 

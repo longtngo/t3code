@@ -2,6 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
 import * as NodeFS from "node:fs";
@@ -121,6 +122,26 @@ describe("readBackendFile", () => {
         const result = yield* readBackendFile();
         expect(result.backend).toBe("default");
         expect(result.degraded).toBeNull();
+      }),
+    );
+
+    it.effect("degrades — never fails — when the containing directory cannot be traversed", () =>
+      Effect.gen(function* () {
+        const filePath = yield* subagentBackendFilePath();
+        const directory = NodePath.dirname(filePath);
+        NodeFS.mkdirSync(directory, { recursive: true });
+        NodeFS.writeFileSync(filePath, '{"backend":"cursor","binaryPath":"/x/agent"}');
+        // The case `fs.exists` could not survive: it only maps NotFound to `false` and
+        // fails on everything else, so a directory the server cannot traverse used to
+        // take down every writer that reads the global record first.
+        NodeFS.chmodSync(directory, 0o000);
+        const exit = yield* Effect.exit(readBackendFile());
+        NodeFS.chmodSync(directory, 0o700);
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value.backend).toBe("default");
+          expect(exit.value.degraded).toContain("could not be read");
+        }
       }),
     );
   });

@@ -10,6 +10,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Subagent offload](#subagent-offload)
 - [Checkpointing](#checkpointing)
 - [Notifications](#notifications)
 - [Appearance](#appearance)
@@ -151,6 +152,10 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
 
+### Subagent offload
+
+The per-machine and per-thread choice of where a coding agent dispatches its subagents. The server writes one machine-global flag file the `subagent-dispatch` wrapper reads, plus one file per thread that has started a session (never pruned) under `<stateDir>/subagent-threads/`, and points each Claude subprocess at its own file through `SUBAGENT_BACKEND_STATE`. Resolution: master switch (`subagentBackendEnabled`) → thread mode (`subagentBackendThreadModes`, `inherit | on | off`) → machine-global record. See [SubagentBackend.ts][31] and [ThreadBackendPath.ts][32].
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
@@ -251,3 +256,5 @@ ships T3 Code already matching it.
 [28]: ../../packages/client-runtime/src/state/threadSettled.ts
 [29]: ../../apps/server/src/environmentTheme.ts
 [30]: ../user/environment-theme.md
+[31]: ../../apps/server/src/subagentBackend/SubagentBackend.ts
+[32]: ../../apps/server/src/subagentBackend/ThreadBackendPath.ts

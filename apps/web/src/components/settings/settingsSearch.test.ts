@@ -137,6 +137,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasSubagentBackendThreadModes: false,
     });
 
     const gatedIds = new Set<string>([
@@ -165,6 +166,7 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
+      hasSubagentBackendThreadModes: true,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -172,6 +174,29 @@ describe("searchSettings", () => {
       "auto-settle-merged-threads",
       "days-before-auto-settle",
     ]);
+  });
+
+  it("hides the subagent offload switch on servers without the capability", () => {
+    const without = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasPrimaryEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+      hasSubagentBackendThreadModes: false,
+    });
+    const with_ = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasPrimaryEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+      hasSubagentBackendThreadModes: true,
+    });
+    expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
+    expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
   });
 
   it("keeps catalog result ids unique", () => {

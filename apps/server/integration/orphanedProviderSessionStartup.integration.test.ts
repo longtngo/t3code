@@ -32,6 +32,7 @@ import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
 import * as ExternalLauncher from "../src/process/externalLauncher.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
+import * as ProviderAdapterRegistry from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../src/provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
@@ -130,6 +131,11 @@ const startupDependencies = Layer.mergeAll(
     appendSessionNote: () => Effect.succeed(false),
     uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
+  }),
+  // FORK: the subagent-backend reconciler enumerates live sessions per adapter. No real
+  // adapters here, so an empty instance list is the whole stub.
+  Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistry)({
+    listInstances: () => Effect.succeed([]),
   }),
   // FORK: startup begins both watchdogs. They are no-ops here — this test's
   // subject is orphaned-session reconciliation, not watchdog behaviour.

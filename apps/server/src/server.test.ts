@@ -112,6 +112,7 @@ import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionRe
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
@@ -724,6 +725,11 @@ const buildAppUnderTest = (options?: {
           Layer.mock(ProviderService.ProviderService)({
             uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
             ...options?.layers?.providerService,
+          }),
+          // The subagent-backend reconciler enumerates live sessions per adapter; this
+          // harness runs no real adapters, so an empty instance list is the whole stub.
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistry)({
+            listInstances: () => Effect.succeed([]),
           }),
         ),
       ),

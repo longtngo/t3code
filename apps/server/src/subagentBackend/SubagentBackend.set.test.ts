@@ -3,8 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId, type ServerSettings } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { resolveCommandPath } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -13,9 +13,17 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
+import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels } from "./cursorModels.ts";
-import { setBackend } from "./SubagentBackend.ts";
+import {
+  backendWriteSemaphore,
+  MASTER_OFF_REASON,
+  readBackendFile,
+  setBackend,
+  writeBackendFile,
+} from "./SubagentBackend.ts";
 
 // vi.mock is hoisted above every import, so the `listCursorModels` binding above
 // already resolves to this mock — letting individual tests override its behavior
@@ -26,14 +34,6 @@ import { setBackend } from "./SubagentBackend.ts";
 vi.mock("./cursorModels.ts", () => ({
   listCursorModels: vi.fn(() => Effect.die("listCursorModels should never run inside setBackend")),
 }));
-
-// `resolveCommandPath` forwards to the real implementation by default, so PATH
-// resolution is still exercised for real; only one test below overrides it once to
-// simulate a settings change landing while resolution is in flight.
-vi.mock("@t3tools/shared/shell", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@t3tools/shared/shell")>();
-  return { ...actual, resolveCommandPath: vi.fn(actual.resolveCommandPath) };
-});
 
 let home: string;
 let previousHome: string | undefined;
@@ -109,6 +109,17 @@ const refBackedSettingsLayer = (ref: Ref.Ref<ServerSettings>) =>
     }),
   );
 
+/** `setBackend` now fans its result out to every live thread, so it needs the session
+ * registry and the threads dir. No instances here: the fan-out is covered in
+ * `SubagentBackend.thread.test.ts`; these tests are about the global record. */
+const emptyRegistryLayer = Layer.mock(ProviderAdapterRegistry)({
+  listInstances: () => Effect.succeed([]),
+});
+const supportLayer = Layer.mergeAll(
+  emptyRegistryLayer,
+  serverConfigLayerTest("/tmp", { prefix: "sbt-set-" }),
+);
+
 describe("setBackend", () => {
   it.layer(NodeServices.layer)("setBackend", (it) => {
     it.effect("rejects an instance that is disabled", () =>
@@ -116,14 +127,14 @@ describe("setBackend", () => {
         const result = yield* setBackend({ backend: "cursor", instanceId: cursorOffId });
         expect(result.backend).toBe("default");
         expect(result.degraded).toContain("not an enabled Cursor instance");
-      }).pipe(Effect.provide(staticSettingsLayer(settings))),
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 
     it.effect("rejects an instance whose driver is not cursor", () =>
       Effect.gen(function* () {
         const result = yield* setBackend({ backend: "cursor", instanceId: claudeAgentId });
         expect(result.backend).toBe("default");
-      }).pipe(Effect.provide(staticSettingsLayer(settings))),
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 
     it.effect("accepts auto without consulting the model cache", () =>
@@ -136,7 +147,7 @@ describe("setBackend", () => {
         });
         expect(result.backend).toBe("cursor");
         expect(result.model).toBe("auto");
-      }).pipe(Effect.provide(staticSettingsLayer(settings))),
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 
     it.effect("writes the resolved absolute binary path", () =>
@@ -153,7 +164,7 @@ describe("setBackend", () => {
           Effect.provideService(HostProcessEnvironment, { PATH: binDir }),
         );
         expect(result.binaryPath).toBe(executablePath);
-      }).pipe(Effect.provide(staticSettingsLayer(settings))),
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 
     it.effect("writes the raw path and marks degraded when resolution fails", () =>
@@ -169,12 +180,72 @@ describe("setBackend", () => {
           },
         } as unknown as ServerSettings;
         const result = yield* setBackend({ backend: "cursor", instanceId: cursorId }).pipe(
-          Effect.provide(staticSettingsLayer(missing)),
+          Effect.provide(Layer.mergeAll(staticSettingsLayer(missing), supportLayer)),
         );
         expect(result.backend).toBe("cursor");
         expect(result.binaryPath).toBe("definitely-not-on-path");
         expect(result.degraded).toContain("PATH");
       }),
+    );
+
+    it.effect("refuses under master-off without touching the file", () =>
+      Effect.gen(function* () {
+        // Seeded on purpose: the refusal must hand back the record the user set LAST,
+        // not a fresh Off. Against an empty file every assertion below is trivially
+        // true, and `before.updatedAt` is null so the unchanged-file check cannot bite.
+        yield* writeBackendFile({
+          schemaVersion: 1,
+          backend: "cursor",
+          instanceId: "cursor",
+          model: "auto",
+          binaryPath: "agent",
+          apiEndpoint: "",
+          updatedAt: null,
+          degraded: null,
+        });
+        const before = yield* readBackendFile();
+        const result = yield* setBackend({ backend: "cursor", instanceId: cursorId });
+        expect(result.backend).toBe("cursor");
+        expect(result.instanceId).toBe("cursor");
+        expect(result.degraded).toBe(MASTER_OFF_REASON);
+        const after = yield* readBackendFile();
+        expect(after.updatedAt).toBe(before.updatedAt);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({ ...settings, subagentBackendEnabled: false }),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("admits a default under master-off, so the switch is not a one-way door", () =>
+      Effect.gen(function* () {
+        yield* writeBackendFile({
+          schemaVersion: 1,
+          backend: "cursor",
+          instanceId: "cursor",
+          model: "auto",
+          binaryPath: "agent",
+          apiEndpoint: "",
+          updatedAt: null,
+          degraded: null,
+        });
+        // Turning offload off machine-wide must not strand the global file on cursor:
+        // refusing every write would leave no way back once the master switch is off.
+        const result = yield* setBackend({ backend: "default" });
+        expect(result.backend).toBe("default");
+        expect(result.degraded).toBeNull();
+        expect((yield* readBackendFile()).backend).toBe("default");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({ ...settings, subagentBackendEnabled: false }),
+            supportLayer,
+          ),
+        ),
+      ),
     );
 
     it.effect("writes default without naming an instance", () =>
@@ -183,11 +254,11 @@ describe("setBackend", () => {
         expect(result.backend).toBe("default");
         expect(result.instanceId).toBeNull();
         expect(result.degraded).toBeNull();
-      }).pipe(Effect.provide(staticSettingsLayer(settings))),
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 
     it.effect(
-      "refuses a selection whose instance was disabled while binary resolution was in flight",
+      "reads settings inside the write permit, so a disable that lands before the permit is honoured",
       () =>
         Effect.gen(function* () {
           const disabled = {
@@ -200,22 +271,26 @@ describe("setBackend", () => {
               },
             },
           } as unknown as ServerSettings;
-
           const settingsRef = yield* Ref.make(settings);
-          // Simulate the race: while (the mocked) `resolveCommandPath` is "in
-          // flight", something else — here, standing in for the reconciler or
-          // another `set` call — disables the flagged instance. The pre-write
-          // revalidation must see `disabled`, not the `enabled` snapshot read
-          // before resolution ran.
-          vi.mocked(resolveCommandPath).mockImplementationOnce((path: string) =>
-            Ref.set(settingsRef, disabled).pipe(Effect.as(path)),
-          );
 
-          const result = yield* setBackend({
-            backend: "cursor",
-            instanceId: cursorId,
-            model: "composer-2.5",
-          }).pipe(Effect.provide(refBackedSettingsLayer(settingsRef)));
+          // Hold the permit ourselves; fork `set` (it must block on the permit); flip the
+          // instance to disabled while still holding it; release. `set` may only read
+          // settings after the release, so it must see `disabled`.
+          const fiber = yield* backendWriteSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const fiber = yield* setBackend({
+                backend: "cursor",
+                instanceId: cursorId,
+                model: "composer-2.5",
+              }).pipe(
+                Effect.provide(Layer.mergeAll(refBackedSettingsLayer(settingsRef), supportLayer)),
+                Effect.forkChild({ startImmediately: true }),
+              );
+              yield* Ref.set(settingsRef, disabled);
+              return fiber;
+            }),
+          );
+          const result = yield* Fiber.join(fiber);
 
           expect(result.backend).toBe("default");
           expect(result.degraded).toContain("not an enabled Cursor instance");
@@ -233,7 +308,7 @@ describe("setBackend", () => {
             backend: "cursor",
             instanceId: cursorId,
             model: "composer-2.5",
-          }).pipe(Effect.provide(staticSettingsLayer(settings)));
+          }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer)));
           expect(result.backend).toBe("cursor");
           expect(result.model).toBe("composer-2.5");
         }),

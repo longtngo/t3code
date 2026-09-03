@@ -35,6 +35,7 @@ export interface SettingsSearchItem {
   readonly localBackendManagementOnly?: boolean;
   readonly wslAvailableOnly?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresSubagentBackendThreadModes?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -44,6 +45,7 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
+  readonly hasSubagentBackendThreadModes: boolean;
 }
 
 /**
@@ -207,6 +209,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Provider update checks",
     to: "/settings/general",
     searchTerms: ["installed cli versions newer available codex claude cursor grok opencode"],
+  },
+  {
+    id: "subagent-offload",
+    title: "Subagent offload",
+    to: "/settings/general",
+    searchTerms: ["cursor subagents offload dispatch master switch thread"],
+    requiresSubagentBackendThreadModes: true,
   },
   {
     id: "continue-threads-after-server-update",
@@ -551,7 +560,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.providerSettingsOnly || availability.hasProviderSettingsEnvironment) &&
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
-      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement),
+      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
+      (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes),
   );
 }
 

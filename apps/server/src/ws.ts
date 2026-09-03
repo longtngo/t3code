@@ -2135,10 +2135,12 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const persisted = yield* SubagentBackend.readBackendFile();
               const settings = yield* serverSettings.getRawSettings;
-              const models = yield* SubagentBackend.modelsForPersistedBackend(
-                persisted,
-                input.refreshModels ?? false,
-              );
+              // Never probe under master-off: the panel still renders, but spawning the
+              // Cursor CLI to list models for a backend nothing may dispatch to is work
+              // the user has explicitly switched off.
+              const refresh =
+                (input.refreshModels ?? false) && settings.subagentBackendEnabled !== false;
+              const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, refresh);
               return SubagentBackend.buildState(persisted, settings, models);
             }).pipe(
               Effect.catch(
@@ -2153,7 +2155,11 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const persisted = yield* SubagentBackend.setBackend(input);
               const settings = yield* serverSettings.getRawSettings;
-              const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, true);
+              // Never probe under master-off, exactly as `subagentBackendGet` does not.
+              const models = yield* SubagentBackend.modelsForPersistedBackend(
+                persisted,
+                settings.subagentBackendEnabled !== false,
+              );
               return SubagentBackend.buildState(persisted, settings, models);
             }).pipe(
               Effect.catch(

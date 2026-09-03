@@ -7,7 +7,18 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { readBackendFile, reconcileBackend, writeBackendFile } from "./SubagentBackend.ts";
+import {
+  backendWriteSemaphore,
+  readBackendFile,
+  reconcileBackendBody,
+  writeBackendFile,
+} from "./SubagentBackend.ts";
+
+// The permit wrapper production no longer needs: `reconcileAllBackends` takes the
+// permit itself and calls `reconcileBackendBody` inside it. Kept here so these tests
+// still exercise the body under the same lock the real caller holds.
+const reconcileBackend = (settings: ServerSettings) =>
+  backendWriteSemaphore.withPermits(1)(reconcileBackendBody(settings));
 
 let home: string;
 let previousHome: string | undefined;

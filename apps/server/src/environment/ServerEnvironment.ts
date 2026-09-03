@@ -224,6 +224,7 @@ export const make = Effect.gen(function* () {
       vcsLocalOnlyStatus: true,
       threadPullRequestLinking: true,
       subagentBackend: true,
+      subagentBackendThreadModes: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? {

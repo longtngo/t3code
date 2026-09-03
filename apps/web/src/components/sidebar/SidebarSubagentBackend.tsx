@@ -1,20 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
+import { useParams } from "@tanstack/react-router";
 import { BotIcon, ChevronRightIcon, Loader2Icon } from "lucide-react";
 import {
   ProviderInstanceId,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
+  subagentBackendThreadMode,
+  type SubagentBackendThreadMode,
+  type ThreadId,
+  type EnvironmentId,
 } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
-import { useClientSettings, usePrimarySettings } from "~/hooks/useSettings";
+import {
+  useClientSettings,
+  useEnvironmentSettings,
+  usePrimarySettings,
+  useUpdateEnvironmentSettings,
+} from "~/hooks/useSettings";
 import { useSubagentBackend } from "~/hooks/useSubagentBackend";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/providerInstances";
 import { getAppModelOptionsForInstance } from "~/modelSelection";
 import { primaryServerProvidersAtom } from "~/state/server";
 import { WindowRow } from "~/components/chat/VitalsGauge";
+import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -25,9 +36,16 @@ import {
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
   subagentCursorModelOptions,
+  threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
 
 const PANEL_ID = "sidebar-subagent-backend-panel";
+
+const THREAD_MODE_LABELS: Record<SubagentBackendThreadMode, string> = {
+  inherit: "Inherit",
+  on: "Cursor",
+  off: "Default",
+};
 
 /**
  * Re-renders once a second while, and only while, the panel is open, so the usage bar's
@@ -46,6 +64,59 @@ function usePanelNow(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return now;
+}
+
+/**
+ * Per-thread override segment. Reads and writes the thread's own environment, not the
+ * primary: a thread on a remote environment must patch that environment's settings, or the
+ * override lands on a server that never spawns the thread.
+ */
+function ThreadOffloadControl(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly primaryMasterEnabled: boolean;
+  /** `null` when unknown — see `threadOffloadNotes`. */
+  readonly cursorAvailable: boolean | null;
+}) {
+  const { environmentId, threadId, primaryMasterEnabled, cursorAvailable } = props;
+  // The master switch is per-environment, not shared (absent from `SHARED_SERVER_SETTING_KEYS`),
+  // so a remote thread's own environment can disagree with the primary's flag. Read here, from
+  // the thread's own environment, rather than from the primary — otherwise this control could
+  // render (or hide) based on a flag the thread's actual server doesn't hold.
+  const settings = useEnvironmentSettings(environmentId);
+  const threadMasterEnabled = settings.subagentBackendEnabled;
+  const mode = subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const notes = threadOffloadNotes({ threadMasterEnabled, primaryMasterEnabled, cursorAvailable });
+  if (!threadMasterEnabled && notes.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] leading-snug text-muted-foreground">This thread</div>
+      {threadMasterEnabled ? (
+        <ToggleGroup
+          aria-label="This thread's subagent backend"
+          variant="segmented"
+          value={[mode]}
+          onValueChange={(next) => {
+            const value = next[0] as SubagentBackendThreadMode | undefined;
+            if (!value) return;
+            updateSettings({ subagentBackendThreadModes: { [threadId]: value } });
+          }}
+        >
+          {Object.entries(THREAD_MODE_LABELS).map(([value, label]) => (
+            <Toggle key={value} value={value}>
+              {label}
+            </Toggle>
+          ))}
+        </ToggleGroup>
+      ) : null}
+      {notes.map((note) => (
+        <p key={note} className="text-[11px] leading-snug text-muted-foreground">
+          {note}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -73,6 +144,15 @@ export function SidebarSubagentBackend() {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const threadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+  const threadSupported =
+    threadRef !== null &&
+    environments.find((environment) => environment.environmentId === threadRef.environmentId)
+      ?.serverConfig?.environment.capabilities.subagentBackendThreadModes === true;
 
   // The picker offers the Cursor provider's own visible models for the selected instance, not
   // the CLI's advertised id list. `null` while that instance has no snapshot yet, which
@@ -89,7 +169,8 @@ export function SidebarSubagentBackend() {
 
   if (!supported || environmentId == null) return null;
 
-  const status = subagentBackendRowStatus(state, modelOptions);
+  const masterEnabled = settings.subagentBackendEnabled;
+  const status = subagentBackendRowStatus(state, modelOptions, masterEnabled);
   const cursorAvailable = subagentCursorAvailable(state);
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
@@ -151,7 +232,7 @@ export function SidebarSubagentBackend() {
                   render={
                     <Toggle
                       value={SUBAGENT_BACKEND_CURSOR}
-                      disabled={controlsDisabled || !cursorAvailable}
+                      disabled={controlsDisabled || !cursorAvailable || !masterEnabled}
                     >
                       Cursor
                     </Toggle>
@@ -182,7 +263,7 @@ export function SidebarSubagentBackend() {
                     ...(state.model ? { model: state.model } : {}),
                   });
                 }}
-                disabled={controlsDisabled}
+                disabled={controlsDisabled || !masterEnabled}
               >
                 <SelectTrigger size="sm" aria-label="Cursor instance">
                   <SelectValue placeholder="Instance" />
@@ -222,7 +303,7 @@ export function SidebarSubagentBackend() {
                     model,
                   });
                 }}
-                disabled={controlsDisabled || modelOptions.length === 0}
+                disabled={controlsDisabled || modelOptions.length === 0 || !masterEnabled}
               >
                 <SelectTrigger size="sm" aria-label="Cursor model">
                   <SelectValue placeholder="Model" />
@@ -248,6 +329,31 @@ export function SidebarSubagentBackend() {
                 windowMs={null}
                 now={now}
                 timestampFormat={timestampFormat}
+              />
+            ) : null}
+
+            {!masterEnabled ? (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Subagent offload is switched off in Settings → General.
+              </p>
+            ) : null}
+
+            {threadSupported && threadRef ? (
+              /* The "Applies to Claude Code threads." note is said rather than gated on the
+                 thread's driver: only the Claude adapter injects `SUBAGENT_BACKEND_STATE`, but
+                 the shell's `session` is null until a session binds (a brand-new thread would
+                 lose the control), and resolving a driver from `modelSelection.instanceId`
+                 needs the thread environment's provider list, which only exists for the
+                 primary environment. */
+              <ThreadOffloadControl
+                environmentId={threadRef.environmentId}
+                threadId={threadRef.threadId}
+                primaryMasterEnabled={masterEnabled}
+                cursorAvailable={
+                  threadRef.environmentId === environmentId && state != null
+                    ? cursorAvailable
+                    : null
+                }
               />
             ) : null}
           </div>

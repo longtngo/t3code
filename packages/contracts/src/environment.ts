@@ -103,6 +103,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes the subagent dispatch toggle (subagentBackend.get/set/usage). Absent on
       servers from before it shipped, so clients must hide the control rather than probe. */
   subagentBackend: Schema.optionalKey(Schema.Boolean),
+  /** Server writes per-thread offload flag files and honours `subagentBackendEnabled` /
+      `subagentBackendThreadModes`. Absent on servers from before it shipped, so clients hide
+      the per-thread control and the master switch rather than write settings nothing reads. */
+  subagentBackendThreadModes: Schema.optionalKey(Schema.Boolean),
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),

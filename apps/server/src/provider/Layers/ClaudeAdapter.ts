@@ -86,6 +86,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { threadBackendFilePath } from "../../subagentBackend/ThreadBackendPath.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
@@ -5021,7 +5022,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: claudeEnvironment,
+        // Points the `subagent-dispatch` wrapper at this thread's own flag file. The base
+        // env is shared by reference across sessions (`makeClaudeEnvironment`), so the spread
+        // here, not a mutation, is what keeps threads from seeing each other's path.
+        env: {
+          ...claudeEnvironment,
+          SUBAGENT_BACKEND_STATE: threadBackendFilePath(
+            serverConfig.subagentThreadsDir,
+            input.threadId,
+          ),
+        },
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession

@@ -3,7 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -1067,6 +1067,31 @@ export const _categoryParity: ExactlySameKeys<
   keyof NotificationCategorySettings
 > = true;
 
+export const SubagentBackendThreadMode = Schema.Literals(["inherit", "on", "off"]);
+export type SubagentBackendThreadMode = typeof SubagentBackendThreadMode.Type;
+
+/** Per-thread subagent-offload overrides. `"inherit"` is the wire value a client patches to
+ * revert a thread, but it is never stored: `applyServerSettingsPatch` strips every
+ * `"inherit"` entry after the merge (`deepMerge` cannot delete keys on its own), so the
+ * persisted map holds only real overrides and Revert is a delete. An absent entry and an
+ * `"inherit"` both resolve to the machine-wide choice. */
+export const SubagentBackendThreadModes = Schema.Record(ThreadId, SubagentBackendThreadMode);
+
+/**
+ * The thread's stored mode, with an absent entry reading as Inherit. The lookup is
+ * `Object.hasOwn`, not `?? "inherit"`: thread ids are client-generated and unconstrained, so
+ * an id like `constructor` or `__proto__` would otherwise read an inherited `Object.prototype`
+ * member (a function, an object) — neither `"inherit"` nor `"off"`, so it lights no toggle in
+ * the UI and would fall straight through a server-side `mode !== "inherit"` chain into the
+ * enabling branch.
+ */
+export function subagentBackendThreadMode(
+  modes: typeof SubagentBackendThreadModes.Type,
+  threadId: ThreadId,
+): SubagentBackendThreadMode {
+  return Object.hasOwn(modes, threadId) ? (modes[threadId] ?? "inherit") : "inherit";
+}
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -1186,6 +1211,23 @@ export const ServerSettings = Schema.Struct({
   // is no narrower meaning). Overridable per launch via T3CODE_DISABLE_AUTH
   // or --disable-auth; read once at startup.
   disableAuthentication: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Master switch for subagent offload. Off writes every thread's flag file as
+  // `default`; `subagentBackend.set` then refuses a Cursor selection but still admits
+  // `default`, so the machine-wide file never strands on a Cursor target with no way to
+  // clear it; and the controls stay visible, saying why they cannot be used.
+  subagentBackendEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+    // Same containment as `autoCompactWindow`/`outputStyle` above. An undecodable value
+    // reads as `true`, the default.
+    Schema.catchDecoding(() => Effect.succeed(Option.some(true))),
+  ),
+  subagentBackendThreadModes: SubagentBackendThreadModes.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+    // Same containment as `autoCompactWindow`/`outputStyle` above. Degrading the whole map
+    // to `{}` means every thread inherits — the conservative direction, since only an
+    // explicit `"on"` enables offload.
+    Schema.catchDecoding(() => Effect.succeed(Option.some({}))),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1407,6 +1449,10 @@ export const ServerSettingsPatch = Schema.Struct({
   // fully-formed `localLlm` every edit, and replacement is required so removing a
   // provider override or model config actually persists.
   localLlm: Schema.optionalKey(LocalLlmSettings),
+  subagentBackendEnabled: Schema.optionalKey(Schema.Boolean),
+  // A partial record: one thread's entry merges over the map (`deepMerge`), so a
+  // client patches `{ [threadId]: mode }` without resending every other thread.
+  subagentBackendThreadModes: Schema.optionalKey(SubagentBackendThreadModes),
   // `disableAuthentication` is deliberately NOT patchable. It is a startup-only switch
   // (`--disable-auth` / `T3CODE_DISABLE_AUTH`), and boot falls back to the persisted value,
   // so accepting it here let any client holding the ordinary settings-write scope turn all

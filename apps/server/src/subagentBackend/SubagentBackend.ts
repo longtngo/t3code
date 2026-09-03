@@ -6,6 +6,11 @@
  * NOT live under T3 home: in a worktree that resolves to `<worktree>/.t3`, so a dev
  * server would write the toggle somewhere `~/bin/subagent-dispatch` never looks.
  *
+ * Per-thread files DO live under T3 home (`ServerConfig.subagentThreadsDir`): the server
+ * itself points each subprocess at its file via `SUBAGENT_BACKEND_STATE`, so the wrapper's
+ * fixed default path is irrelevant for them. Every writer here resolves the same
+ * `resolveThreadBackend` table and takes the same `backendWriteSemaphore` permit.
+ *
  * Everything here fails safe toward "default". Defaulting to Cursor on an unreadable
  * file would silently spend the wrong quota, so an unparseable file, a missing file
  * and an explicit "default" all produce the same dispatch outcome — while still being
@@ -14,6 +19,7 @@
  *
  * @module SubagentBackend
  */
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,12 +38,21 @@ import {
   type SubagentBackendInstance,
   type SubagentBackendModelOption,
   type SubagentBackendSetInput,
+  subagentBackendThreadMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { ServerConfig } from "../config.ts";
+import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
+import {
+  THREAD_BACKEND_MAX_FILE_NAME_LENGTH,
+  threadBackendFileName,
+  threadBackendFilePath,
+} from "./ThreadBackendPath.ts";
 
 export const SUBAGENT_BACKEND_SCHEMA_VERSION = 1;
 
@@ -53,7 +68,7 @@ export interface PersistedBackend {
   readonly degraded: string | null;
 }
 
-const OFF: PersistedBackend = {
+export const OFF: PersistedBackend = {
   schemaVersion: SUBAGENT_BACKEND_SCHEMA_VERSION,
   backend: SUBAGENT_BACKEND_DEFAULT,
   instanceId: null,
@@ -125,23 +140,34 @@ export const subagentBackendFilePath = Effect.fn("subagentBackend.filePath")(fun
   return path.join(home, ".local", "state", "subagent-dispatch", "backend.json");
 });
 
-export const readBackendFile = Effect.fn("subagentBackend.read")(function* () {
+/**
+ * Classified from the read alone, with no `fs.exists` probe in front of it: `exists` only
+ * maps NotFound to `false` and fails the effect on anything else (a parent directory the
+ * server cannot traverse), which would take down every writer that reads the global record
+ * first. Here NotFound is absence and reads as a clean Off (`absentDegraded`), while any
+ * other failure is damage and surfaces through `degraded` rather than reading as an empty
+ * file, which `parsePersistedBackend` maps to a clean Off, indistinguishable from a
+ * deliberate one — the fail-safe this module promises.
+ */
+const readBackendFileAt = Effect.fn("subagentBackend.readAt")(function* (
+  filePath: string,
+  absentDegraded: string | null,
+  failurePrefix: string,
+) {
   const fs = yield* FileSystem.FileSystem;
-  const filePath = yield* subagentBackendFilePath();
-  const exists = yield* fs.exists(filePath);
-  if (!exists) return OFF;
-  // The file is known to exist at this point, so a read failure here (permissions,
-  // a race that deleted it between the check and the read, ...) is damage, not
-  // absence - it must surface through `degraded` rather than silently reading as
-  // "no toggle" the way `Effect.orElseSucceed(() => "")` would.
   const result = yield* Effect.result(fs.readFileString(filePath));
   if (Result.isFailure(result)) {
-    return {
-      ...OFF,
-      degraded: `The subagent toggle file could not be read: ${result.failure.message}`,
-    };
+    if (result.failure.reason._tag === "NotFound") {
+      return { ...OFF, degraded: absentDegraded } satisfies PersistedBackend;
+    }
+    return { ...OFF, degraded: `${failurePrefix}${result.failure.message}` };
   }
   return parsePersistedBackend(result.success);
+});
+
+export const readBackendFile = Effect.fn("subagentBackend.read")(function* () {
+  const filePath = yield* subagentBackendFilePath();
+  return yield* readBackendFileAt(filePath, null, "The subagent toggle file could not be read: ");
 });
 
 /**
@@ -153,16 +179,10 @@ export const readBackendFile = Effect.fn("subagentBackend.read")(function* () {
  */
 export const backendWriteSemaphore = Effect.runSync(Semaphore.make(1));
 
-/** The write itself, with no locking. Only ever called from inside a `backendWriteSemaphore` permit. */
-const writeBackendFileBody = Effect.fn("subagentBackend.writeBody")(function* (
-  next: PersistedBackend,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const filePath = yield* subagentBackendFilePath();
-  const updatedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
-  // Writes back the same hand-parsed plain shape `parsePersistedBackend` reads, on purpose, not Schema.
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
-  const contents = `${JSON.stringify(
+/** The exact plain shape `parsePersistedBackend` and the wrapper's jq filter read. Shared by
+ * the global file and every per-thread file, so the wrapper needs no second parser. */
+function serializePersistedBackend(next: PersistedBackend, updatedAt: string): string {
+  return `${JSON.stringify(
     {
       schemaVersion: SUBAGENT_BACKEND_SCHEMA_VERSION,
       backend: next.backend,
@@ -176,13 +196,29 @@ const writeBackendFileBody = Effect.fn("subagentBackend.writeBody")(function* (
     null,
     2,
   )}\n`;
-  yield* writeFileStringAtomically({ filePath, contents });
+}
+
+/** The write itself, with no locking. Only ever called from inside a `backendWriteSemaphore` permit. */
+const writeBackendFileBody = Effect.fn("subagentBackend.writeBody")(function* (
+  next: PersistedBackend,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const filePath = yield* subagentBackendFilePath();
+  const updatedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  yield* writeFileStringAtomically({
+    filePath,
+    contents: serializePersistedBackend(next, updatedAt),
+  });
   // After the rename, not before: `writeFileStringAtomically` renames from a temp
   // directory it owns, so there is no earlier handle to chmod. The window is one
   // effect step at the destination, versus a permanent umask leak without it.
   yield* fs.chmod(filePath, 0o600).pipe(Effect.ignore);
 });
 
+/**
+ * Test seeding only; production writes go through `setBackend` and `reconcileAllBackends`,
+ * which take the permit themselves — never call this from inside a permit.
+ */
 export const writeBackendFile = Effect.fn("subagentBackend.write")(function* (
   next: PersistedBackend,
 ) {
@@ -260,71 +296,285 @@ export function validateCursorInstance(
 }
 
 /**
- * Validates a subagent-backend selection, resolves the Cursor binary, and persists
- * it. See the module notes on `backendWriteSemaphore` for why the write itself is
- * always routed through `writeBackendFile`/`writeBackendFileBody`.
+ * Turns a validated Cursor instance into the record the flag file stores. Resolves the
+ * binary on the server's PATH (`resolveCommandPath` never spawns a subprocess: it stats
+ * an explicit path on every call, and memoises only bare command names, for 30s) and
+ * degrades — writes the configured string as-is with a reason — when that fails, because
+ * the wrapper's own shell PATH may still find it.
+ */
+const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(function* (
+  validated: ValidCursorInstance,
+  model: string,
+) {
+  const { config } = validated;
+  const resolution = yield* Effect.result(resolveCommandPath(config.binaryPath));
+  const binaryPath = Result.isSuccess(resolution) ? resolution.success : config.binaryPath;
+  const degraded = Result.isFailure(resolution)
+    ? `Could not resolve "${config.binaryPath}" on the server's PATH; wrote it as-is ` +
+      `because the wrapper's own shell PATH may still find it.`
+    : null;
+  return {
+    schemaVersion: SUBAGENT_BACKEND_SCHEMA_VERSION,
+    backend: SUBAGENT_BACKEND_CURSOR,
+    instanceId: validated.instanceId,
+    model,
+    binaryPath,
+    apiEndpoint: config.apiEndpoint,
+    updatedAt: null,
+    degraded,
+  } satisfies PersistedBackend;
+});
+
+export const MASTER_OFF_REASON = "Subagent offload is switched off in Settings.";
+
+/**
+ * The one truth table every per-thread writer uses. Master off beats everything;
+ * `"inherit"` and an absent entry are the same thing; `"on"` reuses the global Cursor
+ * target when there is one and otherwise resolves the first enabled Cursor instance,
+ * so a thread can offload without the user first flipping the machine-wide toggle.
  *
- * No model probe runs here — `ws.ts` already calls
- * `modelsForPersistedBackend(persisted, true)` right after every `set`, so warming
- * the cache in this function would just be a second, redundant probe. Settings are
- * still re-read from `ServerSettingsService` (not the snapshot taken above) and the
- * instance is validated again right where the write happens: `resolveCommandPath`
- * is itself a subprocess-touching step, and only a read taken at the write can see
- * a disable or a reconciliation that landed while it ran — revalidating against the
- * earlier snapshot would always agree with the check already done above and prove
- * nothing.
+ * Only an explicit `"on"` may enable offload — see `subagentBackendThreadMode` for why the
+ * lookup cannot be a plain `?? "inherit"`.
+ */
+export const resolveThreadBackend = Effect.fn("subagentBackend.resolveThread")(function* (input: {
+  readonly settings: ServerSettings;
+  readonly threadId: ThreadId;
+  readonly global: PersistedBackend;
+}) {
+  const { settings, threadId, global } = input;
+  if (settings.subagentBackendEnabled === false) {
+    return { ...OFF, degraded: MASTER_OFF_REASON } satisfies PersistedBackend;
+  }
+  const mode = subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId);
+  if (mode === "off") return OFF;
+  if (mode !== "on") return global;
+  if (global.backend === SUBAGENT_BACKEND_CURSOR) return global;
+  const first = cursorInstances(settings)[0]?.instanceId;
+  const validated = validateCursorInstance(settings, first);
+  if (!validated.ok) return { ...OFF, degraded: validated.reason } satisfies PersistedBackend;
+  return yield* resolveCursorTarget(validated, "auto");
+});
+
+class ThreadBackendNameTooLongError extends Data.TaggedError("ThreadBackendNameTooLongError")<{
+  readonly threadId: ThreadId;
+  readonly length: number;
+}> {}
+
+/**
+ * Creates the threads directory 0700, once per batch of writes rather than per file:
+ * the record names a binary path and an API endpoint, the same reason the global file
+ * is 0600. `writeFileStringAtomically` creates the directory itself, so this is only
+ * about the mode.
+ */
+const ensureThreadsDir = Effect.fn("subagentBackend.ensureThreadsDir")(function* (
+  threadsDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(threadsDir, { recursive: true });
+  yield* fs.chmod(threadsDir, 0o700).pipe(Effect.ignore);
+});
+
+/**
+ * Writes one thread's flag file. No locking here — callers hold `backendWriteSemaphore`,
+ * and call `ensureThreadsDir` once before their batch.
+ */
+export const writeThreadBackendFile = Effect.fn("subagentBackend.writeThread")(function* (
+  threadsDir: string,
+  threadId: ThreadId,
+  next: PersistedBackend,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const fileName = threadBackendFileName(threadId);
+  if (fileName.length > THREAD_BACKEND_MAX_FILE_NAME_LENGTH) {
+    return yield* new ThreadBackendNameTooLongError({ threadId, length: fileName.length });
+  }
+  const filePath = threadBackendFilePath(threadsDir, threadId);
+  const updatedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  yield* writeFileStringAtomically({
+    filePath,
+    contents: serializePersistedBackend(next, updatedAt),
+  });
+  yield* fs.chmod(filePath, 0o600).pipe(Effect.ignore);
+});
+
+/** Reads a thread's file with the same fail-safe parse as the global one: missing or
+ * malformed yields `default` with a `degraded` reason.
+ *
+ * Test-facing reader; production never reads a thread file — only the wrapper does. */
+export const readThreadBackendFile = Effect.fn("subagentBackend.readThread")(function* (
+  threadsDir: string,
+  threadId: ThreadId,
+) {
+  return yield* readBackendFileAt(
+    threadBackendFilePath(threadsDir, threadId),
+    "No thread flag file.",
+    "The thread flag file could not be read: ",
+  );
+});
+
+/**
+ * Rewrites every live thread's file from `settings` and the global record. No locking —
+ * callers hold the permit. Sessions are enumerated per adapter, each under `Effect.catchCause`,
+ * because `registry.getByInstance` fails with `ProviderUnsupportedError` for an instance
+ * removed between `listInstances()` and this lookup, and one such instance must not stop the
+ * other providers' threads from being reconciled. Each write is likewise isolated: one
+ * over-long or unwritable thread id is logged, not fatal.
+ *
+ * The cost of that isolation is a fail-open: a skipped adapter's threads are not rewritten
+ * in this pass, so a live session under it keeps whatever its flag file last said — including
+ * a Cursor target after the master switch was turned off. Such a thread only catches up at
+ * its next session start, when `writeThreadBackendForSession` rewrites the file.
+ */
+const reconcileThreadBackendsBody = Effect.fn("subagentBackend.reconcileThreads")(function* (
+  settings: ServerSettings,
+  global: PersistedBackend,
+) {
+  const registry = yield* ProviderAdapterRegistry;
+  const { subagentThreadsDir } = yield* ServerConfig;
+  const threadIds = new Set<ThreadId>();
+  for (const instanceId of yield* registry.listInstances()) {
+    const sessions = yield* registry.getByInstance(instanceId).pipe(
+      Effect.flatMap((adapter) => adapter.listSessions()),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("subagentBackend.reconcileThreads: listSessions failed", {
+          instanceId,
+          cause,
+        }).pipe(Effect.as([])),
+      ),
+    );
+    for (const session of sessions) threadIds.add(session.threadId);
+  }
+  yield* ensureThreadsDir(subagentThreadsDir);
+  yield* Effect.forEach(
+    threadIds,
+    (threadId) =>
+      resolveThreadBackend({ settings, threadId, global }).pipe(
+        Effect.flatMap((next) => writeThreadBackendFile(subagentThreadsDir, threadId, next)),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("subagentBackend.reconcileThreads: write failed", { threadId, cause }),
+        ),
+      ),
+    { concurrency: 8, discard: true },
+  );
+});
+
+/**
+ * Global + every thread, under one permit, from one settings read taken inside the permit
+ * so a settings write racing this call cannot leave the thread files reflecting an older
+ * snapshot than the global file.
+ */
+export const reconcileAllBackends = Effect.fn("subagentBackend.reconcileAll")(function* () {
+  const serverSettings = yield* ServerSettingsService;
+  yield* backendWriteSemaphore.withPermits(1)(
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getRawSettings;
+      const global = yield* reconcileBackendBody(settings);
+      yield* reconcileThreadBackendsBody(settings, global);
+    }),
+  );
+});
+
+/**
+ * Called by `ProviderService` around every `adapter.startSession` — once immediately
+ * before it, so the file the new subprocess's `SUBAGENT_BACKEND_STATE` points at exists
+ * before the first subagent could be dispatched, and once immediately after, because a
+ * settings change landing while the adapter starts up enumerates only sessions already
+ * registered and so cannot see this one.
+ *
+ * `removeOnFailure` (default true) is for the PRE-start call: a failure there is logged
+ * and the thread's file REMOVED rather than left alone, because nothing else ever deletes
+ * one, so the previous session's record — possibly a Cursor target this call could no
+ * longer confirm — would otherwise be what the new subprocess dispatches on. An absent
+ * file makes the wrapper refuse, which is the safe direction, and a session must never be
+ * blocked from starting over this.
+ *
+ * The POST-start call passes `false`: by then the pre-start write has already put a file
+ * this same session resolved for the current settings, and deleting it on a transient
+ * failure would strand a live subprocess with no file at all — strictly worse than the
+ * one it is holding.
+ */
+export const writeThreadBackendForSession = Effect.fn("subagentBackend.writeForSession")(function* (
+  threadId: ThreadId,
+  options?: { readonly removeOnFailure: boolean },
+) {
+  const removeOnFailure = options?.removeOnFailure ?? true;
+  const fs = yield* FileSystem.FileSystem;
+  const serverSettings = yield* ServerSettingsService;
+  const { subagentThreadsDir } = yield* ServerConfig;
+  // The failure handler (including the removal below) runs inside this same permit, not
+  // after it: outside the permit a concurrent writer could land its own file for this
+  // thread between our failure and the removal, and we would delete a file we never wrote.
+  yield* backendWriteSemaphore.withPermits(1)(
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getRawSettings;
+      const global = yield* readBackendFile();
+      const next = yield* resolveThreadBackend({ settings, threadId, global });
+      yield* ensureThreadsDir(subagentThreadsDir);
+      yield* writeThreadBackendFile(subagentThreadsDir, threadId, next);
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (removeOnFailure) {
+            yield* fs
+              .remove(threadBackendFilePath(subagentThreadsDir, threadId), { force: true })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  // Louder than the write failure itself: a stale enabling file that survived
+                  // both the write and its removal is the one state that dispatches wrongly.
+                  Effect.logError("subagentBackend.writeForSession: stale file left behind", {
+                    threadId,
+                    cause,
+                  }),
+                ),
+              );
+          }
+          yield* Effect.logWarning("subagentBackend.writeForSession failed", { threadId, cause });
+        }),
+      ),
+    ),
+  );
+});
+
+/**
+ * Validates a subagent-backend selection, resolves the Cursor binary, persists it, and
+ * fans the result out to every live thread's file — all under one permit, from one
+ * settings read, so a disable or a master-off that lands mid-call is seen by every write
+ * or by none.
+ *
+ * Under master-off only a selection of Cursor is refused, without writing: the file the
+ * user set last stays as it was and the returned `degraded` says why nothing changed. A
+ * selection of "default" is still admitted, so the master switch is not a one-way door
+ * that strands the global file on a Cursor target with no way to clear it.
  */
 export const setBackend = Effect.fn("subagentBackend.set")(function* (
   input: SubagentBackendSetInput,
 ) {
   const serverSettings = yield* ServerSettingsService;
-
-  if (input.backend !== SUBAGENT_BACKEND_CURSOR) {
-    const next: PersistedBackend = { ...OFF };
-    yield* writeBackendFile(next);
-    return next;
-  }
-
-  const settings = yield* serverSettings.getRawSettings;
-  const validated = validateCursorInstance(settings, input.instanceId);
-  if (!validated.ok) {
-    const next: PersistedBackend = { ...OFF, degraded: validated.reason };
-    yield* writeBackendFile(next);
-    return next;
-  }
-
-  const { config } = validated;
-  const resolution = yield* Effect.result(resolveCommandPath(config.binaryPath));
-  const binaryPath = Result.isSuccess(resolution) ? resolution.success : config.binaryPath;
-  const resolutionDegraded = Result.isFailure(resolution)
-    ? `Could not resolve "${config.binaryPath}" on the server's PATH; wrote it as-is ` +
-      `because the wrapper's own shell PATH may still find it.`
-    : null;
-
-  const model = input.model ?? "auto";
-
   return yield* backendWriteSemaphore.withPermits(1)(
     Effect.gen(function* () {
-      // Re-read settings here, immediately before writing: the probe above can run
-      // for seconds, and only a read taken right here can see an instance the
-      // reconciler downgraded (or the user disabled) while it ran. Revalidating
-      // against the `settings` snapshot captured before the probe would always
-      // agree with the check already done above and prove nothing.
-      const freshSettings = yield* serverSettings.getRawSettings;
-      const revalidated = validateCursorInstance(freshSettings, input.instanceId);
-      const next: PersistedBackend = revalidated.ok
-        ? {
-            schemaVersion: SUBAGENT_BACKEND_SCHEMA_VERSION,
-            backend: SUBAGENT_BACKEND_CURSOR,
-            instanceId: revalidated.instanceId,
-            model,
-            binaryPath,
-            apiEndpoint: config.apiEndpoint,
-            updatedAt: null,
-            degraded: resolutionDegraded,
-          }
-        : { ...OFF, degraded: revalidated.reason };
+      const settings = yield* serverSettings.getRawSettings;
+      if (settings.subagentBackendEnabled === false && input.backend === SUBAGENT_BACKEND_CURSOR) {
+        const current = yield* readBackendFile();
+        return { ...current, degraded: MASTER_OFF_REASON } satisfies PersistedBackend;
+      }
+      let next: PersistedBackend;
+      if (input.backend !== SUBAGENT_BACKEND_CURSOR) {
+        next = OFF;
+      } else {
+        const validated = validateCursorInstance(settings, input.instanceId);
+        next = validated.ok
+          ? yield* resolveCursorTarget(validated, input.model ?? "auto")
+          : { ...OFF, degraded: validated.reason };
+      }
       yield* writeBackendFileBody(next);
+      // The global file is already on disk, so a crashing fan-out must not turn a saved
+      // selection into a "could not be saved" at the RPC boundary. The threads it missed
+      // catch up at their next session start.
+      yield* reconcileThreadBackendsBody(settings, next).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("subagentBackend.set: thread fan-out failed", { cause }),
+        ),
+      );
       return next;
     }),
   );
@@ -393,39 +643,29 @@ function haveReconcilableFieldsChanged(next: PersistedBackend, current: Persiste
  * nothing here to check against `settings`, and a lazy check inside `read`/`set`
  * was considered and rejected — the wrapper reads the file directly, never
  * `read`, so a lazy path would never run where it matters.
+ *
+ * The reconcile itself, no locking; returns the global record now on disk (rewritten or not).
  */
-export const reconcileBackend = Effect.fn("subagentBackend.reconcile")(function* (
+export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(function* (
   settings: ServerSettings,
 ) {
   const current = yield* readBackendFile();
-  if (current.backend !== SUBAGENT_BACKEND_CURSOR) return;
+  if (current.backend !== SUBAGENT_BACKEND_CURSOR) return current;
 
   const validated = validateCursorInstance(settings, current.instanceId ?? undefined);
   let next: PersistedBackend;
   if (!validated.ok) {
     next = { ...OFF, degraded: validated.reason };
   } else {
-    const resolution = yield* Effect.result(resolveCommandPath(validated.config.binaryPath));
-    const binaryPath = Result.isSuccess(resolution)
-      ? resolution.success
-      : validated.config.binaryPath;
-    const resolutionDegraded = Result.isFailure(resolution)
-      ? `Could not resolve "${validated.config.binaryPath}" on the server's PATH; wrote it ` +
-        `as-is because the wrapper's own shell PATH may still find it.`
-      : null;
-    next = {
-      ...current,
-      instanceId: validated.instanceId,
-      binaryPath,
-      apiEndpoint: validated.config.apiEndpoint,
-      degraded: resolutionDegraded,
-    };
+    const resolved = yield* resolveCursorTarget(validated, current.model ?? "auto");
+    next = { ...resolved, model: current.model };
   }
 
   // Nothing dispatch-relevant changed: skip the write rather than bumping
-  // `updatedAt` (and taking the write semaphore) on every unrelated settings change.
-  if (!haveReconcilableFieldsChanged(next, current)) return;
-  yield* writeBackendFile(next);
+  // `updatedAt` on every unrelated settings change.
+  if (!haveReconcilableFieldsChanged(next, current)) return current;
+  yield* writeBackendFileBody(next);
+  return next;
 });
 
 /**
@@ -450,21 +690,13 @@ export const subagentBackendReconciler = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
   const changes = yield* serverSettings.subscribeChanges;
 
-  const reconcileLogged = (settings: ServerSettings) =>
-    reconcileBackend(settings).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("subagentBackend.reconcile failed", { cause }),
-      ),
-    );
-
-  yield* serverSettings.getRawSettings.pipe(
-    Effect.flatMap(reconcileLogged),
-    // A failed read must not stop the reconciler from moving on to the stream
-    // below — the same failure tolerance `reconcileLogged` gives every later
-    // reconcile.
-    Effect.catchCause((cause) =>
-      Effect.logWarning("subagentBackend.reconcile (startup) failed", { cause }),
-    ),
+  // The stream payload is ignored on purpose: `reconcileAllBackends` re-reads settings
+  // inside the write permit, so the global file and every thread file come from one
+  // snapshot no concurrent settings write can split.
+  const reconcileLogged = reconcileAllBackends().pipe(
+    Effect.catchCause((cause) => Effect.logWarning("subagentBackend.reconcile failed", { cause })),
   );
-  yield* changes.pipe(Stream.runForEach(reconcileLogged));
+
+  yield* reconcileLogged;
+  yield* changes.pipe(Stream.runForEach(() => reconcileLogged));
 });

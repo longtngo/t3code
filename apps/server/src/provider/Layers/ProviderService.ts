@@ -29,8 +29,10 @@ import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCi
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -60,6 +62,7 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { writeThreadBackendForSession } from "../../subagentBackend/SubagentBackend.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -252,6 +255,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  // Bound once here: `ProviderServiceShape` methods are `R = never`, so the per-thread
+  // flag-file writer's services must come from the layer's context, not the caller's.
+  const threadBackendContext = yield* Effect.context<
+    | FileSystem.FileSystem
+    | Path.Path
+    | ServerConfig.ServerConfig
+    | ServerSettings.ServerSettingsService
+  >();
+  const writeThreadBackend = (
+    threadId: ThreadId,
+    options?: { readonly removeOnFailure: boolean },
+  ) => writeThreadBackendForSession(threadId, options).pipe(Effect.provide(threadBackendContext));
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
@@ -482,6 +497,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* writeThreadBackend(input.binding.threadId);
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -496,6 +512,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+      // Again, now that the adapter has registered the session — see `writeThreadBackendForSession`.
+      yield* writeThreadBackend(input.binding.threadId, { removeOnFailure: false });
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -704,6 +722,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* writeThreadBackend(threadId);
         const session = yield* adapter
           .startSession({
             ...input,
@@ -712,6 +731,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
+        // Again, now that the adapter has registered the session — see `writeThreadBackendForSession`.
+        yield* writeThreadBackend(threadId, { removeOnFailure: false });
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);

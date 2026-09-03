@@ -26,16 +26,23 @@ export interface SubagentBackendRowStatus {
  *    (unrecognised by the cached model list) and then to "Auto" (no model chosen yet).
  * 5. Anything else — including the "default" backend and any unrecognised value, which the
  *    wire contract says must read as default — is the default route.
+ *
+ * `masterEnabled: false` forces the dot grey without changing the text. This row is always
+ * mounted, so it is the only part of the feature most users ever see, and under master-off
+ * no T3 thread offloads — a green dot there would be a lie. The text stays because the
+ * machine-wide file the row names is still live for non-T3 tools on this host.
  */
 export function subagentBackendRowStatus(
   state: SubagentBackendState | null,
   options?: ReadonlyArray<SubagentBackendModelOption>,
+  masterEnabled?: boolean,
 ): SubagentBackendRowStatus {
   if (state == null) return { dot: "off", text: "Loading…" };
   if (state.degraded != null) return { dot: "off", text: "Degraded" };
   if (state.instances.length === 0) return { dot: "off", text: "Cursor unavailable" };
   if (state.backend === SUBAGENT_BACKEND_CURSOR) {
-    return { dot: "on", text: subagentModelLabel(state, options ?? state.models) };
+    const dot = masterEnabled === false ? "off" : "on";
+    return { dot, text: subagentModelLabel(state, options ?? state.models) };
   }
   return { dot: "off", text: "Default" };
 }
@@ -58,6 +65,32 @@ export function subagentCursorAvailable(state: SubagentBackendState | null): boo
  *  choice to make — one instance needs no picker. */
 export function subagentCursorInstancesPickable(state: SubagentBackendState | null): boolean {
   return (state?.instances.length ?? 0) > 1;
+}
+
+/**
+ * Notes under the per-thread control. The segment itself renders only while the thread's own
+ * server has the master on; its absence is explained only when that server disagrees with the
+ * primary (when both are off, the panel's own master-off line has already said it).
+ * `cursorAvailable` is `null` when unknown — a thread on another environment (the primary's
+ * instance list says nothing about that server) or state not yet loaded — so no Cursor note
+ * is offered on a guess.
+ */
+export function threadOffloadNotes(input: {
+  readonly threadMasterEnabled: boolean;
+  readonly primaryMasterEnabled: boolean;
+  readonly cursorAvailable: boolean | null;
+}): ReadonlyArray<string> {
+  if (!input.threadMasterEnabled) {
+    return input.primaryMasterEnabled
+      ? ["Subagent offload is switched off on this thread's server."]
+      : [];
+  }
+  return [
+    ...(input.cursorAvailable === false
+      ? ["Add a Cursor instance in Settings to use Cursor here."]
+      : []),
+    "Applies to Claude Code threads.",
+  ];
 }
 
 /**

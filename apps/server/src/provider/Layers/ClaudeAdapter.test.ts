@@ -40,6 +40,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { threadBackendFileName } from "../../subagentBackend/ThreadBackendPath.ts";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../ClaudeModelCatalog.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -868,6 +869,31 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.env?.HOME, NodePath.join(NodeOS.homedir(), ".claude-work"));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("points each session's SUBAGENT_BACKEND_STATE at its own thread flag file", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      const statePath = createInput?.options.env?.SUBAGENT_BACKEND_STATE;
+      assert.ok(statePath, "env must carry SUBAGENT_BACKEND_STATE");
+      assert.match(statePath, /\/subagent-threads\/[A-Za-z0-9_-]+\.json$/);
+      assert.equal(NodePath.basename(statePath), threadBackendFileName(THREAD_ID));
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
