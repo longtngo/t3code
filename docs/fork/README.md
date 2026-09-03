@@ -663,6 +663,7 @@ restoring a deleted duplicate. One line of upstream's component is fork-edited: 
 `selectedOptionValue(...)` rather than the raw stored string, so an off-list value shows the first
 row (Antigravity's `authMethod` included) instead of a choice the driver will not use; re-picking
 that row still writes the omitted key.
+
 ### 28. Claude's continuation group is the transcript store
 
 Upstream keys Claude's continuation group on HOME only (`makeClaudeContinuationGroupKey`,
