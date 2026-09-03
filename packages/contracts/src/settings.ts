@@ -3,8 +3,13 @@ import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
-import { ThreadEnvMode } from "./environment.ts";
+import {
+  ForwardCompatibleNullable,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TrimmedString,
+} from "./baseSchemas.ts";
+import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
@@ -31,6 +36,10 @@ import {
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
+
+export const DiffLayout = Schema.Literals(["stacked", "split"]);
+export type DiffLayout = typeof DiffLayout.Type;
+export const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
 
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
@@ -193,6 +202,14 @@ export const BROWSER_RECORDING_FRAME_RATES = [30, 60] as const;
 export const BrowserRecordingFrameRate = Schema.Literals(BROWSER_RECORDING_FRAME_RATES);
 export type BrowserRecordingFrameRate = typeof BrowserRecordingFrameRate.Type;
 export const DEFAULT_BROWSER_RECORDING_FRAME_RATE: BrowserRecordingFrameRate = 30;
+/**
+ * Where a clicked link goes: the OS default browser, or a tab in the in-app
+ * browser beside the thread. "system" is the default because that is what
+ * every link did before the setting existed.
+ */
+export const BrowserLinkTarget = Schema.Literals(["system", "app"]);
+export type BrowserLinkTarget = typeof BrowserLinkTarget.Type;
+export const DEFAULT_BROWSER_LINK_TARGET: BrowserLinkTarget = "system";
 
 export const ClientSettingsSchema = Schema.Struct({
   appearanceContrast: AppearanceContrast.pipe(
@@ -214,6 +231,13 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   browserRecordingFrameRate: BrowserRecordingFrameRate.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_RECORDING_FRAME_RATE)),
+  ),
+  /**
+   * Where links clicked in a thread (chat markdown, terminal output) open.
+   * Only the desktop app has an in-app browser, so other clients ignore "app".
+   */
+  browserLinkTarget: BrowserLinkTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_LINK_TARGET)),
   ),
   /**
    * Whether an agent opening a preview pops the floating mini player into
@@ -256,6 +280,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
   ),
@@ -375,7 +400,7 @@ const makeBinaryPathSetting = (fallback: string) =>
     Schema.withDecodingDefault(Effect.succeed(fallback)),
   );
 
-export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch";
+export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch" | "select";
 
 export interface ProviderSettingsFormOption {
   readonly value: string;
@@ -390,13 +415,14 @@ export interface ProviderSettingsFormAnnotation {
   /**
    * Renders the field as a dropdown over exactly these choices, instead of a text input.
    *
-   * Deliberately not a `control` variant. `control` is a tag the renderer has to know
-   * about, and `folder` is already proof of how that fails: it is annotated but has no
-   * render branch, so it silently falls through to a text input. Presence of `options` is
-   * the whole condition, so the field cannot be half-wired.
+   * Presence of `options` alone is enough: the field renders as a native `<select>` that
+   * shares the text fields' chrome. Include an empty-valued entry when the field is
+   * optional - it is the row that clears the setting, and it works because a native
+   * `<select>` can hold `""`.
    *
-   * Include an empty-valued entry when the field is optional - it is the row that clears
-   * the setting, and it works because a native `<select>` can hold `""`.
+   * `control: "select"` is upstream's variant of the same idea and is also honoured, with
+   * different semantics: no empty row, the first entry is the default, and the default is
+   * stored as an omitted key. Use it only for a required field that always has a value.
    */
   readonly options?: readonly ProviderSettingsFormOption[] | undefined;
 }
@@ -769,6 +795,89 @@ export const GrokSettings = makeProviderSettingsSchema(
   },
 );
 export type GrokSettings = typeof GrokSettings.Type;
+
+/**
+ * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
+ * in the browser. The API key and Agent Platform methods take credentials from
+ * the instance config and never open a browser.
+ */
+export const ANTIGRAVITY_AUTH_METHODS = [
+  { value: "oauth-personal", label: "Google account" },
+  { value: "oauth-business", label: "Gemini Enterprise" },
+  { value: "gemini-api-key", label: "Gemini API key" },
+  { value: "agent-platform", label: "Agent Platform (Vertex AI)" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+export const AntigravityAuthMethod = Schema.Literals(
+  ANTIGRAVITY_AUTH_METHODS.map((method) => method.value),
+);
+export type AntigravityAuthMethod = typeof AntigravityAuthMethod.Type;
+
+export const AntigravitySettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    authMethod: AntigravityAuthMethod.pipe(
+      Schema.withDecodingDefault(Effect.succeed("oauth-personal" as const)),
+      Schema.annotateKey({
+        title: "Sign-in method",
+        description:
+          "Google account uses your Antigravity subscription. Gemini Enterprise needs a GCP project and location. API key and Agent Platform bill the credential you enter.",
+        providerSettingsForm: {
+          control: "select",
+          options: ANTIGRAVITY_AUTH_METHODS,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    apiKey: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API key",
+        description:
+          "Gemini API key, or a Vertex AI express key for Agent Platform. Stored in plain text on this environment.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "Optional",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    gcpProject: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "GCP project",
+        description:
+          "Required for Gemini Enterprise. Agent Platform uses it when no API key is set.",
+        providerSettingsForm: { placeholder: "my-project-id", clearWhenEmpty: "omit" },
+      }),
+    ),
+    gcpLocation: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "GCP location",
+        description: "Region for Gemini Enterprise or Agent Platform, such as us-central1.",
+        providerSettingsForm: { placeholder: "us-central1", clearWhenEmpty: "omit" },
+      }),
+    ),
+    binaryPath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Binary path",
+        description:
+          "Optional path to the official Antigravity ACP executable. Leave empty for automatic selection.",
+        providerSettingsForm: { placeholder: "Automatic", clearWhenEmpty: "persist" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["authMethod", "apiKey", "gcpProject", "gcpLocation", "binaryPath"] },
+);
+export type AntigravitySettings = typeof AntigravitySettings.Type;
 
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
@@ -1150,6 +1259,16 @@ export const ServerSettings = Schema.Struct({
   defaultThemeSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
   ),
+  /**
+   * The icon clients draw for this environment. Null means "use what the
+   * server detected" (`environment.platform.machine`), falling back to a
+   * generic server. Lives on the server, not the client, so every device
+   * sees the same machine. A kind picked on a newer server decodes as null
+   * here rather than failing the whole settings snapshot for an older client.
+   */
+  environmentIcon: ForwardCompatibleNullable(EnvironmentMachineKind).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   defaultThreadEnvMode: ThreadEnvMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("local" as const satisfies ThreadEnvMode)),
   ),
@@ -1190,6 +1309,7 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1371,6 +1491,16 @@ const GrokSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const AntigravitySettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  authMethod: Schema.optionalKey(AntigravityAuthMethod),
+  apiKey: Schema.optionalKey(TrimmedString),
+  gcpProject: Schema.optionalKey(TrimmedString),
+  gcpLocation: Schema.optionalKey(TrimmedString),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 const OpenCodeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -1408,6 +1538,7 @@ export const ServerSettingsPatch = Schema.Struct({
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
+  environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
@@ -1433,6 +1564,7 @@ export const ServerSettingsPatch = Schema.Struct({
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      antigravity: Schema.optionalKey(AntigravitySettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
@@ -1468,6 +1600,7 @@ export const ClientSettingsPatch = Schema.Struct({
   browserDefaultZoomFactor: Schema.optionalKey(PreviewZoomFactor),
   browserDefaultAppearance: Schema.optionalKey(PreviewAppearancePreference),
   browserRecordingFrameRate: Schema.optionalKey(BrowserRecordingFrameRate),
+  browserLinkTarget: Schema.optionalKey(BrowserLinkTarget),
   browserAutoShowFloatingPreview: Schema.optionalKey(Schema.Boolean),
   composerShortcuts: Schema.optionalKey(Schema.Array(ComposerShortcut)),
   browserProfiles: Schema.optionalKey(Schema.Array(BrowserProfile)),
@@ -1478,6 +1611,7 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadUnpin: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   notifyOnThreadCompletion: Schema.optionalKey(Schema.Boolean),

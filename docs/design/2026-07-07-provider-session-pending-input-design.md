@@ -154,9 +154,9 @@ skip to `ProviderSessionReaper.sweep`, mirroring `ProviderTurnStallWatchdog.shou
   (`ProjectionSnapshotQuery.ts:1911-1913`). Note (**S7**): these flags are projection-derived —
   fine as defense-in-depth, not claimed as authoritative.
 
-*(Deliberately NOT doing: a server-side refusal to `thread.session.stop` when input is pending —
+_(Deliberately NOT doing: a server-side refusal to `thread.session.stop` when input is pending —
 the escape hatch (S2) and explicit stop must keep working. The fix is to stop the client from
-*auto*-escalating, not to forbid a deliberate stop.)*
+*auto*-escalating, not to forbid a deliberate stop.)_
 
 ### Part 2 — Auto-reattach: remove the precheck, reuse the recovery that already exists
 

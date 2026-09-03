@@ -14,6 +14,7 @@ import type {
 import { cn } from "../../lib/utils";
 import { DraftInput } from "../ui/draft-input";
 import { Input, inputControlClassName, inputControlShellClassName } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import type { ProviderClientDefinition } from "./providerDriverMeta";
@@ -26,7 +27,11 @@ export interface ProviderSettingsFieldModel {
   readonly placeholder?: string | undefined;
   readonly clearWhenEmpty: "omit" | "persist";
   readonly defaultBooleanValue?: boolean | undefined;
-  /** Present only for closed-set fields; its presence is what renders a dropdown. */
+  /**
+   * Present only for closed-set fields. Its presence alone renders the fork's native
+   * dropdown; `control: "select"` additionally routes the field to upstream's Base UI
+   * select, whose first entry is the default and is stored as an omitted key.
+   */
   readonly options?: readonly ProviderSettingsFormOption[] | undefined;
 }
 
@@ -189,6 +194,48 @@ interface ProviderSettingsFormProps {
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
 }
 
+/** Stores the default choice as an omitted key so unchanged configs stay small. */
+function ProviderSettingsSelect({
+  field,
+  value,
+  inputId,
+  size,
+  className,
+  onChange,
+}: {
+  readonly field: ProviderSettingsFieldModel;
+  readonly value: unknown;
+  readonly inputId: string;
+  readonly size: "sm" | "xs";
+  readonly className?: string | undefined;
+  readonly onChange: ProviderSettingsFormProps["onChange"];
+}) {
+  const options = field.options ?? [];
+  const fallback = options[0]?.value ?? "";
+  const current = readProviderConfigString(value, field.key) || fallback;
+  const label = options.find((option) => option.value === current)?.label ?? current;
+  return (
+    <Select
+      value={current}
+      onValueChange={(next) => {
+        if (typeof next !== "string") return;
+        onChange(nextProviderConfigWithFieldValue(value, field, next === fallback ? "" : next));
+      }}
+    >
+      <SelectTrigger id={inputId} size={size} className={className} aria-label={field.label}>
+        <SelectValue>{label}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="start" alignItemWithTrigger={false}>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
+}
+
 function FieldFrame(props: {
   readonly variant: ProviderSettingsFormProps["variant"];
   readonly children: ReactNode;
@@ -250,6 +297,15 @@ function ProviderSettingsFieldRow({
                 aria-describedby={descriptionId}
               />
             </span>
+          ) : field.control === "select" ? (
+            <ProviderSettingsSelect
+              field={field}
+              value={value}
+              inputId={inputId}
+              size="xs"
+              className="w-56"
+              onChange={onChange}
+            />
           ) : field.control === "textarea" ? (
             <Textarea
               id={inputId}
@@ -302,6 +358,25 @@ function ProviderSettingsFieldRow({
             aria-label={field.label}
           />
         </div>
+      </FieldFrame>
+    );
+  }
+
+  if (field.control === "select") {
+    return (
+      <FieldFrame variant={variant}>
+        <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
+          {label}
+          <ProviderSettingsSelect
+            field={field}
+            value={value}
+            inputId={inputId}
+            size="sm"
+            className={cn("w-full", variant === "card" && "mt-1.5")}
+            onChange={onChange}
+          />
+          {description}
+        </label>
       </FieldFrame>
     );
   }

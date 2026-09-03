@@ -74,11 +74,10 @@ export const getCachedCapabilitiesDroppingMisses = <Key, A, E, R>(
   key: Key,
 ) =>
   Cache.get(cache, key).pipe(
-    Effect.flatMap(
-      (capabilities): Effect.Effect<A | undefined> =>
-        capabilities === undefined
-          ? Cache.invalidate(cache, key).pipe(Effect.as(undefined))
-          : Effect.succeed(capabilities),
+    Effect.flatMap((capabilities): Effect.Effect<A | undefined> =>
+      capabilities === undefined
+        ? Cache.invalidate(cache, key).pipe(Effect.as(undefined))
+        : Effect.succeed(capabilities),
     ),
   );
 

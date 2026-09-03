@@ -29,10 +29,13 @@ interface PendingRpcAckRequest {
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
 const untrackedRpcAckMethods = new Set<string>([WS_METHODS.previewAutomationConnect]);
+// Usage summary shells out to every provider CLI, so it joins the long leash
+// (fork precedent: pull requests) rather than the untracked set upstream chose.
 const longRunningRpcAckMethods = new Set<string>([
   WS_METHODS.serverUpdateProvider,
   WS_METHODS.serverRefreshProviders,
   WS_METHODS.serverUpdateServer,
+  WS_METHODS.serverGetUsageSummary,
 ]);
 /**
  * Pull request calls fan out across every configured server and shell out to

@@ -155,7 +155,7 @@ Sidecar service: own tables, own repository, own supervisor layer. No
   `[X]`. Built end to end the exemption is **5 files, 126 lines**, 0 errors in all
   five packages and 75 server tests green, with the role query at 0.0396 ms against
   0.564 ms for one of `getShellSnapshot`'s five existing queries `[X: the
-  developer's own database, 505 threads, seeded with 200 crew tasks]`.
+developer's own database, 505 threads, seeded with 200 crew tasks]`.
   `Migrations.ts` is on this path too, since the fill needs migration 51 before any
   snapshot runs. The field alone typechecks
   clean in all five packages and stays `undefined` on every thread, so the web
@@ -940,7 +940,7 @@ best by the most over-broad implementation possible. Each needs its complement.
   predicate is `every(id => true)`, which passes on the id-34 fixture `[X: two
 arms]`. `LEGACY` is a `Set` built from an inline array literal — as a bare array
   the bullet does not typecheck (`Property 'has' does not exist on type
-  'number[]'`) `[X: tsgo]`. Assert `LEGACY.size === 49`. **And assert the migration
+'number[]'`) `[X: tsgo]`. Assert `LEGACY.size === 49`. **And assert the migration
   executes.**
 - **`derive()`:** total, the four-tier ordering, and — the assertion that
   discriminates — **for each of the seven `OrchestrationSessionStatus` members,

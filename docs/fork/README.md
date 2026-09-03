@@ -37,7 +37,8 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-08-27: 49 entries, all ids unique, monotonic, max 50. Id `34` is intentionally burned (an
+Verified 2026-09-03 (28th reconcile): 54 entries, all ids unique, monotonic, max 55; upstream's
+`046`/`047` took applied ids 54/55. Id `34` is intentionally burned (an
 earlier fork DB applied a since-renamed `034_PushSubscriptions`).
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
@@ -136,7 +137,15 @@ ordinary upstream additions by the 17th reconcile:
 - `ComposerPendingUserInputPanel.tsx` drops upstream's `Collapsible` wrapper (fork commit
   `a02c9e405`) for a bounded, kept-mounted options list that survives a collapse with its scroll
   position and keeps `aria-controls` resolvable. Upstream keeps restyling its own version, so this
-  file conflicts on every reconcile that touches it; the resolution is the fork's.
+  file conflicts on every reconcile that touches it; the resolution is the fork's — **but re-graft
+  genuine fixes**: the 28th reconcile's conflict here was upstream's `optionLabel` → `optionValue`
+  migration, half of which had already merged outside the markers. Taking the fork's side untouched
+  would have left the file half-migrated.
+
+- `ComposerPrimaryActions` has no `showSendWhileRunning` prop. Upstream gates Send behind it while a
+  turn runs; here Send is always mounted beside Stop because a mid-turn send queues (invariant 5).
+  Upstream re-adds the prop and passes it from `ChatComposer.tsx`; both sides of that are rejected.
+  Only `ComposerPrimaryActions.test.tsx` recorded the removal before the 28th reconcile.
 
 ### 4b. Send-blocked and environment-unavailable are different states
 
@@ -298,6 +307,18 @@ Upstream's `matches through a symlinked entrypoint` fixture builds its paths und
 hold. It passes on upstream's Linux CI and fails on every macOS run. `makeTempDir` realpaths the
 temp root here; `isEntrypoint` itself is untouched, and production is unaffected (an
 npm-installed CLI symlink carries no such prefix indirection). Worth sending upstream.
+
+Two more fixtures realpath their roots for the same reason (28th reconcile): `CursorProvider.test.ts`
+skills discovery and `AntigravityInstallation.test.ts` override resolution, both upstream's, both
+comparing a raw temp path against the resolved one their subject returns.
+
+Same prefix, second victim (28th reconcile): `AntigravityAdapter.resolveClientFilePath` realpathed
+the session roots but fell back to the **unresolved** parent when a write targeted a directory that
+did not exist yet, so under `/var/folders` every new nested file read as outside the workspace. The
+fork's `realPathNearestAncestor` realpaths the nearest existing ancestor and re-joins the missing
+tail. Not test-only: a symlinked project root hits the same branch in production. The adapter also
+carries the three fork-only `ProviderAdapterShape` members (`refreshAccountUsage`,
+`withdrawQueuedTurn`, `appendSessionNote`) as constant stubs, like the other ACP adapters.
 
 ### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
 
@@ -583,6 +604,56 @@ Related: upstream's own new adapter tests may send a second turn while the first
 reaches the provider — the symptom is a test that _hangs_ on a prompt read rather than one that
 fails. Retarget by completing the running turn first, which is the fork's actual contract.
 
+### 23. Slow-by-design RPCs get the long leash, never the untracked set
+
+Fork commit `facc05f9e` set the rule for `apps/web/src/rpc/requestLatencyState.ts`: a call that is
+slow because it fans out or shells out joins `longRunningRpcAckMethods` (120s), not
+`untrackedRpcAckMethods`. "Slow by design" and "unobservable" are different claims, and the
+untracked set hides a call that has genuinely wedged. Upstream #9358 put `serverGetUsageSummary`
+in the untracked set; here it sits on the long leash and its test asserts the 120s edge. Expect
+upstream to keep adding to the untracked set; move each addition down.
+
+### 24. The resting composer and the strip toggle are orthogonal, and meet in `ChatView`
+
+Upstream #7855 auto-collapses the whole composer when an existing desktop thread's composer is
+unfocused, and relocates the model/mode controls into the thread-context strip. The fork's
+`ed3b7263e` is an explicit, persisted footer toggle that hides that strip. Both are kept. They
+meet at one point: upstream needs the strip **mounted** while invisible so the resting composer can
+measure it, and the fork needs the `aria-controls` target to exist. `ChatView.tsx` therefore
+mounts the strip on upstream's `mountComposerContextStrip` and passes
+`contextStripVisible={renderComposerContextStrip}` — the fork's collapse suppresses the strip's
+chrome, not its mount. With the strip collapsed a resting composer's relocated controls are hidden
+too; upstream's own doc accepts that case (the controls return on focus).
+
+The `ContextWindowMeter` upstream renders behind `showSecondaryStatus` is still rejected (§4, §10);
+the fork's Vitals gauge sits behind the same flag so a resting composer stays one line high.
+
+### 25. ACP cancel keeps the fork's generation guard over upstream's dispatch semaphore
+
+Upstream's Antigravity rework of `AcpSessionRuntime.ts` (`activePromptRef`,
+`promptDispatchSemaphore`, `acquireUseRelease`, `cancelBehavior`) does not cover the fork's fix
+`73ac45066`: a prompt parked on `promptSerializationSemaphore` has run none of the body that
+registers it, so `cancel` cannot see it and it goes to the agent after Stop. The semaphore only
+serialises cancel against dispatch in `wait-for-prompt` mode; in the default `interrupt` mode
+(Cursor, Grok, OpenCode) the window is still open. The fork's `promptCancelGenerationRef` is
+layered on top: read before parking, re-checked before dispatch, re-checked once more after
+registration, and bumped in `cancel` before `getStartedState`. The post-registration re-check is
+gated on `cancelBehavior !== "wait-for-prompt"` — ungated it would fire on every Antigravity cancel
+of a running prompt and turn its wait-for-confirmation into a failed cancel. Mutation-checked:
+dropping the bump in `cancel` turns `AcpJsonRpcConnection.test.ts`'s parked-prompt case red.
+
+### 26. `isKnownFilesystemRootPath` is a FORK-ONLY export of client-runtime
+
+Upstream #9250 (`922bd6922`) moved `apps/web`'s path helpers into
+`packages/client-runtime/src/markdownLinks.ts` and kept `POSIX_FILE_ROOT_PREFIXES` module-private.
+The fork's chat prose linkifier (`chatFilePathLinks.ts`) and the link gate must share one answer to
+"is this a filesystem path", so the predicate is exported from client-runtime and re-exported by
+`apps/web/src/markdown-links.ts`. It tests Windows **drive** paths only — an escaped backslash in
+prose is not a UNC path (measured 0 true positives). Three of upstream's new helpers are the fork's
+own re-implemented line for line (`fileBasename` = `basenamePathSegment`, `workspaceRelativeFilePath`
+= the local `workspaceRelativePath`, `formatFilePathPosition` = `withPosition`), so the fork's copies
+are aliases or gone.
+
 ### 18. The event hub is unbounded; every consumer of it must not be
 
 `apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
@@ -755,6 +826,25 @@ common reported all-green having checked nothing.
 any of twelve formula variants (they give 147/149/186/188); it was a mid-merge number quoted in a
 post-merge document. The same reconcile's `fork-loss` was recorded as 16 and is **18**. Re-measure
 before quoting a sweep number — the tool is one command.
+
+## Sweep numbers from the 28th reconcile
+
+73 upstream commits, 40 conflicted files (one modify/delete). Sweep totals: **resurrected 16,
+dropped 47, fork-loss 120, both-kept 1**, all named in `~/reports/t3code/2026-09/2026-09-03/`.
+The resurrected 10 in `ProviderCommandReactor.test.ts` are one test restored on purpose (see the
+report); the rest of the fork-loss is relocation into upstream helpers (§26) and comment reshaping.
+
+Two things only this reconcile taught:
+
+- **Typecheck is a structural false green while any file still carries conflict markers.** Both
+  `tsgo` and `tsc` report only TS1185 and suppress every semantic diagnostic program-wide.
+  Falsified twice with deliberate type errors that were reported clean. Typecheck a group's files
+  with a throwaway per-file tsconfig, or only after the LAST marker is gone.
+- **Upstream deletions in unconflicted files reach fork files that are also unconflicted.**
+  `terminal-links.ts` lost `splitPathAndPosition` with no conflict; `chatFilePathLinks.ts` (fork
+  only, untouched by the merge) still imported it and 27 tests threw at runtime. Only typecheck
+  after the last marker, or a test run, sees it — and only because the export vanished rather than
+  changing meaning.
 
 ## Sweep numbers from the 27th reconcile
 

@@ -1,4 +1,5 @@
 import type {
+  ChatFileAttachment,
   EditorId,
   EnvironmentId,
   ResolvedKeybindingsConfig,
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
+import { PierreEntryIcon } from "~/components/chat/PierreEntryIcon";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { useRemoteOpenState } from "~/remoteOpen";
@@ -69,6 +71,7 @@ import {
   isMarkdownPreviewFile,
   rendersFromAssetUrl,
   setMarkdownTaskChecked,
+  shouldShowFileExplorer,
 } from "./filePreviewMode";
 import { useRightPanelStore } from "~/rightPanelStore";
 
@@ -97,6 +100,7 @@ interface FilePreviewPanelProps {
    * selector moves only the tree.
    */
   fileRepoCwd?: string | undefined;
+  attachment?: ChatFileAttachment;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
   keybindings: ResolvedKeybindingsConfig;
@@ -269,6 +273,69 @@ function WorkspaceAudioPreview(props: {
 
 const isPdfPreviewFile = (path: string): boolean => /\.pdf$/i.test(path.split(/[?#]/, 1)[0] ?? "");
 
+function BrowserDocumentFrame(props: {
+  readonly src: string;
+  readonly title: string;
+  readonly pdf: boolean;
+}) {
+  const className = "min-h-0 flex-1 border-0 bg-white";
+  // The built-in PDF viewer needs an unsandboxed frame; a PDF runs no scripts.
+  return props.pdf ? (
+    // oxlint-disable-next-line react/iframe-missing-sandbox
+    <iframe key={props.src} src={props.src} title={props.title} className={className} />
+  ) : (
+    <iframe
+      key={props.src}
+      src={props.src}
+      title={props.title}
+      className={className}
+      sandbox="allow-scripts allow-forms allow-popups allow-modals"
+    />
+  );
+}
+
+function AttachmentBrowserPreview(props: {
+  readonly environmentId: EnvironmentId;
+  readonly attachment: ChatFileAttachment;
+}) {
+  const resource = useMemo(
+    () => ({
+      _tag: "attachment" as const,
+      attachmentId: props.attachment.id,
+      fileName: props.attachment.name,
+      mimeType: props.attachment.mimeType,
+      disposition: "inline" as const,
+    }),
+    [props.attachment.id, props.attachment.mimeType, props.attachment.name],
+  );
+  const assetUrl = useAssetUrlState(props.environmentId, resource);
+
+  if (assetUrl._tag === "Failure") {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
+        Unable to load attachment preview.
+      </div>
+    );
+  }
+  if (assetUrl._tag !== "Success") {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" />
+      </div>
+    );
+  }
+  return (
+    <BrowserDocumentFrame
+      src={assetUrl.url}
+      title={props.attachment.name}
+      pdf={
+        isPdfPreviewFile(props.attachment.name) ||
+        props.attachment.mimeType.split(";", 1)[0]?.trim().toLowerCase() === "application/pdf"
+      }
+    />
+  );
+}
+
 /**
  * Renders an HTML or PDF file in place from its signed asset URL. HTML runs in
  * a sandboxed frame with an opaque origin, so a page cannot reach the app's
@@ -313,19 +380,11 @@ function WorkspaceBrowserPreview(props: {
       </div>
     );
   }
-  const src = `${assetUrl.url}${revisionSuffix}`;
-  const className = "min-h-0 flex-1 border-0 bg-white";
-  // The built-in PDF viewer needs an unsandboxed frame; a PDF runs no scripts.
-  return isPdfPreviewFile(props.absolutePath) ? (
-    // oxlint-disable-next-line react/iframe-missing-sandbox
-    <iframe key={src} src={src} title={props.title} className={className} />
-  ) : (
-    <iframe
-      key={src}
-      src={src}
+  return (
+    <BrowserDocumentFrame
+      src={`${assetUrl.url}${revisionSuffix}`}
       title={props.title}
-      className={className}
-      sandbox="allow-scripts allow-forms allow-popups allow-modals"
+      pdf={isPdfPreviewFile(props.absolutePath)}
     />
   );
 }
@@ -992,6 +1051,7 @@ export default function FilePreviewPanel({
   projectName,
   relativePath,
   fileRepoCwd,
+  attachment,
   threadRef,
   composerDraftTarget,
   keybindings,
@@ -1053,9 +1113,15 @@ export default function FilePreviewPanel({
   const isPdf = relativePath !== null && isPdfPreviewFile(relativePath);
   const isHtml = relativePath !== null && !isPdf && isBrowserPreviewFile(relativePath);
   // A file outside the workspace (an absolute path) is shown, never edited.
-  const isHostFile = relativePath !== null && isAbsolutePath(relativePath);
+  const isHostFile =
+    attachment !== undefined || (relativePath !== null && isAbsolutePath(relativePath));
   const isAssetPreview = relativePath !== null && rendersFromAssetUrl(relativePath);
-  const file = useProjectFileQuery(environmentId, cwd, relativePath, !isMedia && !isPdf);
+  const file = useProjectFileQuery(
+    environmentId,
+    cwd,
+    relativePath,
+    attachment === undefined && !isMedia && !isPdf,
+  );
   // Same rule as the trusted viewer: a failed read is a directory candidate, and
   // asking for the listing is the test. Rooted at this panel's own cwd + relative
   // path rather than anything the server resolved, so children relativize back
@@ -1069,6 +1135,11 @@ export default function FilePreviewPanel({
     listingPath,
   );
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
+  const showExplorer = shouldShowFileExplorer({
+    relativePath,
+    explorerOpen,
+    attachmentOpen: attachment !== undefined,
+  });
   // Reading markdown rendered is a preference, not a property of one file. Keeping
   // it on the panel meant a thread switch dropped it and forced source back.
   const [renderMarkdownPreferred, setRenderMarkdownPreferred] = useLocalStorage(
@@ -1095,20 +1166,27 @@ export default function FilePreviewPanel({
     (handledReveal?.path === relativePath && handledReveal.requestId === revealRequestId);
   const renderMarkdown = isMarkdown && renderMarkdownPreferred && revealHandled;
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
-  const canToggleRendered = isMarkdown || isHtml;
+  const canToggleRendered = attachment === undefined && (isMarkdown || isHtml);
   const rendered = isMarkdown ? renderMarkdown : renderBrowserFile;
   const setRenderedPreferred = isMarkdown
     ? setRenderMarkdownPreferred
     : setRenderBrowserFilePreferred;
   const canOpenInBrowser =
     relativePath !== null &&
+    attachment === undefined &&
     !isVideo &&
     isPreviewSupportedInRuntime() &&
     isBrowserPreviewFile(relativePath);
-  const absolutePath = relativePath ? resolvePathLinkTarget(relativePath, cwd) : null;
+  const absolutePath =
+    relativePath && attachment === undefined ? resolvePathLinkTarget(relativePath, cwd) : null;
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
   useWorkspaceMutationRefresh({
-    enabled: relativePath !== null && !isAssetPreview && !isPdf && !selectedFilePending,
+    enabled:
+      attachment === undefined &&
+      relativePath !== null &&
+      !isAssetPreview &&
+      !isPdf &&
+      !selectedFilePending,
     mutationId: workspaceMutationId,
     refresh: file.refresh,
     resourceKey: `file:${environmentId}:${cwd}:${relativePath ?? ""}`,
@@ -1165,27 +1243,39 @@ export default function FilePreviewPanel({
           className="flex h-10 min-h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
           data-surface-subheader
         >
-          <ScrollArea
-            ref={breadcrumbRef}
-            hideScrollbars
-            scrollFade
-            className="min-w-0 flex-1 rounded-none"
-            data-file-breadcrumbs
-          >
-            <div className="flex h-full w-max min-w-full items-center text-xs">
-              <FileBreadcrumbs
-                cwd={cwd}
-                environmentId={environmentId}
-                onOpenFile={onOpenFile}
-                // The root label names the repository `cwd` points at, which for a
-                // file opened out of an attached member is that member, not the
-                // project. Upstream's browsable breadcrumbs take it as `projectName`.
-                projectName={fileRepoName}
-                relativePath={relativePath}
-                workspaceMutationId={workspaceMutationId}
+          {attachment ? (
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
+              <PierreEntryIcon
+                pathValue={attachment.name}
+                kind="file"
+                theme={resolvedTheme}
+                className="size-3.5"
               />
+              <span className="truncate font-medium">{attachment.name}</span>
             </div>
-          </ScrollArea>
+          ) : (
+            <ScrollArea
+              ref={breadcrumbRef}
+              hideScrollbars
+              scrollFade
+              className="min-w-0 flex-1 rounded-none"
+              data-file-breadcrumbs
+            >
+              <div className="flex h-full w-max min-w-full items-center text-xs">
+                <FileBreadcrumbs
+                  cwd={cwd}
+                  environmentId={environmentId}
+                  onOpenFile={onOpenFile}
+                  // The root label names the repository `cwd` points at, which for a
+                  // file opened out of an attached member is that member, not the
+                  // project. Upstream's browsable breadcrumbs take it as `projectName`.
+                  projectName={fileRepoName}
+                  relativePath={relativePath}
+                  workspaceMutationId={workspaceMutationId}
+                />
+              </div>
+            </ScrollArea>
+          )}
           {absolutePath &&
           (environmentId === primaryEnvironmentId || remoteOpenState.mode !== "local-exec") ? (
             <OpenInPicker
@@ -1242,25 +1332,27 @@ export default function FilePreviewPanel({
               <TooltipPopup>Open file in preview browser</TooltipPopup>
             </Tooltip>
           ) : null}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  className="shrink-0"
-                  pressed={explorerOpen}
-                  onPressedChange={toggleExplorer}
-                  aria-label={explorerOpen ? "Hide file explorer" : "Show file explorer"}
-                  variant="ghost"
-                  size="sm"
-                >
-                  <FolderTree className="size-3.5" />
-                </Toggle>
-              }
-            />
-            <TooltipPopup>
-              {explorerOpen ? "Hide file explorer" : "Show file explorer"}
-            </TooltipPopup>
-          </Tooltip>
+          {!isHostFile ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    className="shrink-0"
+                    pressed={explorerOpen}
+                    onPressedChange={toggleExplorer}
+                    aria-label={explorerOpen ? "Hide file explorer" : "Show file explorer"}
+                    variant="ghost"
+                    size="sm"
+                  >
+                    <FolderTree className="size-3.5" />
+                  </Toggle>
+                }
+              />
+              <TooltipPopup>
+                {explorerOpen ? "Hide file explorer" : "Show file explorer"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
       ) : null}
       {relativePath && !isMedia && !renderBrowserFile && file.data?.truncated ? (
@@ -1275,7 +1367,9 @@ export default function FilePreviewPanel({
             relativePath ? "flex" : "hidden",
           )}
         >
-          {relativePath && isVideo && absolutePath ? (
+          {relativePath && attachment ? (
+            <AttachmentBrowserPreview environmentId={environmentId} attachment={attachment} />
+          ) : relativePath && isVideo && absolutePath ? (
             <WorkspaceVideoPreview
               key={`${environmentId}:${threadRef.threadId}:${absolutePath}`}
               environmentId={environmentId}
@@ -1389,7 +1483,7 @@ export default function FilePreviewPanel({
             )
           ) : null}
         </div>
-        {explorerOpen || relativePath === null ? (
+        {showExplorer ? (
           <aside
             className={cn(
               "flex min-h-0 shrink-0 bg-background",

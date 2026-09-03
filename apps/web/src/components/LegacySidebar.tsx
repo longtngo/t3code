@@ -23,6 +23,7 @@ import {
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
 import { ThreadProviderChip, ThreadProviderRail } from "./ThreadProviderRail";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -49,6 +50,7 @@ import {
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
+  resolveEnvironmentMachineKind,
   ThreadId,
   type WorkspaceMember,
 } from "@t3tools/contracts";
@@ -400,9 +402,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   });
   const environment = useEnvironment(thread.environmentId);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const isRemoteThread =
-    primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
+  // No primary (the hosted app) means every thread is remote, and the machine
+  // glyph is what tells the environments apart.
+  const isRemoteThread = thread.environmentId !== primaryEnvironmentId;
   const remoteEnvLabel = environment?.label ?? null;
+  const remoteMachine = resolveEnvironmentMachineKind(environment?.serverConfig ?? null);
   // A desktop-local secondary backend (e.g. the WSL backend) shows up as a
   // bearer environment whose connection id is prefixed "local:". It runs on the
   // user's own machine, so the cloud icon is misleading — label it "Local" and
@@ -885,7 +889,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                         />
                       }
                     >
-                      <CloudIcon className="size-3 text-muted-foreground/40" />
+                      <EnvironmentMachineIcon
+                        kind={remoteMachine}
+                        className="size-3 text-muted-foreground/40"
+                      />
                     </TooltipTrigger>
                     <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
                   </Tooltip>
@@ -2405,11 +2412,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               }`}
             />
           )}
-          <ProjectFavicon
-            environmentId={project.environmentId}
-            cwd={project.workspaceRoot}
-            faviconPath={project.faviconPath}
-          />
+          <span className="flex shrink-0">
+            <ProjectFavicon
+              environmentId={project.environmentId}
+              cwd={project.workspaceRoot}
+              projectName={project.displayName}
+              faviconPath={project.faviconPath}
+              projectIcon={project.projectIcon}
+            />
+          </span>
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className="truncate text-sm font-medium text-sidebar-foreground/90">
               {project.displayName}

@@ -59,6 +59,23 @@ describe("requestLatencyState", () => {
     expect(getSlowRpcAckRequests()).toEqual([]);
   });
 
+  it("gives usage summary requests the long leash instead of no tracking", () => {
+    trackRpcRequestSent("1", WS_METHODS.serverGetUsageSummary);
+    vi.advanceTimersByTime(LONG_RUNNING_RPC_ACK_THRESHOLD_MS - 1);
+
+    expect(getSlowRpcAckRequests()).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+
+    expect(getSlowRpcAckRequests()).toMatchObject([
+      {
+        requestId: "1",
+        tag: WS_METHODS.serverGetUsageSummary,
+        thresholdMs: LONG_RUNNING_RPC_ACK_THRESHOLD_MS,
+      },
+    ]);
+  });
+
   it.each(Object.values(WS_METHODS).filter((method) => method.startsWith("pullRequests.")))(
     "keeps quiet about pull request request %s at the normal threshold",
     (method) => {

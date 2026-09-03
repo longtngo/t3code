@@ -848,6 +848,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
+
     // Checkpoints snapshot the staging repository only. Restoring it while a
     // member repository has moved leaves an inconsistent tree behind a UI that
     // implies a clean undo, so the revert is refused and the repositories are

@@ -223,6 +223,7 @@ export function projectEvent(
             defaultThreadEnvMode: null,
             autoPull: false,
             faviconPath: payload.faviconPath ?? null,
+            projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,
             members: payload.members ?? [],
             createdAt: payload.createdAt,
@@ -262,6 +263,9 @@ export function projectEvent(
                   ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
                   ...(payload.faviconPath !== undefined
                     ? { faviconPath: payload.faviconPath }
+                    : {}),
+                  ...(payload.projectIcon !== undefined
+                    ? { projectIcon: payload.projectIcon }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.members !== undefined ? { members: payload.members } : {}),

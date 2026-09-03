@@ -24,13 +24,14 @@
  *
  * @module chatFilePathLinks
  */
+import {
+  formatFilePathPosition,
+  splitFilePathPosition,
+} from "@t3tools/client-runtime/markdown-links";
+
 import { classifyFileViewerKind } from "./lib/codeFileTypes";
 import { isKnownFilesystemRootPath } from "./markdown-links";
-import {
-  extractTerminalLinks,
-  resolvePathLinkTarget,
-  splitPathAndPosition,
-} from "./terminal-links";
+import { extractTerminalLinks, resolvePathLinkTarget } from "./terminal-links";
 
 export interface ChatFilePathMention {
   /** The matched text, exactly as it appears in the message. */
@@ -74,11 +75,6 @@ function hasSeparator(path: string): boolean {
 function basenameOf(path: string): string {
   const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return index >= 0 ? path.slice(index + 1) : path;
-}
-
-function withPosition(path: string, line: string | undefined, column: string | undefined): string {
-  if (!line) return path;
-  return `${path}:${line}${column ? `:${column}` : ""}`;
 }
 
 /**
@@ -125,7 +121,7 @@ export function collectKnownAbsolutePaths(text: string): string[] {
   const found: string[] = [];
   for (const match of extractTerminalLinks(text)) {
     if (match.kind !== "path") continue;
-    const { path } = splitPathAndPosition(match.text);
+    const { path } = splitFilePathPosition(match.text);
     if (!isAbsolute(path) || URL_LIKE_PATTERN.test(path)) continue;
     found.push(path);
   }
@@ -143,7 +139,8 @@ export function resolveChatFilePathMention(
   const trimmed = raw.trim();
   if (trimmed.length === 0 || URL_LIKE_PATTERN.test(trimmed)) return null;
 
-  const { path, line, column } = splitPathAndPosition(trimmed);
+  const position = splitFilePathPosition(trimmed);
+  const { path } = position;
   if (path.length === 0) return null;
 
   // The curated extension allow-list is the primary gate for "is this an openable
@@ -168,7 +165,7 @@ export function resolveChatFilePathMention(
     return null;
   }
 
-  if (isAbsolute(path)) return withPosition(path, line, column);
+  if (isAbsolute(path)) return formatFilePathPosition(position);
 
   const cwd = options.cwd;
 
@@ -179,13 +176,13 @@ export function resolveChatFilePathMention(
     );
     if (matches.size !== 1) return null;
     const [only] = [...matches];
-    return withPosition(only!, line, column);
+    return formatFilePathPosition({ ...position, path: only! });
   }
 
   if (!cwd) return null;
   const resolved = resolvePathLinkTarget(trimmed, cwd);
-  const split = splitPathAndPosition(resolved);
-  return withPosition(normalizeDotSegments(split.path), split.line, split.column);
+  const split = splitFilePathPosition(resolved);
+  return formatFilePathPosition({ ...split, path: normalizeDotSegments(split.path) });
 }
 
 /**

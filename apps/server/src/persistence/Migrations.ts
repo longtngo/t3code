@@ -113,6 +113,12 @@ import Migration0051 from "./Migrations/051_CrewTasks.ts";
 // numbers. Filenames are free to repeat and to lag; applied ids are not.
 import Migration0052 from "./Migrations/044_ClearAutomaticProjectModelDefaults.ts";
 import Migration0053 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
+// Upstream's 046 (repair automatic settlement timestamps) and 047
+// (projection_projects.project_icon_json) arrive after the fork already deployed
+// ids 33-53, so they take the next free ids (54, 55) rather than their filename
+// numbers. Their tests are retargeted to those applied ids.
+import Migration0054 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
+import Migration0055 from "./Migrations/047_ProjectionProjectIcon.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -177,6 +183,8 @@ export const migrationEntries = [
   [51, "CrewTasks", Migration0051],
   [52, "ClearAutomaticProjectModelDefaults", Migration0052],
   [53, "ProjectionProjectsAutoPull", Migration0053],
+  [54, "RepairAutomaticSettlementTimestamps", Migration0054],
+  [55, "ProjectionProjectIcon", Migration0055],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

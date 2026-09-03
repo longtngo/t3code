@@ -511,6 +511,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultThreadEnvMode: null,
             autoPull: false,
             faviconPath: event.payload.faviconPath ?? null,
+            projectIcon: event.payload.projectIcon ?? null,
             scripts: event.payload.scripts,
             members: event.payload.members ?? [],
             createdAt: event.payload.createdAt,
@@ -541,6 +542,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.autoPull !== undefined ? { autoPull: event.payload.autoPull } : {}),
             ...(event.payload.faviconPath !== undefined
               ? { faviconPath: event.payload.faviconPath }
+              : {}),
+            ...(event.payload.projectIcon !== undefined
+              ? { projectIcon: event.payload.projectIcon }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             ...(event.payload.members !== undefined ? { members: event.payload.members } : {}),
