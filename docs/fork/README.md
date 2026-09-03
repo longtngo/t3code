@@ -176,11 +176,11 @@ conflict — reintroduces a guaranteed red test.
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
-`SettingsSidebarNav`. The fork's two footer-only panels (`SidebarLocalModels`,
-`SidebarResourceQueue`), their shared open state, and the `relative` row wrapper they anchor to
-now live **inside that component**, not in `SidebarChromeFooter`, which is a bare
-`<SidebarUtilityMenu />`. Keeping them out of it would have hidden them on the settings page,
-which is the one surface upstream added.
+`SettingsSidebarNav`. Four fork panels (`SidebarLocalModels`, `SidebarResourceQueue`,
+`SidebarCrew`, `SidebarSubagentBackend`) live **inside that component**, along with the shared
+open state and the `relative` row wrapper the status panels anchor to. `SidebarChromeFooter` keeps
+only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the four out of
+the menu would have hidden them on the settings page, which is the one surface upstream added.
 
 `sidebarChromeFooter.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than

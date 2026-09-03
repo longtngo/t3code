@@ -295,7 +295,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
         <T3ConnectSidebarSignIn />
-        <div className="flex items-center gap-1">
+        <div className="flex items-end gap-1">
           <div className="min-w-0 flex-1">
             <SidebarUtilityMenu />
           </div>

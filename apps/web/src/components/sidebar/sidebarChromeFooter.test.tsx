@@ -44,13 +44,15 @@ vi.mock("./SidebarCrew", () => ({
   SidebarCrew: () => createElement("li", { "data-panel": "crew" }),
 }));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
-vi.mock("./SidebarSubagentBackend", () => ({ SidebarSubagentBackend: () => null }));
+vi.mock("./SidebarSubagentBackend", () => ({
+  SidebarSubagentBackend: () => createElement("div", { "data-panel": "subagents" }),
+}));
 vi.mock("./SidebarUpdatePill", () => ({
   SidebarUpdatePill: () => null,
   SidebarUpdateArchitectureWarning: () => null,
 }));
 
-import { SidebarChromeFooter } from "./SidebarChrome";
+import { SidebarChromeFooter, SidebarUtilityMenu } from "./SidebarChrome";
 import { SidebarProvider } from "../ui/sidebar";
 
 function renderFooterAt(pathname: string) {
@@ -104,5 +106,17 @@ describe("SidebarChromeFooter panel placement", () => {
     // ancestor. That ancestor must be the row wrapper, or each popover collapses
     // to the width of its ~40px trigger.
     expect(renderFooterAt("/")).toContain('class="relative"');
+  });
+
+  it("mounts the subagent disclosure inside the utility menu, which is what the settings page renders", () => {
+    locationState.pathname = "/settings";
+    const markup = renderToStaticMarkup(
+      createElement(SidebarProvider, null, createElement(SidebarUtilityMenu)),
+    );
+    expect(markup).toContain('data-panel="subagents"');
+  });
+
+  it("mounts the subagent disclosure exactly once in the footer", () => {
+    expect(renderFooterAt("/").split('data-panel="subagents"').length - 1).toBe(1);
   });
 });

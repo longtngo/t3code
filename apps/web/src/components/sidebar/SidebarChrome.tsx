@@ -220,7 +220,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [openFooterPanel]);
 
   return (
-    /* This wrapper is the positioning context for the two fork-only panels in the row
+    <>
+      <SidebarSubagentBackend />
+      {/* This wrapper is the positioning context for the two fork-only panels in the row
        below. Their trigger items opt out of `relative`, so each panel draws at exactly
        footer width above the whole row instead of against its own ~40px button — correct
        on the 16rem desktop sidebar and the wider mobile drawer alike, with no width
@@ -228,38 +230,38 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
        The row wraps: five controls plus the Electron update pill do not always fit 240px,
        and wrapping to a second line beats overflowing or shrinking the badges past
-       legibility. */
-    <div className="relative" ref={footerRowRef}>
-      <SidebarMenu className="flex-row flex-wrap items-center">
-        {currentFooterPage ? (
-          <SidebarMenuItem className="min-w-0 flex-1">
-            <SidebarMenuButton onClick={handleBackClick}>
-              <ArrowLeftIcon />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ) : (
-          <>
-            <SidebarUtilityItem
-              icon={<SettingsIcon />}
-              label="Settings"
-              onClick={handleSettingsClick}
-            />
-            {pullRequestsSupported ? (
+       legibility. */}
+      <div className="relative" ref={footerRowRef}>
+        <SidebarMenu className="flex-row flex-wrap items-center">
+          {currentFooterPage ? (
+            <SidebarMenuItem className="min-w-0 flex-1">
+              <SidebarMenuButton onClick={handleBackClick}>
+                <ArrowLeftIcon />
+                <span>Back</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : (
+            <>
               <SidebarUtilityItem
-                icon={<GitPullRequestIcon />}
-                label="Pull Requests"
-                onClick={handlePullRequestsClick}
+                icon={<SettingsIcon />}
+                label="Settings"
+                onClick={handleSettingsClick}
               />
-            ) : null}
-            <SidebarUtilityItem
-              icon={<ChartNoAxesColumnIcon />}
-              label="Usage"
-              onClick={handleUsageClick}
-            />
-          </>
-        )}
-        {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
+              {pullRequestsSupported ? (
+                <SidebarUtilityItem
+                  icon={<GitPullRequestIcon />}
+                  label="Pull Requests"
+                  onClick={handlePullRequestsClick}
+                />
+              ) : null}
+              <SidebarUtilityItem
+                icon={<ChartNoAxesColumnIcon />}
+                label="Usage"
+                onClick={handleUsageClick}
+              />
+            </>
+          )}
+          {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
             Usage are navigation, so "Back" rightly replaces them once you are on one of
             those pages. These two are live status readouts — hiding them there would be a
             silent capability loss for no gain. `SidebarUpdatePill` below sits outside for
@@ -268,18 +270,19 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             Their open state lives in this component rather than in each panel: both anchor
             to the wrapper above with identical insets, so two open panels would occupy the
             same box. */}
-        <SidebarLocalModels
-          isOpen={openFooterPanel === "models"}
-          onOpenChange={(open) => setFooterPanelOpen("models", open)}
-        />
-        <SidebarResourceQueue
-          isOpen={openFooterPanel === "queue"}
-          onOpenChange={(open) => setFooterPanelOpen("queue", open)}
-        />
-        <SidebarCrew />
-        <SidebarUpdatePill />
-      </SidebarMenu>
-    </div>
+          <SidebarLocalModels
+            isOpen={openFooterPanel === "models"}
+            onOpenChange={(open) => setFooterPanelOpen("models", open)}
+          />
+          <SidebarResourceQueue
+            isOpen={openFooterPanel === "queue"}
+            onOpenChange={(open) => setFooterPanelOpen("queue", open)}
+          />
+          <SidebarCrew />
+          <SidebarUpdatePill />
+        </SidebarMenu>
+      </div>
+    </>
   );
 });
 
@@ -288,7 +291,6 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      <SidebarSubagentBackend />
       <SidebarUtilityMenu />
     </SidebarFooter>
   );
