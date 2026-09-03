@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { beforeAll, describe, expect, it } from "vite-plus/test";
 
 import type { NativeReviewDiffRow } from "./nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "./nativeReviewDiffTypes";
@@ -49,6 +49,24 @@ function highlight(
 }
 
 describe("highlightNativeReviewDiffVisibleRows", () => {
+  // Shiki stops tokenizing a line after 500 ms (`tokenizeTimeLimit`) and hands back the
+  // pre-line grammar stack, so a template literal opened on that line never closes on the
+  // next. The JavaScript regex engine compiles each grammar rule on first use, and the
+  // template-literal rules are first hit here — under a CPU-starved full gate that compile
+  // alone crossed the limit and made two identical inputs tokenize differently. Pay it once,
+  // before any assertion.
+  beforeAll(async () => {
+    await highlight([
+      makeLine({
+        id: "warm-up",
+        content: "const warm = `${1}`;",
+        change: "add",
+        oldLineNumber: null,
+        newLineNumber: 1,
+      }),
+    ]);
+  });
+
   it("does not carry grammar state across hunk boundaries", async () => {
     const exportRow = makeLine({
       id: "export-row",
