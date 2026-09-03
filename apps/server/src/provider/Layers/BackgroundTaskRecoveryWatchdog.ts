@@ -42,7 +42,7 @@ import { RuntimeBootId } from "../../environment/Services/RuntimeBootId.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PendingBackgroundTaskRepository } from "../../persistence/Services/PendingBackgroundTask.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { AnalyticsService } from "../../telemetry/AnalyticsService.ts";
 import {
   BackgroundTaskRecoveryWatchdog,
   type BackgroundTaskRecoveryWatchdogShape,

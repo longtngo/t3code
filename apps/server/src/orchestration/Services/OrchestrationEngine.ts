@@ -111,6 +111,25 @@ export interface OrchestrationEngineShape {
    * (the caller deduplicates the read/live overlap by sequence). The subscription
    * is released when the surrounding scope closes.
    */
+  /**
+   * The same eager subscription as {@link subscribeDomainEvents}, WITHOUT the bounded
+   * WS buffer in front of it.
+   *
+   * Internal reactors need both halves: they must not miss an event published between
+   * layer construction and their own stream being run, and they must not be dropped when
+   * they fall behind — a reactor that silently loses a `thread.session.stop` leaves the
+   * thread wedged. The bound on the WS accessor exists for consumers that can stop
+   * draining, which a reactor cannot; it drains on the command worker.
+   *
+   * This is unbounded, and that is the same exposure `streamDomainEvents` already has.
+   * Do NOT hand it to a WebSocket consumer — see invariant 18 in docs/fork/README.md.
+   */
+  readonly subscribeDomainEventsLossless: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
+
   readonly subscribeDomainEvents: Effect.Effect<
     Stream.Stream<OrchestrationEvent>,
     never,

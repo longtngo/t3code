@@ -10,7 +10,7 @@ import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { AnalyticsService } from "../../telemetry/AnalyticsService.ts";
 import {
   ProviderRuntimeIngestionService,
   type TurnActivitySnapshot,

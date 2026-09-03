@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { migrationEntries, runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 /**
  * The ids already deployed to live databases before this change. A literal, never
@@ -38,9 +38,15 @@ describe("051_CrewTasks ids", () => {
     expect(ids.every((id) => LEGACY.has(id) || id > 50)).toBe(expected);
   });
 
-  vitestIt("registers exactly one new id, and it is 51", () => {
-    const ids = migrationEntries.map(([id]) => id);
-    expect(ids.filter((id) => !LEGACY.has(id))).toEqual([51]);
+  // Retargeted on the 27th reconcile: this asserted "exactly one new id" when 51 was
+  // the only one above the mark. Upstream's 044/045 have since arrived and taken 52/53,
+  // so the subject is now that 51 is still CrewTasks and that every id past the mark is
+  // a contiguous, ascending extension of it -- which is what a renumbering would break.
+  vitestIt("keeps 51 as CrewTasks and extends contiguously above the mark", () => {
+    const beyond = migrationEntries.filter(([id]) => !LEGACY.has(id));
+    expect(beyond[0]?.[0]).toBe(51);
+    expect(beyond[0]?.[1]).toBe("CrewTasks");
+    expect(beyond.map(([id]) => id)).toEqual(beyond.map((_entry, index) => 51 + index));
   });
 
   vitestIt("ids are unique and strictly ascending", () => {

@@ -14,7 +14,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../persistence/Migrations.ts";
-import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { CrewRepository, CrewRepositoryLive } from "./CrewRepository.ts";
 
 const ProviderDriver = "claudeAgent" as CrewTask["provider"];

@@ -101,6 +101,9 @@ export const ProviderSendTurnInput = Schema.Struct({
    * or a queued message can be listed but never withdrawn.
    */
   messageId: Schema.optional(MessageId),
+  /** Internal recovery signal. Allows an empty turn only for adapters that
+      explicitly support promptless continuation. */
+  continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),

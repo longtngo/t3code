@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
+  lazy,
+  Suspense,
   useEffect,
   useState,
   useSyncExternalStore,
@@ -15,10 +17,10 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
+import { usePanelAnimationSettings } from "../panelAnimations";
 import { isViewerRoutePath } from "./files/viewerPath";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
-import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import {
   resolveSidebarStageFocusRingOffsetClass,
@@ -43,6 +45,14 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
+
+// The settings nav (and the Clerk profile surfaces behind it) only renders on
+// settings routes; lazy-loading it keeps that subtree out of the startup chunk.
+const SettingsSidebarNav = lazy(() =>
+  import("./settings/SettingsSidebarNav").then((module) => ({
+    default: module.SettingsSidebarNav,
+  })),
+);
 
 function subscribeToViewportWidth(onChange: () => void): () => void {
   window.addEventListener("resize", onChange);
@@ -140,6 +150,8 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -173,6 +185,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   });
   const sidebarProviderStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
+    "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...(isMacosDesktop && !isWindowFullscreen
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
@@ -218,6 +231,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider
       className="h-dvh! min-h-0!"
+      data-panel-animations={panelAnimationsActive ? "true" : "false"}
       defaultOpen={!startsWithSidebarCollapsed}
       style={sidebarProviderStyle}
     >
@@ -240,7 +254,9 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         {isOnSettings ? (
           <>
             <SidebarChromeHeader isElectron={isElectron} />
-            <SettingsSidebarNav pathname={pathname} />
+            <Suspense fallback={null}>
+              <SettingsSidebarNav pathname={pathname} />
+            </Suspense>
           </>
         ) : legacySidebarEnabled ? (
           <LegacyThreadSidebar />

@@ -25,7 +25,7 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-08-29 (23rd reconcile), against `origin/main`. Concentrated in `apps/server`
+As of 2026-09-02 (27th reconcile), against `origin/main`. Concentrated in `apps/server`
 and `apps/web`.
 
 ## Invariants a merge must not break
@@ -115,6 +115,24 @@ ordinary upstream additions by the 17th reconcile:
 - `MessagesTimeline.tsx` drops `buildToolCallExpandedBody`, `workEntryRawCommand` and
   `stopRowToggle`. The fork opens a work-entry's detail in a modal instead of an inline expanded
   body, so all three would be unused. Upstream still has them and still calls them.
+
+  **Widened 2026-09-02 (27th reconcile).** Upstream #9106/#9267 rebuilt that inline expansion
+  around a `WorkGroupViewCtx` (per-entry `expandedEntries` set, an `onToggleEntry` callback
+  threaded through `TimelineRowCtx`) and a `resolveWorkEntryToolPresentation`-driven row label.
+  Roughly half of it merged **outside every conflict marker**, so rejecting only the marked
+  hunks left a file that referenced a context nothing consumed. The whole per-entry expansion
+  is rejected and its scaffolding removed: `WorkGroupViewCtx`, `expandedEntries`,
+  `onToggleWorkEntry`. What is KEPT from the same commits, because it is about the group list
+  rather than the row: `resolveWorkGroupScrollAnchor` + `workGroupViewState.scrollPositions`,
+  and upstream's `ExpandedWorkGroupEntries` virtualized component — which now mounts the fork's
+  `WorkEntryDetailDialog` itself, since its rows open detail the same way.
+
+  Also relocated, not lost: `commandProgramName` / `tokenizeShellCommand` / the
+  `COMMAND_WRAPPER_*` tables moved to `packages/client-runtime/src/work-log/commandLabel.ts`
+  (upstream's copy is a superset — it also unwraps `sh -c`), and `liveWorkEntryLabel` moved to
+  `MessagesTimeline.logic.ts`. The local copies are gone; a sweep reports ~92 fork-loss lines
+  for this file and every one of them is that move.
+
 - `ComposerPendingUserInputPanel.tsx` drops upstream's `Collapsible` wrapper (fork commit
   `a02c9e405`) for a bounded, kept-mounted options list that survives a collapse with its scroll
   position and keeps `aria-controls` resolvable. Upstream keeps restyling its own version, so this
@@ -185,8 +203,29 @@ session is live, so it assumes zero). The behaviour is covered end-to-end by
 retargeted to `stopped` with a comment. That test is the guard: disabling the binding block leaves
 `bindingStatus: "running"` and a stale `activeTurnId`, verified 2026-08-21.
 
-**A reconcile that restores upstream's `error` semantics, or reinstates the
-`provider-sessions.reconcile` phase, is reverting a deliberate decision.**
+**Updated 2026-09-02 (27th reconcile). The phase is back, narrowed.** Upstream #9167 turned
+`reconcileProviderSessions` from a dead orphan-settler into the engine for "continue active
+threads across a server restart": `ServerSelfUpdate` marks every running thread's directory
+binding with `continueAfterServerUpdate` before the update, and this phase resumes them
+afterwards. That is a real feature, and `ws.ts` / `ServerRuntimeStartup`'s interface / the
+`serverUpdateThreadContinuation` capability all merged cleanly around it, so rejecting it was
+no longer free.
+
+It is adopted **verbatim**, and made reachable by one change on the fork's side:
+`reconcileInterruptedTurnsOnBoot` now reads each candidate thread's binding and **skips the
+continuation-marked ones**. Without that skip the fork's earlier phase settles them to
+`stopped`, upstream's filter (`starting`/`running`/`activeTurnId !== null`) matches zero, and
+the resume silently never fires — the exact dead-phase shape this entry used to describe.
+`SERVER_UPDATE_CONTINUATION_KEY` and `hasServerUpdateContinuationMarker` moved to
+`ProviderSessionDirectory.ts` so both reconcilers can read them without a module cycle.
+
+Upstream's `serverRuntimeStartup.reconcile.test.ts` is **restored** with it (the fork had
+deleted it); its `ProviderService` / `OrchestrationEngine` stubs needed the fork's
+`withdrawQueuedTurn` / `refreshAccountUsage` / `appendSessionNote` / `hubBacklog` members added.
+
+**Still true: every thread that is NOT continuation-marked keeps the fork's `stopped` resting
+state, not upstream's `error`.** A reconcile that widens this phase back over ordinary restart
+orphans, or drops the skip in `BootTurnReconciler`, is reverting a deliberate decision.
 
 ### 6. Two project entry points in the sidebar, on purpose
 
@@ -388,6 +427,20 @@ actions there. The in-DOM menu earns its place on **discoverability** and on tou
 were wrong when written, and the comment is what seeded the doc. If a reconcile restores that
 wording from upstream, it is still wrong.)
 
+**Updated 2026-09-02 (27th reconcile).** Upstream #9140 renamed the chip's
+`workspaceRelativePath` prop to `panelPath` and widened its meaning: workspace-relative when there
+is one, otherwise the absolute host path of a non-media file. That is the fork's own "a report
+under `~/reports` opens read-only" behaviour, re-implemented upstream and routed through
+`openFileInPanel` rather than the fork's `openTrustedFile` detour, so the fork's two extra
+branches in `handleOpenInFilePreview` are gone and `canOpenInPanel` is upstream's. The
+`trustedFile` right-panel surface itself STAYS — `ChatView`, `FilePreviewPanel`'s directory
+listing and `rightPanelStore.test.ts` still use it. A separate `workspaceRelativePath` prop was
+added back beside `panelPath` because the fork's `onReveal` asks the workspace index for a
+basename match, which only makes sense for a path inside the workspace.
+
+Upstream's `onOpenMedia` is adopted, and its new "Preview media" item joins `sharedFileMenuItems`
+rather than upstream's hand-written native menu — which is the whole point of the shared array.
+
 The two menus deliberately differ: the in-DOM one carries "View in side panel" and "Open in new
 tab", the native one carries "Open in integrated browser" and "Copy relative path". Everything
 else comes from one `sharedFileMenuItems` array, which both menus map — the native menu at
@@ -421,6 +474,32 @@ resolves to nothing, and nothing renders the banner.
 **The mechanical tell:** after resolving, the merged `ChatView.logic.ts` exported the name
 **zero** times while the merged `ChatView.tsx` still referenced it once. When a conflict is an
 import list, count exports against references rather than reading the marker.
+
+### 19. `contextWindowMeterEnabled` defaults to TRUE here, not upstream's false
+
+Upstream #9190 made its circular context-window indicator opt-in, defaulting the setting OFF and
+labelling the control "(legacy)" — it is retiring that indicator. In this fork the same switch
+gates `activeContextWindow` on the composer's **Vitals gauge**, which is current, not legacy, and
+has been on since it shipped. Taking upstream's default would have silently removed a shipped
+feature from every existing user on the next launch.
+
+The gate itself is upstream's and is KEPT: a settings switch that changes nothing is worse than
+the divergence. Only the default flips, in
+`packages/contracts/src/settings.ts`. `packages/contracts/src/settings.test.ts` ("defaults on and
+preserves an explicit opt-out"), `apps/desktop/src/settings/DesktopClientSettings.test.ts`, and
+the "(legacy)" wording in `SettingsPanels.tsx` / `settingsSearch.ts` follow it.
+
+**A reconcile that restores `Effect.succeed(false)` here turns the Vitals gauge's context ring
+off for everyone, and nothing fails.**
+
+### 20. Two helpers upstream deleted as unused are still called here
+
+Upstream #9150's dead-code sweep removed `newCommandId` from `apps/web/src/lib/utils.ts` and
+`getProviderDisplayName` from `apps/web/src/providerModels.ts`. Both are dead upstream and live
+here — `ChatView` mints a command id for a queued follow-up turn (invariant 5), and the composer's
+provider label reads through the other. Both carry a `FORK-ONLY` comment now. The failure mode is
+loud (typecheck), which is the good case; the point of the note is that upstream will keep
+deleting them.
 
 ### 16. The socket TOS guard is load-bearing until Node >= 26.5.1
 
@@ -456,6 +535,54 @@ RSTs sub-millisecond, the unpatched arm crashes with the production stack (exit 
 arm survives 35,615 attempts (exit 0), suppressing 1 real EINVAL while every request still fails
 as `ECONNRESET`.
 
+### 21. `/api/assets` splits on which claim resolved the asset
+
+Upstream #8919's `assetFileResponse` was rejected once, in favour of the fork's Range parser
+(`assetVideoRangeResponse` + `assetResponseByteCap`), which also serves **audio**, caps the
+rangeless video branch at `ASSET_MAX_VIDEO_BYTES`, caps images, and 404s a directory named
+`foo.png` before headers are flushed. Upstream #9023 then gave `assetFileResponse` something the
+fork's branch structurally cannot do: serve from an **already-open descriptor**, which is how a
+`media-file-exact` claim (a host file outside any workspace) is served.
+
+So the route splits on `asset.file`: present means the host-file claim resolved it and upstream's
+helper answers; absent means a workspace asset and the fork's branch answers. `assetFileResponse`
+and its `assetByteRange` are live again, with upstream's own suite restored in
+`http.test.ts`'s "video asset byte ranges". The fork's retargeted edge-case suite above it now
+says so.
+
+`FilePreviewPanel` took the same shape: upstream's `WorkspaceVideoPreview` (retry + actions menu)
+and `WorkspaceBrowserPreview` (HTML/PDF in place) are adopted, and the fork's component is
+narrowed to `WorkspaceAudioPreview` — audio has no upstream branch at all. Upstream's browsable
+`FileBreadcrumbs` (#8910) replaced the fork's display-only crumb list. It takes the root label as
+`projectName`, and the fork passes **`fileRepoName`** — the repository the open file actually came
+from — not the project's name. The two differ exactly when a file is opened out of an attached
+workspace member, which is the wrong-root confusion the fork's label fix exists to prevent; the
+merge dropped the only call site and left the label disagreeing with the `cwd` beside it.
+
+### 22. Claude adapter tests: synthetic catalog by default, bundled where the model IS the subject
+
+Upstream replaced the fork's hardcoded context-window table with the manifest-driven
+`ClaudeModelCatalog`, and pointed `ClaudeAdapter.test.ts` at a **synthetic** catalog
+(`ClaudeModelCatalog.testFixtures.ts`) so transport tests stay independent of manifest contents.
+Keep that default.
+
+But the fork's auto-compaction rules are keyed on **real slugs** (`claude-opus-4-8`,
+`claude-opus-4-6`) and on the real `[1m]` API suffix, and against a synthetic catalog they resolve
+no window at all — four wrong assertions, two hangs, and a percentage resolved against 200k instead
+of 1M. Those tests pass `modelCatalog: Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)` to
+`makeHarness`, because the bundled catalog is what the adapter resolves in production.
+
+No production behaviour moved: `model-manifest.json` carries `fixedContextWindowTokens: 1000000`
+for `opus-4-8`/`opus-4-7` and `contextWindowTokens` for every model with a window toggle, so the
+catalog lookup returns what the fork's switch used to. `claudeCliContextWindow`'s hardcoded
+native-1M switch and `CLAUDE_UNARMED_COMPACTION_MODELS` are still fork-owned and still real-slug
+keyed.
+
+Related: upstream's own new adapter tests may send a second turn while the first is running.
+**Queued follow-up turns are fork-only** (`origin/main` has no queue at all), so such a turn never
+reaches the provider — the symptom is a test that _hangs_ on a prompt read rather than one that
+fails. Retarget by completing the running turn first, which is the fork's actual contract.
+
 ### 18. The event hub is unbounded; every consumer of it must not be
 
 `apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
@@ -480,6 +607,22 @@ own:
   what is NOT true: no patch in `patches/` touches `Stream` any more, so the two allowlisted
   `ws.ts` shell-coalescing sites are safe by virtue of the **pinned effect version alone**.
   Re-measure with `scripts/idle-aggregate-probe.ts` on any effect bump.
+
+- **Internal reactors take `subscribeDomainEventsLossless`, never `subscribeDomainEvents`.**
+  Upstream #9152 moved `ProviderCommandReactor` off `streamDomainEvents` onto the _WS-facing_
+  accessor so its subscription exists before `start()` returns (a real fix - reverting it locally
+  took the reactor suite from 3 failures to 18 and a 235s run). But that accessor carries the
+  bounded drop-buffer above, which **ends the stream** on a slow consumer; a reactor that loses
+  events silently stops reacting. `subscribeDomainEventsLossless` is the same eager subscription
+  without the bound. Any new internal reactor uses it. The merge that introduced this violated the
+  invariant and typechecked, linted and tested clean.
+
+  A side effect worth knowing when writing tests: with the subscription eager but the _enqueue_
+  still happening on a separate stream fiber, `reactor.drain` is **not** a barrier for work
+  triggered by a `dispatch` that just returned - the drain can find an empty worker queue and
+  return before the event has been enqueued at all. Wait on the observable outcome first (the
+  `waitFor` yield-loop in `ProviderCommandReactor.test.ts`), then drain if the assertion also needs
+  the unit's follow-up dispatch to have landed.
 
 **The health gauge belongs to the running server, not to the layer.** It reads
 `OrchestrationEngineShape.hubBacklog` and is forked in `serverRuntimeStartup.ts`
@@ -612,6 +755,20 @@ common reported all-green having checked nothing.
 any of twelve formula variants (they give 147/149/186/188); it was a mid-merge number quoted in a
 post-merge document. The same reconcile's `fork-loss` was recorded as 16 and is **18**. Re-measure
 before quoting a sweep number — the tool is one command.
+
+## Sweep numbers from the 27th reconcile
+
+112 upstream commits, 53 conflicted files, the largest reconcile on this fork so far. Sweep
+totals: **resurrected 343, dropped 121, fork-loss 193, both-kept 1**. Every one is named in
+`~/reports/t3code/2026-09/2026-09-02/`. The bulk is three deliberate adoptions
+(`serverRuntimeStartup.reconcile.test.ts` restored whole, `assetFileResponse` back, the
+`commandProgramName` block relocated to `client-runtime`), so a large non-zero here is not by
+itself a defect — but each file still needs a sentence.
+
+The one finding the sweep caught that nothing else would have: `packages/contracts/src/ipc.ts`.
+Resolving its import conflict as "union of both sides" resurrected 18 type imports the fork had
+deliberately deleted along with 219 lines of Electron IPC surface. They referenced nothing,
+typecheck was green, and only the RESURRECTED direction saw them.
 
 ## CI does not run here — the pre-push hook is the gate
 

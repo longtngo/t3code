@@ -19,7 +19,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { CrewLog, type CrewLogCode, type CrewLogFields } from "./CrewLog.ts";
 import { CrewRepository, CrewRepositoryLive } from "./CrewRepository.ts";

@@ -15,6 +15,7 @@ import {
   getThemePreferenceMode,
   isKnownThemePreference,
   getCustomThemes,
+  getStandardThemeColors,
   getStoredCustomThemeCollection,
   invalidateCustomThemes,
   installCustomTheme,
@@ -138,6 +139,19 @@ describe("theme files", () => {
     expect(asHex(dark.error)).not.toBe(asHex(darkDefaults.error));
   });
 
+  it("keeps stock dark controls in the neutral-black surface hierarchy", () => {
+    expectThemeColors(getStandardThemeColors("dark"), {
+      canvas: "#0a0a0a",
+      surface: "#111111",
+      surfaceRaised: "#111111",
+      surfaceOverlay: "#111111",
+      toolbarControl: "#111111",
+      secondary: "#111111",
+      muted: "#111111",
+      accentSurface: "#141414",
+    });
+  });
+
   it("derives readable, distinctive vivid palettes from exact seeds", () => {
     const seeds: ReadonlyArray<["light" | "dark", string, string]> = [
       ["light", "#f4f9f2", "#1d8a4e"],
@@ -160,7 +174,13 @@ describe("theme files", () => {
       expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(colors.textMuted, colors.canvas)).toBeLessThan(5.5);
       expect(contrastRatio(colors.mutedForeground, colors.muted)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.mutedForeground, colors.muted)).toBeLessThan(
+        contrastRatio(colors.text, colors.muted),
+      );
       expect(contrastRatio(colors.placeholder, colors.surfaceRaised)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.placeholder, colors.surfaceRaised)).toBeLessThan(
+        contrastRatio(colors.text, colors.surfaceRaised),
+      );
       expect(colors.secondaryLabel).toBe(colors.textMuted);
       expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
       expect(

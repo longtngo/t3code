@@ -139,7 +139,9 @@ export const ComposerTasksBadge = memo(function ComposerTasksBadge({
   return placement === "inline" ? (
     row
   ) : (
-    <ComposerBanner.Root data-composer-shoulder-tab>{row}</ComposerBanner.Root>
+    <ComposerBanner.Root density="comfortable" data-composer-shoulder-tab>
+      {row}
+    </ComposerBanner.Root>
   );
 });
 

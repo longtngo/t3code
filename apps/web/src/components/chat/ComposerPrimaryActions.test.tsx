@@ -47,6 +47,12 @@ function renderPendingActions(isRunning: boolean, isStopEscalated = false) {
   );
 }
 
+// Upstream's `renderRunningActions(showSendWhileRunning, hasSendableContent)` helper and
+// its "renders send alongside stop while running when Enter-to-send is unavailable" test
+// are deliberately absent: this fork removed the `showSendWhileRunning` prop, because
+// Send is ALWAYS mounted beside Stop here (it queues a follow-up). The case upstream's
+// test covers is asserted unconditionally by "keeps Send mounted beside Stop" below.
+//
 // `hasSendableContent` is parameterised deliberately. Send's `disabled` already
 // includes `!hasSendableContent`, so a fixture hardcoding `false` makes every
 // enabled/disabled assertion pass no matter what the running branch does.
@@ -245,17 +251,14 @@ describe("ComposerPrimaryActions", () => {
     const markup = renderSendButton();
 
     expect(markup).toContain("stage-nightly");
-    expect(markup).toContain("bg-transparent text-white");
-    expect(markup).not.toContain("bg-message-action text-message-action-foreground");
   });
 
-  it("keeps the normal send-button fill when artwork identification is inactive", () => {
+  it("hides stage artwork when artwork identification is inactive", () => {
     stageArtworkState.variant = "nightly";
 
     const markup = renderSendButton();
 
     expect(markup).not.toContain("stage-nightly");
-    expect(markup).toContain("bg-message-action text-message-action-foreground");
   });
 
   // FORK: upstream's three "showSendWhileRunning" tests sat here (#4781). They

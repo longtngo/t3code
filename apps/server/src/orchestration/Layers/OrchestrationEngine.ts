@@ -259,12 +259,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           .withTransaction(
             Effect.gen(function* () {
               const committedEvents: OrchestrationEvent[] = [];
+              const attachmentCleanups: Effect.Effect<void>[] = [];
               let nextCommandReadModel = commandReadModel;
 
               for (const nextEvent of eventBases) {
                 const savedEvent = yield* eventStore.append(nextEvent);
                 nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
-                yield* projectionPipeline.projectEvent(savedEvent);
+                const cleanup = yield* projectionPipeline.projectEventDeferred(savedEvent);
+                attachmentCleanups.push(cleanup);
                 committedEvents.push(savedEvent);
               }
 
@@ -290,6 +292,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
               return {
                 committedEvents,
+                attachmentCleanups,
                 lastSequence: lastSavedEvent.sequence,
                 nextCommandReadModel,
               } as const;
@@ -304,6 +307,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        for (const cleanup of committedCommand.attachmentCleanups) {
+          yield* cleanup;
+        }
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
           if (index === 0) {
@@ -445,6 +451,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // `wsSubscriberBufferCapacity` behind, the stream ends cleanly and the client
     // resubscribes from its last-applied sequence. Only WS callers use this;
     // internal reactors consume the lossless `streamDomainEvents`.
+    // Eager like the above, unbounded like `streamDomainEvents`. The reactors take this
+    // one: upstream #9152 pointed them at the WS accessor, which put the fork's bounded,
+    // droppable buffer in front of the one consumer that must never lose an event.
+    subscribeDomainEventsLossless: PubSub.subscribe(eventPubSub).pipe(
+      Effect.map(Stream.fromSubscription),
+    ),
     subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
       Effect.flatMap((subscription) =>
         boundedSubscriberStream(subscription, wsSubscriberBufferCapacity),

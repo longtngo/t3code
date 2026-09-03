@@ -16,7 +16,11 @@
  * are keyed into a receipt table that is never pruned, and the engine replays an
  * accepted receipt instead of deciding, so a thread-scoped id would reconcile a
  * given thread once ever and silently no-op every later boot. Hence the boot
- * timestamp in each id. We dispatch the same clean terminal state the
+ * timestamp in each id. The one exception is a thread marked to continue across a
+ * server self-update: `provider-sessions.reconcile` resumes those a few phases later,
+ * and settling one here would clear the status that phase filters on.
+ *
+ * We dispatch the same clean terminal state the
  * reactor's stop path produces (`status:"stopped", activeTurnId:null`) plus a
  * turn interrupt for history, synchronously (engine dispatch applies the
  * projection in-transaction) — no reactor, and no attempt to signal a dead
@@ -28,12 +32,16 @@ import {
   type OrchestrationCommand,
   type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
+import {
+  hasServerUpdateContinuationMarker,
+  ProviderSessionDirectory,
+} from "../provider/Services/ProviderSessionDirectory.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -122,8 +130,34 @@ export const reconcileInterruptedTurnsOnBoot = Effect.fn("reconcileInterruptedTu
       query.getArchivedShellSnapshot(),
     ]);
     const nowIso = DateTime.formatIso(yield* DateTime.now);
+    // A thread marked for continuation was running when the server went down for its
+    // own update, and `provider-sessions.reconcile` resumes it a few phases later.
+    // Settling it to `stopped` here would clear the very status that phase filters on,
+    // so the resume would silently never happen — which is how upstream's phase came
+    // to be dead code in this fork in the first place (see docs/fork/README.md #5c).
+    const candidates = [...snapshot.threads, ...archivedSnapshot.threads];
+    const continuing = new Set<ThreadId>();
+    for (const thread of candidates) {
+      if (!thread.session || !LIVE_SESSION_STATUSES.has(thread.session.status)) {
+        continue;
+      }
+      const binding = yield* directory.getBinding(thread.id).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("boot.turns-reconcile.continuation-probe-failed", {
+            threadId: thread.id,
+            cause,
+          }).pipe(Effect.as(Option.none())),
+        ),
+      );
+      if (
+        Option.isSome(binding) &&
+        hasServerUpdateContinuationMarker(binding.value.runtimePayload)
+      ) {
+        continuing.add(thread.id);
+      }
+    }
     const commands = planBootReconciliation(
-      [...snapshot.threads, ...archivedSnapshot.threads],
+      candidates.filter((thread) => !continuing.has(thread.id)),
       nowIso,
     );
     const reconciledThreads = commands.filter((c) => c.type === "thread.session.set").length;

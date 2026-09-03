@@ -34,9 +34,10 @@ const OPENCODE_PRESENTATION = {
   supportsQueuedMessageRecall: false,
   reportsContextUsage: false,
 } as const;
+const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
-  readonly cause: unknown;
+  readonly cause?: unknown;
   readonly detail: string;
 }> {}
 
@@ -263,9 +264,11 @@ function trimOptional(value: string | null | undefined): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-function flattenOpenCodeSkills(input: OpenCodeInventory): ReadonlyArray<ServerProviderSkill> {
+export function openCodeSkillsToServerProviderSkills(
+  input: OpenCodeInventory["skills"] | undefined,
+): ReadonlyArray<ServerProviderSkill> {
   const skills: ServerProviderSkill[] = [];
-  for (const skill of input.skills ?? []) {
+  for (const skill of input ?? []) {
     const name = trimOptional(skill.name);
     const path = trimOptional(skill.location);
     if (!name || !path) {
@@ -402,6 +405,15 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
           Effect.mapError(
             (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
           ),
+          Effect.timeoutOrElse({
+            duration: OPENCODE_VERSION_PROBE_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                new OpenCodeProbeError({
+                  detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
+                }),
+              ),
+          }),
         ),
     );
     if (versionExit._tag === "Failure") {
@@ -478,7 +490,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     customModels,
     DEFAULT_OPENCODE_MODEL_CAPABILITIES,
   );
-  const skills = flattenOpenCodeSkills(inventoryExit.value.inventory);
+  const skills = openCodeSkillsToServerProviderSkills(inventoryExit.value.inventory.skills);
   const connectedCount = inventoryExit.value.inventory.providerList.connected.length;
   return buildServerProvider({
     presentation: OPENCODE_PRESENTATION,

@@ -19,7 +19,7 @@ import * as Schedule from "effect/Schedule";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
+import { AnalyticsService } from "../../telemetry/AnalyticsService.ts";
 import { parsePositiveIntEnv } from "./parsePositiveIntEnv.ts";
 import {
   ProviderRuntimeIngestionService,

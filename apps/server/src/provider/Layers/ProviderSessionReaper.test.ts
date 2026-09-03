@@ -224,6 +224,7 @@ describe("ProviderSessionReaper", () => {
       },
       streamDomainEvents: Stream.empty,
       subscribeDomainEvents: Effect.die("unused"),
+      subscribeDomainEventsLossless: Effect.die("unused"),
       latestSequence: Effect.succeed(0),
     } as unknown as OrchestrationEngineShape;
 
@@ -250,6 +251,7 @@ describe("ProviderSessionReaper", () => {
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
           getCounts: () => Effect.die("unused"),
+          getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),

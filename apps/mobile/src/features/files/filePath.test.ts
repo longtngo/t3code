@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  fileRoutePathSegments,
   isBrowserPreviewFile,
   isImagePreviewFile,
   isSvgImagePreviewFile,
@@ -8,6 +9,15 @@ import {
   rendersFromAssetUrl,
   resolveWorkspaceRelativeFilePath,
 } from "./filePath";
+
+describe("fileRoutePathSegments", () => {
+  it("round-trips workspace-relative and host paths through the route", () => {
+    expect(fileRoutePathSegments("src/main.ts")).toEqual(["src", "main.ts"]);
+    expect(fileRoutePathSegments("/tmp/t3-cleanup/report.md").join("/")).toBe(
+      "/tmp/t3-cleanup/report.md",
+    );
+  });
+});
 
 describe("resolveWorkspaceRelativeFilePath", () => {
   it("keeps normalized workspace-relative paths", () => {
@@ -26,6 +36,7 @@ describe("resolveWorkspaceRelativeFilePath", () => {
   it("rejects paths outside the workspace", () => {
     expect(resolveWorkspaceRelativeFilePath("/repo", "/other/main.ts")).toBeNull();
     expect(resolveWorkspaceRelativeFilePath("/repo", "../other/main.ts")).toBeNull();
+    expect(resolveWorkspaceRelativeFilePath("/repo", "/repo/../outside.txt")).toBeNull();
     expect(resolveWorkspaceRelativeFilePath(null, "/repo/main.ts")).toBeNull();
   });
 });

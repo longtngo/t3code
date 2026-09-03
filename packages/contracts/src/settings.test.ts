@@ -18,6 +18,7 @@ import {
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
@@ -169,6 +170,40 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings proactive panels", () => {
+  it("is opt-in and accepts client-local updates", () => {
+    expect(decodeClientSettings({}).proactivePanelsEnabled).toBe(false);
+    expect(decodeClientSettingsPatch({ proactivePanelsEnabled: true }).proactivePanelsEnabled).toBe(
+      true,
+    );
+  });
+});
+
+describe("ClientSettings quit confirmation", () => {
+  it("defaults to hold", () => {
+    expect(decodeClientSettings({}).confirmQuit).toBe("hold");
+  });
+
+  it.each(["direct", "hold", "double-click"] as const)("accepts the %s mode", (mode) => {
+    expect(decodeClientSettings({ confirmQuit: mode }).confirmQuit).toBe(mode);
+    expect(decodeClientSettingsPatch({ confirmQuit: mode }).confirmQuit).toBe(mode);
+  });
+
+  it.each([
+    [true, "hold"],
+    [false, "direct"],
+  ] as const)("migrates the legacy %s value to %s", (legacyValue, mode) => {
+    const settings = decodeClientSettings({ confirmQuit: legacyValue });
+
+    expect(settings.confirmQuit).toBe(mode);
+    expect(encodeClientSettings(settings).confirmQuit).toBe(mode);
+  });
+
+  it("rejects legacy booleans at the patch boundary", () => {
+    expect(() => decodeClientSettingsPatch({ confirmQuit: true })).toThrow();
+  });
+});
+
 describe("ClientSettings browser recording frame rate", () => {
   it("defaults to 30 fps", () => {
     expect(decodeClientSettings({}).browserRecordingFrameRate).toBe(30);
@@ -218,6 +253,22 @@ describe("ClientSettings appearance contrast", () => {
   it.each([50, 100, 150, 200])("accepts an appearance contrast in range: %s", (value) => {
     expect(decodeClientSettings({ appearanceContrast: value }).appearanceContrast).toBe(value);
     expect(decodeClientSettingsPatch({ appearanceContrast: value }).appearanceContrast).toBe(value);
+  });
+});
+
+describe("ClientSettings panel animations", () => {
+  it("defaults to instant changes", () => {
+    expect(decodeClientSettings({}).panelAnimationDurationMs).toBe(0);
+  });
+
+  it.each([0, 400])("accepts a panel animation duration: %s", (value) => {
+    expect(decodeClientSettingsPatch({ panelAnimationDurationMs: value })).toEqual({
+      panelAnimationDurationMs: value,
+    });
+  });
+
+  it.each([-1, 401, 150.5])("rejects an invalid panel animation duration: %s", (value) => {
+    expect(() => decodeClientSettingsPatch({ panelAnimationDurationMs: value })).toThrow();
   });
 });
 
@@ -283,6 +334,20 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);
     expect(() => decodeClientSettingsPatch({ confirmThreadUnpin: "yes" })).toThrow();
+  });
+});
+
+describe("ClientSettings context window meter", () => {
+  // FORK: defaults ON. Upstream ships this off because it is retiring its own circular
+  // indicator; here the switch governs the composer Vitals gauge's context ring.
+  it("defaults on and preserves an explicit opt-out", () => {
+    expect(decodeClientSettings({}).contextWindowMeterEnabled).toBe(true);
+    expect(
+      decodeClientSettings({ contextWindowMeterEnabled: false }).contextWindowMeterEnabled,
+    ).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
+    ).toBe(true);
   });
 });
 

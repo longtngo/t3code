@@ -14,6 +14,28 @@ import type {
   ProviderValidationError,
 } from "../Errors.ts";
 
+/**
+ * Marks a binding whose thread was running when the server went down for a self-update,
+ * so boot can resume it instead of settling it. The value is the turn id that was live.
+ *
+ * It lives on the binding's `runtimePayload` rather than the projection because the
+ * resume needs the binding's `resumeCursor` anyway, and the two must not be able to
+ * disagree about whether a thread is continuable.
+ */
+export const SERVER_UPDATE_CONTINUATION_KEY = "continueAfterServerUpdate";
+
+/** True when `runtimePayload` carries the continuation marker, whatever its value. */
+export function hasServerUpdateContinuationMarker(
+  runtimePayload: unknown,
+): runtimePayload is Record<string, unknown> {
+  return (
+    runtimePayload !== null &&
+    typeof runtimePayload === "object" &&
+    !Array.isArray(runtimePayload) &&
+    SERVER_UPDATE_CONTINUATION_KEY in runtimePayload
+  );
+}
+
 export interface ProviderRuntimeBinding {
   readonly threadId: ThreadId;
   readonly provider: ProviderDriverKind;

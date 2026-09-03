@@ -5,6 +5,7 @@ import {
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
   isWorkspaceVideoPreviewPath,
+  mediaKindFromPath,
   VIDEO_CONTENT_TYPE_BY_EXTENSION,
   WORKSPACE_TEXT_VIEWER_EXTENSIONS,
   WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
@@ -102,4 +103,37 @@ describe("workspace video preview paths", () => {
   it("leaves the browser-preview entry predicate untouched", () => {
     expect(isWorkspacePreviewEntryPath("/Users/me/demo.mp4")).toBe(false);
   });
+});
+
+describe("media path parsing", () => {
+  it.each([
+    ["https://cdn.example/clip.webm?download=1#t=2", "video"],
+    ["https://example.com/download?name=recording.mp4", null],
+    ["https://example.png", null],
+    ["images%2Fresult%2Epng", "image"],
+    ["images/result%23v2.png", "image"],
+    ["images/result.png%23secret.txt", null],
+    ["images/result.png%3Fsecret.txt", null],
+    ["/tmp/100%.png", "image"],
+  ])("classifies the decoded pathname of %s", (source, kind) => {
+    expect(mediaKindFromPath(source)).toBe(kind);
+  });
+
+  // FORK: the third column is retargeted. Upstream's `isWorkspaceVideoPreviewPath`
+  // reads the literal filename, so a trailing `#t=2` keeps it a video and a bare
+  // `recording#take2.mp4` is one too. This fork's predicate strips the query and
+  // fragment first, because its own viewer appends `?raw=1` to every media URL
+  // (asserted above). The `mediaKindFromPath` column is upstream's, unchanged.
+  it.each([
+    ["recording.mp4#t=2", "video", true],
+    ["recording%2Emp4", "video", false],
+    ["recording#take2.mp4", null, false],
+    ["recording?take2.mp4", null, false],
+  ])(
+    "parses authored URLs while the viewer predicate strips query and fragment in %s",
+    (source, kind, literalVideo) => {
+      expect(mediaKindFromPath(source)).toBe(kind);
+      expect(isWorkspaceVideoPreviewPath(source)).toBe(literalVideo);
+    },
+  );
 });

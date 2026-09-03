@@ -196,6 +196,10 @@ export class ProjectListEntriesError extends Schema.TaggedErrorClass<ProjectList
 
 export const ProjectReadFileInput = Schema.Struct({
   cwd: FilePathString,
+  // Workspace-relative, or an absolute host path for a file outside the
+  // workspace. Only workspace-relative paths can be written back.
+  // FORK: FilePathString, not upstream's TrimmedNonEmptyString -- that one
+  // transforms, so a read of `notes ` silently becomes a read of `notes`.
   relativePath: FilePathString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
 });
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;

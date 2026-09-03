@@ -183,6 +183,16 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly handleExtNotification: EffectAcpClient.AcpClient["Service"]["handleExtNotification"];
     /**
+     * Sends only `initialize` and returns the agent's response. Health probes use this to read
+     * advertised capabilities without authenticating or opening a session, so a probe can never
+     * start an interactive login or boot MCP servers.
+     * @see https://agentclientprotocol.com/protocol/schema#initialize
+     */
+    readonly initialize: () => Effect.Effect<
+      EffectAcpSchema.InitializeResponse,
+      EffectAcpErrors.AcpError
+    >;
+    /**
      * Initializes the ACP connection, authenticates, and loads, resumes, or creates the session.
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
      */
@@ -196,11 +206,14 @@ export class AcpSessionRuntime extends Context.Service<
     /** Latest configuration options observed from session setup and configuration writes. */
     readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
     /**
-     * Sends a prompt turn to the active session.
+     * Sends a prompt turn to the active session. `options.dispatched` settles once the
+     * `session/prompt` RPC is registered as the active prompt, so a caller that forks this
+     * effect knows when a later `cancel` will target this prompt.
      * @see https://agentclientprotocol.com/protocol/schema#session/prompt
      */
     readonly prompt: (
       payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
+      options?: { readonly dispatched?: Deferred.Deferred<void> },
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     /**
      * Sends a real ACP `session/cancel` notification for the active session.
@@ -542,18 +555,19 @@ export const make = (
         ),
       );
 
-    const startOnce = Effect.gen(function* () {
-      const initializePayload = {
-        protocolVersion: 1,
-        clientCapabilities: initializeClientCapabilities,
-        clientInfo: options.clientInfo,
-      } satisfies EffectAcpSchema.InitializeRequest;
+    const initializePayload = {
+      protocolVersion: 1,
+      clientCapabilities: initializeClientCapabilities,
+      clientInfo: options.clientInfo,
+    } satisfies EffectAcpSchema.InitializeRequest;
+    const sendInitialize = runLoggedRequest(
+      "initialize",
+      initializePayload,
+      acp.agent.initialize(initializePayload),
+    );
 
-      const initializeResult = yield* runLoggedRequest(
-        "initialize",
-        initializePayload,
-        acp.agent.initialize(initializePayload),
-      );
+    const startOnce = Effect.gen(function* () {
+      const initializeResult = yield* sendInitialize;
 
       const authenticatePayload = {
         methodId: options.authMethodId,
@@ -718,6 +732,7 @@ export const make = (
       handleUnknownExtNotification: acp.handleUnknownExtNotification,
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
+      initialize: () => sendInitialize,
       start: () => start,
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
@@ -730,64 +745,75 @@ export const make = (
       }),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
-      prompt: (payload) =>
+      prompt: (payload, promptOptions?) =>
         Effect.gen(function* () {
           // Read before parking on the permit, so a cancel that lands while we
           // wait is visible as a changed generation once we acquire it.
           const generationAtRequest = yield* Ref.get(promptCancelGenerationRef);
-          return yield* promptSerializationSemaphore.withPermit(
-            Effect.gen(function* () {
-              const cancelledResponse = {
-                stopReason: "cancelled",
-              } satisfies EffectAcpSchema.PromptResponse;
-              if ((yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest) {
-                return cancelledResponse;
-              }
-              const started = yield* getStartedState;
-              yield* closeActiveAssistantSegment({
-                queue: eventQueue,
-                assistantSegmentRef,
-              });
-              const requestPayload = {
-                sessionId: started.sessionId,
-                ...payload,
-              } satisfies EffectAcpSchema.PromptRequest;
-              const promptRpcFiber = yield* runLoggedRequest(
-                "session/prompt",
-                requestPayload,
-                acp.agent.prompt(requestPayload),
-              ).pipe(Effect.forkIn(runtimeScope));
-              yield* Ref.set(activePromptFiberRef, Option.some(promptRpcFiber));
-              // Between the check above and this registration the prompt is in
-              // neither place `cancel` looks, so a cancel landing in that window
-              // would bump a generation nobody re-reads and find no fiber to
-              // interrupt. Re-check now that we are registered.
-              if ((yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest) {
-                yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
-                yield* Ref.set(activePromptFiberRef, Option.none());
-                return cancelledResponse;
-              }
-              return yield* Fiber.join(promptRpcFiber).pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.succeed(cancelledResponse)
-                    : Effect.failCause(cause),
-                ),
-                Effect.ensuring(
-                  Effect.gen(function* () {
-                    yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
-                    yield* Ref.set(activePromptFiberRef, Option.none());
-                  }),
-                ),
-                Effect.tap(() =>
-                  closeActiveAssistantSegment({
-                    queue: eventQueue,
-                    assistantSegmentRef,
-                  }),
-                ),
-              );
-            }),
-          );
+          return yield* promptSerializationSemaphore
+            .withPermit(
+              Effect.gen(function* () {
+                const cancelledResponse = {
+                  stopReason: "cancelled",
+                } satisfies EffectAcpSchema.PromptResponse;
+                if ((yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest) {
+                  return cancelledResponse;
+                }
+                const started = yield* getStartedState;
+                yield* closeActiveAssistantSegment({
+                  queue: eventQueue,
+                  assistantSegmentRef,
+                });
+                const requestPayload = {
+                  sessionId: started.sessionId,
+                  ...payload,
+                } satisfies EffectAcpSchema.PromptRequest;
+                const promptRpcFiber = yield* runLoggedRequest(
+                  "session/prompt",
+                  requestPayload,
+                  acp.agent.prompt(requestPayload),
+                ).pipe(Effect.forkIn(runtimeScope));
+                yield* Ref.set(activePromptFiberRef, Option.some(promptRpcFiber));
+                if (promptOptions?.dispatched) {
+                  yield* Deferred.succeed(promptOptions.dispatched, undefined);
+                }
+                // Between the check above and this registration the prompt is in
+                // neither place `cancel` looks, so a cancel landing in that window
+                // would bump a generation nobody re-reads and find no fiber to
+                // interrupt. Re-check now that we are registered.
+                if ((yield* Ref.get(promptCancelGenerationRef)) !== generationAtRequest) {
+                  yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
+                  yield* Ref.set(activePromptFiberRef, Option.none());
+                  return cancelledResponse;
+                }
+                return yield* Fiber.join(promptRpcFiber).pipe(
+                  Effect.catchCause((cause) =>
+                    Cause.hasInterruptsOnly(cause)
+                      ? Effect.succeed(cancelledResponse)
+                      : Effect.failCause(cause),
+                  ),
+                  Effect.ensuring(
+                    Effect.gen(function* () {
+                      yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
+                      yield* Ref.set(activePromptFiberRef, Option.none());
+                    }),
+                  ),
+                  Effect.tap(() =>
+                    closeActiveAssistantSegment({
+                      queue: eventQueue,
+                      assistantSegmentRef,
+                    }),
+                  ),
+                );
+              }),
+            )
+            .pipe(
+              Effect.ensuring(
+                promptOptions?.dispatched
+                  ? Deferred.succeed(promptOptions.dispatched, undefined)
+                  : Effect.void,
+              ),
+            );
         }),
       cancel: Effect.gen(function* () {
         // Retire every prompt issued before this cancel, including any that are
@@ -803,9 +829,9 @@ export const make = (
             if (Option.isSome(activePromptFiber)) {
               yield* Fiber.interrupt(activePromptFiber.value).pipe(Effect.ignore);
             }
-            yield* acp.agent
-              .cancel({ sessionId: started.sessionId })
-              .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+            // Await the notification write so a replacement session/prompt
+            // cannot race ahead of session/cancel on the wire.
+            yield* acp.agent.cancel({ sessionId: started.sessionId }).pipe(Effect.ignore);
           }),
         ),
       ),
