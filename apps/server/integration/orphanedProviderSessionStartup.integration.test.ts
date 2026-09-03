@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - builds a real tmpdir HOME so the startup reconciler never touches the developer's machine-wide toggle file.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -9,7 +10,10 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import { assert, it } from "@effect/vitest";
+import { afterAll, assert, beforeAll, it } from "@effect/vitest";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -148,6 +152,19 @@ const startupDependencies = Layer.mergeAll(
     clearRecoveryRecord: () => Effect.void,
   }),
 );
+
+// `ServerRuntimeStartup.layer` forks the subagent-backend reconciler, which reads and may
+// rewrite `$HOME/.local/state/subagent-dispatch/backend.json` — the developer's real
+// machine-wide toggle on this host. Point HOME at a scratch dir for the whole file.
+let previousHome: string | undefined;
+beforeAll(() => {
+  previousHome = process.env.HOME;
+  process.env.HOME = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "orphaned-startup-home-"));
+});
+afterAll(() => {
+  if (previousHome === undefined) delete process.env.HOME;
+  else process.env.HOME = previousHome;
+});
 
 it.effect(
   "recovers a persisted starting session before opening the command gate after restart",
