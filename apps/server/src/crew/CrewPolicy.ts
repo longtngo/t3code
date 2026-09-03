@@ -18,6 +18,30 @@ export const DEFAULT_CREW_MAX_CONCURRENT_TASKS = 4;
 
 export const CREW_MAX_CONCURRENT_TASKS_ENV = "T3CODE_CREW_MAX_CONCURRENT_TASKS";
 
+export const CREW_ENABLED_ENV = "T3CODE_CREW_ENABLED";
+
+/**
+ * The master switch. Off unless explicitly turned on.
+ *
+ * Default-off because crew has never actually been reachable: the toolkit and
+ * the delivery sweep were both unreferenced, so nothing anywhere depends on it
+ * being on, and turning it on advertises five new tools to every thread on every
+ * provider. Opt-in is the honest default for that.
+ *
+ * Distinct from `T3CODE_CREW_MAX_CONCURRENT_TASKS=0`, which refuses new
+ * dispatches but leaves the tools advertised, the sweep running and the panel
+ * polling. This gates all three.
+ *
+ * Only unambiguous affirmatives count. Anything else — including `"maybe"`,
+ * `""`, or a typo — is off, which is the safe direction for a switch whose
+ * "on" position exposes new agent-callable tools.
+ */
+export function resolveCrewEnabled(env: Record<string, string | undefined>): boolean {
+  const raw = env[CREW_ENABLED_ENV];
+  if (raw === undefined) return false;
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
 /**
  * Reads the cap from an environment record.
  *

@@ -12,6 +12,8 @@ import {
   normalizeNote,
   requiresTurn,
   resolveCrewMaxConcurrentTasks,
+  CREW_ENABLED_ENV,
+  resolveCrewEnabled,
 } from "./CrewPolicy.ts";
 
 describe("resolveCrewMaxConcurrentTasks", () => {
@@ -118,5 +120,21 @@ describe("writable report states", () => {
     }
     expect(isWritableReportState("answer")).toBe(false);
     expect(isWritableReportState("nonsense")).toBe(false);
+  });
+});
+
+describe("resolveCrewEnabled", () => {
+  it("is off when unset, because crew has never been reachable", () => {
+    expect(resolveCrewEnabled({})).toBe(false);
+  });
+
+  it.each(["1", "true", "TRUE", "yes", "on", " on "])("%s turns it on", (raw) => {
+    expect(resolveCrewEnabled({ [CREW_ENABLED_ENV]: raw })).toBe(true);
+  });
+
+  it.each(["0", "false", "off", "", "maybe", "onn", "2"])("%s leaves it off", (raw) => {
+    // Off is the safe direction: "on" advertises five agent-callable tools to
+    // every thread, so anything ambiguous must not reach that state.
+    expect(resolveCrewEnabled({ [CREW_ENABLED_ENV]: raw })).toBe(false);
   });
 });

@@ -122,6 +122,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import { CrewDirectoryLive } from "./crew/CrewDirectory.ts";
 import { CrewLogLive } from "./crew/CrewLog.ts";
+import { CrewSweepLive } from "./crew/CrewSweep.ts";
 import { CrewTeardownHooksPartialLive } from "./crew/CrewTeardownHooksLive.ts";
 import { CrewRepositoryLive } from "./crew/CrewRepository.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -449,7 +450,10 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // be the earlier (consuming) stage to see `ProviderService` at all. Behind it,
   // `ProviderService` leaks out of the server layer — 48 typecheck errors.
   Layer.provideMerge(
-    CrewDirectoryLive.pipe(
+    // The sweep sits beside the directory at the head of this group, not after
+    // it: B provides into A, so both consume the repository, log sink and hooks
+    // merged in below rather than providing into them.
+    Layer.mergeAll(CrewDirectoryLive, CrewSweepLive).pipe(
       Layer.provideMerge(CrewRepositoryLive),
       Layer.provideMerge(CrewLogLive),
       // Teardown steps 3, 4 and 5 are live. Step 2 (clearRecoveryRecord) is not,
@@ -588,7 +592,17 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+  // The crew toolkit (mounted only when the master switch is on) needs the same
+  // repository, log sink and teardown hooks the panel uses, so it gets the very
+  // same instances rather than a second set over one database.
+  McpHttpServer.layer.pipe(
+    Layer.provide(McpSessionRegistry.layer),
+    Layer.provide(
+      Layer.mergeAll(CrewRepositoryLive, CrewLogLive, CrewTeardownHooksPartialLive).pipe(
+        Layer.provide(PersistenceLayerLive),
+      ),
+    ),
+  ),
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.

@@ -19,12 +19,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CrewLog, type CrewLogCode, type CrewLogFields } from "./CrewLog.ts";
-import {
-  CrewCallerThread,
-  CrewService,
-  CrewServiceLive,
-  CrewTeardownHooksService,
-} from "./CrewService.ts";
+import { CrewService, CrewServiceLive, CrewTeardownHooksService } from "./CrewService.ts";
 import { CrewRepository, CrewRepositoryLive } from "./CrewRepository.ts";
 
 const BRIDGE = ThreadId.make("bridge-1");
@@ -86,7 +81,6 @@ const harness = (options: Options = {}) => {
 
   const layer = CrewServiceLive({ env: {} }).pipe(
     Layer.provideMerge(CrewRepositoryLive),
-    Layer.provideMerge(Layer.succeed(CrewCallerThread, BRIDGE)),
     Layer.provideMerge(
       Layer.succeed(CrewLog, {
         record: (code, fields) =>
@@ -154,6 +148,44 @@ const harness = (options: Options = {}) => {
 
 const codes = (records: ReadonlyArray<{ code: CrewLogCode }>) => records.map((r) => r.code);
 
+describe("one service instance serves many callers", () => {
+  it.effect("attributes each call to the thread that made it, not the one that built it", () => {
+    const h = harness();
+    return h.run(
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        const crew = yield* CrewService;
+
+        // Two bridges, one CrewService instance — which is the situation an MCP
+        // mount creates. The caller used to be read once at construction, so a
+        // single registration-time instance attributed every call to whichever
+        // thread happened to build it. That is the defect this pins.
+        const other = ThreadId.make("bridge-2");
+        yield* repository.insertTask(makeTask());
+        yield* repository.insertTask(
+          makeTask({
+            taskId: CrewTaskId.make("task-2"),
+            parentThreadId: other,
+            crewThreadId: ThreadId.make("crew-2"),
+          }),
+        );
+
+        const mine = yield* crew.status({}, BRIDGE);
+        const theirs = yield* crew.status({}, other);
+
+        assert.deepStrictEqual(
+          mine.map((task) => String(task.taskId)),
+          ["task-1"],
+        );
+        assert.deepStrictEqual(
+          theirs.map((task) => String(task.taskId)),
+          ["task-2"],
+        );
+      }),
+    );
+  });
+});
+
 describe("crew teardown", () => {
   it.effect("step 2 working -> the watchdog has nothing left to resume", () =>
     (() => {
@@ -164,7 +196,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           assert.include(h.calls, "clearRecoveryRecord");
           assert.strictEqual(h.watchdogWouldResume(), false);
@@ -182,7 +214,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           // The defect step 2 retires, asserted positively: with the record left
           // behind, the watchdog dispatches a turn to a thread that is stopped,
@@ -209,7 +241,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           const task = yield* repository.getTaskByCrewThreadId({ crewThreadId: CREWMATE });
           assert.strictEqual(Option.getOrThrow(task).status, "closed");
@@ -229,7 +261,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           // Holding the slot on this error is what revision 11 did, and the call
           // fails deterministically — so Retry re-ran it forever and the cap
@@ -250,7 +282,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           // Step 6 is what stops `ensureThreadWorktree` re-creating a directory
           // the operator deleted.
@@ -269,7 +301,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           assert.notInclude(h.commands, "thread.archive");
           assert.strictEqual(yield* repository.countOpenTasks(), 0);
@@ -287,7 +319,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask());
 
-          yield* crew.teardown({ taskId: TASK });
+          yield* crew.teardown({ taskId: TASK }, BRIDGE);
 
           assert.strictEqual(yield* repository.countOpenTasks(), 0);
           assert.notInclude(h.commands, "thread.archive");
@@ -305,7 +337,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask({ parentThreadId: ThreadId.make("someone-else") }));
 
-          const outcome = yield* Effect.result(crew.teardown({ taskId: TASK }));
+          const outcome = yield* Effect.result(crew.teardown({ taskId: TASK }, BRIDGE));
 
           assert.strictEqual(outcome._tag, "Failure");
           assert.include(codes(h.records), "crew.tool.refused.crew_teardown.no-row");
@@ -324,7 +356,7 @@ describe("crew teardown", () => {
           const crew = yield* CrewService;
           yield* repository.insertTask(makeTask({ status: "closed" }));
 
-          const outcome = yield* Effect.result(crew.teardown({ taskId: TASK }));
+          const outcome = yield* Effect.result(crew.teardown({ taskId: TASK }, BRIDGE));
 
           assert.strictEqual(outcome._tag, "Failure");
           assert.include(codes(h.records), "crew.tool.refused.crew_teardown.no-row");

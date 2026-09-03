@@ -10,6 +10,10 @@ import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { CREW_ENABLED_ENV, resolveCrewEnabled } from "../crew/CrewPolicy.ts";
+import { CrewToolkit } from "./toolkits/crew/tools.ts";
+import { CrewToolkitLayer } from "./toolkits/crew/handlers.ts";
+import { CrewServiceLive } from "../crew/CrewService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -223,4 +227,28 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+/**
+ * The crew tools, mounted only when the master switch is on.
+ *
+ * Registration is unconditional in shape but empty when off, so "off" means the
+ * five tools are never advertised — not advertised-and-refusing. An agent that
+ * cannot see `crew_dispatch` cannot be talked into calling it.
+ *
+ * Read from the environment at layer-construction time, which is once per server
+ * start. Flipping the switch needs a restart, which is the same contract as
+ * every other `T3CODE_*` variable here.
+ */
+const CrewToolkitRegistrationLive = resolveCrewEnabled(process.env)
+  ? McpServer.toolkit(CrewToolkit).pipe(
+      // `CrewRepository`, `CrewLog` and the teardown hooks come from the crew
+      // layer `server.ts` already builds for the panel. Constructing a second
+      // set here would mean two repositories over one database and two log
+      // sinks, and would need `SqlClient` at a point that does not have it.
+      Layer.provide(CrewToolkitLayer.pipe(Layer.provide(CrewServiceLive()))),
+    )
+  : Layer.empty;
+
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  CrewToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

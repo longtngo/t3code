@@ -79,9 +79,23 @@ export interface CrewStatusInput {
   readonly limit?: number | undefined;
 }
 
+/**
+ * Every method takes the calling thread explicitly.
+ *
+ * It used to be read once from a `CrewCallerThread` context service at
+ * construction, which pinned a `CrewService` instance to a single thread. That
+ * is unmountable: an MCP tool call's thread comes from `McpInvocationContext`
+ * and differs per invocation, so one registration-time instance would attribute
+ * every crew call to whichever thread happened to build it.
+ *
+ * Deliberately a separate argument rather than a field on the tool input types:
+ * those are the MCP `parameters` schemas, and a caller thread an agent could
+ * pass is a caller thread an agent could forge. This one is server-resolved.
+ */
 export interface CrewServiceShape {
   readonly dispatch: (
     input: CrewDispatchInput,
+    callerThreadId: ThreadId,
   ) => Effect.Effect<CrewDispatchResult, CrewDispatchRefusedError>;
 
   /**
@@ -90,27 +104,33 @@ export interface CrewServiceShape {
    * single `parentThreadId` scope returns nothing to a crewmate, which makes the
    * delivery nudge unreadable in the answer direction.
    */
-  readonly status: (input: CrewStatusInput) => Effect.Effect<ReadonlyArray<CrewTaskView>>;
+  readonly status: (
+    input: CrewStatusInput,
+    callerThreadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<CrewTaskView>>;
 
-  readonly teardown: (input: {
-    readonly taskId: CrewTaskId;
-  }) => Effect.Effect<void, CrewTaskNotFoundError>;
+  readonly teardown: (
+    input: { readonly taskId: CrewTaskId },
+    callerThreadId: ThreadId,
+  ) => Effect.Effect<void, CrewTaskNotFoundError>;
 
-  readonly report: (input: {
-    readonly state: string;
-    readonly note: string;
-  }) => Effect.Effect<CrewReportId, CrewTaskNotFoundError | CrewReportRefusedError>;
+  readonly report: (
+    input: { readonly state: string; readonly note: string },
+    callerThreadId: ThreadId,
+  ) => Effect.Effect<CrewReportId, CrewTaskNotFoundError | CrewReportRefusedError>;
 
-  readonly answer: (input: {
-    readonly reportId: CrewReportId;
-    readonly text: string;
-  }) => Effect.Effect<
+  readonly answer: (
+    input: { readonly reportId: CrewReportId; readonly text: string },
+    callerThreadId: ThreadId,
+  ) => Effect.Effect<
     CrewReportId,
     CrewTaskNotFoundError | CrewAlreadyAnsweredError | CrewAnswerRefusedError
   >;
 
   /** Slots currently held. Exposed so the acceptance run can read it directly. */
-  readonly openSlots: () => Effect.Effect<{ readonly open: number; readonly limit: number }>;
+  readonly openSlots: (
+    callerThreadId: ThreadId,
+  ) => Effect.Effect<{ readonly open: number; readonly limit: number }>;
 }
 
 export class CrewService extends Context.Service<CrewService, CrewServiceShape>()(
@@ -190,7 +210,6 @@ const makeCrewService = (options?: CrewServiceOptions) =>
     const crewLog = yield* CrewLog;
     const hooks = yield* CrewTeardownHooksService;
     const crypto = yield* Crypto.Crypto;
-    const callerThreadId = yield* CrewCallerThread;
 
     const limit = resolveCrewMaxConcurrentTasks(options?.env ?? process.env);
 
@@ -221,7 +240,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         Effect.catchCause(() => Effect.succeed(false)),
       );
 
-    const refuseDispatch = (error: CrewDispatchRefusedError) =>
+    const refuseDispatch = (error: CrewDispatchRefusedError, callerThreadId: ThreadId) =>
       crewLog
         .record(`crew.dispatch.refused.${error.reason}` as const, {
           threadId: callerThreadId,
@@ -230,7 +249,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         })
         .pipe(Effect.andThen(Effect.fail(error)));
 
-    const dispatch: CrewServiceShape["dispatch"] = (input) =>
+    const dispatch: CrewServiceShape["dispatch"] = (input, callerThreadId) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_dispatch", { threadId: callerThreadId });
 
@@ -240,11 +259,15 @@ const makeCrewService = (options?: CrewServiceOptions) =>
               reason: "payload",
               detail: `${byteLength(input.prompt)} bytes`,
             }),
+            callerThreadId,
           );
         }
 
         if (yield* isCrewmate(callerThreadId)) {
-          return yield* refuseDispatch(new CrewDispatchRefusedError({ reason: "nested" }));
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({ reason: "nested" }),
+            callerThreadId,
+          );
         }
 
         const caller = yield* shellOf(callerThreadId);
@@ -252,12 +275,16 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         if (!deliverable.ok) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "thread", detail: deliverable.detail }),
+            callerThreadId,
           );
         }
 
         const provider = input.provider ?? caller!.modelSelection.instanceId;
         if (CREW_UNSUPPORTED_PROVIDERS.some((name) => provider.includes(name))) {
-          return yield* refuseDispatch(new CrewDispatchRefusedError({ reason: "provider" }));
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({ reason: "provider" }),
+            callerThreadId,
+          );
         }
 
         const browserAccess = yield* serverSettings.getSettings.pipe(
@@ -267,7 +294,10 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           Effect.catchCause(() => Effect.succeed(false)),
         );
         if (!browserAccess) {
-          return yield* refuseDispatch(new CrewDispatchRefusedError({ reason: "browser-access" }));
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({ reason: "browser-access" }),
+            callerThreadId,
+          );
         }
 
         const open = yield* repository
@@ -276,6 +306,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         if (open >= limit) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "cap", openTasks: open, limit }),
+            callerThreadId,
           );
         }
 
@@ -412,7 +443,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         } satisfies CrewTaskView;
       });
 
-    const status: CrewServiceShape["status"] = (input) =>
+    const status: CrewServiceShape["status"] = (input, callerThreadId) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_status", { threadId: callerThreadId });
 
@@ -461,7 +492,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         .listReportsByTaskId({ taskId })
         .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
 
-    const teardown: CrewServiceShape["teardown"] = (input) =>
+    const teardown: CrewServiceShape["teardown"] = (input, callerThreadId) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_teardown", {
           threadId: callerThreadId,
@@ -538,7 +569,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         }
       });
 
-    const report: CrewServiceShape["report"] = (input) =>
+    const report: CrewServiceShape["report"] = (input, callerThreadId) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_report", { threadId: callerThreadId });
 
@@ -594,7 +625,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         return reportId;
       });
 
-    const answer: CrewServiceShape["answer"] = (input) =>
+    const answer: CrewServiceShape["answer"] = (input, callerThreadId) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_answer", {
           threadId: callerThreadId,
@@ -648,7 +679,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         return reportId;
       });
 
-    const openSlots: CrewServiceShape["openSlots"] = () =>
+    const openSlots: CrewServiceShape["openSlots"] = (callerThreadId) =>
       repository.countOpenTasks().pipe(
         Effect.map((open) => ({ open, limit })),
         Effect.catchCause(() => Effect.succeed({ open: 0, limit })),
@@ -656,17 +687,6 @@ const makeCrewService = (options?: CrewServiceOptions) =>
 
     return { dispatch, status, teardown, report, answer, openSlots } satisfies CrewServiceShape;
   });
-
-/**
- * The calling thread, resolved by the MCP layer and never supplied by the caller.
- *
- * A separate service rather than a parameter because every authority check keys
- * on it, and threading it through each signature invites a call site that passes
- * an id from the tool input instead.
- */
-export class CrewCallerThread extends Context.Service<CrewCallerThread, ThreadId>()(
-  "t3/crew/CrewService/CrewCallerThread",
-) {}
 
 export const CrewServiceLive = (options?: CrewServiceOptions) =>
   Layer.effect(CrewService)(makeCrewService(options));

@@ -43,6 +43,7 @@ import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
 import * as ServerSettings from "../src/serverSettings.ts";
 import * as AnalyticsService from "../src/telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../src/vcs/GitVcsDriver.ts";
+import { CrewSweep } from "../src/crew/CrewSweep.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
 const projectId = ProjectId.make("project-startup-orphan");
@@ -109,6 +110,9 @@ const startupDependencies = Layer.mergeAll(
   ),
   AnalyticsService.layerTest,
   Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+  // Startup acquires the sweep whether or not T3CODE_CREW_ENABLED is set; it is
+  // only *started* when the switch is on, which it is not here.
+  Layer.mock(CrewSweep)({}),
   Layer.succeed(ProviderService.ProviderService, {
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),
