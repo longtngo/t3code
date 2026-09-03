@@ -88,7 +88,7 @@ import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { threadBackendFilePath } from "../../subagentBackend/ThreadBackendPath.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
-import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeContinuationGroupKey, makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import {
@@ -2085,6 +2085,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const spawnerOption = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner);
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
     Effect.provideService(Path.Path, path),
+  );
+  // The transcript store `--resume` reads from, for the resume span. Resolved
+  // once here from the same settings the driver keys its continuation group on.
+  const claudeStoreKey = yield* makeClaudeContinuationGroupKey(claudeSettings).pipe(
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
   );
   const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
     claudeSettings.binaryPath,
@@ -5059,6 +5065,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           existingResumeSessionId !== undefined ? "resume-session" : "generated-session",
         "claude.resume.thread_id": resumeState?.threadId ?? "",
         "claude.resume.session_id": existingResumeSessionId ?? "",
+        "claude.store": claudeStoreKey,
         "claude.resume.session_at": resumeState?.resumeSessionAt ?? "",
         "claude.resume.turn_count": resumeState?.turnCount ?? -1,
         "claude.query.cwd": input.cwd ?? "",

@@ -668,6 +668,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        // The persisted binding continues this thread when it names the instance
+        // being started, or a different instance of the same driver that resumes
+        // from the same store — two Claude config dirs whose `projects` resolve
+        // to one transcript directory share a continuation key. Without this the
+        // switch would pass the gate and then start a fresh conversation, because
+        // there is no live session to hand the cursor over.
+        let sharesContinuation = persistedBinding?.providerInstanceId === resolvedInstanceId;
         if (
           persistedBinding?.provider === resolvedProvider &&
           persistedBinding.providerInstanceId !== resolvedInstanceId &&
@@ -687,6 +694,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
             );
           }
+          sharesContinuation = true;
         }
         // Fork: resolve the parent thread's resume cursor and fork it. Falls back
         // to a fresh start when the parent has no compatible cursor (the caller
@@ -694,9 +702,23 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const forkParentBinding = input.forkFrom
           ? Option.getOrUndefined(yield* directory.getBinding(input.forkFrom.sourceThreadId))
           : undefined;
+        // A parent on a shared-store sibling forks the same way: `--resume
+        // --fork-session` only needs the transcript to be reachable, and the
+        // parent's instance may since have been deleted from settings.
+        const forkParentSharesStore =
+          forkParentBinding !== undefined &&
+          forkParentBinding.provider === resolvedProvider &&
+          forkParentBinding.providerInstanceId !== undefined &&
+          forkParentBinding.providerInstanceId !== resolvedInstanceId &&
+          Option.exists(
+            yield* Effect.option(registry.getInstanceInfo(forkParentBinding.providerInstanceId)),
+            (parentInfo) =>
+              parentInfo.continuationIdentity.continuationKey ===
+              instanceInfo.continuationIdentity.continuationKey,
+          );
         const forkParentCursor =
-          forkParentBinding?.providerInstanceId === resolvedInstanceId
-            ? forkParentBinding.resumeCursor
+          forkParentBinding?.providerInstanceId === resolvedInstanceId || forkParentSharesStore
+            ? forkParentBinding?.resumeCursor
             : undefined;
         const forkedResumeCursor =
           input.forkFrom !== undefined &&
@@ -713,30 +735,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const effectiveResumeCursor =
           forkedResumeCursor ??
           input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
+          (sharesContinuation ? persistedBinding?.resumeCursor : undefined);
         const effectiveCwd =
           input.cwd ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? readPersistedCwd(persistedBinding.runtimePayload)
-            : undefined);
+          (sharesContinuation ? readPersistedCwd(persistedBinding?.runtimePayload) : undefined);
+        const persistedSource =
+          persistedBinding?.providerInstanceId === resolvedInstanceId
+            ? "persisted"
+            : "persisted-shared-store";
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
           "provider.resume_cursor.source":
             input.resumeCursor !== undefined
               ? "request"
-              : effectiveResumeCursor !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
+              : effectiveResumeCursor !== undefined && sharesContinuation
+                ? persistedSource
                 : "none",
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
           "provider.cwd.source":
             input.cwd !== undefined
               ? "request"
-              : effectiveCwd !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
+              : effectiveCwd !== undefined && sharesContinuation
+                ? persistedSource
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
         });

@@ -4,13 +4,29 @@ import { ProviderInstanceId, type ModelSelection, type ServerConfig } from "@t3t
 
 import {
   buildModelOptions,
+  filterThreadProviderGroups,
   groupByProvider,
   isModelSelectionUnavailable,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
   type ModelOption,
+  type ProviderGroup,
 } from "./modelOptions";
+
+function providerGroup(
+  providerKey: string,
+  providerDriver: string,
+  continuationGroupKey: string | null,
+): ProviderGroup {
+  return {
+    providerKey,
+    providerLabel: providerKey,
+    providerDriver,
+    continuationGroupKey,
+    models: [],
+  };
+}
 
 describe("mobile model options", () => {
   it("groups models by provider and flags legacy entries", () => {
@@ -99,7 +115,13 @@ describe("mobile model options", () => {
       })),
     );
     expect(groupByProvider(options)).toEqual([
-      { providerKey: "opencode_work", providerLabel: "OpenCode Work", models: options },
+      {
+        providerKey: "opencode_work",
+        providerLabel: "OpenCode Work",
+        providerDriver: "opencode",
+        continuationGroupKey: null,
+        models: options,
+      },
     ]);
   });
 
@@ -407,5 +429,81 @@ describe("mobile model options", () => {
         modelOptions: [unavailable],
       }),
     ).toBeNull();
+  });
+
+  describe("filterThreadProviderGroups", () => {
+    it("offers both groups when two Claude instances share a continuation key", () => {
+      const groups = [
+        providerGroup("claudeAgent", "claudeAgent", "claude:store:/shared"),
+        providerGroup("claudeAgent_personal", "claudeAgent", "claude:store:/shared"),
+      ];
+
+      expect(
+        filterThreadProviderGroups(groups, { instanceId: "claudeAgent", driver: "claudeAgent" }),
+      ).toEqual(groups);
+    });
+
+    it("keeps only the current group when its continuation key is missing", () => {
+      const groups = [
+        providerGroup("claudeAgent", "claudeAgent", null),
+        providerGroup("claudeAgent_personal", "claudeAgent", "claude:store:/shared"),
+      ];
+
+      expect(
+        filterThreadProviderGroups(groups, { instanceId: "claudeAgent", driver: "claudeAgent" }),
+      ).toEqual([groups[0]]);
+    });
+
+    it("never pairs two groups whose keys are both missing, whatever the driver", () => {
+      // An older server sends no continuation key; two unknowns are not a match.
+      for (const driver of ["claudeAgent", "antigravity"]) {
+        const groups = [
+          providerGroup("work", driver, null),
+          providerGroup("personal", driver, null),
+        ];
+        expect(filterThreadProviderGroups(groups, { instanceId: "work", driver })).toEqual([
+          groups[0],
+        ]);
+      }
+    });
+
+    it("never pairs across drivers, even on an equal key", () => {
+      const groups = [
+        providerGroup("claudeAgent", "claudeAgent", "store:/shared"),
+        providerGroup("codex", "codex", "store:/shared"),
+      ];
+
+      expect(
+        filterThreadProviderGroups(groups, { instanceId: "claudeAgent", driver: "claudeAgent" }),
+      ).toEqual([groups[0]]);
+    });
+
+    it("anchors on the stored selection when the live session's instance has no group", () => {
+      // The thread was switched to the shared-store instance, then the original
+      // instance was removed: the session still names it, the picker must not empty.
+      const groups = [providerGroup("claudeAgent_personal", "claudeAgent", "claude:store:/shared")];
+
+      expect(
+        filterThreadProviderGroups(groups, {
+          instanceId: "claudeAgent",
+          fallbackInstanceId: "claudeAgent_personal",
+          driver: "claudeAgent",
+        }),
+      ).toEqual(groups);
+    });
+
+    it("keeps the current group even when its instance is absent from providers", () => {
+      // buildModelOptions injects the thread's stored selection unconditionally
+      // (the fallback path), so its group still appears here with no
+      // continuation key to compare against — this must not empty the picker.
+      const groups = [providerGroup("claudeAgent_removed", "claudeAgent", null)];
+
+      expect(
+        filterThreadProviderGroups(groups, {
+          instanceId: "claudeAgent_removed",
+          driver: "claudeAgent",
+        }),
+      ).toEqual(groups);
+    });
   });
 });

@@ -351,7 +351,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
           displayName: "Claude",
           enabled: false,
           config: makeClaudeConfig({
-            homePath: "/home/julius/.claude-work",
+            homePath: "/nonexistent-home/julius/.claude-work",
             launchArgs: "--verbose",
           }),
         },
@@ -457,7 +457,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(claudeSnapshot.driver).toBe(claudeDriverKind);
       expect(claudeSnapshot.enabled).toBe(false);
       expect(claudeSnapshot.continuation?.groupKey).toBe(
-        "claude:home:/home/julius/.claude-work:config:",
+        "claude:store:/nonexistent-home/julius/.claude-work/.claude/projects",
       );
 
       const cursorSnapshot = yield* cursor!.snapshot.getSnapshot;

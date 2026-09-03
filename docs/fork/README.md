@@ -663,6 +663,26 @@ restoring a deleted duplicate. One line of upstream's component is fork-edited: 
 `selectedOptionValue(...)` rather than the raw stored string, so an off-list value shows the first
 row (Antigravity's `authMethod` included) instead of a choice the driver will not use; re-picking
 that row still writes the omitted key.
+### 28. Claude's continuation group is the transcript store
+
+Upstream keys Claude's continuation group on HOME only (`makeClaudeContinuationGroupKey`,
+`ClaudeHome.ts`). The fork keys it on `realpath(<configDir>/projects)` instead — the directory
+`claude --resume` actually reads `<cwd>/<sessionId>.jsonl` from — normalised through the deepest
+existing ancestor so the key does not flip the first time Claude creates `projects`. Two config
+dirs whose `projects` resolve to one directory share a key even with different HOME, because HOME
+does not locate the transcript once `CLAUDE_CONFIG_DIR` is set.
+
+A persisted resume cursor follows the thread across two instances that share a key
+(`sharesContinuation` in `apps/server/src/provider/Layers/ProviderService.ts`), not only across the same instance id.
+Mobile's model picker filters to the thread's continuation group (`filterThreadProviderGroups`,
+`apps/mobile/src/lib/modelOptions.ts`), ported from web's existing predicate
+(`ChatView.logic.ts`).
+
+A reconcile that restores the upstream HOME-only key, or any key built from the raw config-dir
+string instead of the resolved `projects` path, silently re-refuses a switch this fork means to
+allow. A reconcile that restores the old id-only cursor inheritance (dropping
+`sharesContinuation`) silently loses history on a stopped-session switch between two instances of
+the same store, because the switch itself is no longer refused but nothing hands the cursor over.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 

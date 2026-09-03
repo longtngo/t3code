@@ -134,14 +134,21 @@ blurred by default; click the blurred email to reveal it.
 
 ## Can I Switch Claude Accounts In An Existing Thread?
 
-Usually, no.
+Yes, when both Claude providers' config directories share one `projects` directory — for example,
+`~/.claude_personal_home/projects` set up as a symlink to `~/.claude/projects`. T3 Code keys "same
+Claude environment" on that directory, because it is where Claude Code keeps the conversation
+transcripts `--resume` reads. Switching between two such providers in an existing thread keeps its
+history. Two things follow from sharing that directory: both accounts can read and resume each
+other's conversations, and after a switch the thread continues under the other account, with that
+account's tool permissions and trust settings. Stop a running turn before switching.
 
-T3 Code only offers Claude providers that use the same config directory for an existing thread. A
-different config directory is treated as a different Claude environment.
+Otherwise, no: a separate config directory has its own transcripts, and the thread would lose its
+history if T3 Code let you switch to it.
 
-This is different from the recommended Codex setup. Claude Code keeps account and local state across
-multiple files under its config directory, so T3 Code keeps separate config directories isolated
-instead of trying to share part of the state.
+This is different from the recommended Codex setup. Codex shares its home directly, so any two
+Codex providers pointed at the same home are already in one continuation group. Claude shares
+through the `projects` link instead, because Claude Code keeps account and local state across
+multiple other files under its config directory that T3 Code does not need to share.
 
 ## I Want To Use OpenRouter
 

@@ -721,6 +721,15 @@ const make = Effect.gen(function* () {
           detail: `Thread '${threadId}' cannot switch from instance '${currentInstanceId}' to '${desiredInstanceId}' because their provider resume state is incompatible.`,
         });
       }
+      // A switch restarts the session at once; there is no orchestration-level
+      // queue here, so doing it under a running turn would abandon that turn.
+      if (thread.session.activeTurnId !== null) {
+        return yield* new ProviderAdapterRequestError({
+          provider: preferredProvider,
+          method: "thread.turn.start",
+          detail: `Thread '${threadId}' is running a turn on instance '${currentInstanceId}'; stop it before switching to '${desiredInstanceId}'.`,
+        });
+      }
     }
     const project = yield* resolveProject(thread.projectId);
     const effectiveCwd = resolveThreadWorkspaceCwd({
@@ -837,6 +846,10 @@ const make = Effect.gen(function* () {
         currentProvider: activeSession?.provider,
         currentInstanceId,
         desiredInstanceId,
+        // Which transcript store each side resumes from; the adapter's resume
+        // span carries the same key as `claude.store`.
+        currentContinuationKey: currentInfo.continuationIdentity.continuationKey,
+        desiredContinuationKey: desiredInfo.continuationIdentity.continuationKey,
         desiredProvider: desiredModelSelection.instanceId,
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode: thread.runtimeMode,

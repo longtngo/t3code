@@ -26,6 +26,7 @@ function modelOption(
     providerKey: "codex",
     providerLabel: "Codex",
     providerDriver: "codex",
+    continuationGroupKey: null,
     isDefault: false,
     isLegacy: false,
     capabilities: null,
@@ -109,7 +110,13 @@ describe("thread settings sheet state", () => {
 
   it("cannot save a staged model after sign-out removes it from the catalog", () => {
     const pending = modelOption("gemini-native");
-    const group = { providerKey: "codex", providerLabel: "Codex", models: [pending] };
+    const group = {
+      providerKey: "codex",
+      providerLabel: "Codex",
+      providerDriver: "codex",
+      continuationGroupKey: null,
+      models: [pending],
+    };
 
     expect(canCommitPendingModel(pending, [group])).toBe(true);
     expect(canCommitPendingModel(pending, [])).toBe(false);

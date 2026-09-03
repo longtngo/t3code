@@ -15,6 +15,7 @@ export type ModelOption = {
   readonly providerKey: string;
   readonly providerLabel: string;
   readonly providerDriver: string;
+  readonly continuationGroupKey: string | null;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
@@ -25,6 +26,8 @@ export type ModelOption = {
 export type ProviderGroup = {
   readonly providerKey: string;
   readonly providerLabel: string;
+  readonly providerDriver: string;
+  readonly continuationGroupKey: string | null;
   readonly models: ReadonlyArray<ModelOption>;
 };
 
@@ -173,6 +176,7 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        continuationGroupKey: provider.continuation?.groupKey ?? null,
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
@@ -220,6 +224,7 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
+        continuationGroupKey: provider?.continuation?.groupKey ?? null,
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection)
@@ -235,7 +240,15 @@ export function buildModelOptions(
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
-  const groups = new Map<string, { providerLabel: string; models: ModelOption[] }>();
+  const groups = new Map<
+    string,
+    {
+      providerLabel: string;
+      providerDriver: string;
+      continuationGroupKey: string | null;
+      models: ModelOption[];
+    }
+  >();
   for (const option of options) {
     const existing = groups.get(option.providerKey);
     if (existing) {
@@ -243,6 +256,8 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
     } else {
       groups.set(option.providerKey, {
         providerLabel: option.providerLabel,
+        providerDriver: option.providerDriver,
+        continuationGroupKey: option.continuationGroupKey,
         models: [option],
       });
     }
@@ -251,6 +266,41 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
   return [...groups.entries()].map(([providerKey, group]) => ({
     providerKey,
     providerLabel: group.providerLabel,
+    providerDriver: group.providerDriver,
+    continuationGroupKey: group.continuationGroupKey,
     models: group.models,
   }));
+}
+
+/**
+ * Filter a thread's provider picker to its continuation group: the thread's
+ * own group, plus any other group of the same driver that resumes from the
+ * same store (equal, non-null `continuationGroupKey`). A missing key never
+ * pairs, which also covers web's Antigravity exact-instance rule.
+ *
+ * The anchor is the live session's instance when it still has a group, else
+ * the stored selection's — `buildModelOptions` guarantees a group for the
+ * stored selection, so the picker can never come back empty.
+ */
+export function filterThreadProviderGroups(
+  groups: ReadonlyArray<ProviderGroup>,
+  current: {
+    readonly instanceId: string;
+    readonly fallbackInstanceId?: string | undefined;
+    readonly driver: string | null | undefined;
+  },
+): ReadonlyArray<ProviderGroup> {
+  const anchor =
+    groups.find((group) => group.providerKey === current.instanceId) ??
+    groups.find((group) => group.providerKey === current.fallbackInstanceId);
+  if (anchor === undefined)
+    return groups.filter((group) => group.providerKey === current.instanceId);
+  const driver = current.driver ?? anchor.providerDriver;
+  return groups.filter(
+    (group) =>
+      group.providerKey === anchor.providerKey ||
+      (group.providerDriver === driver &&
+        anchor.continuationGroupKey !== null &&
+        group.continuationGroupKey === anchor.continuationGroupKey),
+  );
 }

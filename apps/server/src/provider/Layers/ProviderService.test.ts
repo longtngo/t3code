@@ -3057,3 +3057,174 @@ describe("agent browser access", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+describe("switching instances that share a continuation group", () => {
+  const personalInstanceId = ProviderInstanceId.make("claudeAgent_personalsub");
+
+  // Two Claude instances of one driver. `sharedStore` decides whether their
+  // continuation keys match — i.e. whether their `projects` directories resolve
+  // to the same transcript store.
+  const makeTwoInstanceRegistry = (
+    adapter: ProviderAdapterShape<ProviderAdapterError>,
+    sharedStore: boolean,
+  ): ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] => {
+    const known = new Set<ProviderInstanceId>([claudeAgentInstanceId, personalInstanceId]);
+    const continuationKeyFor = (instanceId: ProviderInstanceId) =>
+      sharedStore || instanceId === claudeAgentInstanceId
+        ? "claude:store:/shared/projects"
+        : "claude:store:/personal/projects";
+    const unsupported = () => new ProviderUnsupportedError({ provider: CLAUDE_AGENT_DRIVER });
+    return {
+      getByInstance: (instanceId) =>
+        known.has(instanceId) ? Effect.succeed(adapter) : Effect.fail(unsupported()),
+      getInstanceInfo: (instanceId) =>
+        known.has(instanceId)
+          ? Effect.succeed({
+              instanceId,
+              driverKind: CLAUDE_AGENT_DRIVER,
+              displayName: undefined,
+              enabled: true,
+              continuationIdentity: {
+                driverKind: CLAUDE_AGENT_DRIVER,
+                continuationKey: continuationKeyFor(instanceId),
+              },
+            })
+          : Effect.fail(unsupported()),
+      listInstances: () => Effect.succeed(Array.from(known)),
+      subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+        PubSub.subscribe(pubsub),
+      ),
+    };
+  };
+
+  const runSwitch = (options: {
+    readonly sharedStore: boolean;
+    readonly threadId: ThreadId;
+    // When set, the binding belongs to this parent thread and the start forks it.
+    readonly forkFrom?: ThreadId;
+  }) =>
+    Effect.gen(function* () {
+      const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
+      const registry = makeTwoInstanceRegistry(claude.adapter, options.sharedStore);
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = Layer.mergeAll(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(serverConfigTestLayer),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+          ),
+        ),
+        directoryLayer,
+      );
+      const scope = yield* Scope.make();
+      const services = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+      const providerService = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+
+      // Written through the BUILT layer — see the note on `refreshAccountUsage`.
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        yield* directory.upsert({
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId: options.forkFrom ?? options.threadId,
+          resumeCursor: { sessionId: "persisted-session" },
+          runtimePayload: { cwd: "/persisted/cwd" },
+        });
+      }).pipe(Effect.provide(services));
+
+      // No live session: the switch has to reach the persisted binding, not a
+      // cursor handed over by a running one.
+      const outcome = yield* Effect.exit(
+        providerService.startSession(options.threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: personalInstanceId,
+          threadId: options.threadId,
+          runtimeMode: "full-access",
+          ...(options.forkFrom ? { forkFrom: { sourceThreadId: options.forkFrom } } : {}),
+        }),
+      );
+      yield* Scope.close(scope, Exit.void);
+      return { claude, outcome };
+    }).pipe(Effect.provide(NodeServices.layer));
+
+  it.effect("forks a parent bound to a shared-store sibling with the parent's cursor", () =>
+    Effect.gen(function* () {
+      const { claude, outcome } = yield* runSwitch({
+        sharedStore: true,
+        threadId: asThreadId("thread-shared-store-fork-child"),
+        forkFrom: asThreadId("thread-shared-store-fork-parent"),
+      });
+
+      assert.isTrue(Exit.isSuccess(outcome), Exit.isFailure(outcome) ? String(outcome.cause) : "");
+      assert.equal(claude.startSession.mock.calls.length, 1);
+      const startInput = claude.startSession.mock.calls[0]![0] as {
+        readonly resumeCursor?: unknown;
+      };
+      assert.deepEqual(startInput.resumeCursor, { sessionId: "persisted-session", fork: true });
+    }),
+  );
+
+  it.effect("forks a parent bound to an unrelated sibling without a cursor", () =>
+    Effect.gen(function* () {
+      const { claude, outcome } = yield* runSwitch({
+        sharedStore: false,
+        threadId: asThreadId("thread-separate-store-fork-child"),
+        forkFrom: asThreadId("thread-separate-store-fork-parent"),
+      });
+
+      assert.isTrue(Exit.isSuccess(outcome), Exit.isFailure(outcome) ? String(outcome.cause) : "");
+      assert.equal(claude.startSession.mock.calls.length, 1);
+      const startInput = claude.startSession.mock.calls[0]![0] as {
+        readonly resumeCursor?: unknown;
+      };
+      assert.equal(startInput.resumeCursor, undefined);
+    }),
+  );
+
+  it.effect("carries the persisted cursor and cwd to an instance with the same key", () =>
+    Effect.gen(function* () {
+      const { claude, outcome } = yield* runSwitch({
+        sharedStore: true,
+        threadId: asThreadId("thread-shared-store"),
+      });
+
+      assert.isTrue(Exit.isSuccess(outcome), Exit.isFailure(outcome) ? String(outcome.cause) : "");
+      assert.equal(claude.startSession.mock.calls.length, 1);
+      const startInput = claude.startSession.mock.calls[0]![0] as {
+        readonly resumeCursor?: unknown;
+        readonly cwd?: string;
+        readonly providerInstanceId?: ProviderInstanceId;
+      };
+      assert.deepEqual(startInput.resumeCursor, { sessionId: "persisted-session" });
+      assert.equal(startInput.cwd, "/persisted/cwd");
+      assert.equal(startInput.providerInstanceId, personalInstanceId);
+    }),
+  );
+
+  it.effect("still refuses an instance whose key differs", () =>
+    Effect.gen(function* () {
+      const { claude, outcome } = yield* runSwitch({
+        sharedStore: false,
+        threadId: asThreadId("thread-separate-store"),
+      });
+
+      assert.isTrue(Exit.isFailure(outcome));
+      const failure = Exit.isFailure(outcome) ? Cause.squash(outcome.cause) : undefined;
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include((failure as ProviderValidationError).issue, "resume state is incompatible");
+      assert.equal(claude.startSession.mock.calls.length, 0);
+    }),
+  );
+});

@@ -2,6 +2,8 @@ import * as NodeOS from "node:os";
 
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -67,13 +69,49 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   return env;
 });
 
+/**
+ * Key the continuation group on the transcript store — `<configDir>/projects`,
+ * the directory `claude --resume` reads `<cwd>/<sessionId>.jsonl` from. Two
+ * config dirs whose `projects` resolve to one directory can resume each
+ * other's sessions, so they share a group (fork precedent:
+ * `codexContinuationIdentity` keys on Codex's shared home). HOME is not part of
+ * the key: with `CLAUDE_CONFIG_DIR` set it does not locate the transcript.
+ */
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
-  function* (config: ClaudeHomeConfig): Effect.fn.Return<string, never, Path.Path> {
-    const resolvedHomePath = yield* resolveClaudeHomePath(config);
-    const resolvedConfigDir = yield* resolveClaudeConfigDirPath(config);
-    return `claude:home:${resolvedHomePath}:config:${resolvedConfigDir}`;
+  function* (
+    config: ClaudeHomeConfig,
+  ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const configDir =
+      (yield* resolveClaudeConfigDirPath(config)) ||
+      path.join(yield* resolveClaudeHomePath(config), ".claude");
+    return `claude:store:${yield* realPathThroughExistingAncestor(fs, path, path.join(configDir, "projects"))}`;
   },
 );
+
+/**
+ * `realpath` of `target` when it exists, otherwise of its deepest existing ancestor with the
+ * missing tail re-joined. The key must not change between the boot before Claude first
+ * creates `projects` (or the config dir itself) and the boot after, and a symlink anywhere
+ * on the way must resolve the same in both.
+ */
+const realPathThroughExistingAncestor = Effect.fn("realPathThroughExistingAncestor")(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  target: string,
+): Effect.fn.Return<string, never> {
+  const tail: Array<string> = [];
+  let current = target;
+  while (true) {
+    const real = yield* fs.realPath(current).pipe(Effect.option);
+    if (Option.isSome(real)) return path.join(real.value, ...tail);
+    const parent = path.dirname(current);
+    if (parent === current) return target;
+    tail.unshift(path.basename(current));
+    current = parent;
+  }
+});
 
 export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesCacheKey")(
   function* (
