@@ -6,6 +6,7 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   liveWorkEntryLabel,
+  messageMetaVisibilityClasses,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveWorkGroupScrollIndex,
@@ -2545,5 +2546,17 @@ describe("coalesceRepeatedWorkLogEntries", () => {
 
   it("returns nothing for no entries", () => {
     expect(coalesceRepeatedWorkLogEntries([])).toEqual([]);
+  });
+});
+
+describe("messageMetaVisibilityClasses", () => {
+  it("reveals on hover of the named group unless always visible", () => {
+    expect(messageMetaVisibilityClasses(false, "group-hover:")).toBe(
+      "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
+    );
+    expect(messageMetaVisibilityClasses(false, "group-hover/assistant:")).toBe(
+      "opacity-0 focus-within:opacity-100 group-hover/assistant:opacity-100",
+    );
+    expect(messageMetaVisibilityClasses(true, "group-hover:")).toBe("opacity-100");
   });
 });

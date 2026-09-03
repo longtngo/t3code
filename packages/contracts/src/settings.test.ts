@@ -337,6 +337,16 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);
     expect(() => decodeClientSettingsPatch({ confirmThreadUnpin: "yes" })).toThrow();
   });
+
+  it("keeps message timestamps on hover unless the user opts in", () => {
+    expect(decodeClientSettings({}).alwaysShowMessageTimestamps).toBe(false);
+    expect(
+      decodeClientSettings({ alwaysShowMessageTimestamps: true }).alwaysShowMessageTimestamps,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ alwaysShowMessageTimestamps: true }).alwaysShowMessageTimestamps,
+    ).toBe(true);
+  });
 });
 
 describe("ClientSettings context window meter", () => {
@@ -751,6 +761,24 @@ describe("settings schema / patch parity", () => {
         ...fieldsMissingFromMirror(
           (ServerSettings as unknown as { ast: unknown }).ast,
           (ServerSettingsPatch as unknown as { ast: unknown }).ast,
+        ),
+      ].sort(),
+    ).toEqual([...deliberatelyUnpatchable].sort());
+  });
+
+  it("mirrors every ClientSettings field in ClientSettingsPatch", () => {
+    const deliberatelyUnpatchable = [
+      // No writer anywhere in the client (grepped web/desktop/contracts): not
+      // yet wired to any dismiss action, so there is nothing for a patch
+      // mirror to carry today.
+      "dismissedProviderUpdateNotificationKeys",
+    ];
+
+    expect(
+      [
+        ...fieldsMissingFromMirror(
+          (ClientSettingsSchema as unknown as { ast: unknown }).ast,
+          (ClientSettingsPatch as unknown as { ast: unknown }).ast,
         ),
       ].sort(),
     ).toEqual([...deliberatelyUnpatchable].sort());

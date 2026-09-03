@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - the invariant is about the source
+// on disk (does the panel render this catalog entry), no Effect runtime here.
+import * as NodeFS from "node:fs";
+
 import { NOTIFICATION_CATEGORIES } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -264,5 +268,14 @@ describe("notification settings search entries", () => {
       id: "background-notifications",
       to: "/settings/notifications",
     });
+  });
+});
+
+describe("General panel catalog coverage", () => {
+  it("mounts every General catalog entry in the General panel", () => {
+    const source = NodeFS.readFileSync(new URL("./SettingsPanels.tsx", import.meta.url), "utf8");
+    for (const item of SETTINGS_SEARCH_ITEMS.filter((item) => item.to === "/settings/general")) {
+      expect(source, item.id).toContain(`searchableSetting("${item.id}")`);
+    }
   });
 });

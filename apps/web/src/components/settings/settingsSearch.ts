@@ -211,6 +211,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["command menu dollar $ slash /"],
   },
   {
+    id: "always-show-message-timestamps",
+    title: "Always show message timestamps",
+    to: "/settings/general",
+    searchTerms: ["copy revert hover meta row actions"],
+  },
+  {
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",

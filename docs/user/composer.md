@@ -231,6 +231,9 @@ start it in the background. T3 Code opens another new thread and shows an **Open
 thread that started. The new thread keeps the selected workspace mode and base branch. If **New
 worktree** is selected, each background thread creates its own worktree.
 
+Each message shows its timestamp and its Copy and Revert buttons when you hover over it. To keep
+them visible, turn on **Always show message timestamps** in **Settings → General**.
+
 ## Sending while the agent is working
 
 You do not have to wait for the agent to finish before sending. A message sent

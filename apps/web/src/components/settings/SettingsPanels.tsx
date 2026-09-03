@@ -542,6 +542,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
         ? ["Show skills in slash menu"]
         : []),
+      ...(settings.alwaysShowMessageTimestamps !==
+      DEFAULT_UNIFIED_SETTINGS.alwaysShowMessageTimestamps
+        ? ["Always show message timestamps"]
+        : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
         ? ["Context window indicator"]
         : []),
@@ -625,6 +629,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
+      settings.alwaysShowMessageTimestamps,
       settings.timestampFormat,
       settings.wordWrap,
       followSystem,
@@ -703,6 +708,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
+      alwaysShowMessageTimestamps: DEFAULT_UNIFIED_SETTINGS.alwaysShowMessageTimestamps,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -2331,6 +2337,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ showSkillsInSlashMenu: Boolean(checked) })
               }
               aria-label="Show skills in slash menu"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("always-show-message-timestamps")}
+          description="Keeps each message's timestamp row and its buttons visible instead of showing them on hover."
+          resetAction={
+            settings.alwaysShowMessageTimestamps !==
+            DEFAULT_UNIFIED_SETTINGS.alwaysShowMessageTimestamps ? (
+              <SettingResetButton
+                label="always show message timestamps"
+                onClick={() =>
+                  updateSettings({
+                    alwaysShowMessageTimestamps:
+                      DEFAULT_UNIFIED_SETTINGS.alwaysShowMessageTimestamps,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.alwaysShowMessageTimestamps}
+              onCheckedChange={(checked) =>
+                updateSettings({ alwaysShowMessageTimestamps: Boolean(checked) })
+              }
+              aria-label="Always show message timestamps"
             />
           }
         />

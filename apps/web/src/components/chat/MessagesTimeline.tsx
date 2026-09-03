@@ -136,6 +136,7 @@ import {
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   resolveWorkGroupScrollIndex,
+  messageMetaVisibilityClasses,
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
   toolGroupAction,
@@ -192,6 +193,7 @@ interface TimelineRowSharedState {
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
+  alwaysShowMessageTimestamps: boolean;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
@@ -323,6 +325,7 @@ interface MessagesTimelineProps {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
+  alwaysShowMessageTimestamps?: boolean;
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   anchorMessageId: MessageId | null;
@@ -376,6 +379,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   markdownCwd,
   resolvedTheme,
   timestampFormat,
+  alwaysShowMessageTimestamps = false,
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
   anchorMessageId,
@@ -645,6 +649,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       citationRequest: readyCitationRequest,
       listRef,
       timestampFormat,
+      alwaysShowMessageTimestamps,
       routeThreadKey,
       // Must be referentially stable: ChatMarkdown keys its react-markdown
       // component map on threadRef, and a fresh object here remounts every
@@ -673,6 +678,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       readyCitationRequest,
       listRef,
       timestampFormat,
+      alwaysShowMessageTimestamps,
       routeThreadKey,
       citationThreadRef,
       markdownCwd,
@@ -1377,7 +1383,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
-      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+      <div
+        className={cn(
+          "flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums transition-opacity duration-200",
+          messageMetaVisibilityClasses(ctx.alwaysShowMessageTimestamps, "group-hover:"),
+        )}
+      >
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -1484,6 +1495,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             message={row.message}
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
+            alwaysVisible={ctx.alwaysShowMessageTimestamps && !row.message.streaming}
           />
         ) : null}
       </div>
@@ -1528,9 +1540,7 @@ function AssistantMessageMeta({
     <div
       className={cn(
         "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        messageMetaVisibilityClasses(alwaysVisible, "group-hover/assistant:"),
         className,
       )}
     >

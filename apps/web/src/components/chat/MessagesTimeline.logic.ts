@@ -1279,3 +1279,13 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
   }
 }
+
+/** Class list for a message's timestamp/actions row: hover-revealed within `hoverGroup`, or pinned visible. */
+export function messageMetaVisibilityClasses(
+  alwaysVisible: boolean,
+  hoverGroup: "group-hover:" | "group-hover/assistant:",
+): string {
+  return alwaysVisible
+    ? "opacity-100"
+    : `opacity-0 focus-within:opacity-100 ${hoverGroup}opacity-100`;
+}

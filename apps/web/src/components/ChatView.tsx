@@ -8333,6 +8333,7 @@ function ChatViewContent(props: ChatViewProps) {
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
+                alwaysShowMessageTimestamps={settings.alwaysShowMessageTimestamps}
                 workspaceRoot={activeWorkspaceRoot}
                 skills={
                   activeProviderStatus
