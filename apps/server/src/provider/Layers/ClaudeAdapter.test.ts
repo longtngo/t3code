@@ -18,6 +18,7 @@ import {
   CLAUDE_OUTPUT_STYLES,
   MessageId,
   ProviderDriverKind,
+  SUBAGENT_BACKEND_CURSOR,
   ProviderItemId,
   ProviderRuntimeEvent,
   type RuntimeMode,
@@ -29,8 +30,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import type * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -40,6 +43,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { OFF, writeThreadBackendFile } from "../../subagentBackend/SubagentBackend.ts";
 import { threadBackendFileName } from "../../subagentBackend/ThreadBackendPath.ts";
 import { subagentDispatchAppend } from "./ClaudeAdapter.ts";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../ClaudeModelCatalog.ts";
@@ -261,7 +265,10 @@ function makeHarness(config?: {
       Layer.provideMerge(
         ServerConfig.layerTest(
           config?.cwd ?? "/tmp/claude-adapter-test",
-          config?.baseDir ?? "/tmp",
+          // A per-harness temp dir, NOT a shared "/tmp": that resolved every harness in this
+          // file to one `/tmp/userdata/subagent-threads`, so a flag-file fixture written by
+          // one test was visible to all 150 and survived between runs on the machine.
+          config?.baseDir ?? { prefix: "claude-adapter-" },
         ),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -403,7 +410,9 @@ describe("ClaudeAdapterLive", () => {
         });
       }),
     ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(
+        ServerConfig.layerTest("/tmp/claude-adapter-test", { prefix: "claude-adapter-" }),
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -934,34 +943,46 @@ describe("ClaudeAdapterLive", () => {
   });
 
   /**
-   * Each of these gets its OWN base dir. `makeHarness`'s default (`/tmp`) resolves
-   * `subagentThreadsDir` to a single shared `/tmp/userdata/subagent-threads`, so a fixture
-   * written by one test is visible to every other test in this file — and to every later run on
-   * the machine. Verified by planting a `cursor` file there and watching the unrelated
-   * "derives bypass permission mode" case go red on the `systemPrompt` deepEqual.
+   * Writes the fixture with the SAME function the server writes it with, so the test cannot
+   * drift from production's on-disk format.
    */
-  const withIsolatedThreadsDir = <A, E>(
-    write: ((dir: string) => void) | undefined,
-    read: (harness: ReturnType<typeof makeHarness>) => Effect.Effect<A, E, ClaudeAdapter>,
-  ) =>
+  const writeFlagFile = (backend: "cursor" | "default") =>
     Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "claude-adapter-subagent-"),
-      );
-      const threadsDir = NodePath.join(baseDir, "userdata", "subagent-threads");
-      NodeFS.mkdirSync(threadsDir, { recursive: true });
-      if (write !== undefined) write(threadsDir);
-      const harness = makeHarness({ baseDir });
-      return yield* read(harness).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
-        Effect.ensuring(
-          Effect.sync(() => {
-            NodeFS.rmSync(baseDir, { recursive: true, force: true });
-          }),
-        ),
+      const { subagentThreadsDir } = yield* ServerConfig;
+      yield* writeThreadBackendFile(
+        subagentThreadsDir,
+        THREAD_ID,
+        backend === "cursor"
+          ? {
+              ...OFF,
+              backend: SUBAGENT_BACKEND_CURSOR,
+              instanceId: "cursor",
+              model: "auto",
+              binaryPath: "/usr/bin/true",
+            }
+          : OFF,
       );
     });
+
+  /** Each harness owns its base dir, so a fixture written here reaches no other test. */
+  const appendForFlagFile = <E = never>(
+    write?: Effect.Effect<void, E, FileSystem.FileSystem | Path.Path | ServerConfig>,
+  ) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      if (write !== undefined) yield* write;
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      return harness.getLastCreateQueryInput()?.options.systemPrompt;
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  };
 
   /** Narrows the SDK's `string | string[] | preset` prompt to the preset's appended text. */
   const presetAppend = (systemPrompt: ClaudeQueryOptions["systemPrompt"]): string => {
@@ -971,35 +992,6 @@ describe("ClaudeAdapterLive", () => {
     );
     return systemPrompt.append ?? "";
   };
-
-  const writeFlagFile = (backend: string) => (dir: string) => {
-    NodeFS.writeFileSync(
-      NodePath.join(dir, threadBackendFileName(THREAD_ID)),
-      JSON.stringify({
-        schemaVersion: 1,
-        backend,
-        instanceId: backend === "cursor" ? "cursor" : null,
-        model: backend === "cursor" ? "auto" : null,
-        binaryPath: backend === "cursor" ? "/usr/bin/true" : null,
-        apiEndpoint: "",
-        updatedAt: "2026-09-04T00:00:00.000Z",
-        degraded: null,
-      }),
-    );
-  };
-
-  const appendForFlagFile = (write: ((dir: string) => void) | undefined) =>
-    withIsolatedThreadsDir(write, (harness) =>
-      Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudeAgent"),
-          runtimeMode: "full-access",
-        });
-        return harness.getLastCreateQueryInput()?.options.systemPrompt;
-      }),
-    );
 
   it.effect("appends the dispatch instruction when the thread's flag file says cursor", () =>
     Effect.gen(function* () {
@@ -1021,7 +1013,7 @@ describe("ClaudeAdapterLive", () => {
 
   it.effect("appends nothing when the thread has no flag file at all", () =>
     Effect.gen(function* () {
-      const systemPrompt = yield* appendForFlagFile(undefined);
+      const systemPrompt = yield* appendForFlagFile();
       const append = presetAppend(systemPrompt);
       assert.notMatch(append, /subagent-dispatch/);
     }),
@@ -4497,7 +4489,9 @@ describe("ClaudeAdapterLive", () => {
         });
       }),
     ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(
+        ServerConfig.layerTest("/tmp/claude-adapter-test", { prefix: "claude-adapter-" }),
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -4560,7 +4554,9 @@ describe("ClaudeAdapterLive", () => {
         });
       }),
     ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(
+        ServerConfig.layerTest("/tmp/claude-adapter-test", { prefix: "claude-adapter-" }),
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -4686,7 +4682,9 @@ describe("ClaudeAdapterLive", () => {
         });
       }),
     ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(
+        ServerConfig.layerTest("/tmp/claude-adapter-test", { prefix: "claude-adapter-" }),
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -4777,7 +4775,9 @@ describe("ClaudeAdapterLive", () => {
         });
       }),
     ).pipe(
-      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(
+        ServerConfig.layerTest("/tmp/claude-adapter-test", { prefix: "claude-adapter-" }),
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
