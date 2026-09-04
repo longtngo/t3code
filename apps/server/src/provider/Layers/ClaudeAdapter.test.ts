@@ -41,6 +41,7 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { threadBackendFileName } from "../../subagentBackend/ThreadBackendPath.ts";
+import { subagentDispatchAppend } from "./ClaudeAdapter.ts";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../ClaudeModelCatalog.ts";
 import {
   SYNTHETIC_CLAUDE_CAPABLE_MODEL,
@@ -908,6 +909,123 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it("offers the dispatch instruction only for an exact cursor backend", () => {
+    // The gate is the resolved backend string, and `readThreadBackendFile` maps every
+    // unreadable state - absent, malformed, empty - onto "default". Fragment match, not prose
+    // equality: rewording the instruction must not fail this test.
+    assert.match(subagentDispatchAppend("cursor"), /subagent-dispatch/);
+    assert.equal(subagentDispatchAppend("default"), "");
+    assert.equal(subagentDispatchAppend(""), "");
+    assert.equal(subagentDispatchAppend("Cursor"), "");
+    assert.equal(subagentDispatchAppend("cursor "), "");
+  });
+
+  it("names exit 3 as the only fallback signal", () => {
+    // Regression guard for a wording bug that shipped twice in review: the wrapper `exec`s the
+    // configured binary, so the binary's own exit code propagates (1 from a failed Cursor run,
+    // 127 from a missing cursor-scratch). Any enumeration of "these codes mean you typed it
+    // wrong" is therefore incorrect, and a generic "non-zero means offload is off" sends the
+    // agent to a Claude subagent after its own mistake.
+    const instruction = subagentDispatchAppend("cursor");
+    assert.match(instruction, /Exit code 3 means/);
+    assert.match(instruction, /Any other non-zero exit is not a fallback signal/);
+    assert.notMatch(instruction, /\b6[456]\b/);
+  });
+
+  /**
+   * Each of these gets its OWN base dir. `makeHarness`'s default (`/tmp`) resolves
+   * `subagentThreadsDir` to a single shared `/tmp/userdata/subagent-threads`, so a fixture
+   * written by one test is visible to every other test in this file — and to every later run on
+   * the machine. Verified by planting a `cursor` file there and watching the unrelated
+   * "derives bypass permission mode" case go red on the `systemPrompt` deepEqual.
+   */
+  const withIsolatedThreadsDir = <A, E>(
+    write: ((dir: string) => void) | undefined,
+    read: (harness: ReturnType<typeof makeHarness>) => Effect.Effect<A, E, ClaudeAdapter>,
+  ) =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "claude-adapter-subagent-"),
+      );
+      const threadsDir = NodePath.join(baseDir, "userdata", "subagent-threads");
+      NodeFS.mkdirSync(threadsDir, { recursive: true });
+      if (write !== undefined) write(threadsDir);
+      const harness = makeHarness({ baseDir });
+      return yield* read(harness).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            NodeFS.rmSync(baseDir, { recursive: true, force: true });
+          }),
+        ),
+      );
+    });
+
+  /** Narrows the SDK's `string | string[] | preset` prompt to the preset's appended text. */
+  const presetAppend = (systemPrompt: ClaudeQueryOptions["systemPrompt"]): string => {
+    assert.ok(
+      typeof systemPrompt === "object" && systemPrompt !== null && !Array.isArray(systemPrompt),
+      "expected a preset system prompt",
+    );
+    return systemPrompt.append ?? "";
+  };
+
+  const writeFlagFile = (backend: string) => (dir: string) => {
+    NodeFS.writeFileSync(
+      NodePath.join(dir, threadBackendFileName(THREAD_ID)),
+      JSON.stringify({
+        schemaVersion: 1,
+        backend,
+        instanceId: backend === "cursor" ? "cursor" : null,
+        model: backend === "cursor" ? "auto" : null,
+        binaryPath: backend === "cursor" ? "/usr/bin/true" : null,
+        apiEndpoint: "",
+        updatedAt: "2026-09-04T00:00:00.000Z",
+        degraded: null,
+      }),
+    );
+  };
+
+  const appendForFlagFile = (write: ((dir: string) => void) | undefined) =>
+    withIsolatedThreadsDir(write, (harness) =>
+      Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        return harness.getLastCreateQueryInput()?.options.systemPrompt;
+      }),
+    );
+
+  it.effect("appends the dispatch instruction when the thread's flag file says cursor", () =>
+    Effect.gen(function* () {
+      const systemPrompt = yield* appendForFlagFile(writeFlagFile("cursor"));
+      const append = presetAppend(systemPrompt);
+      assert.match(append, /subagent-dispatch/);
+      // The runtime block must survive alongside it, not be replaced by it.
+      assert.match(append, /<runtime_info>/);
+    }),
+  );
+
+  it.effect("appends nothing when the thread's flag file says default", () =>
+    Effect.gen(function* () {
+      const systemPrompt = yield* appendForFlagFile(writeFlagFile("default"));
+      const append = presetAppend(systemPrompt);
+      assert.notMatch(append, /subagent-dispatch/);
+    }),
+  );
+
+  it.effect("appends nothing when the thread has no flag file at all", () =>
+    Effect.gen(function* () {
+      const systemPrompt = yield* appendForFlagFile(undefined);
+      const append = presetAppend(systemPrompt);
+      assert.notMatch(append, /subagent-dispatch/);
+    }),
+  );
 
   it.effect("points each session's SUBAGENT_BACKEND_STATE at its own thread flag file", () => {
     const harness = makeHarness();

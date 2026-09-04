@@ -28,9 +28,11 @@ import {
 // vi.mock is hoisted above every import, so the `listCursorModels` binding above
 // already resolves to this mock — letting individual tests override its behavior
 // for one call via `vi.mocked(listCursorModels).mockImplementationOnce(...)`.
-// `setBackend` never warms the model cache itself: `ws.ts` always calls
-// `modelsForPersistedBackend(persisted, true)` right after every `set`, so a probe
-// inside `setBackend` would just be a second, redundant one.
+// `setBackend` never warms the model cache itself, and since the toggle-latency fix
+// neither does the RPC around it: `ws.ts` calls
+// `modelsForPersistedBackend(persisted, false)` after every `set`, which peeks the
+// cache instead of spawning a probe. A probe inside `setBackend` would put back the
+// multi-second wait that fix removed.
 vi.mock("./cursorModels.ts", () => ({
   listCursorModels: vi.fn(() => Effect.die("listCursorModels should never run inside setBackend")),
 }));

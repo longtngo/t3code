@@ -49,6 +49,7 @@ import {
   RuntimeTaskId,
   type RuntimeTaskStatus,
   type RuntimeTaskUsage,
+  SUBAGENT_BACKEND_CURSOR,
   type TaskAgentLinkage,
   type TaskRunHandles,
   ThreadId,
@@ -87,6 +88,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { readThreadBackendFile } from "../../subagentBackend/SubagentBackend.ts";
 import { threadBackendFilePath } from "../../subagentBackend/ThreadBackendPath.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeContinuationGroupKey, makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
@@ -1641,6 +1643,39 @@ const CLAUDE_SETTING_SOURCES = [
   "project",
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
+
+/**
+ * Told to a Claude session whose thread resolves to Cursor, because nothing else reaches the
+ * agent's tool choice: `SUBAGENT_BACKEND_STATE` and the flag file both sit downstream of a
+ * `Bash` call the agent has to decide to make, and the native `Agent` tool reads neither.
+ * Measured over 8 trials per arm, wrapper share went 0.125 without this text to 1.000 with it.
+ *
+ * Exit 3 is named because it is the wrapper's own "offload unavailable" refusal and the only code
+ * that should send the agent back to the `Agent` tool. Everything else is deliberately NOT
+ * enumerated: the wrapper `exec`s the configured binary, so the binary's own exit code propagates
+ * (a failed Cursor run gives 1, a missing `cursor-scratch` gives 127), and any list of codes here
+ * would tell the agent to "fix its invocation" after a failure it did not cause.
+ *
+ * Lives here rather than in `RuntimeInstructions.ts`: that module is imported by the Cursor,
+ * Codex, Grok and OpenCode adapters, none of which receive `SUBAGENT_BACKEND_STATE` or should see
+ * dispatch text.
+ */
+const SUBAGENT_DISPATCH_INSTRUCTION =
+  "<subagent_dispatch>Subagent offload is ON for this thread. When you need a subagent, do NOT " +
+  "use the Agent tool: write the subagent prompt to a file and run " +
+  "`~/bin/subagent-dispatch <short-name> <prompt-file>` with the Bash tool. Exit code 3 means " +
+  "offload is unavailable for this thread \u2014 only then fall back to the Agent tool. Any other " +
+  "non-zero exit is not a fallback signal: read stderr, then either fix your invocation or treat " +
+  "it as a failed subagent run.</subagent_dispatch>";
+
+/**
+ * The instruction for a resolved backend, or an empty string. Only an exact `cursor` enables it,
+ * so a malformed, absent, or `default` flag file — all of which `readThreadBackendFile` maps to
+ * `default` — appends nothing and leaves the session prompt byte-identical to before.
+ */
+export function subagentDispatchAppend(backend: string): string {
+  return backend === SUBAGENT_BACKEND_CURSOR ? SUBAGENT_DISPATCH_INSTRUCTION : "";
+}
 
 function buildPromptText(
   input: ProviderSendTurnInput,
@@ -5011,6 +5046,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.workspaceMemberPaths ?? []),
         serverConfig.attachmentsDir,
       ];
+      // `ProviderService` writes this thread's flag file immediately before calling us, on both
+      // its start and its recover-with-resume paths, so it is on disk by now. A missing or
+      // malformed file reads as `default` and appends nothing — the fail-safe direction, and the
+      // same one the wrapper takes when it cannot confirm a Cursor target.
+      // `fileSystem` is the one captured at layer build, not a `yield*` of the service:
+      // `ProviderAdapterShape.startSession` is `R = never`, so requiring `FileSystem` from the
+      // caller's context breaks the shape (the same reason the two other reads in this file
+      // provide it explicitly, `:2133` and `:5427`).
+      const threadBackend = yield* readThreadBackendFile(
+        serverConfig.subagentThreadsDir,
+        input.threadId,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      const dispatchInstruction = subagentDispatchAppend(threadBackend.backend);
+
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -5019,7 +5068,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           type: "preset",
           preset: "claude_code",
           // Model and effort can change after this session-level prompt is set.
-          append: buildRuntimeInstructions({ harness: "Claude Code" }),
+          append: buildRuntimeInstructions({ harness: "Claude Code" }) + dispatchInstruction,
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
@@ -5098,6 +5147,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.settings_json": encodeJsonStringForDiagnostics(settings) ?? "",
         "claude.query.extra_args_json": encodeJsonStringForDiagnostics(extraArgs) ?? "",
         "claude.query.path_to_executable": claudeBinaryPath,
+        // Always set, `false` included: the incident this came from needed to tell "offload was
+        // off for this thread" apart from "this thread never started a session", and a key that
+        // only appears when true cannot.
+        "claude.query.subagent_offload_injected": dispatchInstruction !== "",
       });
 
       const queryRuntime = yield* Effect.try({

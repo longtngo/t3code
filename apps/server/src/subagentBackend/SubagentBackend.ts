@@ -398,9 +398,12 @@ export const writeThreadBackendFile = Effect.fn("subagentBackend.writeThread")(f
 });
 
 /** Reads a thread's file with the same fail-safe parse as the global one: missing or
- * malformed yields `default` with a `degraded` reason.
+ * malformed yields `default` with a `degraded` reason — so no read failure can turn into a
+ * failed session start, only into a session that is not told to offload.
  *
- * Test-facing reader; production never reads a thread file — only the wrapper does. */
+ * The wrapper is no longer the only production reader: `ClaudeAdapter` reads this at session
+ * start to decide whether to append the dispatch instruction, because nothing else reaches the
+ * agent's choice between the wrapper and its native `Agent` tool. */
 export const readThreadBackendFile = Effect.fn("subagentBackend.readThread")(function* (
   threadsDir: string,
   threadId: ThreadId,
@@ -604,11 +607,12 @@ export function buildState(
 
 /**
  * Resolves the Cursor CLI model list for a persisted backend state.
- * `refresh: false` — the `subagentBackend.get` default, see
- * `WsSubagentBackendGetRpc`'s payload doc — never spawns a probe, only
+ * `refresh: false` — what `subagentBackend.get` defaults to and what
+ * `subagentBackend.set` now always passes — never spawns a probe, only
  * reporting whatever `listCursorModels` already has cached (via
- * `peekCursorModels`), because `get` runs on every client mount and must stay
- * cheap. `refresh: true` (`set`, or `get` once the panel opens and asks) probes.
+ * `peekCursorModels`). `get` runs on every client mount and `set` sits on the
+ * toggle's critical path, so neither can afford a subprocess. `refresh: true`
+ * is now reached only by `get` once the panel opens and asks for it.
  */
 export const modelsForPersistedBackend = (persisted: PersistedBackend, refresh: boolean) => {
   if (persisted.backend !== SUBAGENT_BACKEND_CURSOR || persisted.binaryPath === null) {
