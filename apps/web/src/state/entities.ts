@@ -205,6 +205,19 @@ export function useEnvironmentSupportsLocalOnlyStatus(environmentId: Environment
   return serverConfigs.get(environmentId)?.environment.capabilities.vcsLocalOnlyStatus === true;
 }
 
+/** Whether the environment's server understands `enableCrew` and serves the
+    `crew.*` RPCs. An older one has never heard of `crew.list`, and the panel and
+    the command palette both poll it on a timer, so an ungated client sends a
+    request a minute per environment that can only fail. Same version-skew
+    contract as the rest: missing reads as unsupported. */
+export function useEnvironmentSupportsCrew(environmentId: EnvironmentId | null): boolean {
+  const serverConfigs = useServerConfigs();
+  return (
+    environmentId != null &&
+    serverConfigs.get(environmentId)?.environment.capabilities.crew === true
+  );
+}
+
 /** Whether the environment's server understands thread.pin/unpin.
     Same version-skew contract as settlement. */
 export function readEnvironmentSupportsPinning(environmentId: EnvironmentId): boolean {

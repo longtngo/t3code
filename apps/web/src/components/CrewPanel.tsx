@@ -136,7 +136,7 @@ export function CrewPanel({
   onForgetWorktree,
 }: CrewPanelProps) {
   const environmentId = usePrimaryEnvironmentId();
-  const { tasks } = useCrew(environmentId, expanded);
+  const { tasks, supported } = useCrew(environmentId, expanded);
   const [answerFor, setAnswerFor] = useState<string | null>(null);
   const [answerText, setAnswerText] = useState("");
 
@@ -152,6 +152,13 @@ export function CrewPanel({
     },
     [answerText, onAnswer],
   );
+
+  // A server with no crew never answers, so `tasks` stays null and the guard
+  // below never fires — the section would sit there showing "Loading crew…"
+  // for the whole session.
+  if (!supported) {
+    return null;
+  }
 
   // The section vanishes entirely when there is no crew, matching the snoozed
   // shelf beside it. It renders whenever the environment has ever had one.

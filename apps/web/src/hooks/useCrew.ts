@@ -4,6 +4,7 @@ import type { CrewTaskView, EnvironmentId } from "@t3tools/contracts";
 
 import { useDocumentVisible } from "./useDocumentVisible";
 import { crewEnvironment } from "../state/crew";
+import { useEnvironmentSupportsCrew } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 
 /** Background cadence: crew state changes on a 60s sweep, so match it. */
@@ -14,6 +15,14 @@ const ACTIVE_INTERVAL_MS = 5_000;
 export interface CrewState {
   /** Latest task list, or null before the first poll resolves. */
   readonly tasks: ReadonlyArray<CrewTaskView> | null;
+  /**
+   * Whether this environment's server serves crew at all.
+   *
+   * Surfaced because `tasks` cannot distinguish "not answered yet" from "never
+   * will be": both are null, so a panel keyed on `tasks` alone shows a loading
+   * line forever against a server that has no `crew.list`.
+   */
+  readonly supported: boolean;
 }
 
 /**
@@ -27,11 +36,19 @@ export interface CrewState {
  */
 export function useCrew(environmentId: EnvironmentId | null, fast: boolean): CrewState {
   const visible = useDocumentVisible();
-  const active = environmentId != null && visible;
+  // `supportsCrew` is false for a null environment too, so it subsumes the
+  // id check the `queryAtom` ternary below still needs for type narrowing.
+  const supportsCrew = useEnvironmentSupportsCrew(environmentId);
+  const active = visible && supportsCrew;
   const intervalMs = fast ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
 
+  // Nulled when unsupported, not merely left unpolled: `useEnvironmentQuery`
+  // subscribes to the atom, and subscribing is what fires the first fetch. A
+  // gate on the interval alone would still send one `crew.list` per mount.
   const queryAtom =
-    environmentId == null ? null : crewEnvironment.list({ environmentId, input: {} });
+    environmentId == null || !supportsCrew
+      ? null
+      : crewEnvironment.list({ environmentId, input: {} });
   const { data, refresh } = useEnvironmentQuery(queryAtom);
 
   const [tasks, setTasks] = useState<ReadonlyArray<CrewTaskView> | null>(null);
@@ -51,5 +68,5 @@ export function useCrew(environmentId: EnvironmentId | null, fast: boolean): Cre
     return () => clearInterval(id);
   }, [active, intervalMs]);
 
-  return { tasks };
+  return { tasks, supported: supportsCrew };
 }
