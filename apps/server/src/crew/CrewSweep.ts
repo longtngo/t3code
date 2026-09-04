@@ -3,7 +3,7 @@
  * the bridge's answer into the crewmate's, without starting a turn where it can
  * avoid one.
  *
- * Runs every 60s; a `crew_report` nudge runs the same loop.
+ * Runs every 60s. `runOnce` is also the seam the tests drive directly.
  *
  * @module crew/CrewSweep
  */
@@ -44,7 +44,7 @@ export const CREW_ZOMBIE_SCAN_FAILURE_LIMIT = 3;
 const WAKE_PREFIX = "Crew report: ";
 
 export interface CrewSweepShape {
-  /** Runs one pass. The 60s schedule and the `crew_report` nudge share it. */
+  /** Runs one pass. The 60s schedule is its only production caller. */
   readonly runOnce: () => Effect.Effect<void>;
   /** Forks the 60s loop and the zombie fiber into the caller's scope. */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;

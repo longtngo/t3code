@@ -217,15 +217,6 @@ export class CrewAnswerRefusedError extends Schema.TaggedErrorClass<CrewAnswerRe
   }
 }
 
-export const CrewError = Schema.Union([
-  CrewDispatchRefusedError,
-  CrewTaskNotFoundError,
-  CrewAlreadyAnsweredError,
-  CrewReportRefusedError,
-  CrewAnswerRefusedError,
-]);
-export type CrewError = typeof CrewError.Type;
-
 /** Prompt bound for `crew_dispatch`. Bytes, matching the note bound. */
 export const CREW_PROMPT_BYTE_LIMIT = 8 * 1024;
 
