@@ -25,7 +25,7 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-02 (27th reconcile), against `origin/main`. Concentrated in `apps/server`
+As of 2026-09-04 (29th reconcile), against `origin/main`. Concentrated in `apps/server`
 and `apps/web`.
 
 ## Invariants a merge must not break
@@ -181,6 +181,10 @@ Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reus
 open state and the `relative` row wrapper the status panels anchor to. `SidebarChromeFooter` keeps
 only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the four out of
 the menu would have hidden them on the settings page, which is the one surface upstream added.
+
+`SettingsSidebarNav.tsx`'s row is `items-end`, not upstream's `items-center`: these panels open
+upward and anchor on the row's bottom edge. Upstream #9563 wrapped `T3ConnectSidebarSignIn` in a
+`Suspense` beside it — that is kept, the alignment is not.
 
 `sidebarChromeFooter.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
@@ -613,6 +617,13 @@ untracked set hides a call that has genuinely wedged. Upstream #9358 put `server
 in the untracked set; here it sits on the long leash and its test asserts the 120s edge. Expect
 upstream to keep adding to the untracked set; move each addition down.
 
+**One exception, added 2026-09-04.** `isTrackedRpcAck` drops every method whose name contains
+"subscribe" before the leash is consulted, because a subscription is a long-lived stream rather
+than a request. The fork's two `pullRequests.` tests enumerate that namespace from `WS_METHODS`,
+so upstream #9496's new `pullRequests.subscribeRefreshes` broke them with nothing wrong; the
+enumeration now excludes subscribe-shaped methods. A new non-subscribe method in the namespace
+should still be picked up automatically.
+
 ### 24. The resting composer and the strip toggle are orthogonal, and meet in `ChatView`
 
 Upstream #7855 auto-collapses the whole composer when an existing desktop thread's composer is
@@ -684,6 +695,42 @@ string instead of the resolved `projects` path, silently re-refuses a switch thi
 allow. A reconcile that restores the old id-only cursor inheritance (dropping
 `sharesContinuation`) silently loses history on a stopped-session switch between two instances of
 the same store, because the switch itself is no longer refused but nothing hands the cursor over.
+
+### 29. Two rate-limit events, one Codex notification
+
+Upstream #9507's Limits tab reads `account.rate-limits.updated`; the fork's composer Vitals
+gauge reads `account.usage.updated` with a `fetchedAt` stamp. Both are emitted from the single
+`account/rateLimits/updated` notification in `CodexAdapter.ts`, through two different
+normalizers (`codexRateLimitsToUpdate` and `normalizeCodexRateLimitsNotification`). A reconcile
+that keeps only upstream's branch silently blanks the gauge; one that keeps only the fork's
+leaves the Limits tab empty for Codex.
+
+### 30. A failed session stop: clear the spinner, unless a compaction was in flight
+
+Two rules meet in `processSessionStopRequested` (`ProviderCommandReactor.ts`) and a compaction
+in flight is the only thing that tells them apart.
+
+- FORK (`868ed1c02`): a provider that cannot be stopped — dead process, closed transport — must
+  still get the `stopped` session write, or the thread sits with a spinner nothing can clear.
+  Its test is "still clears the session, and says so, when the provider fails to stop".
+- UPSTREAM (#9293): when the stop interrupted a compaction, the failure path restores the
+  session itself, and a `stopped` write on top clobbers that fresher state. Its test is "does
+  not overwrite concurrent session state after compaction failure".
+
+So the write is skipped exactly when this handler found the thread in `compactingThreadIds` on
+entry. Note the ordering trap: `restoreCompaction` returns without writing while the thread is
+in `stoppingThreadIds`, so the stopping mark has to come off before it is called.
+
+### 31. The completion marker travels through the pump, not `takeAll`
+
+Upstream #9521 answers a `requestCompletionMarker` subscription by offering `synchronized` into
+its coalescer and reading it straight back with `takeAll`. That works upstream because the
+coalescer's output queue is the only buffer. Here it is chained into a bounded queue
+(invariant 18), and the pump draining that same queue races the `takeAll` — measured: the marker
+arrived before an event that was already in flight, and `server.test.ts`'s "buffers thread
+events published while the initial snapshot loads" caught it. `offerAndWait` alone is enough:
+it returns once the marker is in the coalescer's output, and the pump preserves order from
+there. Both `Effect.forkScoped` calls in that chain need `startImmediately: true`.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 
