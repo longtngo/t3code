@@ -107,6 +107,26 @@ G3 re-run on the shipped text (wrapper refuses, N = 4): 8 wrapper attempts, 8 na
 4/4 completed — the same degradation shape that separated A1 from A2 in the first place. The
 guardrail that decided the arm was re-checked against the wording that changed it.
 
+### A confound found afterwards, and the cleaner number
+
+Every arm above ran with `--setting-sources user,project,local`, matching production
+(`CLAUDE_SETTING_SOURCES`). That pulled in a personal `CLAUDE.md` on this machine which already
+tells the agent to use the wrapper. Building the committed harness exposed it: a **deliberately
+neutered** instruction that mentions offload but never names `subagent-dispatch` still scored
+M = 1.000 under those sources. The harness could not fail, which made it worthless as a gate.
+
+The comparison above survives — A0 carried the same `CLAUDE.md` and still scored 0.125 against a
+real-world 0.000 — but the A1 = 1.000 figure was over-attributed to the instruction. Re-measured
+with `user` dropped, so the instruction is the only thing that can steer:
+
+| Instruction                       | dispatches | wrapper | native | **M**     |
+| --------------------------------- | ---------- | ------- | ------ | --------- |
+| Neutered, never names the wrapper | 6          | 0       | 6      | **0.000** |
+| Shipped                           | 8          | 8       | 0      | **1.000** |
+
+That is stronger evidence for the shipped decision than the original run, and it is the
+configuration the committed harness uses.
+
 ## Approach
 
 ### 1. Inject the dispatch instruction (Claude only)
@@ -227,7 +247,10 @@ RPC boundary for anyone to get wrong, and the existing `listCursorModels` mock �
 runs — now reaches the real call site. Through `ws.ts` it could not, and building the ws-level
 harness to reach it would have cost more than the assertion was worth.
 
-**Routing itself stays on the out-of-band harness.** `/tmp/exp-subagent-routing/`, N = 8, decision
+**Routing itself stays on the out-of-band harness**, now committed at
+`scripts/subagent-routing-harness/` rather than living in `/tmp` where the one gate this feature
+has would have been deleted. It reads the instruction out of `ClaudeAdapter.ts` instead of
+carrying a copy — a copy is what drifted twice during this run. N = 8, decision
 threshold M ≥ 0.90. Re-run it whenever the instruction text changes — this run had to, twice, and
 the second time caught that the shipped text was no longer the measured text. A green
 `pnpm verify` says nothing about whether the model still follows the instruction. That is a proxy
