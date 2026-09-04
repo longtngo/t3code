@@ -100,7 +100,8 @@ function defaultViewMode(path: string | null): FileViewMode {
 
 function FileContent(props: {
   readonly activeMode: FileViewMode;
-  readonly environmentId: EnvironmentId | null;
+  readonly cwd: string;
+  readonly environmentId: EnvironmentId;
   readonly previewUri: string | null;
   readonly previewFailure: AssetUrlFailureReason | null;
   readonly onRetryPreview: () => void;
@@ -110,6 +111,7 @@ function FileContent(props: {
   readonly fileContents: string | null;
   readonly fileError: string | null;
   readonly relativePath: string;
+  readonly threadId: ThreadId;
   readonly initialLine: number | null;
   readonly truncated: boolean;
   readonly onRefresh?: () => Promise<void> | void;
@@ -199,7 +201,14 @@ function FileContent(props: {
         </View>
       ) : null}
       {props.activeMode === "preview" && isMarkdown ? (
-        <FileMarkdownPreview markdown={props.fileContents} onRefresh={props.onRefresh} />
+        <FileMarkdownPreview
+          cwd={props.cwd}
+          environmentId={props.environmentId}
+          markdown={props.fileContents}
+          relativePath={props.relativePath}
+          threadId={props.threadId}
+          onRefresh={props.onRefresh}
+        />
       ) : (
         <SourceFileSurface
           contents={props.fileContents}
@@ -911,6 +920,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         <FileContent
           key={previewKey}
           activeMode={resolvedActiveMode}
+          cwd={cwd}
           environmentId={environmentId}
           previewUri={previewUri}
           previewFailure={assetPreview._tag === "Failure" ? assetPreview.reason : null}
@@ -922,6 +932,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           fileError={fileQuery.error}
           initialLine={targetLine}
           relativePath={relativePath}
+          threadId={threadId}
           truncated={fileData?.truncated ?? false}
           onRefresh={() => fileQuery.refresh()}
         />

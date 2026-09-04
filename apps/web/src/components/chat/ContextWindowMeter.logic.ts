@@ -6,7 +6,7 @@
 // resolveContextWindowModelDisplayName / formatContextWindowCompactionMessage are
 // deliberately absent: the first is reimplemented inline in ChatComposer.tsx, the
 // second only ever served the deleted component.
-import type { ProviderInstanceId } from "@t3tools/contracts";
+import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
@@ -19,27 +19,33 @@ import {
 export const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
 export const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
 
-export function hasAvailableClaudeCompactionProvider(input: {
+export function providerSupportsManualCompaction(
+  provider: ProviderInstanceEntry | null | undefined,
+): boolean {
+  return provider?.snapshot.slashCommands.some((command) => command.name === "compact") ?? false;
+}
+
+export function hasAvailableCompactionProvider(input: {
   readonly providers: ReadonlyArray<ProviderInstanceEntry>;
+  readonly driverKind: ProviderDriverKind;
   readonly instanceId: ProviderInstanceId | null;
   readonly lockedInstanceId: ProviderInstanceId | null;
 }): boolean {
-  const claudeProviders = input.providers.filter(
-    (provider) => provider.driverKind === "claudeAgent",
+  const driverProviders = input.providers.filter(
+    (provider) => provider.driverKind === input.driverKind,
   );
   const lockedContinuationGroupKey = input.lockedInstanceId
-    ? claudeProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
+    ? driverProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
         ?.continuationGroupKey
     : undefined;
   const compatibleProviders = lockedContinuationGroupKey
-    ? claudeProviders.filter(
+    ? driverProviders.filter(
         (provider) => provider.continuationGroupKey === lockedContinuationGroupKey,
       )
-    : claudeProviders;
+    : driverProviders;
 
-  return (
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined) !==
-    undefined
+  return providerSupportsManualCompaction(
+    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
   );
 }
 

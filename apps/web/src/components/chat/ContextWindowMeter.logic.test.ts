@@ -2,7 +2,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3
 import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
-  hasAvailableClaudeCompactionProvider,
+  hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
   shouldOfferResumeCompaction,
 } from "./ContextWindowMeter.logic";
@@ -23,12 +23,12 @@ function claudeProvider(input: {
     auth: { status: "authenticated" },
     checkedAt: "2026-08-24T12:00:00.000Z",
     models: [],
-    slashCommands: [],
+    slashCommands: [{ name: "compact", description: "" }],
     skills: [],
   };
 }
 
-describe("hasAvailableClaudeCompactionProvider", () => {
+describe("hasAvailableCompactionProvider", () => {
   const originalInstanceId = ProviderInstanceId.make("claude_original");
 
   it("rejects a fallback in a different locked continuation group", () => {
@@ -45,8 +45,9 @@ describe("hasAvailableClaudeCompactionProvider", () => {
     ]);
 
     expect(
-      hasAvailableClaudeCompactionProvider({
+      hasAvailableCompactionProvider({
         providers,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
         instanceId: originalInstanceId,
         lockedInstanceId: originalInstanceId,
       }),
@@ -67,8 +68,9 @@ describe("hasAvailableClaudeCompactionProvider", () => {
     ]);
 
     expect(
-      hasAvailableClaudeCompactionProvider({
+      hasAvailableCompactionProvider({
         providers,
+        driverKind: ProviderDriverKind.make("claudeAgent"),
         instanceId: originalInstanceId,
         lockedInstanceId: originalInstanceId,
       }),

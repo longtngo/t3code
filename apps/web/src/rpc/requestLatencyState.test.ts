@@ -76,33 +76,39 @@ describe("requestLatencyState", () => {
     ]);
   });
 
-  it.each(Object.values(WS_METHODS).filter((method) => method.startsWith("pullRequests.")))(
-    "keeps quiet about pull request request %s at the normal threshold",
-    (method) => {
-      trackRpcRequestSent("1", method);
-      vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS * 2);
+  it.each(
+    Object.values(WS_METHODS).filter(
+      (method) => method.startsWith("pullRequests.") && !method.includes("subscribe"),
+    ),
+  )("keeps quiet about pull request request %s at the normal threshold", (method) => {
+    trackRpcRequestSent("1", method);
+    vi.advanceTimersByTime(SLOW_RPC_ACK_THRESHOLD_MS * 2);
 
-      expect(getSlowRpcAckRequests()).toEqual([]);
-    },
-  );
+    expect(getSlowRpcAckRequests()).toEqual([]);
+  });
 
   // The pair above and below is the whole point of the change: quiet at 15s
   // because fanning out across every server legitimately takes that long, but
   // still audible at 120s, because by then the call has not been slow, it has
   // wedged.
-  it.each(Object.values(WS_METHODS).filter((method) => method.startsWith("pullRequests.")))(
-    "still reports pull request request %s once it has wedged",
-    (method) => {
-      trackRpcRequestSent("1", method);
-      vi.advanceTimersByTime(LONG_RUNNING_RPC_ACK_THRESHOLD_MS - 1);
-      expect(getSlowRpcAckRequests()).toEqual([]);
+  // Subscriptions are excluded here rather than from the leash: a subscribe call
+  // is a long-lived stream, so `isTrackedRpcAck` drops every method whose name
+  // contains "subscribe" before the leash is consulted. Upstream #9496 added
+  // `pullRequests.subscribeRefreshes`, which this enumeration would otherwise pick up.
+  it.each(
+    Object.values(WS_METHODS).filter(
+      (method) => method.startsWith("pullRequests.") && !method.includes("subscribe"),
+    ),
+  )("still reports pull request request %s once it has wedged", (method) => {
+    trackRpcRequestSent("1", method);
+    vi.advanceTimersByTime(LONG_RUNNING_RPC_ACK_THRESHOLD_MS - 1);
+    expect(getSlowRpcAckRequests()).toEqual([]);
 
-      vi.advanceTimersByTime(1);
-      expect(getSlowRpcAckRequests()).toMatchObject([
-        { requestId: "1", tag: method, thresholdMs: LONG_RUNNING_RPC_ACK_THRESHOLD_MS },
-      ]);
-    },
-  );
+    vi.advanceTimersByTime(1);
+    expect(getSlowRpcAckRequests()).toMatchObject([
+      { requestId: "1", tag: method, thresholdMs: LONG_RUNNING_RPC_ACK_THRESHOLD_MS },
+    ]);
+  });
 
   it("keeps ignoring untracked methods when a display tag is supplied", () => {
     trackRpcRequestSent(

@@ -22,6 +22,7 @@ function terminal(
       hasRunningSubprocess: false,
       updatedAt: null,
       version: 1,
+      lifecycleVersion: 0,
       ...state,
     },
   };

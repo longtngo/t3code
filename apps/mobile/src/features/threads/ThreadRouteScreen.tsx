@@ -821,6 +821,7 @@ function ThreadRouteContent(
           selectedThreadFeed={composer.selectedThreadFeed}
           heldMessages={composer.heldMessages}
           activeWorkStartedAt={composer.activeWorkStartedAt}
+          isCompacting={composer.isCompacting}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}

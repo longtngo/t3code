@@ -22,6 +22,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { type ClaudeScopedLimitNames, claudeRateLimitEventToUpdate } from "./claudeUsageLimits.ts";
 import {
   type AccountUsageUpdatedPayload,
   ApprovalRequestId,
@@ -91,6 +92,7 @@ import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeContinuationGroupKey, makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
@@ -450,6 +452,8 @@ export interface ClaudeAdapterLiveOptions {
   /** Interval between account usage polls. Defaults to 60 seconds. */
   readonly usagePollInterval?: Duration.Duration;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
+  /** Scoped-bucket names the driver's status probe last saw; see `claudeUsageLimits`. */
+  readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
 }
 
 function isUuid(value: string): boolean {
@@ -968,12 +972,13 @@ function compactBoundaryTokenUsageSnapshot(
     return undefined;
   }
 
-  // After a compaction the context window shrinks to `post_tokens`. Emit an
-  // authoritative snapshot that fully resets the meter to the post-compact
-  // size: `lastUsedTokens` defaults to `post_tokens` and no pre-compact
-  // `totalProcessedTokens` high-water mark is carried forward. Retaining the
-  // pre-compact figures would leave the meter pinned at the old usage and
-  // defeat the reset the compaction is meant to reflect.
+  // FORK: after a compaction the context window shrinks to `post_tokens`. Emit an
+  // authoritative snapshot that fully resets the meter to the post-compact size:
+  // `lastUsedTokens` defaults to `post_tokens` and no pre-compact
+  // `totalProcessedTokens` high-water mark is carried forward. Upstream #9293 does
+  // the opposite — it takes the pre-compact total as a third argument and reports
+  // `pre_tokens` as the before-figure — which would leave the meter pinned at the
+  // old usage and defeat the reset the compaction is meant to reflect.
   return makeClaudeTokenUsageSnapshot({
     activeTokens: postTokens,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -3755,7 +3760,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "compact_boundary":
+      case "compact_boundary": {
         // Drop the pre-compact total-processed high-water mark so a later
         // result cannot re-emit it and re-pollute the freshly reset meter.
         context.lastKnownTotalProcessedTokens = undefined;
@@ -3763,26 +3768,30 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.turnState.latestAssistantUsage = undefined;
           context.turnState.compactedSinceLatestAssistantUsage = true;
         }
-        yield* emitThreadTokenUsage(
-          context,
-          compactBoundaryTokenUsageSnapshot(
-            message as unknown as Record<string, unknown>,
-            context.lastKnownContextWindow,
-          ),
-          {
-            rawMethod: "claude/system/compact_boundary",
-            rawPayload: message,
-          },
+        const compactedUsage = compactBoundaryTokenUsageSnapshot(
+          message as unknown as Record<string, unknown>,
+          context.lastKnownContextWindow,
         );
+        yield* emitThreadTokenUsage(context, compactedUsage, {
+          rawMethod: "claude/system/compact_boundary",
+          rawPayload: message,
+        });
         yield* offerRuntimeEvent({
           ...base,
           type: "thread.state.changed",
           payload: {
             state: "compacted",
+            ...(compactedUsage?.lastUsedTokens !== undefined
+              ? { beforeTokens: compactedUsage.lastUsedTokens }
+              : {}),
+            ...(compactedUsage?.usedTokens !== undefined
+              ? { afterTokens: compactedUsage.usedTokens }
+              : {}),
             detail: message,
           },
         });
         return;
+      }
       case "hook_started":
         yield* offerRuntimeEvent({
           ...base,
@@ -4190,12 +4199,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      const names = options?.scopedLimitNames
+        ? yield* Ref.get(options.scopedLimitNames)
+        : { overageIncluded: undefined };
+      const limits = claudeRateLimitEventToUpdate(message.rate_limit_info, names);
+      if (!limits) return;
       yield* offerRuntimeEvent({
         ...base,
         type: "account.rate-limits.updated",
-        payload: {
-          rateLimits: message,
-        },
+        payload: { limits },
       });
       return;
     }
@@ -4376,7 +4388,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     // Same reason as the approvals above: a request nobody can answer any more
     // must not stay open, or the thread can never be settled.
-    for (const pending of [...context.pendingUserInputs.values()]) {
+    for (const pending of context.pendingUserInputs.values()) {
       yield* pending.cancel;
     }
 
@@ -5003,7 +5015,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
-        systemPrompt: { type: "preset", preset: "claude_code" },
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          // Model and effort can change after this session-level prompt is set.
+          append: buildRuntimeInstructions({ harness: "Claude Code" }),
+        },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
         // normalized to `xhigh` above and paired with `settings.ultracode`.

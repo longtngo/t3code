@@ -76,6 +76,7 @@ import { makeAccountUsageBroadcast } from "../accountUsageBroadcast.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { makeAccountUsagePoll, normalizeCodexRateLimitsNotification } from "./CodexUsage.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import { codexRateLimitsToUpdate } from "./codexUsageLimits.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1459,6 +1460,27 @@ function mapToRuntimeEvents(
     if (!item) {
       return [];
     }
+    if (item.type === "agentMessage" && item.delivery === "async" && item.questions?.length) {
+      return [
+        {
+          ...runtimeEventBase(event, canonicalThreadId),
+          type: "user-input.requested",
+          requestId: RuntimeRequestId.make(`codex-async:${canonicalThreadId}:${item.id}`),
+          eventId: EventId.make(`codex-async:${canonicalThreadId}:${item.id}`),
+          payload: {
+            responseMode: "message",
+            questions: item.questions.map((question, index) => ({
+              id: String(index),
+              header: "Question",
+              question: question.title,
+              options: (question.options ?? []).map((label) => ({ label, description: "" })),
+              allowCustomAnswer: true,
+              multiSelect: false,
+            })),
+          },
+        },
+      ];
+    }
     const itemType = toCanonicalItemType(item.type);
     if (itemType === "plan") {
       const detail = itemDetail(itemType, item);
@@ -1476,7 +1498,18 @@ function mapToRuntimeEvents(
       ];
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    return completed ? [completed] : [];
+    if (!completed || itemType !== "context_compaction") {
+      return completed ? [completed] : [];
+    }
+    return [
+      completed,
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        eventId: EventId.make(`${event.id}:thread-compacted`),
+        type: "thread.state.changed",
+        payload: { state: "compacted" },
+      },
+    ];
   }
 
   if (
@@ -1746,23 +1779,37 @@ function mapToRuntimeEvents(
     if (!payload) {
       return [];
     }
+    // One notification, two events: upstream's `account.rate-limits.updated` feeds the
+    // Limits tab's ingestion layer, and the fork's `account.usage.updated` feeds the
+    // composer's Vitals gauge. Neither reads the other's payload shape.
+    const limits = codexRateLimitsToUpdate(payload.rateLimits);
     const usage = normalizeCodexRateLimitsNotification(payload);
-    if (!usage) {
-      return [];
-    }
     return [
-      {
-        type: "account.usage.updated",
-        ...runtimeEventBase(event, canonicalThreadId),
-        // A push IS its own fetch, so the event time is the honest stamp. It
-        // has to be carried explicitly all the same: the vitals popover reads
-        // `fetchedAt` off the payload, takes the newest activity, and treats a
-        // missing field as "age unknown". Without this a live push arriving
-        // after a poll would blank the age label the poll had just given the
-        // refresh control, leaving fresher numbers looking less trustworthy
-        // than stale ones.
-        payload: { ...usage, fetchedAt: event.createdAt },
-      },
+      ...(limits
+        ? [
+            {
+              type: "account.rate-limits.updated" as const,
+              ...runtimeEventBase(event, canonicalThreadId),
+              payload: { limits },
+            },
+          ]
+        : []),
+      ...(usage
+        ? [
+            {
+              type: "account.usage.updated" as const,
+              ...runtimeEventBase(event, canonicalThreadId),
+              // A push IS its own fetch, so the event time is the honest stamp. It
+              // has to be carried explicitly all the same: the vitals popover reads
+              // `fetchedAt` off the payload, takes the newest activity, and treats a
+              // missing field as "age unknown". Without this a live push arriving
+              // after a poll would blank the age label the poll had just given the
+              // refresh control, leaving fresher numbers looking less trustworthy
+              // than stale ones.
+              payload: { ...usage, fetchedAt: event.createdAt },
+            },
+          ]
+        : []),
     ];
   }
 
@@ -2315,6 +2362,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = Effect.fn("compactThread")(
+    function* (threadId) {
+      const session = yield* requireSession(threadId);
+      yield* session.runtime.compactThread.pipe(
+        Effect.mapError((cause) => mapCodexRuntimeError(threadId, "thread/compact/start", cause)),
+      );
+    },
+  );
+
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.readThread),
@@ -2450,6 +2506,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     },
     startSession,
     sendTurn,
+    compactThread,
     interruptTurn,
     readThread,
     rollbackThread,

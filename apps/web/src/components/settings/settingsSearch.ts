@@ -113,7 +113,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["dev nightly artwork pill label hide none"],
     // The setting is stage-dependent, so its parent section is the stable destination.
-    targetId: "appearance",
+    targetId: "appearance-interface",
   },
   {
     id: "interface-font",
@@ -215,6 +215,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Always show message timestamps",
     to: "/settings/general",
     searchTerms: ["copy revert hover meta row actions"],
+  },
+  {
+    id: "composer-collapse",
+    title: "Collapse composer",
+    to: "/settings/general",
+    searchTerms: [
+      "composer rest resting unfocus blur focus click away scroll wheel conversation timeline shrink minimize",
+    ],
   },
   {
     id: "provider-update-checks",
@@ -368,6 +376,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "usage-providers",
+    title: "Usage providers",
+    to: "/settings/providers",
+    searchTerms: [
+      "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
+    ],
+    providerSettingsOnly: true,
+  },
+  {
     id: "provider-health-check-interval",
     title: "Health check interval",
     to: "/settings/providers",
@@ -390,7 +407,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-default-profile",
     title: "Default browser profile",
     to: "/settings/integrations",
-    targetId: "browser",
+    targetId: "browser-profiles",
   },
   {
     id: "browser-default-viewport",

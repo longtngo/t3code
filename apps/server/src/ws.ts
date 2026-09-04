@@ -146,6 +146,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { registerPushSubscription } from "./push/register.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { LlmServeManager } from "./llm/LlmServeManager.ts";
@@ -584,6 +585,7 @@ const makeWsRpcLayer = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
+      const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -1766,11 +1768,17 @@ const makeWsRpcLayer = (
               // ended stream makes the client resubscribe (with afterSequence)
               // and resync. See WS_LIVE_BUFFER_CAPACITY / pumpBoundedLiveBuffer.
               const coalescer = yield* makeThreadLiveEventCoalescer();
-              yield* Effect.forkScoped(liveStream.pipe(Stream.runForEach(coalescer.offer)));
+              // `startImmediately` is upstream #9521: without it the fiber starts on the
+              // next yield and events published during subscription setup are lost.
+              yield* Effect.forkScoped(liveStream.pipe(Stream.runForEach(coalescer.offer)), {
+                startImmediately: true,
+              });
               const liveBuffer = yield* Queue.dropping<OrchestrationThreadStreamItem, Cause.Done>(
                 WS_LIVE_BUFFER_CAPACITY,
               );
-              yield* Effect.forkScoped(pumpBoundedLiveBuffer(coalescer.stream, liveBuffer));
+              yield* Effect.forkScoped(pumpBoundedLiveBuffer(coalescer.stream, liveBuffer), {
+                startImmediately: true,
+              });
               const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
               // When the client already loaded the snapshot over HTTP it passes
@@ -1821,11 +1829,17 @@ const makeWsRpcLayer = (
                   const afterCatchUp =
                     input.requestCompletionMarker === true
                       ? Stream.concat(
-                          Stream.fromEffect(
-                            coalescer
-                              .offerAndWait({ kind: "synchronized" as const })
-                              .pipe(Effect.andThen(coalescer.takeAll)),
-                          ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
+                          // Upstream reads the marker back with `takeAll`; here the pump
+                          // is draining that same queue into the bounded buffer, so a
+                          // `takeAll` races it and can deliver the marker ahead of an
+                          // event already in flight. `offerAndWait` alone is enough: it
+                          // returns once the marker is in the coalescer's output, and the
+                          // pump preserves order from there.
+                          Stream.drain(
+                            Stream.fromEffect(
+                              coalescer.offerAndWait({ kind: "synchronized" as const }),
+                            ),
+                          ),
                           bufferedLiveStream,
                         )
                       : bufferedLiveStream;
@@ -1864,11 +1878,13 @@ const makeWsRpcLayer = (
               const afterSnapshot =
                 input.requestCompletionMarker === true
                   ? Stream.concat(
-                      Stream.fromEffect(
-                        coalescer
-                          .offerAndWait({ kind: "synchronized" as const })
-                          .pipe(Effect.andThen(coalescer.takeAll)),
-                      ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
+                      // See the note on the catch-up path above: `takeAll` would race
+                      // the bounded pump that is draining the same queue.
+                      Stream.drain(
+                        Stream.fromEffect(
+                          coalescer.offerAndWait({ kind: "synchronized" as const }),
+                        ),
+                      ),
                       bufferedLiveStream,
                     )
                   : bufferedLiveStream;
@@ -1894,6 +1910,13 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
+              // An untargeted refresh is "re-read everything's status", which
+              // includes quota from configured usage-limit sources. Awaited,
+              // not forked: the RPC scope closes on return and would
+              // interrupt a fork before the hub answered.
+              if (input.instanceId === undefined) {
+                yield* usageLimitSources.refresh;
+              }
               let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
                 ? providerRegistry.refreshWorkspaceSnapshot({
                     instanceId: input.instanceId,
@@ -1954,6 +1977,41 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.providerConsumeResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeResetCredit,
+            Effect.gen(function* () {
+              const instance = yield* providerInstances.getInstance(input.instanceId);
+              // A disabled instance must not spend anything on its account.
+              if (instance === undefined || !instance.enabled) {
+                return yield* new ProviderSetupError({
+                  instanceId: input.instanceId,
+                  operation: "consume-reset-credit",
+                  detail: instance ? "This provider is disabled." : "Provider instance not found.",
+                });
+              }
+              if (instance.consumeResetCredit === undefined) {
+                return yield* new ProviderSetupError({
+                  instanceId: input.instanceId,
+                  operation: "consume-reset-credit",
+                  detail: "This provider does not bank reset credits.",
+                });
+              }
+              const outcome = yield* instance.consumeResetCredit().pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ProviderSetupError({
+                      instanceId: input.instanceId,
+                      operation: "consume-reset-credit",
+                      detail: error.detail,
+                      cause: error,
+                    }),
+                ),
+              );
+              return { outcome };
+            }),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.providerAuthStart]: (input) =>
           observeRpcEffect(
@@ -2411,6 +2469,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsSubscribeRefreshes]: () =>
+          observeRpcStream(
+            WS_METHODS.pullRequestsSubscribeRefreshes,
+            pullRequests.subscribeRefreshes,
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReviewerCandidates,
@@ -3122,6 +3186,17 @@ const makeWsRpcLayer = (
                       })),
                     )
                   : Stream.empty;
+              // Same gate as themes: an older client dies on an unknown event.
+              const usageLimitSourceUpdates =
+                input.usageLimitSources === true
+                  ? usageLimitSources.streamChanges.pipe(
+                      Stream.map((sources) => ({
+                        version: 1 as const,
+                        type: "usageLimitSourcesUpdated" as const,
+                        payload: { sources },
+                      })),
+                    )
+                  : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
@@ -3139,7 +3214,10 @@ const makeWsRpcLayer = (
                 keybindingsUpdates,
                 Stream.merge(
                   providerStatuses,
-                  Stream.merge(settingsUpdates, environmentThemeUpdates),
+                  Stream.merge(
+                    settingsUpdates,
+                    Stream.merge(environmentThemeUpdates, usageLimitSourceUpdates),
+                  ),
                 ),
               );
 

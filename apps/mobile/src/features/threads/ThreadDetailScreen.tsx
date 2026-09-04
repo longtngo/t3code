@@ -104,6 +104,7 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly heldMessages: ReadonlyArray<ComposerHeldMessage>;
   readonly activeWorkStartedAt: string | null;
+  readonly isCompacting: boolean;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
@@ -356,6 +357,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     if (threadSyncLabel !== null) {
       return { kind: "syncing", label: threadSyncLabel };
     }
+    if (props.isCompacting && contentPresentationKind === "ready") {
+      return { kind: "compacting" };
+    }
     if (props.activeWorkStartedAt !== null && contentPresentationKind === "ready") {
       return { kind: "working", startedAt: props.activeWorkStartedAt };
     }
@@ -363,6 +367,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   })();
   const showWorkingControl = floatingStatus !== null;
   const selectedThreadFeed = props.selectedThreadFeed;
+  const hasCompactableConversation =
+    selectedThreadFeed.some(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "user" &&
+        ((entry.message.attachments?.length ?? 0) > 0 ||
+          entry.message.text.trim().toLowerCase() !== "/compact"),
+    ) ||
+    (Boolean(props.loadEarlier) && props.selectedThread.latestUserMessageAt !== null);
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
   // While a user-input request is pending, the questionnaire owns the
@@ -848,6 +861,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   connectionError={props.connectionError}
                   environmentLabel={props.environmentLabel}
                   selectedThread={props.selectedThread}
+                  hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
                   serverConfig={props.serverConfig}
                   queueCount={props.selectedThreadQueueCount}
                   heldMessages={props.heldMessages}

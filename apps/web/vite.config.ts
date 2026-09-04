@@ -1,6 +1,5 @@
 import * as NodeZlib from "node:zlib";
 
-import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -15,6 +14,7 @@ import pkg from "./package.json" with { type: "json" };
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -244,7 +244,7 @@ export default defineConfig(() => {
         parserOpts: { plugins: ["typescript", "jsx"] },
         presets: [reactCompilerPreset()],
       }),
-      tailwindcss(),
+      tailwindPlugins(bundledDev),
       // Bundle analyzer — gated behind ANALYZE so it is zero-cost by default.
       // Run `ANALYZE=1 pnpm --filter @t3tools/web build` to emit dist/stats.html.
       ...(process.env.ANALYZE

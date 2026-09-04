@@ -7,9 +7,9 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 
 // The unit project has no DOM environment, so these render to a static string rather than
 // driving the control. That is enough for what a helper test cannot reach: whether the
-// dropdown branch is wired at all, in every variant including `grid`, which used to fall
-// through to a free-text input for a closed-set field.
-const renderClaudeForm = (variant: "card" | "dialog" | "grid", value: unknown) => {
+// dropdown branch is wired at all, in every variant including `settings` (upstream's
+// rename of `grid`), which used to fall through to a free-text input for a closed-set field.
+const renderClaudeForm = (variant: "card" | "dialog" | "settings", value: unknown) => {
   const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
   expect(claude).toBeDefined();
   return renderToStaticMarkup(
@@ -24,7 +24,7 @@ const renderClaudeForm = (variant: "card" | "dialog" | "grid", value: unknown) =
 };
 
 describe("ProviderSettingsForm output style rendering", () => {
-  it.each(["card", "dialog", "grid"] as const)(
+  it.each(["card", "dialog", "settings"] as const)(
     "renders a real dropdown in the %s variant",
     (variant) => {
       const markup = renderClaudeForm(variant, { outputStyle: "Learning" });

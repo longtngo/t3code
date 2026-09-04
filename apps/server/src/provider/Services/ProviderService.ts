@@ -23,8 +23,8 @@ import type {
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
-  ThreadId,
   MessageId,
+  ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -53,6 +53,12 @@ export interface ProviderServiceShape {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  readonly compactThread: (
+    threadId: ThreadId,
+    modelSelection?: ProviderSendTurnInput["modelSelection"],
+    requestId?: MessageId,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Take a queued turn back out of its adapter's queue before it is started.
