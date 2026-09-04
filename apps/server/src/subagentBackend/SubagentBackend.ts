@@ -623,6 +623,31 @@ export const modelsForPersistedBackend = (persisted: PersistedBackend, refresh: 
     : Effect.succeed(peekCursorModels(persisted.binaryPath));
 };
 
+/**
+ * The whole `subagentBackend.set` RPC: validate and persist the selection, then assemble the
+ * wire state around it.
+ *
+ * It lives here rather than inline in `ws.ts` so the no-probe property is **structural**. The
+ * regression this guards against is someone passing a truthy `refresh` on this path again — the
+ * probe is a Cursor subprocess measured at 0.7s idle and a 3.8s median under load, and it used to
+ * be spent with the toggle still showing its pre-save label, which read as a failed save. With
+ * the call site here there is no boolean at the RPC boundary to get wrong, and
+ * `SubagentBackend.set.test.ts`'s `listCursorModels` mock — which dies if it ever runs — reaches
+ * it. Through `ws.ts` it could not.
+ *
+ * `get` deliberately keeps its `refresh` flag: a panel-open `get` is exactly the caller that
+ * SHOULD probe.
+ */
+export const setBackendState = Effect.fn("subagentBackend.setState")(function* (
+  input: SubagentBackendSetInput,
+) {
+  const serverSettings = yield* ServerSettingsService;
+  const persisted = yield* setBackend(input);
+  const settings = yield* serverSettings.getRawSettings;
+  const models = yield* modelsForPersistedBackend(persisted, false);
+  return buildState(persisted, settings, models);
+});
+
 /** Compares everything but `schemaVersion`/`updatedAt` — the fields that determine
  * dispatch behavior, versus the write bookkeeping that always changes. */
 function haveReconcilableFieldsChanged(next: PersistedBackend, current: PersistedBackend): boolean {

@@ -22,19 +22,22 @@ import {
   MASTER_OFF_REASON,
   readBackendFile,
   setBackend,
+  setBackendState,
   writeBackendFile,
 } from "./SubagentBackend.ts";
 
 // vi.mock is hoisted above every import, so the `listCursorModels` binding above
 // already resolves to this mock — letting individual tests override its behavior
 // for one call via `vi.mocked(listCursorModels).mockImplementationOnce(...)`.
-// `setBackend` never warms the model cache itself, and since the toggle-latency fix
-// neither does the RPC around it: `ws.ts` calls
-// `modelsForPersistedBackend(persisted, false)` after every `set`, which peeks the
-// cache instead of spawning a probe. A probe inside `setBackend` would put back the
-// multi-second wait that fix removed.
+// Nothing on the `set` path may warm the model cache: not `setBackend`, and not
+// `setBackendState`, the RPC body around it. Both peek instead of probing. A probe
+// on either would put back the multi-second wait the toggle-latency fix removed,
+// which is why this mock dies rather than returning a value.
 vi.mock("./cursorModels.ts", () => ({
-  listCursorModels: vi.fn(() => Effect.die("listCursorModels should never run inside setBackend")),
+  listCursorModels: vi.fn(() => Effect.die("listCursorModels must never run on the set path")),
+  // The cache peek is the path `set` is supposed to take. Empty is the honest cold-cache
+  // answer, and it is what the no-probe test asserts the RPC body returns.
+  peekCursorModels: vi.fn(() => []),
 }));
 
 let home: string;
@@ -149,6 +152,22 @@ describe("setBackend", () => {
         });
         expect(result.backend).toBe("cursor");
         expect(result.model).toBe("auto");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("the RPC body never spawns the model probe", () =>
+      Effect.gen(function* () {
+        // `setBackendState` IS the `subagentBackend.set` RPC body (`ws.ts:2296`). The probe is a
+        // Cursor subprocess measured at a 3.8s median under load, and it used to run here with
+        // the toggle still showing its pre-save label — which read as a failed save. The mocked
+        // `listCursorModels` dies if it runs, so reaching the end of this test is the assertion.
+        const state = yield* setBackendState({
+          backend: "cursor",
+          instanceId: cursorId,
+          model: "auto",
+        });
+        expect(state.backend).toBe("cursor");
+        expect(state.models).toEqual([]);
       }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 

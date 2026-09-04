@@ -2296,18 +2296,9 @@ const makeWsRpcLayer = (
         [WS_METHODS.subagentBackendSet]: (input) =>
           observeRpcEffect(
             WS_METHODS.subagentBackendSet,
-            Effect.gen(function* () {
-              const persisted = yield* SubagentBackend.setBackend(input);
-              const settings = yield* serverSettings.getRawSettings;
-              // Never probe here. The flag file is already written by the time we get here, so
-              // the response is authoritative without the probe — and the probe is a Cursor
-              // subprocess measured at 0.7s idle and a 3.8s median under load, spent with the
-              // toggle still showing its old label. `subagentBackendGet` on mount is cheap for
-              // the same reason; the panel's own `get({ refreshModels: true })` is what refreshes
-              // the list.
-              const models = yield* SubagentBackend.modelsForPersistedBackend(persisted, false);
-              return SubagentBackend.buildState(persisted, settings, models);
-            }).pipe(
+            // The body lives in `SubagentBackend.setBackendState`, which never probes — see
+            // its doc for why that is structural here and not a `false` passed from this file.
+            SubagentBackend.setBackendState(input).pipe(
               Effect.catch(
                 subagentBackendDegraded("The subagent backend selection could not be saved."),
               ),

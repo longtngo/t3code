@@ -221,13 +221,11 @@ that. Test 3 must sit at `ws.ts`, not at `modelsForPersistedBackend`: the regres
 argument `ws.ts` passes, and re-testing the function it passes to would be a tripwire pointed at
 the wrong wire.
 
-**Test 3 was not written, deliberately.** The only ws-level RPC harness in the repo
-(`server.test.ts:1251`, `withWsRpcClient`) needs a full auth, pairing and ws-ticket bootstrap plus
-a `ChildProcessSpawner` injected through the whole server layer, to assert one argument. The
-review was right that re-testing `modelsForPersistedBackend` instead would be a tripwire on the
-wrong wire, so the alternative here is not a cheaper test — it is no test plus an honest note. The
-existing mock in `SubagentBackend.set.test.ts` still guarantees `setBackend` itself never probes,
-which is the adjacent half. Carried as a follow-up rather than dropped.
+**Test 3 was written by removing the thing it would have had to test.** The RPC body moved out of
+`ws.ts` into `SubagentBackend.setBackendState`, so there is no longer a `refresh` boolean at the
+RPC boundary for anyone to get wrong, and the existing `listCursorModels` mock — which dies if it
+runs — now reaches the real call site. Through `ws.ts` it could not, and building the ws-level
+harness to reach it would have cost more than the assertion was worth.
 
 **Routing itself stays on the out-of-band harness.** `/tmp/exp-subagent-routing/`, N = 8, decision
 threshold M ≥ 0.90. Re-run it whenever the instruction text changes — this run had to, twice, and
@@ -248,19 +246,15 @@ boundary, not a coverage gap to paper over.
 
 ## Follow-ups deferred
 
-- **Stale per-thread files.** `reconcileThreadBackendsBody` fans out only to `listSessions()`
-  threads and swallows adapter enumeration failures, so a live-but-unenumerated thread keeps its
-  old file until the next session start. Self-healing, and fail-open toward the _previous_
-  setting — which after a master-switch-off means still dispatching to Cursor.
+- **Stale per-thread files — premise falsified, not built.** The worry was that
+  `reconcileThreadBackendsBody` swallows adapter enumeration failures. It does, but that path is
+  unreachable: `listSessions()` is `Effect.sync` on Claude, Cursor, Grok, OpenCode and
+  Antigravity, and Codex's composes `CodexSessionRuntime.getSession`, typed
+  `Effect.Effect<ProviderSession>` — error channel `never`. No adapter's `listSessions` can fail.
+  What remains is `getByInstance` failing for an instance deleted between `listInstances()` and
+  the lookup, whose sessions are being torn down anyway. Threads with no live session are covered
+  by `writeThreadBackendForSession` at their next session start, on both `ProviderService` paths.
 - A guard that the instruction text and the wrapper's contract stay in sync.
-- **`makeHarness` in `ClaudeAdapter.test.ts` defaults every test to one shared
-  `/tmp/userdata/subagent-threads`.** Any fixture written there is visible to every other test in
-  the file and survives between runs on the machine; planting a `cursor` file makes the unrelated
-  "derives bypass permission mode" case fail on its `systemPrompt` deepEqual. This branch's tests
-  take their own base dir, but the default is a trap for the next person.
-- **A ws-layer test that `subagentBackend.set` does not spawn the model probe** (design review
-  must-fix 1, partially unmet). Needs a lighter RPC-handler harness than `server.test.ts`'s, which
-  is the actual blocker and is worth more than this one assertion.
 
 ## Review exit note
 
