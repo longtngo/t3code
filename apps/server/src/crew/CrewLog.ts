@@ -31,6 +31,7 @@ import * as Layer from "effect/Layer";
  * or promised there and never emitted — fails `pnpm verify`.
  */
 export const CREW_LOG_CODES = [
+  "crew.dispatch.refused.disabled",
   "crew.dispatch.refused.cap",
   "crew.dispatch.refused.nested",
   "crew.dispatch.refused.thread",

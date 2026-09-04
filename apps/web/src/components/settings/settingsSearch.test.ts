@@ -154,6 +154,7 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
+      hasCrew: false,
     });
 
     const gatedIds = new Set<string>([
@@ -170,6 +171,7 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
+      "crew",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
@@ -183,6 +185,7 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
+      hasCrew: true,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -201,6 +204,7 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
+      hasCrew: false,
     });
     const with_ = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
@@ -210,9 +214,15 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
+      hasCrew: true,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
     expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
+    // Crew rides the same gate for the same reason: an older server strips the
+    // unknown `enableCrew` key from the patch, so an ungated row would accept
+    // the flip and silently snap back.
+    expect(without.some((item) => item.id === "crew")).toBe(false);
+    expect(with_.some((item) => item.id === "crew")).toBe(true);
   });
 
   it("keeps catalog result ids unique", () => {

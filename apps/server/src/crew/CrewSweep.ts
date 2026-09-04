@@ -23,8 +23,9 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { CrewLog } from "./CrewLog.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { CrewRepository } from "./CrewRepository.ts";
-import { boundNoteBytes, destinationOf, requiresTurn } from "./CrewPolicy.ts";
+import { boundNoteBytes, crewEnabled, destinationOf, requiresTurn } from "./CrewPolicy.ts";
 
 export const CREW_SWEEP_INTERVAL_MS = 60_000;
 
@@ -59,6 +60,7 @@ const makeCrewSweep = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const crewLog = yield* CrewLog;
   const crypto = yield* Crypto.Crypto;
+  const serverSettings = yield* ServerSettingsService;
 
   const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -141,9 +143,39 @@ const makeCrewSweep = Effect.gen(function* () {
 
   const runOnce: CrewSweepShape["runOnce"] = () =>
     Effect.gen(function* () {
-      const reports = yield* repository
+      // Checked per pass, not at start-up, so turning crew off in Settings takes
+      // effect within one cycle instead of at the next restart. `getRawSettings`
+      // rather than `getSettings`: this runs every 60s and needs one plain
+      // boolean, and `getSettings` materializes a secret-store read per
+      // sensitive provider env var.
+      const enabled = yield* serverSettings.getRawSettings.pipe(
+        Effect.map(crewEnabled),
+        Effect.catchCause(() => Effect.succeed(false)),
+      );
+
+      const unnoted = yield* repository
         .selectUnnoted()
         .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
+
+      /**
+       * While the switch is off the sweep still delivers **answers**, and only
+       * answers.
+       *
+       * An answer travels operator -> crewmate and can only close a door that is
+       * already open: some crewmate is blocked on `needs-decision`, holding a
+       * slot and a worktree, and this is the reply that frees it. Withholding it
+       * strands exactly the work the operator is trying to wind down, and the
+       * panel offers no retry — `crew.answer` writes a row carrying `replyTo`,
+       * which is what makes the Answer button disappear, so a swallowed answer
+       * is swallowed for good.
+       *
+       * Everything else travels crewmate -> bridge and *starts a turn* on the
+       * operator's own thread. That is the noise a master switch is expected to
+       * stop, and stopping it costs nothing: those rows stay unnoted and deliver
+       * when crew is turned back on, and the Crew panel reads the database
+       * directly, so the operator can still see every pending report while off.
+       */
+      const reports = enabled ? unnoted : unnoted.filter((report) => report.state === "answer");
       if (reports.length === 0) {
         return;
       }
@@ -285,6 +317,29 @@ const makeCrewSweep = Effect.gen(function* () {
     let consecutiveFailures = 0;
 
     const pass = Effect.gen(function* () {
+      /**
+       * Tasks first, sessions second, and the order is load-bearing.
+       *
+       * This fiber is deliberately not gated on the master switch — stopping a
+       * zombie is cleanup of a task that is already closed, the same "way out"
+       * argument that keeps `teardown` open. But it runs on every server every
+       * 60s forever, including for the majority who never turn crew on, and
+       * `listSessions()` fans out across every provider adapter plus a directory
+       * read per live session. With no closed crew tasks there is nothing it
+       * could ever stop, so the cheap query answers that first and the expensive
+       * enumeration never runs.
+       */
+      const tasks = yield* repository
+        .listAllTasks()
+        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
+      const closedCrewThreads = new Set(
+        tasks.filter((task) => task.status === "closed").map((task) => task.crewThreadId),
+      );
+      if (closedCrewThreads.size === 0) {
+        attemptsByThread.clear();
+        return true;
+      }
+
       const sessions = yield* providerService
         .listSessions()
         .pipe(Effect.catchCause(() => Effect.succeed(null)));
@@ -299,13 +354,6 @@ const makeCrewSweep = Effect.gen(function* () {
         return consecutiveFailures < CREW_ZOMBIE_SCAN_FAILURE_LIMIT;
       }
       consecutiveFailures = 0;
-
-      const tasks = yield* repository
-        .listAllTasks()
-        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
-      const closedCrewThreads = new Set(
-        tasks.filter((task) => task.status === "closed").map((task) => task.crewThreadId),
-      );
 
       for (const session of sessions) {
         const threadId = session.threadId;

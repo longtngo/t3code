@@ -52,6 +52,7 @@ import { CrewLog } from "./CrewLog.ts";
 import { CrewRepository } from "./CrewRepository.ts";
 import {
   byteLength,
+  crewEnabled,
   destinationOf,
   isNoteWithinBound,
   isPromptWithinBound,
@@ -253,6 +254,37 @@ const makeCrewService = (options?: CrewServiceOptions) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_dispatch", { threadId: callerThreadId });
 
+        /**
+         * Both settings this dispatch needs, in one read.
+         *
+         * Read per call rather than at construction, so the Settings toggle
+         * takes effect on the next dispatch with no restart. `getRawSettings`
+         * because both fields are plain booleans — `getSettings` materializes a
+         * secret-store read per sensitive provider env var, and its own doc says
+         * not to call it on a hot path.
+         *
+         * Fails closed as a pair. A settings read that fails now refuses with
+         * `disabled` rather than `browser-access`, because the master switch is
+         * checked first; either way the dispatch is refused and nothing is
+         * created.
+         */
+        const settings = yield* serverSettings.getRawSettings.pipe(
+          Effect.map((value) => ({
+            enabled: crewEnabled(value),
+            browserAccess: value.enableAgentBrowserAccess,
+          })),
+          Effect.catchCause(() => Effect.succeed({ enabled: false, browserAccess: false })),
+        );
+
+        // The master switch, checked first so nothing else in dispatch runs
+        // while crew is off.
+        if (!settings.enabled) {
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({ reason: "disabled" }),
+            callerThreadId,
+          );
+        }
+
         if (!isPromptWithinBound(input.prompt)) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({
@@ -287,13 +319,10 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           );
         }
 
-        const browserAccess = yield* serverSettings.getSettings.pipe(
-          Effect.map((settings) => settings.enableAgentBrowserAccess),
-          // Fail closed, matching ProviderService: an explicit "off" silently
-          // becoming "on" would violate the operator's stated choice.
-          Effect.catchCause(() => Effect.succeed(false)),
-        );
-        if (!browserAccess) {
+        // Fail closed, matching ProviderService: an explicit "off" silently
+        // becoming "on" would violate the operator's stated choice. Checked here
+        // rather than at the read above so the refusal precedence is unchanged.
+        if (!settings.browserAccess) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "browser-access" }),
             callerThreadId,

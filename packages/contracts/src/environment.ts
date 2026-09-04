@@ -137,6 +137,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       `subagentBackendThreadModes`. Absent on servers from before it shipped, so clients hide
       the per-thread control and the master switch rather than write settings nothing reads. */
   subagentBackendThreadModes: Schema.optionalKey(Schema.Boolean),
+  /** Server understands `enableCrew` and serves the `crew.*` RPCs. Absent on servers from
+      before crew shipped, so clients hide the master switch rather than write a setting
+      nothing reads — an ungated row accepts the flip, has the unknown key stripped from the
+      patch, and silently snaps back with no error. */
+  crew: Schema.optionalKey(Schema.Boolean),
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),

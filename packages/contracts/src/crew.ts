@@ -122,6 +122,7 @@ export type CrewRendering = typeof CrewRendering.Type;
  */
 
 export const CrewDispatchRefusalReason = Schema.Literals([
+  "disabled",
   "cap",
   "nested",
   "thread",
@@ -144,6 +145,8 @@ export class CrewDispatchRefusedError extends Schema.TaggedErrorClass<CrewDispat
 ) {
   override get message(): string {
     switch (this.reason) {
+      case "disabled":
+        return "Crew is turned off. Turn it on in Settings under General before dispatching.";
       case "cap":
         return `Crew is at its cap of ${this.limit ?? 0} concurrent tasks (${this.openTasks ?? 0} open). Tear one down with crew_teardown before dispatching another.`;
       case "nested":

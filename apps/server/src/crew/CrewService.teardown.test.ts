@@ -51,6 +51,10 @@ interface Options {
   readonly stopSession?: "ok" | "fail";
   readonly crewmateArchived?: boolean;
   readonly crewmateMissing?: boolean;
+  /** The Settings master switch. Defaults on so the teardown cases read normally. */
+  readonly crewEnabled?: boolean;
+  /** Makes the settings read fail, to assert the switch fails closed. */
+  readonly crewSettingsFail?: boolean;
 }
 
 const harness = (options: Options = {}) => {
@@ -122,7 +126,13 @@ const harness = (options: Options = {}) => {
     Layer.provideMerge(Layer.succeed(GitWorkflowService, {} as never)),
     Layer.provideMerge(
       Layer.succeed(ServerSettingsService, {
-        getSettings: Effect.succeed({ enableAgentBrowserAccess: true }),
+        getRawSettings:
+          options.crewSettingsFail === true
+            ? Effect.die("settings unavailable")
+            : Effect.succeed({
+                enableAgentBrowserAccess: true,
+                enableCrew: options.crewEnabled ?? true,
+              }),
       } as never),
     ),
     Layer.provideMerge(NodeSqliteClient.layerMemory()),
@@ -181,6 +191,67 @@ describe("one service instance serves many callers", () => {
           theirs.map((task) => String(task.taskId)),
           ["task-2"],
         );
+      }),
+    );
+  });
+});
+
+describe("the Settings master switch", () => {
+  it.effect("dispatch is refused while crew is off, and teardown still works", () => {
+    const h = harness({ crewEnabled: false });
+    return h.run(
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        const crew = yield* CrewService;
+        yield* repository.insertTask(makeTask());
+
+        const refusal = yield* crew.dispatch({ prompt: "go" }, BRIDGE).pipe(Effect.flip);
+        assert.strictEqual(refusal.reason, "disabled");
+        assert.include(codes(h.records), "crew.dispatch.refused.disabled");
+
+        // The way out stays open. Refusing teardown too would strand every
+        // crewmate dispatched before the switch was turned off, with no way to
+        // close its row or free its slot.
+        yield* crew.teardown({ taskId: TASK }, BRIDGE);
+        assert.include(h.calls, "stopSession");
+        assert.deepStrictEqual(
+          (yield* crew.status({}, BRIDGE)).map((task) => task.status),
+          ["closed"],
+        );
+      }),
+    );
+  });
+
+  it.effect("a settings read that fails refuses the dispatch rather than allowing it", () => {
+    // The fail-closed direction had no coverage: flipping the read's fallback
+    // from `false` to `true` — silently making the master switch fail OPEN —
+    // left the whole crew suite green. This is the test that kills that mutant.
+    const h = harness({ crewSettingsFail: true });
+    return h.run(
+      Effect.gen(function* () {
+        const crew = yield* CrewService;
+        const refusal = yield* crew.dispatch({ prompt: "go" }, BRIDGE).pipe(Effect.flip);
+        assert.strictEqual(refusal.reason, "disabled");
+      }),
+    );
+  });
+
+  it.effect("with crew on, dispatch gets past the switch to the later checks", () => {
+    // The negative arm alone would pass on a dispatch that refuses for any
+    // reason at all. This asserts the gate *opened*: the same call, same
+    // fixture, now refuses at `nested` — a check that lives downstream of the
+    // switch and can only be reached through it.
+    const h = harness();
+    return h.run(
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        const crew = yield* CrewService;
+        // Makes BRIDGE a crewmate, so the next check after the switch refuses.
+        yield* repository.insertTask(makeTask({ crewThreadId: BRIDGE }));
+
+        const refusal = yield* crew.dispatch({ prompt: "go" }, BRIDGE).pipe(Effect.flip);
+        assert.strictEqual(refusal.reason, "nested");
+        assert.notInclude(codes(h.records), "crew.dispatch.refused.disabled");
       }),
     );
   });

@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Subagent offload](#subagent-offload)
+- [Crew](#crew)
 - [Checkpointing](#checkpointing)
 - [Notifications](#notifications)
 - [Appearance](#appearance)
@@ -164,6 +165,34 @@ The per-driver list of current model slugs that decides which models land in the
 
 The per-machine and per-thread choice of where a coding agent dispatches its subagents. The server writes one machine-global flag file the `subagent-dispatch` wrapper reads, plus one file per thread that has started a session (never pruned) under `<stateDir>/subagent-threads/`, and points each Claude subprocess at its own file through `SUBAGENT_BACKEND_STATE`. Resolution: master switch (`subagentBackendEnabled`) → thread mode (`subagentBackendThreadModes`, `inherit | on | off`) → machine-global record. See [SubagentBackend.ts][31] and [ThreadBackendPath.ts][32].
 
+### Crew
+
+#### Crew
+
+The set of agent threads one thread has dispatched to work in parallel, each in its own git
+worktree. Off by default behind the `enableCrew` server setting; see [CrewService.ts][33].
+
+#### Crewmate
+
+A thread dispatched by another thread. It runs a normal provider session on its own branch and
+worktree, and reports back through `crew_report` rather than by being read directly. A crewmate
+may not dispatch its own crew — nesting is refused with reason `nested`.
+
+#### Bridge
+
+The thread that dispatched a crewmate. Reports flow crewmate → bridge; answers flow bridge →
+crewmate. A thread's `crewRole` is `bridge`, `crewmate`, or absent, and it is derived from the
+task rows rather than stored on the thread.
+
+#### Delivery sweep
+
+The 60s pass that carries reports to their destination and stamps them handled, in
+[CrewSweep.ts][34]. While `enableCrew` is off it narrows to `answer` rows only: an answer
+unblocks a crewmate that is already waiting and cannot be retried once accepted, whereas a
+report would start a turn on the operator's own thread. It also forks a zombie scan that stops
+provider sessions belonging to already-closed tasks; that one is cleanup and is deliberately not
+gated on the switch.
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
@@ -266,3 +295,5 @@ ships T3 Code already matching it.
 [30]: ../user/environment-theme.md
 [31]: ../../apps/server/src/subagentBackend/SubagentBackend.ts
 [32]: ../../apps/server/src/subagentBackend/ThreadBackendPath.ts
+[33]: ../../apps/server/src/crew/CrewService.ts
+[34]: ../../apps/server/src/crew/CrewSweep.ts

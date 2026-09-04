@@ -43,7 +43,6 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { CrewSweep } from "./crew/CrewSweep.ts";
-import { resolveCrewEnabled } from "./crew/CrewPolicy.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -806,12 +805,16 @@ export const make = (options?: StartupOptions) =>
           if (process.env.T3CODE_BG_TASK_RECOVERY !== "0") {
             yield* backgroundTaskRecoveryWatchdog.start().pipe(Scope.provide(reactorScope));
           }
-          // The crew delivery sweep. Off unless T3CODE_CREW_ENABLED is set: with
-          // it off the fibers never start, so crewmate reports are neither
-          // delivered nor stamped, and no wake turn is ever dispatched.
-          if (resolveCrewEnabled(process.env)) {
-            yield* crewSweep.start().pipe(Scope.provide(reactorScope));
-          }
+          // The crew delivery sweep. Started unconditionally, so the Settings
+          // switch takes effect on the next pass rather than the next restart.
+          //
+          // `start()` forks two fibers and they honour the switch differently,
+          // on purpose. The delivery loop re-reads it each pass and narrows to
+          // answer rows while off. The zombie scan does not read it at all —
+          // stopping a session for an already-closed task is cleanup, like
+          // `teardown` — but it answers its cheap query first and skips the
+          // provider enumeration entirely when no crew task has ever closed.
+          yield* crewSweep.start().pipe(Scope.provide(reactorScope));
           // Keeps the subagent-dispatch flag file in sync with ServerSettings for
           // the process lifetime (see SubagentBackend.ts's module doc).
           yield* subagentBackendReconciler.pipe(Effect.forkScoped, Scope.provide(reactorScope));

@@ -2,6 +2,7 @@ import {
   CREW_REPORTS_PER_TASK_LIMIT,
   CrewAlreadyAnsweredError,
   CrewAnswerRefusedError,
+  CrewDispatchRefusalReason,
   CrewDispatchRefusedError,
   CrewReportId,
   CrewReportRefusedError,
@@ -101,17 +102,15 @@ describe("crew tool refusal messages", () => {
   it("every dispatch refusal reason has its own message", () => {
     // Enumerated over the reason union, so a reason added without a `case`
     // fails here rather than falling through to an empty string at runtime.
-    const reasons = [
-      "cap",
-      "nested",
-      "thread",
-      "provider",
-      "browser-access",
-      "disk",
-      "payload",
-    ] as const;
+    // Derived from the union, not restated. A hardcoded list silently exempts
+    // every reason added after it was written — which is exactly what happened
+    // to `disabled`, and this test stayed green while blind to it.
+    const reasons = CrewDispatchRefusalReason.literals;
     const messages = reasons.map((reason) => new CrewDispatchRefusedError({ reason }).message);
-    expect(messages.filter((message) => message === "")).toEqual([]);
+    // A reason with no `case` falls out of the switch as `undefined`, not `""`.
+    // Asserting only on `""` is what let a caseless literal through a test whose
+    // whole purpose was to catch one — measured, not assumed.
+    expect(messages.filter((message) => typeof message !== "string" || message === "")).toEqual([]);
     expect(new Set(messages).size).toBe(reasons.length);
   });
 });

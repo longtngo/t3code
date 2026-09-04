@@ -45,6 +45,7 @@ export function useAvailableSettingsSearchItems() {
           primaryServerConfig?.environment.capabilities.threadAutoSettlement === true,
         hasSubagentBackendThreadModes:
           primaryServerConfig?.environment.capabilities.subagentBackendThreadModes === true,
+        hasCrew: primaryServerConfig?.environment.capabilities.crew === true,
       }),
     [
       canManageLocalBackend,

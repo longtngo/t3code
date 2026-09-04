@@ -21,6 +21,7 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { CrewLog, type CrewLogCode, type CrewLogFields } from "./CrewLog.ts";
 import { CrewRepository, CrewRepositoryLive } from "./CrewRepository.ts";
 import { CrewSweep, CrewSweepLive } from "./CrewSweep.ts";
@@ -68,6 +69,8 @@ interface HarnessOptions {
   readonly missing?: ReadonlyArray<ThreadId>;
   /** Threads whose shell is archived. */
   readonly archived?: ReadonlyArray<ThreadId>;
+  /** The Settings master switch. Defaults on so every other case reads normally. */
+  readonly crewEnabled?: boolean;
 }
 
 const harness = (options: HarnessOptions = {}) => {
@@ -75,6 +78,7 @@ const harness = (options: HarnessOptions = {}) => {
   const busy = new Set(options.busy ?? []);
   const missing = new Set(options.missing ?? []);
   const archived = new Set(options.archived ?? []);
+  const crewEnabled = options.crewEnabled ?? true;
 
   const appends: Array<{ threadId: string; text: string }> = [];
   const turns: Array<{ threadId: string; text: string }> = [];
@@ -138,6 +142,11 @@ const harness = (options: HarnessOptions = {}) => {
           Effect.succeed(busy.has(threadId) ? Option.some({ threadId } as never) : Option.none()),
       } as never),
     ),
+    Layer.provideMerge(
+      Layer.succeed(ServerSettingsService, {
+        getRawSettings: Effect.succeed({ enableCrew: crewEnabled }),
+      } as never),
+    ),
     Layer.provideMerge(NodeSqliteClient.layerMemory()),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -154,6 +163,41 @@ const harness = (options: HarnessOptions = {}) => {
 const codes = (records: ReadonlyArray<{ code: CrewLogCode }>) => records.map((r) => r.code);
 
 describe("crew delivery sweep", () => {
+  it.effect("while the switch is off, an answer is delivered and a report is not", () => {
+    // The switch narrows the pass rather than stopping it, and both halves have
+    // to be asserted in the SAME pass. Asserting only "the answer landed" would
+    // pass on a sweep that ignores the switch entirely; asserting only "the
+    // report did not" would pass on a sweep that does nothing at all.
+    //
+    // The report direction is what a master switch is for: it starts a turn on
+    // the operator's own thread. The answer direction only unblocks a crewmate
+    // that is already waiting, and cannot be retried once accepted.
+    const h = harness({ appendsFor: [BRIDGE, CREWMATE], crewEnabled: false });
+    return h.run(
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        const sweep = yield* CrewSweep;
+        yield* repository.insertTask(makeTask());
+        const decision = makeReport("needs-decision");
+        yield* repository.insertReport(decision);
+        yield* repository.insertReport(makeReport("progress"));
+        yield* repository.insertReport(makeReport("answer", { replyTo: decision.reportId }));
+
+        yield* sweep.runOnce();
+
+        // The operator's answer reached the crewmate.
+        assert.deepStrictEqual(
+          h.appends.map((append) => append.threadId),
+          [String(CREWMATE)],
+        );
+        // The crewmate's own reports did not reach the bridge, and were not
+        // consumed — they stay unnoted and deliver when crew is switched on.
+        const remaining = yield* repository.selectUnnoted();
+        assert.strictEqual(remaining.length, 2);
+      }),
+    );
+  });
+
   it.effect("a progress report on a live Claude bridge is noted with no turn started", () => {
     const h = harness({ appendsFor: [BRIDGE] });
     return h.run(

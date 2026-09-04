@@ -760,12 +760,49 @@ travels on an RPC error union `[X: tsgo, two arms]`.
 provider — one global tool array, `tools/call` unfiltered (§1). A second mount at
 `/mcp/crew` fixes it; Phase 2, and the reason is context-window cost.
 
+**Master switch:** the `enableCrew` server setting, off by default, surfaced as
+`Settings -> General -> Crew`. It is read in exactly two places, both per call:
+`CrewService.dispatch` refuses with `crew.dispatch.refused.disabled`, and
+`CrewSweep.runOnce` narrows the pass to `answer` rows. Off therefore takes
+effect immediately, with no restart.
+
+The sweep narrows rather than stops, and the asymmetry is the point. An `answer`
+travels operator -> crewmate and only closes a door already open: some crewmate is
+blocked on `needs-decision` holding a slot and a worktree, and this is the reply
+that frees it. Accepting the answer while withholding delivery is strictly worse
+than refusing it, because `crew.answer` writes a row carrying `replyTo` and that
+is exactly what makes the panel's Answer button disappear - the reply is
+swallowed with no retry. Every other report travels crewmate -> bridge and starts
+a turn on the operator's own thread, which is the noise a master switch is
+expected to stop; those rows stay unnoted and deliver when crew is turned back
+on, and the panel reads the database directly so nothing becomes invisible.
+
+`CrewSweep.start()` also forks a zombie scan, which does **not** read the switch.
+Stopping a provider session for an already-closed task is cleanup, the same
+argument that keeps `teardown` open. It queries closed tasks first and skips the
+provider-session enumeration entirely when there are none, so a server that never
+turns crew on pays one indexed query a minute and nothing else.
+
+Registration of the five MCP tools is deliberately _not_ gated on it. A tool
+listing cannot be retracted once a server is running - `McpServer` exposes
+`addTool` and nothing that removes one - so gating registration would only ever
+mean "the switch's position at process start", a second and quieter contract to
+explain. The tools are always advertised and refuse while the switch is off. The
+context-window cost of that is the known limitation above, and `/mcp/crew` in
+Phase 2 is its fix, not this flag.
+
+Turning it off deliberately leaves `status`, `report`, `answer` and `teardown`
+open. Those act on tasks that already exist, and refusing them would strand every
+crewmate dispatched before the switch was thrown, with no way to close its row or
+free its slot. `MAX_CONCURRENT_TASKS=0` is not a substitute: it refuses
+dispatches while the sweep still runs and the panel still polls.
+
 ## 9. Observability
 
 - **Spans:** `crew.dispatch`, `crew.sweep`, `crew.deliver`, `crew.answer`,
   `crew.teardown`, `crew.tool`.
 - **Warnings, one per refusal §8 or §5 actually has:**
-  `crew.dispatch.refused.<cap|thread|provider|browser-access|disk|nested|payload>`,
+  `crew.dispatch.refused.<disabled|cap|thread|provider|browser-access|disk|nested|payload>`,
   `crew.dispatch.compensate.skipped`,
   `crew.deliver.deferred.<thread|no-session|busy>`, `crew.deliver.no-turn`,
   `crew.deliver.abandoned`,

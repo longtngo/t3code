@@ -10,7 +10,6 @@ import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { CREW_ENABLED_ENV, resolveCrewEnabled } from "../crew/CrewPolicy.ts";
 import { CrewToolkit } from "./toolkits/crew/tools.ts";
 import { CrewToolkitLayer } from "./toolkits/crew/handlers.ts";
 import { CrewServiceLive } from "../crew/CrewService.ts";
@@ -227,25 +226,28 @@ const McpTransportLive = McpServer.layerHttp({
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
 /**
- * The crew tools, mounted only when the master switch is on.
+ * The crew tools, always registered.
  *
- * Registration is unconditional in shape but empty when off, so "off" means the
- * five tools are never advertised — not advertised-and-refusing. An agent that
- * cannot see `crew_dispatch` cannot be talked into calling it.
+ * Not gated on the `enableCrew` setting, because an MCP tool listing cannot be
+ * retracted: `McpServer` exposes `addTool` and nothing that removes one, so a
+ * tool advertised to a running server stays advertised for that server's life.
+ * A build-time gate would therefore only ever mean "the switch's position when
+ * this process started", which is a second, quieter contract to explain and to
+ * get wrong. The switch is enforced where it can be honest — `CrewService`
+ * refuses `crew_dispatch` per call with reason `disabled`.
  *
- * Read from the environment at layer-construction time, which is once per server
- * start. Flipping the switch needs a restart, which is the same contract as
- * every other `T3CODE_*` variable here.
+ * The cost is five tool definitions in every thread's context while crew is off.
+ * That is the same context-window cost §9 of the design already records as
+ * Phase 1's known limitation, and the fix for it is the `/mcp/crew` second mount
+ * in Phase 2, not this flag.
  */
-const CrewToolkitRegistrationLive = resolveCrewEnabled(process.env)
-  ? McpServer.toolkit(CrewToolkit).pipe(
-      // `CrewRepository`, `CrewLog` and the teardown hooks come from the crew
-      // layer `server.ts` already builds for the panel. Constructing a second
-      // set here would mean two repositories over one database and two log
-      // sinks, and would need `SqlClient` at a point that does not have it.
-      Layer.provide(CrewToolkitLayer.pipe(Layer.provide(CrewServiceLive()))),
-    )
-  : Layer.empty;
+const CrewToolkitRegistrationLive = McpServer.toolkit(CrewToolkit).pipe(
+  // `CrewRepository`, `CrewLog` and the teardown hooks come from the crew layer
+  // `server.ts` already builds for the panel. Constructing a second set here
+  // would mean two repositories over one database and two log sinks, and would
+  // need `SqlClient` at a point that does not have it.
+  Layer.provide(CrewToolkitLayer.pipe(Layer.provide(CrewServiceLive()))),
+);
 
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,

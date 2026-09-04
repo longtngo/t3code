@@ -229,6 +229,7 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       subagentBackend: true,
       subagentBackendThreadModes: true,
+      crew: true,
       environmentIcon: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate

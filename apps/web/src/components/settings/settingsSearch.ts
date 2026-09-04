@@ -36,6 +36,7 @@ export interface SettingsSearchItem {
   readonly wslAvailableOnly?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresSubagentBackendThreadModes?: boolean;
+  readonly requiresCrew?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -46,6 +47,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly hasSubagentBackendThreadModes: boolean;
+  readonly hasCrew: boolean;
 }
 
 /**
@@ -223,6 +225,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "composer rest resting unfocus blur focus click away scroll wheel conversation timeline shrink minimize",
     ],
+  },
+  {
+    id: "crew",
+    title: "Crew",
+    to: "/settings/general",
+    requiresCrew: true,
+    searchTerms: ["crewmate delegate dispatch parallel worktree bridge teardown"],
   },
   {
     id: "provider-update-checks",
@@ -604,7 +613,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes),
+      (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
+      (!item.requiresCrew || availability.hasCrew),
   );
 }
 

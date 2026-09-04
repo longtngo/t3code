@@ -596,6 +596,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
         ? ["Agent browser access"]
         : []),
+      ...(settings.enableCrew !== DEFAULT_UNIFIED_SETTINGS.enableCrew ? ["Crew"] : []),
     ],
     [
       isTextGenerationModelDirty,
@@ -608,6 +609,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.browserAutoShowFloatingPreview,
       settings.appearanceContrast,
       settings.enableAgentBrowserAccess,
+      settings.enableCrew,
       settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -763,6 +765,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       // name, so a user restoring defaults is told the agent regains access
       // rather than discovering it later.
       enableAgentBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess,
+      // Restored off, like every other default. Crewmates already dispatched
+      // keep running; the switch only bounds new dispatches.
+      enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew,
     });
     onRestored?.();
   }, [
@@ -2034,6 +2039,7 @@ export function GeneralSettingsPanel() {
   const serverCapabilities = useAtomValue(primaryServerConfigAtom)?.environment.capabilities;
   const supportsAutoSettlement = serverCapabilities?.threadAutoSettlement === true;
   const supportsSubagentOffload = serverCapabilities?.subagentBackendThreadModes === true;
+  const supportsCrew = serverCapabilities?.crew === true;
   const composerCollapseTriggers = useMemo<ComposerCollapseTrigger[]>(
     () => [
       ...(settings.composerCollapseOnBlur ? (["blur"] as const) : []),
@@ -2442,6 +2448,36 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+
+        {supportsCrew ? (
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("crew")}
+            description="Let a thread dispatch crewmates: separate agent threads, each in its own worktree, that report back here when they finish. Off means no new crewmates can be dispatched."
+            status={
+              settings.enableCrew
+                ? undefined
+                : "Any crewmate still running keeps working, and you can still answer it or tear it down from the Crew panel. Its progress reports stop interrupting your threads until this is back on."
+            }
+            resetAction={
+              settings.enableCrew !== DEFAULT_UNIFIED_SETTINGS.enableCrew ? (
+                <SettingResetButton
+                  label="crew"
+                  onClick={() =>
+                    updateSettings({ enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.enableCrew}
+                onCheckedChange={(checked) => updateSettings({ enableCrew: Boolean(checked) })}
+                aria-label="Enable crew"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           serverScoped

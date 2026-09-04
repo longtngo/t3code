@@ -115,9 +115,11 @@ const startupDependencies = Layer.mergeAll(
   ),
   AnalyticsService.layerTest,
   Layer.mock(GitVcsDriver.GitVcsDriver)({}),
-  // Startup acquires the sweep whether or not T3CODE_CREW_ENABLED is set; it is
-  // only *started* when the switch is on, which it is not here.
-  Layer.mock(CrewSweep)({}),
+  // Startup now starts the sweep unconditionally — the Settings switch is read
+  // inside each pass, not around `start()` — so this mock has to answer it.
+  // Left as a no-op: the sweep's own behaviour is covered by CrewSweep.test.ts,
+  // and what this file asserts is that startup reaches command readiness.
+  Layer.mock(CrewSweep)({ start: () => Effect.void }),
   Layer.succeed(ProviderService.ProviderService, {
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),

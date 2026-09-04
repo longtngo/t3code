@@ -1240,6 +1240,26 @@ export const ServerSettings = Schema.Struct({
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
+   * Crew orchestration: whether a thread may dispatch crewmates at all.
+   *
+   * Off by default, because a thread that can dispatch crewmates can spend real
+   * provider budget and create real worktrees without being asked twice. The
+   * five `crew_*` MCP tools are advertised either way — an MCP tool listing
+   * cannot be retracted mid-session — so the default costs their definitions in
+   * context regardless; what it withholds is the authority to act on them.
+   *
+   * Read per call by `CrewService.dispatch`, which refuses, and per pass by
+   * `CrewSweep`, which narrows delivery to answers only. Off therefore takes
+   * effect with no restart.
+   *
+   * `status`, `report`, `answer` and `teardown` stay open, and the sweep keeps
+   * delivering `answer` rows, because those act on tasks that already exist.
+   * Closing them would strand every crewmate dispatched before the switch was
+   * thrown — and an answer in particular cannot be retried once accepted, so
+   * accepting it without delivering it loses the operator's reply outright.
+   */
+  enableCrew: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
    * Which notification categories may raise an alert. Server-authoritative because
    * the Web Push relay sends from the server and cannot read a client's
    * localStorage; the foreground notifier reads the same field so both paths agree.
@@ -1537,6 +1557,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enableCrew: Schema.optionalKey(Schema.Boolean),
   // Every key optional so a single-category edit patches just that key. Using the
   // defaulted struct here would materialize the untouched siblings and deepMerge
   // would write them back over the user's choices.

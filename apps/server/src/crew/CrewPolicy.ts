@@ -18,29 +18,33 @@ export const DEFAULT_CREW_MAX_CONCURRENT_TASKS = 4;
 
 export const CREW_MAX_CONCURRENT_TASKS_ENV = "T3CODE_CREW_MAX_CONCURRENT_TASKS";
 
-export const CREW_ENABLED_ENV = "T3CODE_CREW_ENABLED";
-
 /**
- * The master switch. Off unless explicitly turned on.
+ * The master switch lives in Settings (`enableCrew`), not the environment.
  *
- * Default-off because crew has never actually been reachable: the toolkit and
- * the delivery sweep were both unreferenced, so nothing anywhere depends on it
- * being on, and turning it on advertises five new tools to every thread on every
- * provider. Opt-in is the honest default for that.
+ * Two readers, both per call, so "off" takes effect with no restart:
+ * `CrewService.dispatch` refuses, and `CrewSweep.runOnce` narrows what it
+ * delivers to answers only.
+ *
+ * What it deliberately does NOT gate, and why each one would be a trap:
+ * - **MCP tool registration.** A tool listing cannot be retracted once a server
+ *   is running, so gating it would only ever mean "the switch's position at
+ *   process start" — a second, quieter contract. The tools are always
+ *   advertised and refuse when off.
+ * - **`teardown`, `status`, `report`, `answer` and the Crew panel.** These are
+ *   the way out for work already dispatched; a switch that closes them strands
+ *   it.
+ * - **Delivery of `answer` rows.** Accepting an answer while refusing to deliver
+ *   it is worse than refusing it: the panel drops the retry affordance the
+ *   moment the row is written, so the operator's reply is swallowed for good and
+ *   the crewmate stays blocked. See `CrewSweep.runOnce`.
+ * - **The zombie scan.** Stopping a session for an already-closed task is
+ *   cleanup, not new work.
  *
  * Distinct from `T3CODE_CREW_MAX_CONCURRENT_TASKS=0`, which refuses new
- * dispatches but leaves the tools advertised, the sweep running and the panel
- * polling. This gates all three.
- *
- * Only unambiguous affirmatives count. Anything else — including `"maybe"`,
- * `""`, or a typo — is off, which is the safe direction for a switch whose
- * "on" position exposes new agent-callable tools.
+ * dispatches but leaves the sweep running and the panel polling.
  */
-export function resolveCrewEnabled(env: Record<string, string | undefined>): boolean {
-  const raw = env[CREW_ENABLED_ENV];
-  if (raw === undefined) return false;
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
-}
+export const crewEnabled = (settings: { readonly enableCrew: boolean }): boolean =>
+  settings.enableCrew;
 
 /**
  * Reads the cap from an environment record.
