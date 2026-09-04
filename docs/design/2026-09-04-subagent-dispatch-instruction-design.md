@@ -277,7 +277,17 @@ boundary, not a coverage gap to paper over.
   What remains is `getByInstance` failing for an instance deleted between `listInstances()` and
   the lookup, whose sessions are being torn down anyway. Threads with no live session are covered
   by `writeThreadBackendForSession` at their next session start, on both `ProviderService` paths.
-- A guard that the instruction text and the wrapper's contract stay in sync.
+- **Instruction/wrapper contract sync — closed by the harness.** The wrapper lives in a separate
+  repository (`~/src/personal/subagent-dispatch`, symlinked into `~/bin`), so no test in this repo
+  can import it. It does not need to: `scripts/subagent-routing-harness/run.sh --fallback` drives
+  the **real** wrapper — only the Cursor binary behind it is stubbed — with a `default` flag file,
+  so the refusal path is exercised end to end. If the wrapper's refuse code stopped being 3, the
+  instruction's "any other non-zero is not a fallback signal" clause would keep the agent from
+  falling back and the harness's completion gate would fail. The in-repo half is covered by the
+  `names exit 3 as the only fallback signal` unit test.
+
+All follow-ups from this design are now closed. Two shipped, one was falsified rather than built,
+one turned out to be covered by the harness.
 
 ## Review exit note
 
