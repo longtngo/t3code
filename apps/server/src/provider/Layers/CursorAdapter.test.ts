@@ -107,10 +107,27 @@ async function waitForFileContent(filePath: string, attempts = 40) {
   throw new Error(`Timed out waiting for file content at ${filePath}`);
 }
 
+/**
+ * Polls a mock ACP process's request log until an entry matches.
+ *
+ * Polling is right here and only here: the log is written by a real subprocess, so there is no
+ * receipt to wait on.
+ *
+ * The wait is `Effect.yieldNow` and a real `readJsonLines` per attempt, NOT `Effect.sleep`. Every
+ * test in this file is `it.effect`, which runs on a `TestClock` - a sleep there never returns
+ * unless someone advances the clock, so adding one deadlocks the test until the 120s harness
+ * timeout. The awaited file read is what actually gives the subprocess a chance to write; the
+ * attempt count is therefore the knob, and it is generous because a saturated `pnpm verify` makes
+ * each read slower without making the subprocess faster.
+ *
+ * Exhaustion dies rather than returning the log. Returning it pushed the failure into the caller's
+ * `assert.isTrue(...)`, which reported `expected false to be true` - a message that says nothing
+ * about a subprocess never having written.
+ */
 function waitForJsonLogMatch(
   filePath: string,
   predicate: (entry: Record<string, unknown>) => boolean,
-  attempts = 40,
+  attempts = 400,
 ) {
   return Effect.gen(function* () {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -120,7 +137,12 @@ function waitForJsonLogMatch(
       }
       yield* Effect.yieldNow;
     }
-    return yield* Effect.promise(() => readJsonLines(filePath));
+    const requests = yield* Effect.promise(() => readJsonLines(filePath));
+    return yield* Effect.die(
+      new Error(
+        `waitForJsonLogMatch: no entry matched after ${attempts} attempts in ${filePath}; ${requests.length} entries were written`,
+      ),
+    );
   });
 }
 
