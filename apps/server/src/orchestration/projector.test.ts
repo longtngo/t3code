@@ -830,6 +830,88 @@ describe("orchestration projector", () => {
     expect(thread?.latestTurn?.turnId).toBe("turn-1");
   });
 
+  it("drops a turnless user message created after the checkpoint the revert kept", async () => {
+    const createdAt = "2026-02-27T09:00:00.000Z";
+    const threadId = "thread-bound";
+    const mk = (
+      sequence: number,
+      type: string,
+      occurredAt: string,
+      payload: Record<string, unknown>,
+    ) =>
+      makeEvent({
+        sequence,
+        type,
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt,
+        commandId: `cmd-${sequence}`,
+        payload: { threadId, ...payload },
+      } as Parameters<typeof makeEvent>[0]);
+
+    const events = [
+      mk(1, "thread.created", createdAt, {
+        projectId: "project-1",
+        title: "demo",
+        modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5.3-codex" },
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      mk(2, "thread.message-sent", "2026-02-27T09:00:01.000Z", {
+        messageId: "user-kept",
+        role: "user",
+        text: "kept",
+        turnId: "turn-1",
+        streaming: false,
+        createdAt: "2026-02-27T09:00:01.000Z",
+        updatedAt: "2026-02-27T09:00:01.000Z",
+      }),
+      mk(3, "thread.turn-diff-completed", "2026-02-27T09:00:02.000Z", {
+        turnId: "turn-1",
+        checkpointTurnCount: 1,
+        checkpointRef: `refs/t3/checkpoints/${threadId}/turn/1`,
+        status: "ready",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-02-27T09:00:02.000Z",
+      }),
+      // A second kept turn whose own user message is turnless. That is what creates the deficit
+      // the fallback exists to fill: two kept turns, one turn-bound user message.
+      mk(4, "thread.turn-diff-completed", "2026-02-27T09:00:03.000Z", {
+        turnId: "turn-2",
+        checkpointTurnCount: 2,
+        checkpointRef: `refs/t3/checkpoints/${threadId}/turn/2`,
+        status: "ready",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-02-27T09:00:03.000Z",
+      }),
+      // Sent after the newest checkpoint the revert keeps, and never bound to a turn. The
+      // fallback would re-admit it to close the deficit; the timestamp bound is what stops it.
+      mk(5, "thread.message-sent", "2026-02-27T09:00:04.000Z", {
+        messageId: "user-orphan",
+        role: "user",
+        text: "sent after the kept checkpoint",
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-02-27T09:00:04.000Z",
+        updatedAt: "2026-02-27T09:00:04.000Z",
+      }),
+      mk(6, "thread.reverted", "2026-02-27T09:00:05.000Z", { turnCount: 2 }),
+    ];
+
+    const afterRevert = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
+      Promise.resolve(createEmptyReadModel(createdAt)),
+    );
+
+    expect(afterRevert.threads[0]?.messages.map((message) => message.id)).toEqual(["user-kept"]);
+  });
+
   it("does not fallback-retain messages tied to removed turn IDs", async () => {
     const createdAt = "2026-02-26T12:00:00.000Z";
     const model = createEmptyReadModel(createdAt);

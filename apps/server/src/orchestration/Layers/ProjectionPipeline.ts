@@ -218,6 +218,13 @@ function deriveHasActionableProposedPlan(input: {
   return latestPlan !== null && latestPlan.implementedAt === null;
 }
 
+/**
+ * Mirrored by `retainThreadMessagesAfterRevert` in `../projector.ts`, which applies the same rule
+ * to the in-memory command read model. They cannot share an implementation - different message
+ * types, and only this one can seed retention from `pendingMessageId`/`assistantMessageId` - so a
+ * rule change in either belongs in both. The timestamp bound below was added here first and the
+ * other side went without it for a day.
+ */
 function retainProjectionMessagesAfterRevert(
   messages: ReadonlyArray<ProjectionThreadMessage>,
   turns: ReadonlyArray<ProjectionTurn>,

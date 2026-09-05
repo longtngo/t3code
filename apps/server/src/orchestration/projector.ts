@@ -117,10 +117,18 @@ function decodeForEvent<A>(
   );
 }
 
+/**
+ * Mirror of `retainProjectionMessagesAfterRevert` in `Layers/ProjectionPipeline.ts`, over the
+ * in-memory command read model instead of the projection rows. The two cannot share an
+ * implementation - different message types, and the durable one seeds retention from
+ * `pendingMessageId`/`assistantMessageId`, which this model does not carry - so a rule change in
+ * either belongs in both.
+ */
 function retainThreadMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
   turnCount: number,
+  keptCheckpointCompletedAt: string | null,
 ): ReadonlyArray<OrchestrationMessage> {
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
@@ -146,6 +154,11 @@ function retainThreadMessagesAfterRevert(
         (message) =>
           message.role === "user" &&
           !retainedMessageIds.has(message.id) &&
+          // A turnless message survives only if it predates the newest checkpoint the revert
+          // kept. The comparison excludes equality because a checkpoint is captured lazily,
+          // when the next turn starts, so that turn's message and this checkpoint often share
+          // a timestamp.
+          (keptCheckpointCompletedAt === null || message.createdAt < keptCheckpointCompletedAt) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
       )
       .toSorted(
@@ -929,10 +942,12 @@ export function projectEvent(
             .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
             .slice(-MAX_THREAD_CHECKPOINTS);
           const retainedTurnIds = new Set(checkpoints.map((checkpoint) => checkpoint.turnId));
+          const latestCheckpoint = checkpoints.at(-1) ?? null;
           const messages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             payload.turnCount,
+            latestCheckpoint?.completedAt ?? null,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -940,7 +955,6 @@ export function projectEvent(
           ).slice(-200);
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
 
-          const latestCheckpoint = checkpoints.at(-1) ?? null;
           const latestTurn =
             latestCheckpoint === null
               ? null
