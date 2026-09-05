@@ -72,10 +72,28 @@ const buildSourcemap: boolean | "hidden" =
       ? "hidden"
       : true;
 
+// Component behaviour that needs a real DOM: `*.dom.test.tsx`. Kept as a separate project so the
+// ~4,800 logic tests keep running under the much cheaper `node` environment - a DOM per test file
+// is not free, and almost none of them need one.
+const domTestProject = {
+  extends: true,
+  test: {
+    name: "dom",
+    environment: "happy-dom",
+    include: ["src/**/*.dom.test.tsx"],
+    hookTimeout: 120_000,
+    testTimeout: 120_000,
+    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+  },
+} satisfies TestProjectInlineConfiguration;
+
 const unitTestProject = {
   extends: true,
   test: {
     name: "unit",
+    // `*.dom.test.tsx` belongs to the `dom` project above; without this exclusion both projects
+    // claim it and the DOM tests also run under `node`, where they cannot pass.
+    exclude: ["src/**/*.dom.test.tsx"],
     include: ["src/**/*.test.{ts,tsx}"],
     // Sized for the full monorepo run, not for this project alone. A handful of these tests do
     // real work - WASM highlighting through a worker thread, building and parsing a VSIX - and
@@ -367,7 +385,7 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject)],
+      projects: [defineProject(unitTestProject), defineProject(domTestProject)],
     },
   };
 });

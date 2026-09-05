@@ -9,7 +9,7 @@
     "build": "vp build",
     "preview": "vp preview",
     "typecheck": "tsgo --noEmit",
-    "test": "vp test run --passWithNoTests --project unit"
+    "test": "vp test run --passWithNoTests --project unit --project dom"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -67,6 +67,7 @@
     "@vitejs/plugin-react": "^6.0.0",
     "babel-plugin-react-compiler": "1.0.0",
     "compression": "^1.8.1",
+    "happy-dom": "^20.14.0",
     "react-test-renderer": "19.2.6",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.0.0",
