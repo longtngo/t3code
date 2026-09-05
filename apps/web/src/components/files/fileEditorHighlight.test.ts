@@ -184,7 +184,12 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("editable file highlighting", () => {
+// Every test here drives a real `node:worker_threads` worker doing WASM highlighting over a
+// 7,000-line document. That costs ~1s on an idle machine but 15x more when `pnpm verify` has
+// every package's suite running at once, which is what made this file fail the full gate while
+// passing on its own. The timeout is generous so it only fires when the worker never answers,
+// not when the machine is merely busy.
+describe("editable file highlighting", { timeout: 60_000 }, () => {
   it("still accepts an asynchronous highlight when the file has not changed", async () => {
     expect(renderContents()).not.toContain('style="color:');
     (await nextResponse()).deliver();
