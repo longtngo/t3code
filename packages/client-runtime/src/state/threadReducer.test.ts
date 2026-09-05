@@ -12,7 +12,7 @@ import {
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import { applyThreadDetailEvent, resolveRevertRetention } from "./threadReducer.ts";
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),
@@ -1266,6 +1266,102 @@ describe("applyThreadDetailEvent", () => {
         }
       },
     );
+  });
+
+  describe("resolveRevertRetention", () => {
+    // The confirm dialog subtracts this from the message count to tell the user what a revert
+    // costs them, so it has to agree with what the reducer actually keeps.
+    const at = (iso: string) => iso;
+    const thread: OrchestrationThread = {
+      ...baseThread,
+      messages: [
+        // Turnless on purpose. Both kept turns lack a turn-bound user message, so the retention
+        // fallback runs with a deficit of 2 - which is the only path the timestamp bound guards.
+        {
+          id: MessageId.make("kept-user"),
+          role: "user",
+          text: "kept",
+          turnId: null,
+          streaming: false,
+          createdAt: at("2026-05-01T00:00:01.000Z"),
+          updatedAt: at("2026-05-01T00:00:01.000Z"),
+        },
+        {
+          id: MessageId.make("kept-assistant"),
+          role: "assistant",
+          text: "kept answer",
+          turnId: TurnId.make("turn-1"),
+          streaming: false,
+          createdAt: at("2026-05-01T00:00:02.000Z"),
+          updatedAt: at("2026-05-01T00:00:02.000Z"),
+        },
+        // Turnless and created after the newest checkpoint the revert keeps.
+        {
+          id: MessageId.make("discarded-user"),
+          role: "user",
+          text: "discarded",
+          turnId: null,
+          streaming: false,
+          createdAt: at("2026-05-01T00:00:06.000Z"),
+          updatedAt: at("2026-05-01T00:00:06.000Z"),
+        },
+      ],
+      checkpoints: [
+        {
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("kept-assistant"),
+          completedAt: at("2026-05-01T00:00:03.000Z"),
+        },
+        {
+          turnId: TurnId.make("turn-2"),
+          checkpointTurnCount: 2,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-2"),
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: at("2026-05-01T00:00:05.000Z"),
+        },
+      ],
+    };
+
+    it("keeps only what a revert to the target turn retains", () => {
+      const retained = resolveRevertRetention({
+        checkpoints: thread.checkpoints,
+        messages: thread.messages,
+        turnCount: 2,
+      });
+      expect(retained.messages.map((message) => message.id)).toEqual([
+        "kept-user",
+        "kept-assistant",
+      ]);
+      expect(thread.messages.length - retained.messages.length).toBe(1);
+    });
+
+    it("agrees with what the reducer applies for the same revert", () => {
+      const viaHelper = resolveRevertRetention({
+        checkpoints: thread.checkpoints,
+        messages: thread.messages,
+        turnCount: 2,
+      });
+      const viaReducer = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 99,
+        occurredAt: at("2026-05-01T00:00:06.000Z"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.reverted",
+        payload: { threadId: ThreadId.make("thread-1"), turnCount: 2 },
+      });
+      expect(viaReducer.kind).toBe("updated");
+      if (viaReducer.kind !== "updated") return;
+      expect(viaReducer.thread.messages.map((message) => message.id)).toEqual(
+        viaHelper.messages.map((message) => message.id),
+      );
+    });
   });
 
   describe("thread.reverted", () => {

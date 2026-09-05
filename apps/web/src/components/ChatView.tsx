@@ -38,6 +38,7 @@ import {
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
+  resolveRevertRetention,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
@@ -1688,6 +1689,9 @@ export default function ChatView(props: ChatViewProps) {
   // Armed by the revert control, read by the effect that puts the text back once the
   // message has left the thread. A ref, not state: nothing renders from it.
   const pendingRevertRestoreRef = useRef<PendingRevertRestore | null>(null);
+  // Guards re-entry while the confirm dialog is open. `isRevertingCheckpoint` drives rendering;
+  // this decides whether a second click is allowed to start another revert.
+  const revertInFlightRef = useRef(false);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -6552,7 +6556,7 @@ export default function ChatView(props: ChatViewProps) {
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
       const localApi = readLocalApi();
-      if (!localApi || !activeThread || isRevertingCheckpoint) return;
+      if (!localApi || !activeThread || revertInFlightRef.current) return;
 
       if (!supportsConversationRollback) {
         setThreadError(
@@ -6572,35 +6576,56 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
-      const confirmed = await localApi.dialogs.confirm(
-        [
-          `Revert this thread to checkpoint ${turnCount}?`,
-          "This will discard newer messages and turn diffs in this thread.",
-          "This action cannot be undone.",
-        ].join("\n"),
-        { variant: "destructive" },
-      );
-      if (!confirmed) {
-        return;
-      }
 
+      // Latched before the await, and on a ref rather than the state above: `isRevertingCheckpoint`
+      // is read from the closure, so a second click lands on the pre-render callback and still sees
+      // `false` while the confirm dialog is open.
+      revertInFlightRef.current = true;
       setIsRevertingCheckpoint(true);
-      setThreadError(activeThread.id, null);
-      const result = await revertThreadCheckpoint({
-        environmentId,
-        input: {
-          threadId: activeThread.id,
-          turnCount,
-        },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(
-          activeThread.id,
-          error instanceof Error ? error.message : "Failed to revert thread state.",
+      try {
+        // The same retention the reducer applies, so the number the user is asked to approve is the
+        // number they will lose. Reverts are not small: across a real database the median discards
+        // 258 messages and the tail runs past 4,000.
+        const discardedCount =
+          activeThread.messages.length -
+          resolveRevertRetention({
+            checkpoints: activeThread.checkpoints,
+            messages: activeThread.messages,
+            turnCount,
+          }).messages.length;
+        const confirmed = await localApi.dialogs.confirm(
+          [
+            `Revert this thread to checkpoint ${turnCount}?`,
+            discardedCount === 1
+              ? "This will discard 1 message and its turn diffs."
+              : `This will discard ${discardedCount.toLocaleString()} messages and their turn diffs.`,
+            "This action cannot be undone.",
+          ].join("\n"),
+          { variant: "destructive" },
         );
+        if (!confirmed) {
+          return;
+        }
+
+        setThreadError(activeThread.id, null);
+        const result = await revertThreadCheckpoint({
+          environmentId,
+          input: {
+            threadId: activeThread.id,
+            turnCount,
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to revert thread state.",
+          );
+        }
+      } finally {
+        revertInFlightRef.current = false;
+        setIsRevertingCheckpoint(false);
       }
-      setIsRevertingCheckpoint(false);
     },
     [
       activeThread,
@@ -6608,7 +6633,6 @@ export default function ChatView(props: ChatViewProps) {
       activeEnvironmentUnavailableLabel,
       environmentId,
       isConnecting,
-      isRevertingCheckpoint,
       isSendBusy,
       phase,
       revertThreadCheckpoint,

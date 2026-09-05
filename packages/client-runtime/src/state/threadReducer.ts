@@ -567,31 +567,11 @@ export function applyThreadDetailEvent(
 
     // ── Revert ──────────────────────────────────────────────────────
     case "thread.reverted": {
-      const checkpoints = pipe(
-        thread.checkpoints,
-        Arr.filter(
-          (entry) =>
-            entry.checkpointTurnCount !== undefined &&
-            entry.checkpointTurnCount <= event.payload.turnCount,
-        ),
-        Arr.sort(checkpointOrder),
-      );
-
-      const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
-      // The newest kept checkpoint by time, not by position. The server derives the same bound
-      // with a max scan, and it dedupes conflicting `checkpointTurnCount` rows on write while the
-      // client has no counterpart - so a duplicate count here would make position and time
-      // disagree, and the client would delete messages the server keeps.
-      const messages = retainMessagesAfterRevert(
-        thread.messages,
-        retainedTurnIds,
-        event.payload.turnCount,
-        checkpoints.reduce<string | null>(
-          (latest, entry) =>
-            latest === null || entry.completedAt > latest ? entry.completedAt : latest,
-          null,
-        ),
-      );
+      const { checkpoints, retainedTurnIds, messages } = resolveRevertRetention({
+        checkpoints: thread.checkpoints,
+        messages: thread.messages,
+        turnCount: event.payload.turnCount,
+      });
       const proposedPlans = pipe(
         thread.proposedPlans,
         Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
@@ -779,6 +759,50 @@ function rebindCheckpointAssistantMessage(
   return Arr.map(checkpoints, (entry) =>
     entry.turnId === turnId ? { ...entry, assistantMessageId: messageId } : entry,
   );
+}
+
+/**
+ * What a revert to `turnCount` keeps. Exported because the revert confirmation dialog needs to
+ * tell the user how many messages it is about to discard, and deriving that separately would be a
+ * fourth copy of a rule that has already drifted once: the same retention exists here, in the
+ * server's `ProjectionPipeline.ts`, and in its `projector.ts`.
+ */
+export function resolveRevertRetention(input: {
+  readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly turnCount: number;
+}): {
+  readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+  readonly retainedTurnIds: ReadonlySet<string>;
+  readonly messages: OrchestrationMessage[];
+} {
+  const checkpoints = pipe(
+    input.checkpoints,
+    Arr.filter(
+      (entry) =>
+        entry.checkpointTurnCount !== undefined && entry.checkpointTurnCount <= input.turnCount,
+    ),
+    Arr.sort(checkpointOrder),
+  );
+  const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
+  // The newest kept checkpoint by time, not by position. The server derives the same bound
+  // with a max scan, and it dedupes conflicting `checkpointTurnCount` rows on write while the
+  // client has no counterpart - so a duplicate count here would make position and time
+  // disagree, and the client would delete messages the server keeps.
+  const keptCheckpointCompletedAt = checkpoints.reduce<string | null>(
+    (latest, entry) => (latest === null || entry.completedAt > latest ? entry.completedAt : latest),
+    null,
+  );
+  return {
+    checkpoints,
+    retainedTurnIds,
+    messages: retainMessagesAfterRevert(
+      input.messages,
+      retainedTurnIds,
+      input.turnCount,
+      keptCheckpointCompletedAt,
+    ),
+  };
 }
 
 function retainMessagesAfterRevert(
