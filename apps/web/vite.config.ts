@@ -77,11 +77,18 @@ const unitTestProject = {
   test: {
     name: "unit",
     include: ["src/**/*.test.{ts,tsx}"],
-    // The web runtime suite exercises auth bootstrap, saved environments,
-    // and websocket subscription lifecycles. Under the full monorepo test
-    // run, those async tests can exceed Vitest's default 5s budget.
-    hookTimeout: 15_000,
-    testTimeout: 15_000,
+    // Sized for the full monorepo run, not for this project alone. A handful of these tests do
+    // real work - WASM highlighting through a worker thread, building and parsing a VSIX - and
+    // when `pnpm verify` runs every package's suite at once they slow down by at least 13x.
+    // Measured 2026-09-05: 10 tests exceed 1.2s in isolation and the slowest takes 7.3s, so at
+    // that factor every one of them blows a 15s budget. Two of them did, on separate gate runs,
+    // producing a red gate with nothing broken.
+    //
+    // The generous budget costs only detection latency on a genuinely hung test; the ~4,790
+    // tests that finish in milliseconds are unaffected either way. Raising it is what the
+    // previous 5s -> 15s bump did for the same reason, one load factor too early.
+    hookTimeout: 120_000,
+    testTimeout: 120_000,
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
 } satisfies TestProjectInlineConfiguration;
