@@ -765,21 +765,23 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
-    if (Option.isNone(sessionRuntime)) {
+    // Prefer the live session's cwd, then fall back to the thread/project workspace - the
+    // same resolution the capture path uses. Only live adapter sessions appear in
+    // `listSessions`, so without the fallback every server restart leaves a thread unable
+    // to revert to checkpoints it captured moments earlier.
+    const revertProjects = yield* resolveThreadProjects(thread.projectId);
+    const checkpointCwd = yield* resolveCheckpointCwd({
+      threadId: event.payload.threadId,
+      thread,
+      projects: revertProjects,
+      preferSessionRuntime: true,
+    });
+    if (!checkpointCwd) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
-        detail: "No active provider session with workspace cwd is bound to this thread.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-    if (!(yield* checkpointStore.isGitRepository(sessionRuntime.value.cwd))) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "Checkpoints are unavailable because this project is not a git repository.",
+        detail:
+          "No git workspace is available for this thread. Reverting needs its project directory to be a git repository.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -828,7 +830,6 @@ const make = Effect.gen(function* () {
     // member repository has moved leaves an inconsistent tree behind a UI that
     // implies a clean undo, so the revert is refused and the repositories are
     // named — the user has to know which checkouts to deal with by hand.
-    const revertProjects = yield* resolveThreadProjects(thread.projectId);
     const revertMembers = revertProjects[0]?.members ?? [];
     if (revertMembers.length > 0) {
       // Reverting to turn 0 discards everything this thread did, and there is
@@ -875,7 +876,7 @@ const make = Effect.gen(function* () {
     }
 
     const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: sessionRuntime.value.cwd,
+      cwd: checkpointCwd,
       checkpointRef: targetCheckpointRef,
       fallbackToHead: event.payload.turnCount === 0,
     });
@@ -891,12 +892,12 @@ const make = Effect.gen(function* () {
 
     // Refresh the workspace entry index so the @-mention file picker
     // reflects the reverted filesystem state.
-    yield* workspaceEntries.refresh(sessionRuntime.value.cwd);
+    yield* workspaceEntries.refresh(checkpointCwd);
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {
       yield* providerService.rollbackConversation({
-        threadId: sessionRuntime.value.threadId,
+        threadId: event.payload.threadId,
         numTurns: rolledBackTurns,
       });
     }
@@ -910,7 +911,7 @@ const make = Effect.gen(function* () {
 
     if (staleCheckpointRefs.length > 0) {
       yield* checkpointStore.deleteCheckpointRefs({
-        cwd: sessionRuntime.value.cwd,
+        cwd: checkpointCwd,
         checkpointRefs: staleCheckpointRefs,
       });
     }
