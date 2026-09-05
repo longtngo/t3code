@@ -8,6 +8,7 @@
  *
  * @module sidebarSections
  */
+import { terminalOutputText } from "@t3tools/client-runtime/state/terminal";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 
 export const AUTO_CLEAR_TTL_HOURS = 6;
@@ -79,7 +80,7 @@ export function deriveBackgroundItems(
       // Terminals carry no start timestamp; active terminals tiebreak by id.
       startedAt: null,
       completedAt,
-      buffer: terminal.state.buffer,
+      buffer: terminalOutputText(terminal.state.output),
     };
   });
 }

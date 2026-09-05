@@ -70,14 +70,14 @@ export interface PersistedServerObservabilitySettings {
   readonly otlpMetricsUrl: string | undefined;
 }
 
-export function normalizePersistedServerSettingString(
+function normalizePersistedServerSettingString(
   value: string | null | undefined,
 ): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-export function extractPersistedServerObservabilitySettings(input: {
+function extractPersistedServerObservabilitySettings(input: {
   readonly observability?: {
     readonly otlpTracesUrl?: string;
     readonly otlpMetricsUrl?: string;
@@ -143,10 +143,10 @@ function mergeModelSelectionOptionsById(input: {
 }
 
 /** Upsert each patched entry; `null` removes it. Entries the patch omits are untouched. */
-function mergeUsageLimitSources(
-  current: ServerSettings["usageLimitSources"],
-  patch: NonNullable<ServerSettingsPatch["usageLimitSources"]>,
-): ServerSettings["usageLimitSources"] {
+function mergeSettingsEntries<Value>(
+  current: Readonly<Record<string, Value>>,
+  patch: Readonly<Record<string, Value | null>>,
+): Record<string, Value> {
   const next = new Map(Object.entries(current));
   for (const [id, config] of Object.entries(patch)) {
     if (config === null) {
@@ -155,7 +155,7 @@ function mergeUsageLimitSources(
       next.set(id, config);
     }
   }
-  return Object.fromEntries(next) as ServerSettings["usageLimitSources"];
+  return Object.fromEntries(next);
 }
 
 export function applyServerSettingsPatch(
@@ -170,6 +170,7 @@ export function applyServerSettingsPatch(
     backgroundActivity,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
+    usagePriceOverrides: usagePriceOverridesPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -233,9 +234,17 @@ export function applyServerSettingsPatch(
     ...(patch.localLlm !== undefined ? { localLlm: patch.localLlm } : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {
-          usageLimitSources: mergeUsageLimitSources(
+          usageLimitSources: mergeSettingsEntries(
             current.usageLimitSources,
             usageLimitSourcesPatch,
+          ),
+        }
+      : {}),
+    ...(usagePriceOverridesPatch !== undefined
+      ? {
+          usagePriceOverrides: mergeSettingsEntries(
+            current.usagePriceOverrides,
+            usagePriceOverridesPatch,
           ),
         }
       : {}),

@@ -128,6 +128,21 @@ ordinary upstream additions by the 17th reconcile:
   and upstream's `ExpandedWorkGroupEntries` virtualized component — which now mounts the fork's
   `WorkEntryDetailDialog` itself, since its rows open detail the same way.
 
+  **30th reconcile.** Upstream re-landed the same per-entry expansion (`WorkGroupViewCtx`,
+  `expandedEntries`, `onToggleWorkEntry`, `PlainWorkEntryRow`'s `expanded`/`toggleExpanded` and
+  its inline `expandedBody`) and this time brought a test with it:
+  `MessagesTimeline.test.tsx`'s "restores the composer after closing $toolLifecycleStatus tool
+  output only at the end", which drives the row through `findByProps({ "aria-expanded": false })`.
+  The test is upstream-only (absent from the merge-base) and describes the rejected feature, so it
+  is rejected with it. Two of its four cases pass against the fork's row by accident - do not read
+  that as partial support.
+
+  Also from this reconcile, unrelated to the feature: `@base-ui/react` 1.5.0 calls floating-ui's
+  `isElement` on mount, so any react-test-renderer suite that stubs `window` now needs an `Element`
+  constructor both as a global and on the stubbed window. Stub ONLY `Element`; defining
+  `HTMLElement` or `Node` makes `@pierre/trees` register its web components at import time and
+  fail on the missing `customElements`.
+
   Also relocated, not lost: `commandProgramName` / `tokenizeShellCommand` / the
   `COMMAND_WRAPPER_*` tables moved to `packages/client-runtime/src/work-log/commandLabel.ts`
   (upstream's copy is a superset — it also unwraps `sh -c`), and `liveWorkEntryLabel` moved to
@@ -721,16 +736,69 @@ So the write is skipped exactly when this handler found the thread in `compactin
 entry. Note the ordering trap: `restoreCompaction` returns without writing while the thread is
 in `stoppingThreadIds`, so the stopping mark has to come off before it is called.
 
-### 31. The completion marker travels through the pump, not `takeAll`
+### 31. The live subscription is bounded by upstream's budget, not the fork's pump
 
-Upstream #9521 answers a `requestCompletionMarker` subscription by offering `synchronized` into
-its coalescer and reading it straight back with `takeAll`. That works upstream because the
-coalescer's output queue is the only buffer. Here it is chained into a bounded queue
-(invariant 18), and the pump draining that same queue races the `takeAll` — measured: the marker
-arrived before an event that was already in flight, and `server.test.ts`'s "buffers thread
-events published while the initial snapshot loads" caught it. `offerAndWait` alone is enough:
-it returns once the marker is in the coalescer's output, and the pump preserves order from
-there. Both `Effect.forkScoped` calls in that chain need `startImmediately: true`.
+**Superseded at the 30th reconcile.** The fork used to chain upstream's coalescer into a bounded
+`Queue.dropping` (`WS_LIVE_BUFFER_CAPACITY`, `pumpBoundedLiveBuffer`), and answered a
+`requestCompletionMarker` subscription with `offerAndWait` because the pump draining that queue
+raced upstream's `takeAll`.
+
+Upstream #9521's follow-up made that chain unnecessary. `makeLiveStreamBudget`
+(`apps/server/src/orchestration/LiveStreamBudget.ts`) bounds a subscription by **retained items
+AND retained serialized bytes** (1,000 / 8 MiB) and _fails_ the stream on overflow, which the
+client transport treats exactly as the fork's dropping queue did: resubscribe with
+`afterSequence` and resync losslessly. Every offer into the coalescer's output queue goes through
+`budget.retain` / `budget.check`, so the queue being `Queue.unbounded` no longer means unbounded
+memory. That is a strictly stronger bound than the fork's row count, and it restores the single
+buffer the marker ordering needs — so `liveBuffer.offer({ kind: "synchronized" })` is safe again
+and there is no `takeAll` to race.
+
+`boundedLiveBuffer.ts` and its test were deleted with the last caller. The discriminating test is
+still `server.test.ts`'s "buffers thread events published while the initial snapshot loads": if a
+future reconcile reintroduces a second buffer in front of the coalescer, that test is what catches
+the marker overtaking an in-flight event.
+
+### 33. The per-value failure-budget reset must not be a `Stream.tap`
+
+The fork clears the expected-failure budget on every emitted value ("a value proves the
+subscription works"). It used to do that with `Stream.tap(() => resetExpectedFailures)` inside
+`subscribeDynamicMapped`'s inner stream.
+
+Upstream #10120 added `subscribeDynamicWithSession`, which tags each value with the session that
+produced it via a plain `Stream.map` - deliberately, so `switchMap` cannot lose a value the old
+session had already buffered when the session changes (its own comment says so). A `Stream.tap`
+sitting next to that tag re-introduces exactly the Effect boundary it engineers away: the
+buffered value is dropped and the subscription stalls. `client.test.ts`'s "keeps the producer
+session on an old value buffered across a session switch" hangs, and it is the only thing that
+catches it.
+
+The reset is therefore recorded synchronously (`producedValue`, set in a `Stream.map`) and
+flushed inside `catchCause`, where an Effect boundary is free. Anything else added to that inner
+pipeline has to be synchronous for the same reason.
+
+### 32. Claude notifications are `runtime.notification`; only three subtypes warn
+
+Fork commit `e71c04825` deleted `emitRuntimeWarning` from the Claude adapter to stop the
+per-turn "Runtime warning" spam: every SDK message subtype the adapter does not model used to
+reach the user as a warning row, when `logNativeSdkMessage` had already captured it. The
+`default:` arm drops to `Effect.logDebug` instead, and `case "notification"` emits a dedicated
+`runtime.notification` event regardless of priority.
+
+The 30th reconcile put the helper back, deliberately and narrowly. Upstream added three subtypes
+that describe something a user genuinely needs to see, and none of them is the unmodelled-subtype
+spam the fork removed:
+
+- `model_refusal_fallback` - a safety fallback silently switched the model mid-session.
+- `model_refusal_no_fallback` - the model declined and nothing took over.
+- `informational` with `level === "warning"` - e.g. a Stop hook that refused continuation.
+
+What must stay: the `default:` arm logs at debug and never warns (it now also carries upstream's
+`message satisfies never` guard, so a new SDK subtype fails typecheck rather than slipping
+through), and notifications of every priority go to `runtime.notification`, never to a warning
+row. Upstream's `case "notification"` emitting a high-priority warning is dropped on sight - it
+would sit unreachable behind the fork's arm and re-open the spam if the arms were ever reordered.
+`ClaudeAdapter.test.ts`'s "consumes undeclared and UX-internal system subtypes without warning
+rows" pins the whole shape: exactly three warnings, two notifications.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 
@@ -744,10 +812,13 @@ own:
   PubSub subscription _unconditionally_ into a bounded queue (`T3CODE_WS_SUBSCRIBER_BUFFER`,
   default 4096). A WebSocket consumer that stops draining therefore ends its own subscription
   cleanly and resubscribes from its last-applied sequence; it can never pin the hub.
-- **`ws.ts` chains coalesce -> bound**, in that order: the thread-live coalescer feeds a
-  `Queue.dropping` of `WS_LIVE_BUFFER_CAPACITY`. Upstream's own coalescer (#8368) is
-  `Queue.unbounded` at _both_ ends, which is the precise shape that OOM-ed this server. Adopting
-  it wholesale reintroduces the crash; the two must stay chained.
+- **`ws.ts` bounds through `makeLiveStreamBudget`** (see invariant 31). Upstream's coalescer
+  (#8368) was `Queue.unbounded` at _both_ ends - the precise shape that OOM-ed this server - and
+  the fork chained it into a `Queue.dropping`. Upstream has since put every offer behind a budget
+  that caps retained items **and bytes** and fails the stream on overflow, so the fork's chain was
+  dropped at the 30th reconcile in favour of it. What must not come back is an offer path into the
+  coalescer that skips `budget.retain` / `budget.check`: the queue itself is still unbounded, and
+  the budget is the only thing standing between a stalled socket and the heap.
 - **`groupedWithin`/`aggregate`/`aggregateWithin`/`aggregateWithinEither` are banned in new
   code** by `oxlint-plugin-t3code/rules/no-unsafe-stream-aggregate.ts`; the replacement is
   `batchWithinStackSafe`. They lower to a non-stack-safe `stepToBuffer` schedule loop that pins

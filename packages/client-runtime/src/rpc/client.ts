@@ -242,15 +242,15 @@ export function subscriptionRetryDelay(base: Duration.Input, attempt: number): D
  */
 const HEALTHY_SUBSCRIPTION_MILLIS = 10_000;
 
-export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
+function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
   makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  mapStream: (
+    session: RpcSession,
+    stream: Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>,
+  ) => Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>>,
   options?: SubscriptionOptions<TTag>,
-): Stream.Stream<
-  EnvironmentRpcStreamValue<TTag>,
-  EnvironmentRpcStreamFailure<TTag>,
-  EnvironmentSupervisor
-> {
+): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>, EnvironmentSupervisor> {
   return Stream.unwrap(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
@@ -292,10 +292,7 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               >;
-              const subscribeToSession = (): Stream.Stream<
-                EnvironmentRpcStreamValue<TTag>,
-                EnvironmentRpcStreamFailure<TTag>
-              > =>
+              const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
                     Effect.gen(function* () {
@@ -309,11 +306,21 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                       // Each subscription's observation completes when that
                       // subscription ends, so a resubscribe below is observed as a
                       // fresh subscription rather than one long-running span.
-                      const liveOnce = method(input).pipe(
-                        // A value proves the subscription works, so the failure
-                        // budget starts over. Without this a subscription that
-                        // flaps once an hour would eventually exhaust its cap.
-                        Stream.tap(() => resetExpectedFailures),
+                      // A value proves the subscription works, so the failure budget
+                      // starts over. Without this a subscription that flaps once an
+                      // hour would eventually exhaust its cap.
+                      //
+                      // Recorded synchronously and flushed in `catchCause` below, NOT
+                      // with `Stream.tap`: an Effect boundary per element makes
+                      // `switchMap` drop a value the old session had already buffered
+                      // when the session changes - which is why upstream's `mapStream`
+                      // tag is a plain `Stream.map` too.
+                      let producedValue = false;
+                      const liveOnce = mapStream(session, method(input)).pipe(
+                        Stream.map((value) => {
+                          producedValue = true;
+                          return value;
+                        }),
                         Stream.ensuring(completeObservation),
                       );
                       // When enabled, a NORMAL completion of the live stream (the
@@ -392,13 +399,17 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             // re-issuing the snapshot fetch each time, because
                             // an expected failure was read as a transient one.
                             const giveUp: Stream.Stream<
-                              EnvironmentRpcStreamValue<TTag>,
+                              A,
                               EnvironmentRpcStreamFailure<TTag>
                             > = Stream.empty;
                             return handled.pipe(
                               Stream.concat(
                                 Stream.unwrap(
                                   Effect.gen(function* () {
+                                    if (producedValue) {
+                                      producedValue = false;
+                                      yield* resetExpectedFailures;
+                                    }
                                     const attempt = yield* Ref.getAndUpdate(
                                       expectedFailures,
                                       (count) => count + 1,
@@ -445,6 +456,36 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
     Stream.withSpan("EnvironmentRpc.subscribe", {
       attributes: { "rpc.method": tag },
     }),
+  );
+}
+
+export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  options?: SubscriptionOptions<TTag>,
+): Stream.Stream<
+  EnvironmentRpcStreamValue<TTag>,
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor
+> {
+  return subscribeDynamicMapped(tag, makeInput, (_session, stream) => stream, options);
+}
+
+/** Tags each value before `switchMap` can buffer it across a session change. */
+export function subscribeDynamicWithSession<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  options?: SubscriptionOptions<TTag>,
+): Stream.Stream<
+  readonly [session: RpcSession, value: EnvironmentRpcStreamValue<TTag>],
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor
+> {
+  return subscribeDynamicMapped(
+    tag,
+    makeInput,
+    (session, stream) => stream.pipe(Stream.map((value) => [session, value] as const)),
+    options,
   );
 }
 

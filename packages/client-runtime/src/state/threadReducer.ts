@@ -12,6 +12,8 @@ import type {
   OrchestrationThreadActivity,
   TurnId,
 } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -546,7 +548,10 @@ export function applyThreadDetailEvent(
         (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
           ? {
               turnId: event.payload.turnId,
-              state: checkpointStatusToTurnState(event.payload.status),
+              state:
+                thread.latestTurn?.state === "interrupted"
+                  ? "interrupted"
+                  : checkpointStatusToTurnState(event.payload.status),
               requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
               startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
               completedAt: event.payload.completedAt,
@@ -575,11 +580,12 @@ export function applyThreadDetailEvent(
       const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
       // The newest kept checkpoint by time, not by position. The server derives the same bound
       // with a max scan, and it dedupes conflicting `checkpointTurnCount` rows on write while the
-      // client has no counterpart — so a duplicate count here would make position and time
+      // client has no counterpart - so a duplicate count here would make position and time
       // disagree, and the client would delete messages the server keeps.
       const messages = retainMessagesAfterRevert(
         thread.messages,
         retainedTurnIds,
+        event.payload.turnCount,
         checkpoints.reduce<string | null>(
           (latest, entry) =>
             latest === null || entry.completedAt > latest ? entry.completedAt : latest,
@@ -778,21 +784,51 @@ function rebindCheckpointAssistantMessage(
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
+  turnCount: number,
   keptCheckpointCompletedAt: string | null,
 ): OrchestrationMessage[] {
-  // A user message is persisted before its turn exists and the link is never backfilled, so
-  // `turnId` is null for all of them and a turn match cannot decide their fate. The revert point
-  // decides it instead: a turnless message survives only if it predates the newest checkpoint the
-  // revert kept. A message sharing the checkpoint's timestamp is dropped: a checkpoint is captured
-  // lazily, when the next turn starts, so the next turn's message and this checkpoint often share
-  // a timestamp.
-  return Arr.filter(messages, (message) => {
-    if (message.role === "system") {
-      return true;
+  const retainedMessageIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
+      retainedMessageIds.add(message.id);
+    } else if (message.turnId !== null && retainedTurnIds.has(message.turnId)) {
+      retainedMessageIds.add(message.id);
     }
-    if (message.turnId === null) {
-      return keptCheckpointCompletedAt !== null && message.createdAt < keptCheckpointCompletedAt;
+  }
+
+  for (const role of ["user", "assistant"] as const) {
+    const retainedCount = messages.filter(
+      (message) =>
+        message.role === role &&
+        !isImportedAgentSessionMessageId(message.id) &&
+        retainedMessageIds.has(message.id),
+    ).length;
+    const missingCount = Math.max(0, turnCount - retainedCount);
+    const fallbackMessages = messages
+      .filter(
+        (message) =>
+          message.role === role &&
+          !retainedMessageIds.has(message.id) &&
+          // A user message is persisted before its turn exists and the link is never backfilled,
+          // so `turnId` is null for all of them and the turn match above can never claim one. The
+          // revert point decides instead: a turnless message is only a candidate if it predates
+          // the newest checkpoint the revert kept. Equality is excluded because a checkpoint is
+          // captured lazily, when the next turn starts, so the next turn's message and this
+          // checkpoint often share a timestamp. Without this the count below is a phantom deficit
+          // that re-admits the very message the revert discarded.
+          (keptCheckpointCompletedAt === null || message.createdAt < keptCheckpointCompletedAt) &&
+          (message.turnId === null || retainedTurnIds.has(message.turnId)),
+      )
+      .toSorted(
+        (left, right) =>
+          compareDateTimeStrings(left.createdAt, right.createdAt) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, missingCount);
+    for (const message of fallbackMessages) {
+      retainedMessageIds.add(message.id);
     }
-    return retainedTurnIds.has(message.turnId);
-  });
+  }
+
+  return Arr.filter(messages, (message) => retainedMessageIds.has(message.id));
 }

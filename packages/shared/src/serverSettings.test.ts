@@ -12,9 +12,7 @@ import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySet
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
-  extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
-  normalizePersistedServerSettingString,
   parsePersistedServerObservabilitySettings,
   parsePersistedServerStartupSettings,
   resolveSourceControlWriterModelSelection,
@@ -42,35 +40,28 @@ describe("serverSettings helpers", () => {
     expect(parsePersistedServerStartupSettings("").disableAuthentication).toBe(false);
   });
 
-  it("normalizes optional persisted strings", () => {
-    expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
-    expect(normalizePersistedServerSettingString("   ")).toBeUndefined();
-    expect(normalizePersistedServerSettingString("  http://localhost:4318/v1/traces  ")).toBe(
-      "http://localhost:4318/v1/traces",
-    );
-  });
-
-  it("extracts persisted observability settings", () => {
+  it("ignores missing and blank persisted observability URLs", () => {
+    expect(parsePersistedServerObservabilitySettings("{}")).toEqual({
+      otlpTracesUrl: undefined,
+      otlpMetricsUrl: undefined,
+    });
     expect(
-      extractPersistedServerObservabilitySettings({
-        observability: {
-          otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
-          otlpMetricsUrl: "  http://localhost:4318/v1/metrics  ",
-        },
-      }),
+      parsePersistedServerObservabilitySettings(
+        JSON.stringify({ observability: { otlpTracesUrl: "   ", otlpMetricsUrl: "" } }),
+      ),
     ).toEqual({
-      otlpTracesUrl: "http://localhost:4318/v1/traces",
-      otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+      otlpTracesUrl: undefined,
+      otlpMetricsUrl: undefined,
     });
   });
 
-  it("parses lenient persisted settings JSON", () => {
+  it("parses lenient persisted settings JSON and trims observability URLs", () => {
     expect(
       parsePersistedServerObservabilitySettings(
         JSON.stringify({
           observability: {
-            otlpTracesUrl: "http://localhost:4318/v1/traces",
-            otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+            otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
+            otlpMetricsUrl: "  http://localhost:4318/v1/metrics  ",
           },
         }),
       ),
@@ -343,6 +334,28 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
+  });
+
+  it("replaces and removes individual usage prices without clobbering other models", () => {
+    const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      usagePriceOverrides: { "example-model": { ...prices, cacheReadCostPerMillionTokens: 0.5 } },
+    });
+    const added = applyServerSettingsPatch(current, {
+      usagePriceOverrides: { "other-model": prices },
+    });
+    const replaced = applyServerSettingsPatch(added, {
+      usagePriceOverrides: { "example-model": prices },
+    });
+    expect(replaced.usagePriceOverrides).toEqual({
+      "example-model": prices,
+      "other-model": prices,
+    });
+    const removed = applyServerSettingsPatch(replaced, {
+      usagePriceOverrides: { "example-model": null },
+    });
+    expect(removed.usagePriceOverrides).toEqual({ "other-model": prices });
+    expect(current.usagePriceOverrides["example-model"]?.cacheReadCostPerMillionTokens).toBe(0.5);
   });
 
   it("stores background activity profiles as a versioned object and syncs legacy aliases", () => {

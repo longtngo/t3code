@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { EMPTY_TERMINAL_OUTPUT_STATE } from "@t3tools/client-runtime/state/terminal";
 import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 
 import {
@@ -17,7 +18,7 @@ function terminal(
     target: { environmentId: "env-1" as never, threadId: "thread-1" as never, terminalId },
     state: {
       summary: null,
-      buffer: "",
+      output: EMPTY_TERMINAL_OUTPUT_STATE,
       error: null,
       hasRunningSubprocess: false,
       updatedAt: null,

@@ -4,6 +4,7 @@ import {
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -359,55 +360,59 @@ const probeClaudeCapabilities = (
         }),
       });
       const init = await q.initializationResult();
-      // Usage is a second control round trip on the same process; a failure
-      // there must not cost the slash commands and account we already have.
-      const usage = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET().then(
-        (response) => ({
-          rate_limits_available: response.rate_limits_available,
-          rate_limits: response.rate_limits,
-        }),
-        () => undefined,
-      );
-      const account = init.account as
-        | {
-            readonly email?: string;
-            readonly subscriptionType?: string;
-            readonly tokenSource?: string;
-            readonly apiProvider?: string;
-          }
-        | undefined;
-      return {
-        email: account?.email,
-        subscriptionType: account?.subscriptionType,
-        tokenSource: account?.tokenSource,
-        apiProvider: account?.apiProvider,
-        slashCommands: parseClaudeInitializationCommands(init.commands),
-        ...(usage ? { usage } : {}),
-      } satisfies ClaudeCapabilitiesProbe;
+      return { q, init };
     });
   }).pipe(
+    Effect.timeout(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.flatMap(({ q, init }) =>
+      Effect.gen(function* () {
+        // Usage has its own deadline so a slow optional request cannot discard initialization.
+        const usageResult = yield* Effect.tryPromise(() =>
+          q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+        ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result);
+        const usage = Result.isSuccess(usageResult)
+          ? {
+              rate_limits_available: usageResult.success.rate_limits_available,
+              rate_limits: usageResult.success.rate_limits,
+            }
+          : undefined;
+        const account = init.account as
+          | {
+              readonly email?: string;
+              readonly subscriptionType?: string;
+              readonly tokenSource?: string;
+              readonly apiProvider?: string;
+            }
+          | undefined;
+        return {
+          email: account?.email,
+          subscriptionType: account?.subscriptionType,
+          tokenSource: account?.tokenSource,
+          apiProvider: account?.apiProvider,
+          slashCommands: parseClaudeInitializationCommands(init.commands),
+          ...(usage ? { usage } : {}),
+        } satisfies ClaudeCapabilitiesProbe;
+      }),
+    ),
     Effect.ensuring(
       Effect.sync(() => {
         if (!abort.signal.aborted) abort.abort();
       }),
     ),
-    Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
     Effect.result,
     Effect.flatMap((result) => {
       // Don't fail the status check over a capabilities miss, but leave a
       // trace — a silent `undefined` here surfaces as an unexplained
       // "Could not verify Claude authentication status" warning in the UI.
       if (Result.isFailure(result)) {
-        return Effect.logWarning("claude capabilities probe failed", {
-          error: result.failure,
-        }).pipe(Effect.as(undefined));
+        return Effect.logWarning(
+          Cause.isTimeoutError(result.failure)
+            ? "claude capabilities probe timed out"
+            : "claude capabilities probe failed",
+          { error: result.failure, timeoutMs: CAPABILITIES_PROBE_TIMEOUT_MS },
+        ).pipe(Effect.as(undefined));
       }
-      if (Option.isNone(result.success)) {
-        return Effect.logWarning("claude capabilities probe timed out", {
-          timeoutMs: CAPABILITIES_PROBE_TIMEOUT_MS,
-        }).pipe(Effect.as(undefined));
-      }
-      return Effect.succeed(result.success.value);
+      return Effect.succeed(result.success);
     }),
   );
 };

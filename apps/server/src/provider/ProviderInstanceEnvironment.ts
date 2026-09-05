@@ -1,5 +1,7 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 
+import { expandHomePath } from "../pathExpansion.ts";
+
 /**
  * Builds the environment a provider instance's child processes run under.
  *
@@ -26,7 +28,11 @@ export function mergeProviderInstanceEnvironment(
   }
 
   for (const variable of environment ?? []) {
-    next[variable.name] = variable.value;
+    // Child processes do not apply shell expansion to environment values.
+    next[variable.name] =
+      variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"
+        ? expandHomePath(variable.value)
+        : variable.value;
   }
   return next;
 }

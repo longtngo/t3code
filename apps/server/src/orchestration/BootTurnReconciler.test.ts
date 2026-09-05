@@ -170,6 +170,7 @@ describe("reconcileInterruptedTurnsOnBoot binding resilience", () => {
     getProvider: () => Effect.die("unused"),
     listThreadIds: () => Effect.die("unused"),
     listBindings: () => Effect.die("unused"),
+    recordImportedTranscript: () => Effect.die("unused"),
   });
 
   const run = (directory: ProviderSessionDirectoryShape) => {
@@ -381,6 +382,7 @@ describe("reconcileInterruptedTurnsOnBoot archived coverage", () => {
         getProvider: () => Effect.die("unused"),
         listThreadIds: () => Effect.die("unused"),
         listBindings: () => Effect.die("unused"),
+        recordImportedTranscript: () => Effect.die("unused"),
       } as ProviderSessionDirectoryShape),
       Effect.map(() => dispatched),
       Effect.runPromise,

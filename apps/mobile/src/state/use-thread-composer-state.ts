@@ -146,38 +146,6 @@ export function useThreadComposerState() {
         : waitingUserMessageIdsOf(selectedThreadShell, selectedThreadDetail?.messages ?? []),
     [selectedThreadDetail, selectedThreadShell],
   );
-  const selectedThreadFeed = useMemo(() => {
-    if (!selectedThreadDetail) {
-      return [];
-    }
-    const submissions = selectedThreadKey
-      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
-      : [];
-    // Held messages are drawn in the strip above the composer instead, so the
-    // feed never shows a message the thread has not sent yet. The detail object
-    // itself is left intact - only what is rendered changes.
-    const detail =
-      waitingUserMessageIds.size === 0
-        ? selectedThreadDetail
-        : {
-            ...selectedThreadDetail,
-            messages: selectedThreadDetail.messages.filter(
-              (message) => !(message.role === "user" && waitingUserMessageIds.has(message.id)),
-            ),
-          };
-    return buildThreadFeed(detail, {
-      localMessages: submissions.flatMap((submission) =>
-        submission.status === "interrupted"
-          ? []
-          : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
-      ),
-    });
-  }, [
-    feedbackSubmissionsByThreadKey,
-    selectedThreadDetail,
-    selectedThreadKey,
-    waitingUserMessageIds,
-  ]);
 
   /**
    * The held messages, shaped for the strip. An attachment count rather than the
@@ -195,6 +163,44 @@ export function useThreadComposerState() {
       }));
     return held.length === 0 ? EMPTY_HELD_MESSAGES : held;
   }, [selectedThreadDetail, waitingUserMessageIds]);
+  const localFeedbackMessages = useMemo(() => {
+    const submissions = selectedThreadKey
+      ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
+      : [];
+    return submissions.flatMap((submission) =>
+      submission.status === "interrupted"
+        ? []
+        : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
+    );
+  }, [feedbackSubmissionsByThreadKey, selectedThreadKey]);
+  const selectedThreadMessages = selectedThreadDetail?.messages;
+  const selectedThreadActivities = selectedThreadDetail?.activities;
+  const selectedThreadFeed = useMemo(
+    () =>
+      selectedThreadMessages && selectedThreadActivities
+        ? buildThreadFeed(
+            {
+              // Held messages are drawn in the strip above the composer instead,
+              // so the feed never shows a message the thread has not sent yet.
+              messages:
+                waitingUserMessageIds.size === 0
+                  ? selectedThreadMessages
+                  : selectedThreadMessages.filter(
+                      (message) =>
+                        !(message.role === "user" && waitingUserMessageIds.has(message.id)),
+                    ),
+              activities: selectedThreadActivities,
+            },
+            { localMessages: localFeedbackMessages },
+          )
+        : [],
+    [
+      localFeedbackMessages,
+      selectedThreadActivities,
+      selectedThreadMessages,
+      waitingUserMessageIds,
+    ],
+  );
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -323,7 +329,7 @@ export function useThreadComposerState() {
     ) {
       Alert.alert(
         "Antigravity model unavailable",
-        "Open model settings to finish setup or choose another model.",
+        "Set up Antigravity on web or desktop, or choose another model.",
       );
       return null;
     }
