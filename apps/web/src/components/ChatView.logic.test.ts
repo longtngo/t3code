@@ -1087,6 +1087,115 @@ describe("buildRevertTurnCountByUserMessageId", () => {
     ).toEqual(new Map([[userMessageId, 0]]));
   });
 
+  it("offers no target when the clicked message's own turn was never checkpointed", () => {
+    // The clicked message is answered by `turn-a`, which produced an assistant message but no
+    // checkpoint. `turn-b` continues without a new user message and does have one. Scanning on
+    // into `turn-b` would offer `checkpointTurnCount - 1`, a checkpoint that still contains the
+    // clicked message - so the revert would visibly do nothing.
+    const ownTurn = TurnId.make("turn-a");
+    const laterTurn = TurnId.make("turn-b");
+    const clicked = MessageId.make("orphan-user");
+    const ownAssistant = MessageId.make("orphan-assistant-a");
+    const laterAssistant = MessageId.make("orphan-assistant-b");
+    const message = (id: MessageId, role: "user" | "assistant", turn: TurnId | null) => ({
+      id,
+      kind: "message" as const,
+      createdAt: now,
+      message: {
+        id,
+        role,
+        text: id,
+        turnId: turn,
+        createdAt: now,
+        updatedAt: now,
+        streaming: false,
+      },
+    });
+
+    const entries = [
+      message(clicked, "user", null),
+      message(ownAssistant, "assistant", ownTurn),
+      message(laterAssistant, "assistant", laterTurn),
+    ] satisfies ReadonlyArray<TimelineEntry>;
+
+    const summaries = new Map<MessageId, TurnDiffSummary>([
+      [
+        laterAssistant,
+        {
+          turnId: laterTurn,
+          checkpointTurnCount: 4,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-b"),
+          status: "ready",
+          files: [],
+          assistantMessageId: laterAssistant,
+          completedAt: now,
+        },
+      ],
+    ]);
+
+    expect(
+      buildRevertTurnCountByUserMessageId({
+        supportsConversationRollback: true,
+        timelineEntries: entries,
+        turnDiffSummaryByAssistantMessageId: summaries,
+        inferredCheckpointTurnCountByTurnId: {},
+      }).size,
+    ).toBe(0);
+  });
+
+  it("still uses a later assistant message from the same turn", () => {
+    // The scan must keep going past an assistant message with no summary when the next one
+    // belongs to the same turn - only a turn boundary should stop it.
+    const turn = TurnId.make("turn-same");
+    const clicked = MessageId.make("same-user");
+    const firstAssistant = MessageId.make("same-assistant-1");
+    const secondAssistant = MessageId.make("same-assistant-2");
+    const message = (id: MessageId, role: "user" | "assistant", turnValue: TurnId | null) => ({
+      id,
+      kind: "message" as const,
+      createdAt: now,
+      message: {
+        id,
+        role,
+        text: id,
+        turnId: turnValue,
+        createdAt: now,
+        updatedAt: now,
+        streaming: false,
+      },
+    });
+
+    const entries = [
+      message(clicked, "user", null),
+      message(firstAssistant, "assistant", turn),
+      message(secondAssistant, "assistant", turn),
+    ] satisfies ReadonlyArray<TimelineEntry>;
+
+    const summaries = new Map<MessageId, TurnDiffSummary>([
+      [
+        secondAssistant,
+        {
+          turnId: turn,
+          checkpointTurnCount: 3,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-same"),
+          status: "ready",
+          files: [],
+          assistantMessageId: secondAssistant,
+          completedAt: now,
+        },
+      ],
+    ]);
+
+    expect(
+      buildRevertTurnCountByUserMessageId({
+        supportsConversationRollback: true,
+        timelineEntries: entries,
+        turnDiffSummaryByAssistantMessageId: summaries,
+        inferredCheckpointTurnCountByTurnId: {},
+      }),
+    ).toEqual(new Map([[clicked, 2]]));
+  });
+
   it("offers no rewind action when file checkpoints exist but conversation rollback is unsupported", () => {
     expect(
       buildRevertTurnCountByUserMessageId({

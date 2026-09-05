@@ -488,12 +488,25 @@ export function buildRevertTurnCountByUserMessageId(
       continue;
     }
 
+    // The turn that answered this message. Established by the first assistant message after it,
+    // because a user message carries no `turnId` of its own.
+    let ownTurnId: TurnId | null | undefined;
     for (let nextIndex = index + 1; nextIndex < input.timelineEntries.length; nextIndex += 1) {
       const nextEntry = input.timelineEntries[nextIndex];
       if (!nextEntry || nextEntry.kind !== "message") {
         continue;
       }
       if (nextEntry.message.role === "user") {
+        break;
+      }
+      if (ownTurnId === undefined) {
+        ownTurnId = nextEntry.message.turnId ?? null;
+      }
+      // Only this message's own turn gives a valid target. When its turn was never
+      // checkpointed the scan would otherwise run on into the next turn and offer
+      // `thatTurnCount - 1`, a checkpoint that still contains the clicked message - so the
+      // revert visibly does nothing. Offering no target is the honest answer.
+      if ((nextEntry.message.turnId ?? null) !== ownTurnId) {
         break;
       }
       const summary = input.turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
