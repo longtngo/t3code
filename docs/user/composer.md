@@ -190,6 +190,16 @@ uploaded. Stashed files stay uploaded on the server for 24 hours. If you restore
 that, the file comes back with **Attach again** next to it. Attach the file again or remove it, then
 send.
 
+## Taking a message back
+
+Each message you sent has an undo button beside its timestamp. It rolls the thread and the working
+tree back to the state just before you sent that message, discarding everything the agent did in
+response. Confirm first: the change cannot be undone.
+
+Your original text comes back in the composer once the revert lands, so you can reword it and send
+again. Anything already typed is kept, and the recalled text is added below it. Attachments are not
+restored; if the message had files, attach them again before sending.
+
 ## Voice input on iPhone
 
 On supported iPhones with iOS 26 or later, tap the microphone in the composer to record a message.

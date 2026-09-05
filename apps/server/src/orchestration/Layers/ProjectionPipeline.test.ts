@@ -3606,6 +3606,339 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       ]);
     }),
   );
+
+  it.effect("does not re-admit the user message of a discarded turn", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-refallback-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-refallback"),
+        occurredAt: "2026-02-26T12:10:00.000Z",
+        commandId: CommandId.make("cmd-refallback-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-refallback"),
+          title: "Project Revert Fallback",
+          workspaceRoot: "/tmp/project-refallback",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-26T12:10:00.000Z",
+          updatedAt: "2026-02-26T12:10:00.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-refallback-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:00.100Z",
+        commandId: CommandId.make("cmd-refallback-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          projectId: ProjectId.make("project-refallback"),
+          title: "Thread Revert Fallback",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-26T12:10:00.100Z",
+          updatedAt: "2026-02-26T12:10:00.100Z",
+        },
+      });
+
+      // Turn 1: a real user message, linked to its turn as the pending start.
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-refallback-3"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:01.000Z",
+        commandId: CommandId.make("cmd-refallback-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-3"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("user-keep"),
+          role: "user",
+          text: "kept",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-02-26T12:10:01.000Z",
+          updatedAt: "2026-02-26T12:10:01.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-refallback-4"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:01.100Z",
+        commandId: CommandId.make("cmd-refallback-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-4"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("user-keep"),
+          runtimeMode: "full-access",
+          createdAt: "2026-02-26T12:10:01.100Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-refallback-5"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:01.200Z",
+        commandId: CommandId.make("cmd-refallback-5"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-5"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          session: {
+            threadId: ThreadId.make("thread-refallback"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: TurnId.make("turn-1"),
+            lastError: null,
+            updatedAt: "2026-02-26T12:10:01.200Z",
+          },
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-refallback-6"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:02.000Z",
+        commandId: CommandId.make("cmd-refallback-6"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-6"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("assistant-keep-1"),
+          role: "assistant",
+          text: "kept 1",
+          turnId: TurnId.make("turn-1"),
+          streaming: false,
+          createdAt: "2026-02-26T12:10:02.000Z",
+          updatedAt: "2026-02-26T12:10:02.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-refallback-7"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:03.000Z",
+        commandId: CommandId.make("cmd-refallback-7"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-7"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-refallback/turn/1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("assistant-keep-1"),
+          completedAt: "2026-02-26T12:10:03.000Z",
+        },
+      });
+
+      // Turn 2 was auto-started, so it has no pending user message. Its kept
+      // checkpoint is what leaves `missingUserCount` at 1 after the revert.
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-refallback-8"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:04.000Z",
+        commandId: CommandId.make("cmd-refallback-8"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-8"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("assistant-keep-2"),
+          role: "assistant",
+          text: "kept 2",
+          turnId: TurnId.make("turn-2"),
+          streaming: false,
+          createdAt: "2026-02-26T12:10:04.000Z",
+          updatedAt: "2026-02-26T12:10:04.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-refallback-9"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:05.000Z",
+        commandId: CommandId.make("cmd-refallback-9"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-9"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          turnId: TurnId.make("turn-2"),
+          checkpointTurnCount: 2,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-refallback/turn/2"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("assistant-keep-2"),
+          completedAt: "2026-02-26T12:10:05.000Z",
+        },
+      });
+
+      // Turn 3 is the one being reverted away. Its user message is turnless,
+      // like every user message, so only the revert point can discard it.
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-refallback-10"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:06.000Z",
+        commandId: CommandId.make("cmd-refallback-10"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-10"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("user-remove"),
+          role: "user",
+          text: "removed",
+          turnId: null,
+          streaming: false,
+          // Deliberately the same instant as turn 2's checkpoint. A checkpoint is captured
+          // lazily, when the next turn starts, so the next turn's message and the previous
+          // checkpoint routinely share a timestamp - the bound has to exclude the tie, not just
+          // what comes after it.
+          createdAt: "2026-02-26T12:10:05.000Z",
+          updatedAt: "2026-02-26T12:10:05.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-refallback-11"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:07.000Z",
+        commandId: CommandId.make("cmd-refallback-11"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-11"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          messageId: MessageId.make("assistant-remove"),
+          role: "assistant",
+          text: "removed",
+          turnId: TurnId.make("turn-3"),
+          streaming: false,
+          createdAt: "2026-02-26T12:10:07.000Z",
+          updatedAt: "2026-02-26T12:10:07.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-refallback-12"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:08.000Z",
+        commandId: CommandId.make("cmd-refallback-12"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-12"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          turnId: TurnId.make("turn-3"),
+          checkpointTurnCount: 3,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-refallback/turn/3"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("assistant-remove"),
+          completedAt: "2026-02-26T12:10:08.000Z",
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.reverted",
+        eventId: EventId.make("evt-refallback-13"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-refallback"),
+        occurredAt: "2026-02-26T12:10:09.000Z",
+        commandId: CommandId.make("cmd-refallback-13"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-refallback-13"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-refallback"),
+          turnCount: 2,
+        },
+      });
+
+      const messageRows = yield* sql<{
+        readonly messageId: string;
+        readonly turnId: string | null;
+        readonly role: string;
+      }>`
+        SELECT
+          message_id AS "messageId",
+          turn_id AS "turnId",
+          role
+        FROM projection_thread_messages
+        WHERE thread_id = 'thread-refallback'
+        ORDER BY created_at ASC, message_id ASC
+      `;
+      assert.deepEqual(messageRows, [
+        {
+          messageId: "user-keep",
+          turnId: null,
+          role: "user",
+        },
+        {
+          messageId: "assistant-keep-1",
+          turnId: "turn-1",
+          role: "assistant",
+        },
+        {
+          messageId: "assistant-keep-2",
+          turnId: "turn-2",
+          role: "assistant",
+        },
+      ]);
+    }),
+  );
 });
 
 it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-"))(

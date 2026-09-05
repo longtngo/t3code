@@ -486,6 +486,61 @@ export function buildRevertTurnCountByUserMessageId(input: {
   return byUserMessageId;
 }
 
+export type PendingRevertRestore = {
+  readonly messageId: MessageId;
+  readonly text: string;
+  readonly attachmentCount: number;
+  readonly threadKey: string;
+  readonly targetTurnCount: number;
+  readonly requestedAt: string;
+};
+
+/**
+ * Decides what to do with a revert whose text is waiting to go back in the composer.
+ *
+ * The message leaving the thread is the signal that the revert landed, but absence alone is not
+ * enough: a re-window, a reconnect, a cold subscribe or a withdraw can all empty the message list
+ * without a revert. The checkpoint check is what separates them - only a landed revert removes the
+ * checkpoints newer than the target.
+ */
+export function resolvePendingRevertRestore(input: {
+  readonly pending: PendingRevertRestore | null;
+  readonly activeThreadKey: string | null;
+  readonly hasMessage: boolean;
+  readonly maxCheckpointTurnCount: number | null;
+  /**
+   * True while the thread detail is loading. The placeholder thread the client renders in that
+   * window spreads the shell, so it keeps the thread's key while reporting no messages and no
+   * checkpoints - which is indistinguishable from a completed revert unless it is named here.
+   */
+  readonly isThreadLoading: boolean;
+  /**
+   * Set when this revert's target has a recorded failure newer than the request. A revert can be
+   * accepted and then fail silently long after the RPC returned, so an armed entry would otherwise
+   * wait forever.
+   */
+  readonly hasRevertFailure: boolean;
+}): "idle" | "wait" | "restore" | "discard" {
+  const { pending } = input;
+  if (pending === null) return "idle";
+  // No active thread is a transient teardown frame, not a switch away; discarding here would
+  // silently lose a restore that was about to land.
+  if (input.activeThreadKey === null || input.isThreadLoading) return "wait";
+  if (input.activeThreadKey !== pending.threadKey) return "discard";
+  if (input.hasRevertFailure) return "discard";
+  if (input.hasMessage) return "wait";
+  if (
+    input.maxCheckpointTurnCount !== null &&
+    input.maxCheckpointTurnCount > pending.targetTurnCount
+  ) {
+    return "wait";
+  }
+  // Only reverting to turn 0 legitimately leaves a thread with no checkpoints at all. Anything
+  // else with none has not loaded them yet.
+  if (input.maxCheckpointTurnCount === null && pending.targetTurnCount > 0) return "wait";
+  return "restore";
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

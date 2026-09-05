@@ -229,6 +229,10 @@ function retainProjectionMessagesAfterRevert(
       turn.checkpointTurnCount !== null &&
       turn.checkpointTurnCount <= turnCount,
   );
+  // The revert point. A turnless message survives only if it predates the newest checkpoint the
+  // revert kept; the comparison excludes equality because a checkpoint is captured lazily, when the
+  // next turn starts, so the next turn's message and this checkpoint often share a timestamp.
+  let keptCheckpointCompletedAt: string | null = null;
   for (const turn of keptTurns) {
     if (turn.turnId !== null) {
       retainedTurnIds.add(turn.turnId);
@@ -238,6 +242,12 @@ function retainProjectionMessagesAfterRevert(
     }
     if (turn.assistantMessageId !== null) {
       retainedMessageIds.add(turn.assistantMessageId);
+    }
+    if (
+      turn.completedAt !== null &&
+      (keptCheckpointCompletedAt === null || turn.completedAt > keptCheckpointCompletedAt)
+    ) {
+      keptCheckpointCompletedAt = turn.completedAt;
     }
   }
 
@@ -261,6 +271,7 @@ function retainProjectionMessagesAfterRevert(
         (message) =>
           message.role === "user" &&
           !retainedMessageIds.has(message.messageId) &&
+          (keptCheckpointCompletedAt === null || message.createdAt < keptCheckpointCompletedAt) &&
           (message.turnId === null || retainedTurnIds.has(message.turnId)),
       )
       .toSorted(

@@ -209,7 +209,8 @@ interface TimelineRowSharedState {
    * this the bubble is indistinguishable from one being worked on.
    */
   waitingUserMessageIds: ReadonlySet<string>;
-  onRevertUserMessage: (messageId: MessageId) => void;
+  /** `promptText` is the text as rendered, so the composer gets back what the user sees. */
+  onRevertUserMessage: (messageId: MessageId, promptText: string, attachmentCount: number) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
@@ -319,7 +320,8 @@ interface MessagesTimelineProps {
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   /** Display-only, defaulted like the other optional presentation props. */
   waitingUserMessageIds?: ReadonlySet<string>;
-  onRevertUserMessage: (messageId: MessageId) => void;
+  /** `promptText` is the text as rendered, so the composer gets back what the user sees. */
+  onRevertUserMessage: (messageId: MessageId, promptText: string, attachmentCount: number) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -1434,7 +1436,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
-            {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
+            {canRevertAgentWork && (
+              <RevertUserMessageButton
+                messageId={row.message.id}
+                promptText={elementContextState.promptText}
+                attachmentCount={row.message.attachments?.length ?? 0}
+              />
+            )}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
             )}
@@ -1445,7 +1453,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
 }
 
-function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
+function RevertUserMessageButton({
+  messageId,
+  promptText,
+  attachmentCount,
+}: {
+  messageId: MessageId;
+  promptText: string;
+  attachmentCount: number;
+}) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
 
@@ -1458,7 +1474,7 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
             size="xs"
             variant="ghost"
             disabled={activity.isRevertingCheckpoint || activity.isWorking}
-            onClick={() => ctx.onRevertUserMessage(messageId)}
+            onClick={() => ctx.onRevertUserMessage(messageId, promptText, attachmentCount)}
             aria-label="Revert to this message"
           />
         }

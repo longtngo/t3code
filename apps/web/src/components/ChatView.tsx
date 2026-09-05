@@ -421,6 +421,8 @@ import {
   readFileAsDataUrl,
   resolveFileAttachmentUrl,
   reconcileMountedTerminalThreadIds,
+  type PendingRevertRestore,
+  resolvePendingRevertRestore,
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -449,6 +451,7 @@ import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
+import { appendRecalledPrompt } from "@t3tools/client-runtime/state/held-messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { fileAttachmentCapabilityBlockReason } from "./chat/composerAttachmentFiles";
 import { assetEnvironment } from "../state/assets";
@@ -1674,6 +1677,9 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  // Armed by the revert control, read by the effect that puts the text back once the
+  // message has left the thread. A ref, not state: nothing renders from it.
+  const pendingRevertRestoreRef = useRef<PendingRevertRestore | null>(null);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -3154,6 +3160,77 @@ function ChatViewContent(props: ChatViewProps) {
     optimisticUserMessages,
     deliveredOutboxTurns,
     queuedOutboxTurns,
+  ]);
+  // The reverted message's text goes back to the composer only once the message has actually
+  // left the thread. A revert is often accepted and then fails silently, so restoring on
+  // acceptance would leave the text in the composer with the message still above it.
+  useEffect(() => {
+    const pending = pendingRevertRestoreRef.current;
+    if (pending === null) return;
+    const decision = resolvePendingRevertRestore({
+      pending,
+      activeThreadKey,
+      hasMessage: timelineMessages.some((message) => message.id === pending.messageId),
+      maxCheckpointTurnCount:
+        activeThread?.checkpoints.reduce<number | null>(
+          (max, checkpoint) =>
+            max === null || checkpoint.checkpointTurnCount > max
+              ? checkpoint.checkpointTurnCount
+              : max,
+          null,
+        ) ?? null,
+      isThreadLoading: threadDetailLoading,
+      // Matched on the target turn count, not just on time: a stalled revert's failure lands long
+      // after the RPC returned, so a later revert's restore would otherwise be discarded by an
+      // earlier revert's failure. `payload` is unknown-typed on the wire, so read it defensively.
+      hasRevertFailure: threadActivities.some((activity) => {
+        if (activity.kind !== "checkpoint.revert.failed") return false;
+        if (activity.createdAt < pending.requestedAt) return false;
+        const payload: unknown = activity.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          "turnCount" in payload &&
+          (payload as { turnCount?: unknown }).turnCount === pending.targetTurnCount
+        );
+      }),
+    });
+    if (decision === "wait" || decision === "idle") return;
+    pendingRevertRestoreRef.current = null;
+    if (decision === "discard") return;
+
+    const nextPrompt = appendRecalledPrompt(promptRef.current, pending.text);
+    if (nextPrompt !== promptRef.current) {
+      promptRef.current = nextPrompt;
+      setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+        prompt: nextPrompt,
+        detectTrigger: true,
+      });
+    }
+    if (pending.attachmentCount > 0) {
+      toastManager.add({
+        type: "warning",
+        title: `Attachment${pending.attachmentCount === 1 ? "" : "s"} not restored`,
+        description: `The text came back, but ${
+          pending.attachmentCount === 1
+            ? "the file"
+            : `all ${String(pending.attachmentCount)} files`
+        } will need attaching again.`,
+        data: { hideCopyButton: true },
+      });
+    }
+  }, [
+    activeThread?.checkpoints,
+    activeThreadKey,
+    composerDraftTarget,
+    composerRef,
+    promptRef,
+    setComposerDraftPrompt,
+    threadActivities,
+    threadDetailLoading,
+    timelineMessages,
   ]);
   /**
    * The message the provider is holding behind the running turn. Derived from
@@ -8106,13 +8183,30 @@ function ChatViewContent(props: ChatViewProps) {
   revertTurnCountRef.current = revertTurnCountByUserMessageId;
   const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
   onRevertToTurnCountRef.current = onRevertToTurnCount;
-  const onRevertUserMessage = useCallback((messageId: MessageId) => {
-    const targetTurnCount = revertTurnCountRef.current.get(messageId);
-    if (typeof targetTurnCount !== "number") {
-      return;
-    }
-    void onRevertToTurnCountRef.current(targetTurnCount);
-  }, []);
+  const activeThreadKeyRef = useRef(activeThreadKey);
+  activeThreadKeyRef.current = activeThreadKey;
+  const onRevertUserMessage = useCallback(
+    (messageId: MessageId, promptText: string, attachmentCount: number) => {
+      const targetTurnCount = revertTurnCountRef.current.get(messageId);
+      if (typeof targetTurnCount !== "number") {
+        return;
+      }
+      const threadKey = activeThreadKeyRef.current;
+      pendingRevertRestoreRef.current =
+        threadKey === null
+          ? null
+          : {
+              messageId,
+              text: promptText,
+              attachmentCount,
+              threadKey,
+              targetTurnCount,
+              requestedAt: new Date().toISOString(),
+            };
+      void onRevertToTurnCountRef.current(targetTurnCount);
+    },
+    [],
+  );
 
   // Empty state: no active thread
   if (!activeThread) {

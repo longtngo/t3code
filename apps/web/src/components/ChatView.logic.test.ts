@@ -42,6 +42,7 @@ import {
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   resolveDraftPromotionNavigationTarget,
+  resolvePendingRevertRestore,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
@@ -1934,6 +1935,94 @@ describe("nextStopAction", () => {
         nowMs: ARMED_AT - 60_000,
       }),
     ).toBe("interrupt");
+  });
+});
+
+describe("resolvePendingRevertRestore", () => {
+  const pending = {
+    messageId: MessageId.make("msg-1"),
+    text: "take this back",
+    attachmentCount: 0,
+    threadKey: "thread-1",
+    targetTurnCount: 1,
+    requestedAt: "2026-09-05T10:00:00.000Z",
+  };
+  const base = {
+    pending,
+    activeThreadKey: "thread-1",
+    hasMessage: false,
+    maxCheckpointTurnCount: 1,
+    isThreadLoading: false,
+    hasRevertFailure: false,
+  };
+
+  it("waits while the message is still in the thread", () => {
+    expect(
+      resolvePendingRevertRestore({ ...base, hasMessage: true, maxCheckpointTurnCount: 2 }),
+    ).toBe("wait");
+  });
+
+  it("waits when the message is gone but a discarded checkpoint remains", () => {
+    // A re-window or a reconnect empties the message list without a revert landing.
+    expect(resolvePendingRevertRestore({ ...base, maxCheckpointTurnCount: 2 })).toBe("wait");
+  });
+
+  it("restores once the message is gone and the checkpoints match the target", () => {
+    expect(resolvePendingRevertRestore(base)).toBe("restore");
+  });
+
+  it("restores when reverting to turn 0 empties the thread", () => {
+    expect(
+      resolvePendingRevertRestore({
+        ...base,
+        pending: { ...pending, targetTurnCount: 0 },
+        maxCheckpointTurnCount: null,
+      }),
+    ).toBe("restore");
+  });
+
+  it("waits while the thread detail is loading", () => {
+    // The loading placeholder spreads the shell, so it keeps the thread key while reporting no
+    // messages and no checkpoints - the same shape a completed revert to turn 0 produces, which
+    // is the one target the checkpoint guard below cannot separate it from.
+    expect(
+      resolvePendingRevertRestore({
+        ...base,
+        pending: { ...pending, targetTurnCount: 0 },
+        maxCheckpointTurnCount: null,
+        isThreadLoading: true,
+      }),
+    ).toBe("wait");
+  });
+
+  it("waits when no checkpoint is loaded but the target is not turn 0", () => {
+    expect(resolvePendingRevertRestore({ ...base, maxCheckpointTurnCount: null })).toBe("wait");
+  });
+
+  it("waits rather than discarding when no thread is active", () => {
+    // A teardown frame is transient; discarding there would lose a restore about to land.
+    expect(resolvePendingRevertRestore({ ...base, activeThreadKey: null })).toBe("wait");
+  });
+
+  it("discards on a thread switch", () => {
+    expect(resolvePendingRevertRestore({ ...base, activeThreadKey: "thread-2" })).toBe("discard");
+  });
+
+  it("discards when this revert's target recorded a failure", () => {
+    expect(
+      resolvePendingRevertRestore({
+        ...base,
+        hasMessage: true,
+        maxCheckpointTurnCount: 2,
+        hasRevertFailure: true,
+      }),
+    ).toBe("discard");
+  });
+
+  it("is idle with nothing pending", () => {
+    expect(
+      resolvePendingRevertRestore({ ...base, pending: null, maxCheckpointTurnCount: null }),
+    ).toBe("idle");
   });
 });
 

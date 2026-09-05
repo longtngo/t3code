@@ -573,7 +573,19 @@ export function applyThreadDetailEvent(
       );
 
       const retainedTurnIds = new Set(Arr.map(checkpoints, (entry) => entry.turnId));
-      const messages = retainMessagesAfterRevert(thread.messages, retainedTurnIds);
+      // The newest kept checkpoint by time, not by position. The server derives the same bound
+      // with a max scan, and it dedupes conflicting `checkpointTurnCount` rows on write while the
+      // client has no counterpart — so a duplicate count here would make position and time
+      // disagree, and the client would delete messages the server keeps.
+      const messages = retainMessagesAfterRevert(
+        thread.messages,
+        retainedTurnIds,
+        checkpoints.reduce<string | null>(
+          (latest, entry) =>
+            latest === null || entry.completedAt > latest ? entry.completedAt : latest,
+          null,
+        ),
+      );
       const proposedPlans = pipe(
         thread.proposedPlans,
         Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
@@ -766,15 +778,20 @@ function rebindCheckpointAssistantMessage(
 function retainMessagesAfterRevert(
   messages: ReadonlyArray<OrchestrationMessage>,
   retainedTurnIds: ReadonlySet<string>,
+  keptCheckpointCompletedAt: string | null,
 ): OrchestrationMessage[] {
-  // Keep messages that belong to a retained turn, plus system messages and
-  // messages without a turn binding (pre-turn-0 user messages).
+  // A user message is persisted before its turn exists and the link is never backfilled, so
+  // `turnId` is null for all of them and a turn match cannot decide their fate. The revert point
+  // decides it instead: a turnless message survives only if it predates the newest checkpoint the
+  // revert kept. A message sharing the checkpoint's timestamp is dropped: a checkpoint is captured
+  // lazily, when the next turn starts, so the next turn's message and this checkpoint often share
+  // a timestamp.
   return Arr.filter(messages, (message) => {
     if (message.role === "system") {
       return true;
     }
     if (message.turnId === null) {
-      return true;
+      return keptCheckpointCompletedAt !== null && message.createdAt < keptCheckpointCompletedAt;
     }
     return retainedTurnIds.has(message.turnId);
   });
