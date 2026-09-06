@@ -2637,6 +2637,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           <DialogPanel className="space-y-4">
             {workspaceMembersTarget ? (
               <WorkspaceMembersControl
+                // Remount per project: an optimistic list must never carry over
+                // to a different one. Same reason as the settings page's key.
+                key={`${workspaceMembersTarget.environmentId}:${workspaceMembersTarget.id}`}
                 environmentId={workspaceMembersTarget.environmentId}
                 members={workspaceMembersTarget.members}
                 onMembersChange={(members) =>

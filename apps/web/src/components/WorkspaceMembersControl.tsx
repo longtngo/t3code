@@ -33,28 +33,91 @@ export default function WorkspaceMembersControl({
   // Only the id is held. The members array is re-rendered from the server on
   // every write, so a held member object would go stale after the first save.
   const [editingId, setEditingId] = useState<string | null>(null);
-  const editing = members.find((member) => member.id === editingId) ?? null;
+
+  /**
+   * The list the last write submitted, held until the server echoes it back.
+   *
+   * Every write is computed from the current list, and the `members` prop is only
+   * refreshed by the shell stream's `project-upserted`, which the server coalesces
+   * on a 50ms window (`ws.ts`, SHELL_COALESCE_WINDOW). The dispatch RPC acks well
+   * before that lands, so a second write issued in between would be computed from
+   * the pre-write list and silently undo the first — two quick detaches left the
+   * first repository attached. Rendering and writing through this value closes
+   * that window and lets the second write land correctly.
+   *
+   * Keyed on the CONTENTS of the lists it supersedes, never on array identity.
+   * `shell.ts` replaces the whole snapshot on every `snapshot` item — sent on each
+   * (re)subscribe, so on every WS reconnect — with a freshly decoded, equal-content
+   * array. Keying on identity would therefore drop the submitted list on any
+   * reconnect mid-write and reopen this bug.
+   *
+   * `stale` holds every list this write supersedes: the one it was computed from,
+   * plus any it already replaced. An arriving list inside that set is older than
+   * what is in flight — the echo of an EARLIER write of ours, which would otherwise
+   * flash the removed row back and have the next click computed from it.
+   */
+  const [pending, setPending] = useState<{
+    readonly list: ReadonlyArray<WorkspaceMember>;
+    readonly stale: ReadonlySet<string>;
+  } | null>(null);
+  const membersKey = JSON.stringify(members);
+  if (pending !== null && !pending.stale.has(membersKey)) {
+    // The list moved past everything in flight, so the server is authoritative
+    // again. Adjusting state during render is React's own alternative to a
+    // synchronizing effect.
+    setPending(null);
+  }
+  const current = pending?.list ?? members;
+  const editing = current.find((member) => member.id === editingId) ?? null;
+
+  const writeMembers = async (next: ReadonlyArray<WorkspaceMember>): Promise<boolean> => {
+    // State rather than a ref: the rows and the next click's handler both have to
+    // see the submitted list, which means re-rendering from it.
+    setPending((held) => ({
+      list: next,
+      stale: new Set([
+        ...(held?.stale ?? []),
+        membersKey,
+        ...(held === null ? [] : [JSON.stringify(held.list)]),
+      ]),
+    }));
+    // Only retract THIS write; a later one already supersedes it.
+    const retract = () => setPending((held) => (held?.list === next ? null : held));
+    let succeeded: boolean;
+    try {
+      succeeded = await onMembersChange(next);
+    } catch {
+      // Both callers report their own failures and resolve `false`, so a rejection
+      // is contract-breaking. Treat it as a failed write anyway: leaving the
+      // optimistic list in place would show a change that was never stored, with
+      // nothing to correct it until the next echo.
+      retract();
+      return false;
+    }
+    if (!succeeded) retract();
+    return succeeded;
+  };
 
   const handleSubmit = async (draft: WorkspaceMemberDraft): Promise<boolean> => {
     const next =
       editing === null
-        ? addMember(members, { ...draft, id: randomUUID() })
-        : updateMember(members, editing.id, draft);
-    const succeeded = await onMembersChange(next);
+        ? addMember(current, { ...draft, id: randomUUID() })
+        : updateMember(current, editing.id, draft);
+    const succeeded = await writeMembers(next);
     if (succeeded && editing !== null) setEditingId(null);
     return succeeded;
   };
 
   return (
     <div className="flex flex-col gap-4">
-      {members.length === 0 ? (
+      {current.length === 0 ? (
         <p className="rounded-lg border border-border/70 border-dashed px-3 py-6 text-center text-muted-foreground text-sm">
           No repositories attached yet. Attach one below to let this project's threads read and
           write it.
         </p>
       ) : (
         <ul className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border/70">
-          {members.map((workspaceMember) => {
+          {current.map((workspaceMember) => {
             const { parent, name } = splitMemberPath(workspaceMember.path);
             const isEditing = workspaceMember.id === editingId;
             return (
@@ -85,7 +148,7 @@ export default function WorkspaceMembersControl({
                     aria-label={`Detach ${workspaceMember.title}`}
                     onClick={() => {
                       if (isEditing) setEditingId(null);
-                      void onMembersChange(removeMember(members, workspaceMember.id));
+                      void writeMembers(removeMember(current, workspaceMember.id));
                     }}
                     size="sm"
                     variant="ghost"
@@ -105,7 +168,7 @@ export default function WorkspaceMembersControl({
         // Remounting on target change resets the draft to the new member's
         // values without a synchronizing effect.
         key={editing?.id ?? "attach"}
-        members={members}
+        members={current}
         onCancel={() => setEditingId(null)}
         onSubmit={handleSubmit}
       />
