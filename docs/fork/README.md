@@ -25,7 +25,7 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-04 (29th reconcile), against `origin/main`. Concentrated in `apps/server`
+As of 2026-09-06 (31st reconcile), against `origin/main`. Concentrated in `apps/server`
 and `apps/web`.
 
 ## Invariants a merge must not break
@@ -78,7 +78,7 @@ bump, re-pin it to the new version.
 Upstream renamed the old `Sidebar.tsx` to `LegacySidebar.tsx` and promoted the v2 content into
 `Sidebar.tsx`, **swapping which one is the default**. Today `Sidebar.tsx` renders by default and
 `LegacySidebar.tsx` is opt-in behind the `legacySidebarEnabled` client setting
-(`useSettings.ts:288`). Before that merge it was the other way round.
+(`useSettings.ts:380`). Before that merge it was the other way round.
 
 Git is rename-blind during a merge, so fork edits to both files were presented **inverted** —
 v1 edits pointed at v2 content, v2 edits stranded in a deleted file. Resolving the conflicts as
@@ -378,10 +378,15 @@ so they are live, not vestigial.
 Upstream #8610 removed `queryCurrentContextUsage` and `normalizeClaudeContextUsageApiSnapshot`
 outright, on the grounds that `getContextUsage`'s token-count fallback can make extra model
 requests. This fork keeps the call. It is the **only** source of the compaction facts —
-`autocompactSource`, `autoCompactThreshold`, `isAutoCompactEnabled` — that
+`compactsAutomatically`, `autoCompactThreshold`, `autoCompactSource` — that
 `packages/contracts/src/providerRuntime.ts` carries on the wire and that the Vitals gauge's
 compaction note and marker render from (`VitalsGauge.tsx`, `lib/contextWindow.ts`). Deleting it
 compiles, passes, and leaves the note permanently blank.
+
+The adapter's own names differ from the wire's, and the difference matters when grepping:
+`isAutoCompactEnabled` and `autocompactSource` (lower-case `c`) are the **raw SDK response keys**
+read in `normalizeClaudeContextUsageApiSnapshot`, and the second one is absent from the SDK's
+declared type, so it is read off the raw object. Verified 2026-09-06.
 
 Upstream's replacement is **adopted underneath it**, not instead of it. `latestAssistantUsage`
 is tracked per assistant frame and `compactedSinceLatestAssistantUsage` guards the
@@ -498,13 +503,13 @@ rather than upstream's hand-written native menu — which is the whole point of 
 
 The two menus deliberately differ: the in-DOM one carries "View in side panel" and "Open in new
 tab", the native one carries "Open in integrated browser" and "Copy relative path". Everything
-else comes from one `sharedFileMenuItems` array, which both menus map — the native menu at
-`ChatMarkdown.tsx:1599`, the in-DOM menu at `:1771`. That sharing is the enforcement: a shared
-item cannot drift between the two, because there is only ever one of it.
+else comes from one `sharedFileMenuItems` array, built at `ChatMarkdown.tsx:2063`, which both
+menus map — the native menu at `:2125`, the in-DOM menu at `:2314`. That sharing is the
+enforcement: a shared item cannot drift between the two, because there is only ever one of it.
 
 **Corrected 2026-08-29.** This section previously said the reveal item "uses `onReveal &&
 revealLabel` inline at both sites, and nothing enforces the pairing, so change both". There is
-**one** such site — `:1563`, inside `sharedFileMenuItems` — and the shared array is precisely what
+**one** such site — `:2088`, inside `sharedFileMenuItems` — and the shared array is precisely what
 enforces the pairing. Change it once. (The substance was right: the reveal item does appear in
 both menus. Only the count and the "nothing enforces" claim were wrong.)
 
@@ -523,7 +528,8 @@ That makes it invariant-4 shaped, but with a twist worth its own entry: the dele
 by a merge as an **upstream import addition**. The 24th reconcile's only conflict was upstream
 adding two names to the `./ChatView.logic` import list —
 `shouldShowBranchMismatchBanner` (a fork deletion) beside `shoulderTabReserve` (genuinely new
-and genuinely used, called at `ChatView.tsx:4762`). Taking both compiles and passes: the import
+and genuinely used at the time; the name has since gone from both sides, 0 hits on
+`origin/main` and 0 here, so do not go looking for it). Taking both compiles and passes: the import
 resolves to nothing, and nothing renders the banner.
 
 **The mechanical tell:** after resolving, the merged `ChatView.logic.ts` exported the name
@@ -634,9 +640,15 @@ native-1M switch and `CLAUDE_UNARMED_COMPACTION_MODELS` are still fork-owned and
 keyed.
 
 Related: upstream's own new adapter tests may send a second turn while the first is running.
-**Queued follow-up turns are fork-only** (`origin/main` has no queue at all), so such a turn never
-reaches the provider — the symptom is a test that _hangs_ on a prompt read rather than one that
-fails. Retarget by completing the running turn first, which is the fork's actual contract.
+**Running a queued turn after the current one is fork-only**, so such a turn never reaches the
+provider — the symptom is a test that _hangs_ on a prompt read rather than one that fails.
+Retarget by completing the running turn first, which is the fork's actual contract.
+
+Be precise about what "fork-only" covers here, because two upstream queues make the loose version
+of this claim false. `origin/main` has both `promptQueue` in `ClaudeAdapter.ts` and
+`threadHasQueuedTurnStart` in `ThreadSettlementPolicy.ts`. What it does not have is the adapter's
+follow-up drain: `drainNextPendingTurn` and `withdrawQueuedTurn` are 0 hits on `origin/main` and
+live across 18 fork files. Verified 2026-09-06.
 
 ### 23. Slow-by-design RPCs get the long leash, never the untracked set
 
