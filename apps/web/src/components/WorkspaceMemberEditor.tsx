@@ -61,8 +61,9 @@ interface WorkspaceMemberEditorProps {
 }
 
 /**
- * The one editor in the dialog: it attaches a repository, or edits the one
- * selected from the list. The caller remounts it (via `key`) when the target
+ * The one editor on either surface — the project settings page and the legacy
+ * sidebar's dialog: it attaches a repository, or edits the one selected from the
+ * list. The caller remounts it (via `key`) when the target
  * changes, so the draft state below always starts from the right values without
  * a synchronizing effect.
  */
@@ -190,7 +191,7 @@ export default function WorkspaceMemberEditor({
     <div className="rounded-lg border border-border/70 bg-muted/40 p-3">
       {/* The eyebrow is uppercased as a section marker, but a repository name is
           a proper noun and keeps its own casing — and its monospace face, which
-          is how paths and refs are set everywhere else in this dialog. */}
+          is how paths and refs are set everywhere else in this editor. */}
       <p className="mb-3 flex items-baseline gap-1.5 text-muted-foreground text-xs">
         <span className="font-medium uppercase tracking-wide">
           {editing === null ? "Attach a repository" : "Edit"}

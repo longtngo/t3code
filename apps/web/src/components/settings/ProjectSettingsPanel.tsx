@@ -20,8 +20,10 @@ import type {
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
+  WorkspaceMember,
 } from "@t3tools/contracts";
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
+import WorkspaceMembersControl from "../WorkspaceMembersControl";
 import { createModelSelection } from "@t3tools/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
@@ -510,6 +512,30 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const selectedCheckout =
     group.memberProjects.find((member) => member.physicalProjectKey === selectedCheckoutKey) ??
     representative;
+  // Workspace members belong to the physical project, not the group, so this
+  // writes to the selected checkout only - never through `updateAllMembers`.
+  // Returns whether the write landed: `WorkspaceMembersControl` clears its
+  // editor on true, and keeping it open on false is what stops a failed save
+  // from discarding what the user typed.
+  const updateWorkspaceMembers = useCallback(
+    async (members: ReadonlyArray<WorkspaceMember>): Promise<boolean> => {
+      const result = mapAtomCommandResult(
+        await updateProject({
+          environmentId: selectedCheckout.environmentId,
+          input: { projectId: selectedCheckout.id, members },
+        }),
+        () => undefined,
+      );
+      if (result._tag === "Failure") {
+        // Silent on an interrupted command, which `reportFailure` already skips.
+        reportFailure("Failed to update workspace repositories", result);
+        return false;
+      }
+      return true;
+    },
+    [reportFailure, selectedCheckout.environmentId, selectedCheckout.id, updateProject],
+  );
+
   const selectedServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
   );
@@ -1101,6 +1127,21 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               </Select>
             }
           />
+          <SettingsRow
+            title="Workspace repositories"
+            description="Extra repositories this checkout's threads can read and write, each on its own integration branch."
+          >
+            <WorkspaceMembersControl
+              // Remount on a checkout change. Without this the control keeps an
+              // `editingId` the new checkout's list has no member for, so an open
+              // edit silently empties to the attach form - and switching back
+              // resurrects it.
+              key={selectedCheckout.physicalProjectKey}
+              environmentId={selectedCheckout.environmentId}
+              members={selectedCheckout.members}
+              onMembersChange={updateWorkspaceMembers}
+            />
+          </SettingsRow>
           {group.memberProjects.length > 1 ? (
             <SettingsRow
               title="Remove checkout"

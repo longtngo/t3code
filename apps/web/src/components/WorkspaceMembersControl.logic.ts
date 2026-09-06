@@ -186,10 +186,11 @@ export function canAutofillBranch(branchValue: string, autofilledValue: string |
  * The one-line explanation under the branch field.
  *
  * Every state answers, including "still reading". An earlier version returned
- * nothing while the branch query was in flight, which read as *no element* — and
- * since the dialog is vertically centred, losing that line moved the whole modal
- * by half its height and moved it back a frame later. Once per keystroke, that
- * is the flicker.
+ * nothing while the branch query was in flight, which read as *no element*. In
+ * the legacy sidebar's vertically-centred dialog that moved the whole modal by
+ * half its height and moved it back a frame later — once per keystroke, which is
+ * the flicker. On the settings page it only reflows the rows below, but a hint
+ * line that disappears mid-typing is still worse than one that says "reading".
  *
  * The caller renders the returned value in a slot that reserves a line even when
  * this is null, so no state can collapse the layout.

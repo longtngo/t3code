@@ -255,18 +255,32 @@ deleted it); its `ProviderService` / `OrchestrationEngine` stubs needed the fork
 state, not upstream's `error`.** A reconcile that widens this phase back over ordinary restart
 orphans, or drops the skip in `BootTurnReconciler`, is reverting a deliberate decision.
 
-### 6. Two project entry points in the sidebar, on purpose
+### 6. The workspace-repositories editor lives in upstream's project settings page
 
-Upstream `#5923`/`#5768` moved project settings to a `/projects/$projectKey` route and repurposed
-the sidebar's per-project button to navigate there. The fork's own project-actions **dialog**
-covers ground that route does not: **workspace member repositories** — attaching one, choosing
-its integration branch, removing it. (Both surfaces carry a grouping-rule control, so grouping is
-_not_ the fork-only part; verified against the running app on 2026-08-11.) The project row
-therefore carries **both** buttons: an ellipsis opening the fork dialog and a gear navigating to
-upstream's page. Since upstream #5931 that row is a `ComboboxItem`, not a `MenuRadioItem` — the
-23rd reconcile rebuilt the fork's button onto upstream's combobox, inside its `project ? …`
-guard, and dropped the then-dead `Menu*` import. Collapsing them to one drops multi-repo workspace management entirely.
-Consolidating the two is real work, not merge work.
+**Consolidated 2026-09-06; this entry moved with it.** Upstream `#5768`/`#5923` replaced the
+sidebar's project-settings dialog with a `/projects/$projectKey` route. The fork's editor for
+**workspace member repositories** — attaching one, choosing its integration branch, removing it —
+had been mounted in that dialog, so the 8th reconcile restored the deleted dialog behind a second
+ellipsis button rather than porting the editor. That arrangement is over: the editor is now a
+`SettingsRow` titled **Workspace repositories** in the **Checkout** section of
+`apps/web/src/components/settings/ProjectSettingsPanel.tsx`, and `Sidebar.tsx` carries only
+upstream's gear.
+
+**What a reconcile must protect.** `ProjectSettingsPanel.tsx` is upstream-owned and churns — 27
+commits on `origin/main` since it was created — and it now holds the fork's only multi-repo mount on the
+default sidebar. This is the FORK-LOSS direction: an upstream rewrite of that file drops the row
+silently, and nothing about the deletion shows up as a conflict. The tripwire is
+`ProjectSettingsPanel.dom.test.tsx`, whose four tests fail if the row goes, is scoped to the group
+instead of the selected checkout, loses its remount key, or stops honouring the write's result.
+Do not delete that file to resolve a merge.
+
+Scope of the row: `members` is a field on the **physical project**, so it writes to the selected
+checkout and must never go through `updateAllMembers`. `LegacySidebar.tsx` keeps its own
+plainly-labelled "Workspace repositories" dialog; that surface is opt-in and unchanged.
+
+Per-member project **renaming** ended with the dialog on the default sidebar — upstream's Name is
+group-level by design, and the per-member inputs were upstream's own deleted code. It still exists
+in the legacy sidebar's context menu.
 
 ### 7. `interruptTurn` is the COOPERATIVE rung; `stopSession` is the hard one
 
