@@ -84,6 +84,7 @@ export default function WorkspaceMemberEditor({
   const [autofilledBranch, setAutofilledBranch] = useState<string | null>(null);
   const [autofilledForCwd, setAutofilledForCwd] = useState<string | null>(null);
   const [isPathOpen, setIsPathOpen] = useState(false);
+  const [isBranchOpen, setIsBranchOpen] = useState(false);
 
   const fieldId = useId();
   const pathInputId = `${fieldId}-path`;
@@ -188,7 +189,22 @@ export default function WorkspaceMemberEditor({
   });
 
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/40 p-3">
+    <div
+      className="rounded-lg border border-border/70 bg-muted/40 p-3"
+      onKeyDownCapture={(event) => {
+        if (event.key !== "Escape") return;
+        // While a suggestion list is up, Escape belongs to the list — Base UI
+        // closes it from a document-level listener. Otherwise cancel the whole
+        // editor, and do it in the capture phase: on a bubbling Escape the
+        // combobox input first wipes its own value, and once a suggestion has
+        // been selected it stops the event outright, so a bubble-phase handler
+        // would see an already-cleared field or no event at all.
+        if (isPathOpen || isBranchOpen) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
       {/* The eyebrow is uppercased as a section marker, but a repository name is
           a proper noun and keeps its own casing — and its monospace face, which
           is how paths and refs are set everywhere else in this editor. */}
@@ -265,6 +281,7 @@ export default function WorkspaceMemberEditor({
         <Autocomplete
           filter={null}
           items={branchItems}
+          onOpenChange={setIsBranchOpen}
           onValueChange={(nextValue) => {
             setBranch(nextValue);
             setError(null);

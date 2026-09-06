@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
+import { shouldLeaveSettingsOnEscape } from "../lib/editableTarget";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
 import { Button } from "../components/ui/button";
@@ -49,17 +50,13 @@ function SettingsContentLayout() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-
-        const activeElement = document.activeElement;
-        if (activeElement instanceof HTMLElement) {
-          activeElement.blur();
-        }
-
-        navigateBackWithinApp();
-      }
+      // Escape inside a field belongs to the field. Leaving the page here threw
+      // away a half-typed form with nothing to recover it from - the workspace
+      // repository editor is this page's first multi-field draft, so it made a
+      // long-standing sharp edge easy to hit.
+      if (!shouldLeaveSettingsOnEscape(event)) return;
+      event.preventDefault();
+      navigateBackWithinApp();
     };
 
     window.addEventListener("keydown", onKeyDown);

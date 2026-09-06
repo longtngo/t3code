@@ -177,7 +177,11 @@ function ThemeLibraryCard({
                     }
                   }}
                   onKeyDown={(event) => {
-                    if (event.key === "Escape") setRadialModeOpen(null);
+                    if (event.key !== "Escape") return;
+                    // Claim the key, or the page-level Escape also fires and
+                    // the radial closing costs the user the settings page.
+                    event.preventDefault();
+                    setRadialModeOpen(null);
                   }}
                   onMouseLeave={() => setRadialModeOpen(null)}
                 >

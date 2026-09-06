@@ -302,10 +302,14 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   );
   const handleSearchKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Escape" && isSearching) {
+      if (event.key === "Escape") {
+        // Claimed even with an empty query. `/` focuses this box from anywhere
+        // on the page, so leaving Escape unclaimed here would strand the
+        // keyboard: the page-level Escape stands down inside a field.
         event.preventDefault();
         event.stopPropagation();
         clearSearch();
+        event.currentTarget.blur();
         return;
       }
       if (results.length === 0) return;
@@ -325,7 +329,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         if (result) handleSearchResultClick(result);
       }
     },
-    [activeResultIndex, clearSearch, handleSearchResultClick, isSearching, results],
+    [activeResultIndex, clearSearch, handleSearchResultClick, results],
   );
   return (
     <>
