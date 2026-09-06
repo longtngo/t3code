@@ -1,5 +1,4 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
@@ -7,6 +6,8 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+
+import { renderDom } from "../../testing/renderDom";
 
 import { deriveProviderModelsForDisplay, ProviderInstanceCard } from "./ProviderInstanceCard";
 
@@ -82,7 +83,7 @@ describe("deriveProviderModelsForDisplay", () => {
     });
   });
 
-  it("shows a redacted provider email in the editor header status line", () => {
+  it("shows a redacted provider email in the editor header status line", async () => {
     const instanceId = ProviderInstanceId.make("codex");
     const driver = ProviderDriverKind.make("codex");
     const liveProvider: ServerProvider = {
@@ -99,7 +100,7 @@ describe("deriveProviderModelsForDisplay", () => {
       skills: [],
     };
 
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       createElement(ProviderInstanceCard, {
         instanceId,
         instance: { driver },
@@ -116,12 +117,60 @@ describe("deriveProviderModelsForDisplay", () => {
       }),
     );
 
-    expect(markup).toContain("Authenticated as");
-    expect(markup).toContain('aria-label="Toggle account email visibility"');
-    expect(markup).toContain("blur-[2px]");
-    expect(markup).not.toContain("developer@example.com");
+    expect(view.text()).toContain("Authenticated as");
+    const toggle = view.find('[aria-label="Toggle account email visibility"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.className).toContain("blur-[2px]");
+    expect(view.text()).not.toContain("developer@example.com");
   });
-  it("surfaces a failed probe message in both the list row and the editor", () => {
+
+  // The redaction is a real toggle, not a permanent mask: the account has to be readable to be
+  // useful. Static markup only ever showed the first half of that.
+  it("reveals the provider email once the toggle is pressed, and hides it again", async () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const driver = ProviderDriverKind.make("codex");
+    const liveProvider: ServerProvider = {
+      instanceId,
+      driver,
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated", email: "developer@example.com" },
+      checkedAt: "2026-08-27T12:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
+
+    const view = await renderDom(
+      createElement(ProviderInstanceCard, {
+        instanceId,
+        instance: { driver },
+        driverOption: undefined,
+        liveProvider,
+        mode: "editor",
+        onUpdate: () => undefined,
+        hiddenModels: [],
+        favoriteModels: [],
+        modelOrder: [],
+        onHiddenModelsChange: () => undefined,
+        onFavoriteModelsChange: () => undefined,
+        onModelOrderChange: () => undefined,
+      }),
+    );
+
+    const toggleSelector = '[aria-label="Toggle account email visibility"]';
+    await view.click(view.find(toggleSelector));
+    expect(view.text()).toContain("developer@example.com");
+    expect(view.find(toggleSelector)?.className).not.toContain("blur-[2px]");
+
+    await view.click(view.find(toggleSelector));
+    expect(view.text()).not.toContain("developer@example.com");
+    expect(view.find(toggleSelector)?.className).toContain("blur-[2px]");
+  });
+
+  it("surfaces a failed probe message in both the list row and the editor", async () => {
     const instanceId = ProviderInstanceId.make("codex_work");
     const driver = ProviderDriverKind.make("codex");
     const message =
@@ -155,9 +204,9 @@ describe("deriveProviderModelsForDisplay", () => {
     } as const;
 
     for (const mode of ["list", "editor"] as const) {
-      const markup = renderToStaticMarkup(createElement(ProviderInstanceCard, { ...props, mode }));
-      expect(markup).toContain("Unavailable");
-      expect(markup).toContain("is not a symlink");
+      const view = await renderDom(createElement(ProviderInstanceCard, { ...props, mode }));
+      expect(view.text()).toContain("Unavailable");
+      expect(view.text()).toContain("is not a symlink");
     }
   });
 });

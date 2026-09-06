@@ -1,5 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { renderDom } from "../../testing/renderDom";
 
 import {
   scrollToSettingsTarget,
@@ -11,18 +12,59 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const PULSE_CLASS = "settings-search-target-pulse";
+
 describe("settings search targets", () => {
-  it("does not persist destination styling in the rendered row", () => {
-    const markup = renderToStaticMarkup(
+  it("does not persist destination styling in the rendered row", async () => {
+    const rows = (className?: string) => (
       <SettingsSearchTargetProvider targetId="word-wrap">
+        <SettingsRow
+          id="word-wrap"
+          title="Word wrap"
+          description="Wrap long lines."
+          className={className}
+        />
+        <SettingsRow id="time-format" title="Time format" description="Choose a clock." />
+      </SettingsSearchTargetProvider>
+    );
+    const view = await renderDom(rows());
+
+    expect(view.find("#word-wrap")?.getAttribute("tabindex")).toBe("-1");
+    expect(view.find("[data-settings-search-target]")).toBeNull();
+    // Only the destination is marked, and only imperatively at mount: a row that is not the
+    // destination never carries the pulse...
+    expect(view.find("#time-format")?.classList.contains(PULSE_CLASS)).toBe(false);
+    // ...and because the pulse is not part of what the row renders, React's next write to that
+    // row's class attribute drops it instead of putting it back.
+    await view.rerender(rows("mt-2"));
+    expect(view.find("#word-wrap")?.classList.contains(PULSE_CLASS)).toBe(false);
+  });
+
+  // Reaching the destination is the row's job on mount, and a static render never runs the ref
+  // that does it, so none of this was covered before.
+  it("takes the destination row on mount and tells the caller the jump landed", async () => {
+    const onTargetHandled = vi.fn();
+    const view = await renderDom(
+      <SettingsSearchTargetProvider targetId="word-wrap" onTargetHandled={onTargetHandled}>
         <SettingsRow id="word-wrap" title="Word wrap" description="Wrap long lines." />
         <SettingsRow id="time-format" title="Time format" description="Choose a clock." />
       </SettingsSearchTargetProvider>,
     );
 
-    expect(markup).toContain('id="word-wrap" tabindex="-1"');
-    expect(markup).not.toContain("data-settings-search-target");
-    expect(markup).not.toContain("settings-search-target-pulse");
+    expect(onTargetHandled).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(view.find("#word-wrap"));
+    expect(view.find("#word-wrap")?.classList.contains(PULSE_CLASS)).toBe(true);
+  });
+
+  it("skips the pulse when the caller does not want the destination highlighted", async () => {
+    const view = await renderDom(
+      <SettingsSearchTargetProvider targetId="word-wrap" highlightTarget={false}>
+        <SettingsRow id="word-wrap" title="Word wrap" description="Wrap long lines." />
+      </SettingsSearchTargetProvider>,
+    );
+
+    expect(document.activeElement).toBe(view.find("#word-wrap"));
+    expect(view.find("#word-wrap")?.classList.contains(PULSE_CLASS)).toBe(false);
   });
 
   it("scrolls directly to a section header and restarts the destination pulse", () => {

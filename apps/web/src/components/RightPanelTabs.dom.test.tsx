@@ -1,6 +1,7 @@
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import { renderDom } from "../testing/renderDom";
 
 import {
   RightPanelTabs,
@@ -92,8 +93,9 @@ function renderTabs(
   second?: DesktopPreviewFavicon,
   audio?: { audible?: boolean; audioMuted?: boolean },
   previewRuntimeTabId: ((tabId: string) => string) | null = (tabId) => `runtime:${tabId}`,
+  handlers: { onActivate?: (id: string) => void; onCloseSurface?: (id: string) => void } = {},
 ) {
-  return renderToStaticMarkup(
+  return renderDom(
     <RightPanelTabs
       mode="inline"
       surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
@@ -107,8 +109,8 @@ function renderTabs(
       }}
       {...(previewRuntimeTabId ? { previewRuntimeTabId } : {})}
       terminalLabelsById={new Map()}
-      onActivate={() => undefined}
-      onCloseSurface={() => undefined}
+      onActivate={(surface) => handlers.onActivate?.(surface.id)}
+      onCloseSurface={(surface) => handlers.onCloseSurface?.(surface.id)}
       onCloseOtherSurfaces={() => undefined}
       onCloseSurfacesToRight={() => undefined}
       onCloseAllSurfaces={() => undefined}
@@ -133,26 +135,36 @@ function renderTabs(
   );
 }
 
+/** Every icon source the tab strip actually asked the browser to fetch. */
+function iconSources(view: Awaited<ReturnType<typeof renderTabs>>): string[] {
+  return view
+    .findAll<HTMLImageElement>("img")
+    .map((image) => image.getAttribute("src") ?? "")
+    .filter((source) => source.length > 0);
+}
+
 describe("RightPanelTabs preview favicon", () => {
-  it("prefers a live capture and never asks Google about a private hostname", () => {
-    const captured = renderTabs(favicon("data:image/png;base64,AAAA", "http://24x.xf.local/"));
-    expect(captured).toContain("data:image/png;base64,AAAA");
-    expect(captured).not.toContain("s2/favicons");
-    expect(renderTabs(null)).not.toContain("s2/favicons");
+  it("prefers a live capture and never asks Google about a private hostname", async () => {
+    const captured = await renderTabs(
+      favicon("data:image/png;base64,AAAA", "http://24x.xf.local/"),
+    );
+    expect(iconSources(captured)).toContain("data:image/png;base64,AAAA");
+    expect(iconSources(captured).join(" ")).not.toContain("s2/favicons");
+    expect(iconSources(await renderTabs(null)).join(" ")).not.toContain("s2/favicons");
   });
 
-  it("keeps route-specific captures isolated between live tabs on one origin", () => {
-    const html = renderTabs(
+  it("keeps route-specific captures isolated between live tabs on one origin", async () => {
+    const view = await renderTabs(
       favicon("data:image/png;base64,AAAA", "http://24x.xf.local/"),
       favicon("data:image/png;base64,BBBB", "http://24x.xf.local/admin"),
     );
-    expect(html).toContain("data:image/png;base64,AAAA");
-    expect(html).toContain("data:image/png;base64,BBBB");
+    expect(iconSources(view)).toContain("data:image/png;base64,AAAA");
+    expect(iconSources(view)).toContain("data:image/png;base64,BBBB");
   });
 
-  it("hides a capture while the server session still describes another origin", () => {
-    const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
-    expect(html).not.toContain("data:image/png;base64,AAAA");
+  it("hides a capture while the server session still describes another origin", async () => {
+    const view = await renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
+    expect(iconSources(view)).not.toContain("data:image/png;base64,AAAA");
   });
 });
 
@@ -220,30 +232,66 @@ describe("RightPanelTabs audio indicator", () => {
     { audible: true, audioMuted: true, label: "Unmute Local site" },
   ] as const;
 
-  it.each(cases)("audible=$audible muted=$audioMuted", ({ audible, audioMuted, label }) => {
-    const html = renderTabs(null, undefined, { audible, audioMuted });
+  it.each(cases)("audible=$audible muted=$audioMuted", async ({ audible, audioMuted, label }) => {
+    const view = await renderTabs(null, undefined, { audible, audioMuted });
     if (label === null) {
-      expect(html).not.toContain("Mute Local site");
-      expect(html).not.toContain("Unmute Local site");
+      expect(view.find('[aria-label="Mute Local site"]')).toBeNull();
+      expect(view.find('[aria-label="Unmute Local site"]')).toBeNull();
     } else {
-      expect(html).toContain(`aria-label="${label}"`);
+      expect(view.find(`[aria-label="${label}"]`)).not.toBeNull();
     }
   });
 
-  it("addresses the desktop by runtime tab id, never the server session id", () => {
+  it("addresses the desktop by runtime tab id, never the server session id", async () => {
     // Session ids are only unique per server process; sending one to the
     // Electron manager raises PreviewTabNotFoundError and silently no-ops.
     const seen: string[] = [];
-    renderTabs(null, undefined, { audible: true }, (tabId) => {
+    await renderTabs(null, undefined, { audible: true }, (tabId) => {
       seen.push(tabId);
       return `runtime:${tabId}`;
     });
     expect(seen).toContain("tab-1");
   });
 
-  it("hides the toggle when no runtime tab id can be resolved", () => {
-    const html = renderTabs(null, undefined, { audible: true }, null);
-    expect(html).not.toContain("Mute Local site");
+  it("hides the toggle when no runtime tab id can be resolved", async () => {
+    const view = await renderTabs(null, undefined, { audible: true }, null);
+    expect(view.find('[aria-label="Mute Local site"]')).toBeNull();
+  });
+});
+
+describe("RightPanelTabs tab controls", () => {
+  it("activates the tab whose title was clicked", async () => {
+    const onActivate = vi.fn();
+    const view = await renderTabs(
+      null,
+      favicon("data:image/png;base64,BBBB", "http://24x.xf.local/admin"),
+      undefined,
+      (tabId) => `runtime:${tabId}`,
+      { onActivate },
+    );
+
+    const secondTitle = view
+      .findAll<HTMLButtonElement>("button")
+      .find((button) => button.textContent === "Admin");
+    await view.click(secondTitle ?? null);
+
+    expect(onActivate).toHaveBeenCalledWith(secondSurface.id);
+  });
+
+  it("closes only the tab whose close control was clicked", async () => {
+    const onCloseSurface = vi.fn();
+    const view = await renderTabs(
+      null,
+      favicon("data:image/png;base64,BBBB", "http://24x.xf.local/admin"),
+      undefined,
+      (tabId) => `runtime:${tabId}`,
+      { onCloseSurface },
+    );
+
+    await view.click(view.find('[aria-label="Close Admin"]'));
+
+    expect(onCloseSurface).toHaveBeenCalledTimes(1);
+    expect(onCloseSurface).toHaveBeenCalledWith(secondSurface.id);
   });
 });
 

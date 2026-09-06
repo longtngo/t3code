@@ -1,6 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
+
+import { renderDom } from "../testing/renderDom";
 
 /**
  * The chip on a client with NO shell actions — a browser or the mobile app.
@@ -34,6 +35,8 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   useOpenChangeRequestLink: () => vi.fn(),
 }));
 
+import { useRightPanelStore } from "../rightPanelStore";
+
 import ChatMarkdown, { shouldUseMarkdownFileBrowserPrimaryAction } from "./ChatMarkdown";
 
 const threadRef = {
@@ -42,15 +45,19 @@ const threadRef = {
 };
 
 const renderChip = (target: string) =>
-  renderToStaticMarkup(
-    <ChatMarkdown cwd="/tmp/project" threadRef={threadRef} text={`[Link](${target})`} />,
-  );
+  renderDom(<ChatMarkdown cwd="/tmp/project" threadRef={threadRef} text={`[Link](${target})`} />);
+
+type View = Awaited<ReturnType<typeof renderDom>>;
 
 /** The menu-only fallback the chip falls back to when nothing can open the file. */
-const rendersAsMenuOnlyButton = (html: string) => html.includes("File options for");
+const rendersAsMenuOnlyButton = (view: View) =>
+  view.find('button[aria-label^="File options for"]') !== null;
+
+/** The chip's primary action: an anchor that opens the file. */
+const chipLink = (view: View) => view.find("a[data-markdown-copy]");
 
 describe("file chips without shell actions", () => {
-  it("keeps the open affordance for a file outside the workspace root", () => {
+  it("keeps the open affordance for a file outside the workspace root", async () => {
     // `handleOpenInFilePreview` opens any absolute path a thread owns: outside the
     // workspace it falls back to the read-only trusted view (a report under ~/reports,
     // a temp file). Upstream #7140's `canOpenInPanel` did not know that and demanded a
@@ -58,22 +65,22 @@ describe("file chips without shell actions", () => {
     // action and a tap opened the context menu, which carries neither "View in side
     // panel" nor "Open in new tab". With shell actions the editor item hides this; on
     // web and mobile it left only the two copy entries.
-    const html = renderChip("/tmp/reports/2026-08-29-followup-catalog.md");
+    const view = await renderChip("/tmp/reports/2026-08-29-followup-catalog.md");
 
-    expect(rendersAsMenuOnlyButton(html)).toBe(false);
-    expect(html).toContain("<a ");
+    expect(rendersAsMenuOnlyButton(view)).toBe(false);
+    expect(chipLink(view)).not.toBeNull();
   });
 
-  it("still opens a file inside the workspace root", () => {
+  it("still opens a file inside the workspace root", async () => {
     // The control that makes the assertion above mean something: same client, same
     // thread, one variable changed -- whether the path is under `cwd`.
-    const html = renderChip("/tmp/project/src/main.ts");
+    const view = await renderChip("/tmp/project/src/main.ts");
 
-    expect(rendersAsMenuOnlyButton(html)).toBe(false);
-    expect(html).toContain("<a ");
+    expect(rendersAsMenuOnlyButton(view)).toBe(false);
+    expect(chipLink(view)).not.toBeNull();
   });
 
-  it("stays a menu-only button when no thread owns the path", () => {
+  it("stays a menu-only button when no thread owns the path", async () => {
     // The negative arm, and what stops the fix from being "always render a link".
     // `openTrustedFile` needs a thread to open against; without one the chip genuinely
     // has no primary action. This is the pull-request-body surface.
@@ -82,11 +89,35 @@ describe("file chips without shell actions", () => {
     // was the first thing tried here: `resolveMarkdownFileLinkTarget` resolves
     // relatives against `cwd`, so "./notes.md" lands inside the workspace and is a
     // link already.
-    const html = renderToStaticMarkup(
+    const view = await renderDom(
       <ChatMarkdown cwd="/tmp/project" text="[Link](/tmp/reports/out-of-tree.md)" />,
     );
 
-    expect(rendersAsMenuOnlyButton(html)).toBe(true);
+    expect(rendersAsMenuOnlyButton(view)).toBe(true);
+    expect(chipLink(view)).toBeNull();
+  });
+
+  it("opens the out-of-workspace file in the side panel when the chip is tapped", async () => {
+    // What the affordance above is *for*: the primary action has to actually open the
+    // file. Static markup could only ever show that an anchor exists.
+    const environmentId = EnvironmentId.make("environment-click");
+    const threadId = ThreadId.make("thread-click");
+    const path = "/tmp/reports/2026-08-29-followup-catalog.md";
+    const view = await renderDom(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        threadRef={{ environmentId, threadId }}
+        text={`[Link](${path})`}
+      />,
+    );
+
+    await view.click(chipLink(view));
+
+    const panel = Object.values(useRightPanelStore.getState().byThreadKey).find((entry) =>
+      entry.surfaces.some((surface) => surface.kind === "file" && surface.relativePath === path),
+    );
+
+    expect(panel?.isOpen).toBe(true);
   });
 });
 

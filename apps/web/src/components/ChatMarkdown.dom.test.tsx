@@ -1,12 +1,12 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { act, type ComponentProps, type ReactNode } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
+import { renderDom } from "../testing/renderDom";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
@@ -63,6 +63,11 @@ import ChatMarkdown, {
   orderedListGutterStyle,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
+
+/** The file chip both the link and the fallback-button branch render. */
+const FILE_CHIP = ".chat-markdown-file-link";
+/** The Codex artifact-template result card. */
+const ARTIFACT_CARD = ".chat-markdown-artifact-template";
 
 function codeButton(renderer: ReactTestRenderer, label: string) {
   const button = renderer.root
@@ -378,20 +383,21 @@ describe("ChatMarkdown skill chips", () => {
 });
 
 describe("ChatMarkdown file option chips", () => {
-  it("keeps the fallback button text selectable", () => {
-    const html = renderToStaticMarkup(
+  it("keeps the fallback button text selectable", async () => {
+    const view = await renderDom(
       <ChatMarkdown cwd="/tmp/project" text="[Source](/tmp/project/src/main.ts)" />,
     );
 
-    expect(html).toContain("<button");
-    expect(html).toContain('aria-haspopup="menu"');
-    expect(html).toContain("select-text");
+    const fallback = view.find("button");
+    expect(fallback).not.toBeNull();
+    expect(fallback?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(fallback?.classList.contains("select-text")).toBe(true);
   });
 
   it.each([true, false])(
     "renders Codex file citations as file chips with parseRawHtml=%s",
-    (parseRawHtml) => {
-      const html = renderToStaticMarkup(
+    async (parseRawHtml) => {
+      const view = await renderDom(
         <ChatMarkdown
           cwd="/tmp/project"
           text={
@@ -402,17 +408,18 @@ describe("ChatMarkdown file option chips", () => {
         />,
       );
 
-      expect(html).not.toContain("codex-file-citation");
-      expect(html).toContain("chat-markdown-file-link");
-      expect(html).toContain(
-        'data-markdown-copy="[report.xlsx](/tmp/project/outputs/report.xlsx)"',
+      expect(view.text()).not.toContain("codex-file-citation");
+      const chip = view.find(FILE_CHIP);
+      expect(chip).not.toBeNull();
+      expect(chip?.getAttribute("data-markdown-copy")).toBe(
+        "[report.xlsx](/tmp/project/outputs/report.xlsx)",
       );
-      expect(html).toContain("report.xlsx");
+      expect(view.text()).toContain("report.xlsx");
     },
   );
 
-  it("leaves an unfinished streaming citation visible until it is complete", () => {
-    const html = renderToStaticMarkup(
+  it("leaves an unfinished streaming citation visible until it is complete", async () => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={'Created :codex-file-citation{path="/tmp/project/outputs/report.xlsx"'}
@@ -420,74 +427,73 @@ describe("ChatMarkdown file option chips", () => {
       />,
     );
 
-    expect(html).toContain(":codex-file-citation");
-    expect(html).not.toContain("chat-markdown-file-link");
+    expect(view.text()).toContain(":codex-file-citation");
+    expect(view.find(FILE_CHIP)).toBeNull();
   });
 
-  it("leaves malformed and similarly named file directives literal", () => {
+  it("leaves malformed and similarly named file directives literal", async () => {
     for (const text of [
       ':codex-file-citation{purpose="output"}',
       ':codex-file-citation-extra{path="/tmp/project/outputs/report.xlsx"}',
     ]) {
-      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      const view = await renderDom(<ChatMarkdown cwd="/tmp/project" text={text} />);
 
-      expect(html).toContain(text.replaceAll('"', "&quot;"));
-      expect(html).not.toContain("chat-markdown-file-link");
+      expect(view.text()).toContain(text);
+      expect(view.find(FILE_CHIP)).toBeNull();
     }
   });
 
-  it("preserves Codex file citation examples inside code", () => {
+  it("preserves Codex file citation examples inside code", async () => {
     const directive = ':codex-file-citation{path="/tmp/project/outputs/report.xlsx"}';
-    const html = renderToStaticMarkup(
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={`Example: \`${directive}\`\n\n\`\`\`text\n${directive}\n\`\`\``}
       />,
     );
 
-    expect(html.match(/:codex-file-citation/g)).toHaveLength(2);
-    expect(html).not.toContain("chat-markdown-file-link");
+    expect(view.text().match(/:codex-file-citation/g)).toHaveLength(2);
+    expect(view.find(FILE_CHIP)).toBeNull();
   });
 
-  it("preserves escaped Codex file citations as literal text", () => {
-    const html = renderToStaticMarkup(
+  it("preserves escaped Codex file citations as literal text", async () => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={'Example: \\:codex-file-citation{path="/tmp/project/outputs/report.xlsx"}'}
       />,
     );
 
-    expect(html).toContain(":codex-file-citation");
-    expect(html).not.toContain("chat-markdown-file-link");
+    expect(view.text()).toContain(":codex-file-citation");
+    expect(view.find(FILE_CHIP)).toBeNull();
   });
 
-  it("does not create a nested link for citations inside link text", () => {
+  it("does not create a nested link for citations inside link text", async () => {
     const directive = ':codex-file-citation{path="/tmp/project/outputs/report.xlsx"}';
-    const html = renderToStaticMarkup(
+    const view = await renderDom(
       <ChatMarkdown cwd="/tmp/project" text={`[See ${directive}](https://example.com)`} />,
     );
-    const renderedText = html.replace(/<[^>]+>/g, "");
 
-    expect(renderedText).toContain("codex-file-citation");
-    expect(html).not.toContain("chat-markdown-file-link");
+    expect(view.text()).toContain("codex-file-citation");
+    expect(view.find(FILE_CHIP)).toBeNull();
   });
 
-  it("renders file citations created by over-indented list recovery", () => {
-    const html = renderToStaticMarkup(
+  it("renders file citations created by over-indented list recovery", async () => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={'-       Created :codex-file-citation{path="/tmp/project/outputs/report.xlsx"}'}
       />,
     );
 
-    expect(html).not.toContain("<pre>");
-    expect(html).toContain("Created ");
-    expect(html).toContain("chat-markdown-file-link");
-    expect(html).toContain("report.xlsx");
+    expect(view.find("pre")).toBeNull();
+    expect(view.text()).toContain("Created ");
+    expect(view.find(FILE_CHIP)).not.toBeNull();
+    expect(view.text()).toContain("report.xlsx");
   });
 
-  it("disambiguates Codex citations with the same basename", () => {
-    const html = renderToStaticMarkup(
+  it("disambiguates Codex citations with the same basename", async () => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={
@@ -496,18 +502,18 @@ describe("ChatMarkdown file option chips", () => {
       />,
     );
 
-    expect(html).toContain("index.ts · project/src");
-    expect(html).toContain("index.ts · project/test");
+    expect(view.text()).toContain("index.ts · project/src");
+    expect(view.text()).toContain("index.ts · project/test");
   });
 
-  it("preserves rejected citations created by over-indented list recovery", () => {
-    const malformedHtml = renderToStaticMarkup(
+  it("preserves rejected citations created by over-indented list recovery", async () => {
+    const malformed = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={'Leading text before list.\n\n-       Bad :codex-file-citation{purpose="output"}'}
       />,
     );
-    const nestedLinkHtml = renderToStaticMarkup(
+    const nestedLink = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={
@@ -515,13 +521,12 @@ describe("ChatMarkdown file option chips", () => {
         }
       />,
     );
-    const nestedLinkText = nestedLinkHtml.replace(/<[^>]+>/g, "");
 
-    expect(malformedHtml).toContain(
-      "<li>Bad :codex-file-citation{purpose=&quot;output&quot;}</li>",
+    expect(malformed.findAll("li").map((item) => item.textContent)).toContain(
+      'Bad :codex-file-citation{purpose="output"}',
     );
-    expect(nestedLinkText).toContain(
-      "Bad :codex-file-citation{path=&quot;/tmp/project/report.xlsx&quot;}",
+    expect(nestedLink.text()).toContain(
+      'Bad :codex-file-citation{path="/tmp/project/report.xlsx"}',
     );
   });
 });
@@ -530,70 +535,103 @@ const ARTIFACT_TEMPLATE_DIRECTIVE =
   '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
 
 describe("ChatMarkdown artifact-template cards", () => {
-  it.each([true, false])("renders the Codex result card with parseRawHtml=%s", (parseRawHtml) => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown
-        cwd="/tmp/project"
-        text={ARTIFACT_TEMPLATE_DIRECTIVE}
-        parseRawHtml={parseRawHtml}
-        onUseArtifactTemplate={() => undefined}
-      />,
-    );
+  it.each([true, false])(
+    "renders the Codex result card with parseRawHtml=%s",
+    async (parseRawHtml) => {
+      const view = await renderDom(
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={ARTIFACT_TEMPLATE_DIRECTIVE}
+          parseRawHtml={parseRawHtml}
+          onUseArtifactTemplate={() => undefined}
+        />,
+      );
 
-    expect(html).not.toContain("::artifact-template");
-    expect(html).toContain("chat-markdown-artifact-template");
-    expect(html).toContain('data-artifact-kind="document"');
-    expect(html).toContain('data-markdown-copy="Hello World (Document template)\n\n"');
-    expect(html).toContain('data-skill-name="artifact-template-hello-world"');
-    expect(html).toContain("Hello World");
-    expect(html).toContain("Document template");
-    expect(html).toContain("Use template");
-    expect(html).not.toContain("<p><div");
-  });
+      expect(view.text()).not.toContain("::artifact-template");
+      const card = view.find(ARTIFACT_CARD);
+      expect(card).not.toBeNull();
+      expect(card?.getAttribute("data-artifact-kind")).toBe("document");
+      expect(card?.getAttribute("data-markdown-copy")).toBe("Hello World (Document template)\n\n");
+      expect(card?.getAttribute("data-skill-name")).toBe("artifact-template-hello-world");
+      expect(view.text()).toContain("Hello World");
+      expect(view.text()).toContain("Document template");
+      expect(view.text()).toContain("Use template");
+      // The card is a block element, so it must never land inside a paragraph.
+      expect(view.find("p > div")).toBeNull();
+    },
+  );
 
-  it("renders a passive card outside a composer-backed timeline", () => {
-    const html = renderToStaticMarkup(
+  it("renders a passive card outside a composer-backed timeline", async () => {
+    const view = await renderDom(
       <ChatMarkdown cwd="/tmp/project" text={ARTIFACT_TEMPLATE_DIRECTIVE} />,
     );
 
-    expect(html).toContain("chat-markdown-artifact-template");
-    expect(html).not.toContain("Use template");
+    expect(view.find(ARTIFACT_CARD)).not.toBeNull();
+    expect(view.text()).not.toContain("Use template");
   });
 
-  it("leaves malformed and unfinished artifact-template directives literal", () => {
+  it("leaves malformed and unfinished artifact-template directives literal", async () => {
     const malformed =
       '::artifact-template{skill_name="artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
     const unfinished = ARTIFACT_TEMPLATE_DIRECTIVE.slice(0, -1);
 
     for (const text of [malformed, unfinished]) {
-      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
-      expect(html).toContain("::artifact-template");
-      expect(html).not.toContain("chat-markdown-artifact-template");
+      const view = await renderDom(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      expect(view.text()).toContain("::artifact-template");
+      expect(view.find(ARTIFACT_CARD)).toBeNull();
     }
   });
 
-  it("leaves escaped and similarly named artifact-template directives literal", () => {
+  it("leaves escaped and similarly named artifact-template directives literal", async () => {
     for (const text of [
       `\\${ARTIFACT_TEMPLATE_DIRECTIVE}`,
       ARTIFACT_TEMPLATE_DIRECTIVE.replace("::artifact-template", "::artifact-template-extra"),
     ]) {
-      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      const view = await renderDom(<ChatMarkdown cwd="/tmp/project" text={text} />);
 
-      expect(html).toContain("::artifact-template");
-      expect(html).not.toContain("chat-markdown-artifact-template");
+      expect(view.text()).toContain("::artifact-template");
+      expect(view.find(ARTIFACT_CARD)).toBeNull();
     }
   });
 
-  it("preserves artifact-template examples inside code", () => {
-    const html = renderToStaticMarkup(
+  it("preserves artifact-template examples inside code", async () => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="/tmp/project"
         text={`\`${ARTIFACT_TEMPLATE_DIRECTIVE}\`\n\n\`\`\`text\n${ARTIFACT_TEMPLATE_DIRECTIVE}\n\`\`\``}
       />,
     );
 
-    expect(html.match(/::artifact-template/g)).toHaveLength(2);
-    expect(html).not.toContain("chat-markdown-artifact-template");
+    expect(view.text().match(/::artifact-template/g)).toHaveLength(2);
+    expect(view.find(ARTIFACT_CARD)).toBeNull();
+  });
+
+  // Only reachable with a real DOM: `onUseArtifactTemplate` is what turns the card from a
+  // readout into an action, and static markup could never press the button.
+  it("hands the parsed template back when Use template is pressed", async () => {
+    const onUseArtifactTemplate = vi.fn();
+    const view = await renderDom(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={ARTIFACT_TEMPLATE_DIRECTIVE}
+        onUseArtifactTemplate={onUseArtifactTemplate}
+      />,
+    );
+
+    const useTemplate = view
+      .findAll("button")
+      .find((button) => button.textContent === "Use template");
+    await view.click(useTemplate ?? null);
+
+    expect(onUseArtifactTemplate).toHaveBeenCalledTimes(1);
+    expect(onUseArtifactTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifactKind: "document",
+        displayName: "Hello World",
+        skillName: "artifact-template-hello-world",
+        skillDirectory: "/Users/test/.codex/skills/artifact-template-hello-world",
+      }),
+    );
   });
 });
 
@@ -684,8 +722,8 @@ describe("orderedListGutterStyle", () => {
 describe("ChatMarkdown Windows file links", () => {
   const environmentId = EnvironmentId.make("env-windows");
 
-  it.each([true, false])("preserves drive paths with parseRawHtml=%s", (parseRawHtml) => {
-    const html = renderToStaticMarkup(
+  it.each([true, false])("preserves drive paths with parseRawHtml=%s", async (parseRawHtml) => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
         environmentId={environmentId}
@@ -695,12 +733,12 @@ describe("ChatMarkdown Windows file links", () => {
       />,
     );
 
-    expect(html).toContain('href="C:/Users/shawn/project/src/main.ts"');
-    expect(html).toContain("chat-markdown-file-link");
+    expect(view.find('[href="C:/Users/shawn/project/src/main.ts"]')).not.toBeNull();
+    expect(view.find(FILE_CHIP)).not.toBeNull();
   });
 
-  it.each([true, false])("normalizes backslashes with parseRawHtml=%s", (parseRawHtml) => {
-    const html = renderToStaticMarkup(
+  it.each([true, false])("normalizes backslashes with parseRawHtml=%s", async (parseRawHtml) => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
         environmentId={environmentId}
@@ -710,14 +748,14 @@ describe("ChatMarkdown Windows file links", () => {
       />,
     );
 
-    expect(html).toContain('href="C:/Users/shawn/project/src/main.ts"');
-    expect(html).toContain("chat-markdown-file-link");
+    expect(view.find('[href="C:/Users/shawn/project/src/main.ts"]')).not.toBeNull();
+    expect(view.find(FILE_CHIP)).not.toBeNull();
   });
 
   it.each([true, false])(
     "distinguishes same-named backslash paths with parseRawHtml=%s",
-    (parseRawHtml) => {
-      const html = renderToStaticMarkup(
+    async (parseRawHtml) => {
+      const view = await renderDom(
         <ChatMarkdown
           cwd="C:/Users/shawn/project"
           environmentId={environmentId}
@@ -727,16 +765,16 @@ describe("ChatMarkdown Windows file links", () => {
         />,
       );
 
-      expect(html).toContain("index.ts · project/src");
-      expect(html).toContain("index.ts · project/test");
+      expect(view.text()).toContain("index.ts · project/src");
+      expect(view.text()).toContain("index.ts · project/test");
     },
   );
 
   it.each([true, false])(
     "does not disambiguate the same file in links and inline code with parseRawHtml=%s",
-    (parseRawHtml) => {
+    async (parseRawHtml) => {
       const path = String.raw`C:\Users\shawn\project\src\main.ts`;
-      const html = renderToStaticMarkup(
+      const view = await renderDom(
         <ChatMarkdown
           cwd="C:/Users/shawn/project"
           environmentId={environmentId}
@@ -746,13 +784,13 @@ describe("ChatMarkdown Windows file links", () => {
         />,
       );
 
-      expect(html.match(/chat-markdown-file-link/g)).toHaveLength(2);
-      expect(html).not.toContain("main.ts ·");
+      expect(view.findAll(FILE_CHIP)).toHaveLength(2);
+      expect(view.text()).not.toContain("main.ts ·");
     },
   );
 
-  it.each([true, false])("preserves reference links with parseRawHtml=%s", (parseRawHtml) => {
-    const html = renderToStaticMarkup(
+  it.each([true, false])("preserves reference links with parseRawHtml=%s", async (parseRawHtml) => {
+    const view = await renderDom(
       <ChatMarkdown
         cwd="C:/Users/shawn/project"
         environmentId={environmentId}
@@ -762,23 +800,36 @@ describe("ChatMarkdown Windows file links", () => {
       />,
     );
 
-    expect(html).toContain('href="C:/Users/shawn/project/src/main.ts"');
-    expect(html).toContain("chat-markdown-file-link");
+    expect(view.find('[href="C:/Users/shawn/project/src/main.ts"]')).not.toBeNull();
+    expect(view.find(FILE_CHIP)).not.toBeNull();
   });
 
-  it.each([true, false])("still rejects unsafe schemes with parseRawHtml=%s", (parseRawHtml) => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown
-        cwd="C:/Users/shawn/project"
-        environmentId={environmentId}
-        text="[unsafe](javascript:alert(1)) and [unknown](d:alert(1))"
-        lineBreaks={!parseRawHtml}
-        parseRawHtml={parseRawHtml}
-      />,
-    );
+  it.each([true, false])(
+    "still rejects unsafe schemes with parseRawHtml=%s",
+    async (parseRawHtml) => {
+      const view = await renderDom(
+        <ChatMarkdown
+          cwd="C:/Users/shawn/project"
+          environmentId={environmentId}
+          text="[unsafe](javascript:alert(1)) and [unknown](d:alert(1))"
+          lineBreaks={!parseRawHtml}
+          parseRawHtml={parseRawHtml}
+        />,
+      );
 
-    expect(html).not.toContain("javascript:");
-    expect(html).not.toContain("d:alert");
-    expect(html).not.toContain("chat-markdown-file-link");
-  });
+      // No element may carry the scheme, and it must not have been rendered as visible
+      // text either — the static version asserted both at once against the markup string.
+      const targets = view
+        .findAll("[href], [src]")
+        .flatMap((element) => [
+          element.getAttribute("href") ?? "",
+          element.getAttribute("src") ?? "",
+        ]);
+      expect(targets.some((target) => target.includes("javascript:"))).toBe(false);
+      expect(targets.some((target) => target.includes("d:alert"))).toBe(false);
+      expect(view.text()).not.toContain("javascript:");
+      expect(view.text()).not.toContain("d:alert");
+      expect(view.find(FILE_CHIP)).toBeNull();
+    },
+  );
 });

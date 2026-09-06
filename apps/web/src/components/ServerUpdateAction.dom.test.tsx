@@ -1,5 +1,4 @@
 import type { ReactElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -29,6 +28,8 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.toast },
 }));
+
+import { renderDom } from "../testing/renderDom";
 
 import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 
@@ -107,8 +108,8 @@ describe("ServerUpdateAction", () => {
     expect(testState.toast).not.toHaveBeenCalled();
   });
 
-  it("keeps the manual instruction for desktop servers without remote update support", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the manual instruction for desktop servers without remote update support", async () => {
+    const view = await renderDom(
       <ServerUpdateAction
         environmentId={"env-test" as EnvironmentId}
         serverLabel="Test server"
@@ -117,8 +118,39 @@ describe("ServerUpdateAction", () => {
       />,
     );
 
-    expect(markup).toContain("Update the desktop app on that machine to update this server.");
-    expect(markup).not.toContain("<button");
+    expect(view.text()).toContain("Update the desktop app on that machine to update this server.");
+    expect(view.find("button")).toBeNull();
+  });
+
+  // The other flow tests call the component as a function and poke its onClick, which cannot
+  // see a button that was never wired to the handler. Drive the real control once so the
+  // wiring is covered too.
+  it("runs the update from the rendered button", async () => {
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
+    );
+
+    const view = await renderDom(
+      <ServerUpdateAction
+        environmentId={"env-test" as EnvironmentId}
+        serverLabel="Test server"
+        selfUpdate="boot-service"
+        targetVersion="0.0.31"
+      />,
+    );
+
+    await view.click(view.find("button"));
+    await flushPromises();
+
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-test",
+      input: { targetVersion: "0.0.31" },
+    });
+    expect(testState.toast).toHaveBeenCalledWith({
+      type: "success",
+      title: "Test server updated",
+      description: "Reconnected on t3@0.0.31.",
+    });
   });
 
   it("updates remote desktop apps through the shared update flow", async () => {
@@ -195,8 +227,8 @@ describe("ServerUpdateAction", () => {
 });
 
 describe("ServerUpdateProgress", () => {
-  it("shows one calm status row for the restart wait", () => {
-    const markup = renderToStaticMarkup(
+  it("shows one calm status row for the restart wait", async () => {
+    const view = await renderDom(
       <ServerUpdateProgress
         state={{
           status: "running",
@@ -207,19 +239,19 @@ describe("ServerUpdateProgress", () => {
       />,
     );
 
-    expect(markup).toContain("Restarting…");
+    expect(view.text()).toContain("Restarting…");
     // The wait state is monochrome and calm: no versions, no step rail, no
     // success/warning colors, one duty-cycled pulse on the dot.
-    expect(markup).not.toContain("0.0.30");
-    expect(markup).not.toContain("Resum");
-    expect(markup).not.toContain("text-success");
-    expect(markup).not.toContain("text-primary");
-    expect(markup).toContain("animate-status-pulse");
-    expect(markup).not.toContain("animate-spin");
+    expect(view.text()).not.toContain("0.0.30");
+    expect(view.text()).not.toContain("Resum");
+    expect(view.findAll('[class*="text-success"]')).toHaveLength(0);
+    expect(view.findAll('[class*="text-primary"]')).toHaveLength(0);
+    expect(view.find(".animate-status-pulse")).not.toBeNull();
+    expect(view.findAll('[class*="animate-spin"]')).toHaveLength(0);
   });
 
-  it("folds the sub-second installing handoff into the download phase", () => {
-    const markup = renderToStaticMarkup(
+  it("folds the sub-second installing handoff into the download phase", async () => {
+    const view = await renderDom(
       <ServerUpdateProgress
         state={{
           status: "running",
@@ -230,12 +262,12 @@ describe("ServerUpdateProgress", () => {
       />,
     );
 
-    expect(markup).toContain("Downloading…");
-    expect(markup).not.toContain("Install");
+    expect(view.text()).toContain("Downloading…");
+    expect(view.text()).not.toContain("Install");
   });
 
-  it("keeps the failure visible with its retryable error", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the failure visible with its retryable error", async () => {
+    const view = await renderDom(
       <ServerUpdateProgress
         state={{
           status: "failed",
@@ -247,8 +279,8 @@ describe("ServerUpdateProgress", () => {
       />,
     );
 
-    expect(markup).toContain('role="alert"');
-    expect(markup).toContain("The package could not be verified.");
-    expect(markup).not.toContain("animate-status-pulse");
+    expect(view.find('[role="alert"]')).not.toBeNull();
+    expect(view.text()).toContain("The package could not be verified.");
+    expect(view.find(".animate-status-pulse")).toBeNull();
   });
 });

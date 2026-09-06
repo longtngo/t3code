@@ -1,12 +1,12 @@
 import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
 import { codexFeedbackMessage } from "@t3tools/client-runtime/state/threads";
 import { act, createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
+import { renderDom } from "../../testing/renderDom";
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -129,59 +129,12 @@ vi.mock("../DiffWorkerPoolProvider", () => ({
   DiffWorkerPoolProvider: ({ children }: { children?: ReactNode }) => children,
 }));
 
-function matchMedia() {
-  return {
-    matches: false,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  };
-}
-
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 
+// The DOM this file needs is the real one now: it runs under the `dom` project, so the
+// stub `window`/`document`/`Element` this suite used to install for the `node` environment
+// would replace a working DOM with a broken one.
 beforeAll(async () => {
-  const classList = {
-    add: () => {},
-    remove: () => {},
-    toggle: () => {},
-    contains: () => false,
-  };
-
-  vi.stubGlobal("localStorage", {
-    getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
-    clear: () => {},
-  });
-  const ElementStub = class Element {};
-  vi.stubGlobal("window", {
-    // `isElement` falls back to `getWindow(value).Element` when the value has no
-    // owner document, so the stub window needs it too.
-    Element: ElementStub,
-    matchMedia,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      callback(0);
-      return 0;
-    },
-    cancelAnimationFrame: () => {},
-    desktopBridge: undefined,
-  });
-  vi.stubGlobal("document", {
-    documentElement: {
-      classList,
-      offsetHeight: 0,
-    },
-  });
-  // base-ui's floating-ui helpers short-circuit when there is no `window`, but the
-  // stub above gives them one, and `isElement` then reaches for this constructor on
-  // mount. There is no DOM here; the class only needs to exist so `value instanceof
-  // Element` answers false instead of throwing. Deliberately NOT `HTMLElement` or
-  // `Node`: defining those makes `@pierre/trees` register its web components at
-  // import time and fail on the missing `customElements`.
-  vi.stubGlobal("Element", ElementStub);
-
   ({ MessagesTimeline } = await import("./MessagesTimeline"));
 }, 30_000);
 
@@ -250,8 +203,27 @@ function buildAssistantTimelineEntry(text: string) {
   };
 }
 
+/** LegendList's mock exposes the end-following decision as this attribute. */
+const MAINTAIN_SCROLL_AT_END = '[data-maintain-scroll-at-end="enabled"]';
+
+/** Accessible names carrying a fragment - the failure notice is label-only, never visible text. */
+function ariaLabelsContaining(
+  view: Awaited<ReturnType<typeof renderDom>>,
+  fragment: string,
+): string[] {
+  return view
+    .findAll("[aria-label]")
+    .map((element) => element.getAttribute("aria-label") ?? "")
+    .filter((label) => label.includes(fragment));
+}
+
+/** Every attribute value in the tree, for "this string reached no attribute either" checks. */
+function attributeValues(view: Awaited<ReturnType<typeof renderDom>>): string[] {
+  return view.findAll("*").flatMap((element) => [...element.attributes].map((a) => a.value));
+}
+
 describe("MessagesTimeline", () => {
-  it("renders a feedback command and its pending response as normal thread messages", () => {
+  it("renders a feedback command and its pending response as normal thread messages", async () => {
     const submission = {
       id: MessageId.make("feedback-command"),
       command: "/feedback The agent stopped early.",
@@ -262,7 +234,7 @@ describe("MessagesTimeline", () => {
       codexFeedbackMessage(submission),
       codexFeedbackMessage(submission, "assistant"),
     ];
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={messages.map((message) => ({
@@ -274,11 +246,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("/feedback The agent stopped early.");
-    expect(markup).toContain("Sending feedback to OpenAI...");
+    expect(view.text()).toContain("/feedback The agent stopped early.");
+    expect(view.text()).toContain("Sending feedback to OpenAI...");
   });
 
-  it("renders the returned Codex thread ID in the feedback response", () => {
+  it("renders the returned Codex thread ID in the feedback response", async () => {
     const submission = {
       id: MessageId.make("feedback-command"),
       command: "/feedback The agent stopped early.",
@@ -290,7 +262,7 @@ describe("MessagesTimeline", () => {
       codexFeedbackMessage(submission),
       codexFeedbackMessage(submission, "assistant"),
     ];
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={messages.map((message) => ({
@@ -302,14 +274,14 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Feedback sent to OpenAI.");
-    expect(markup).toContain("codex-thread-1");
+    expect(view.text()).toContain("Feedback sent to OpenAI.");
+    expect(view.text()).toContain("codex-thread-1");
   });
 
-  it("renders elapsed time for a completed turn", () => {
+  it("renders elapsed time for a completed turn", async () => {
     const turnId = TurnId.make("turn-with-fold");
     const assistantEntry = buildAssistantTimelineEntry("Done.");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         latestTurn={{
@@ -340,13 +312,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Worked for 8.0s");
+    expect(view.text()).toContain("Worked for 8.0s");
   });
 
-  it("keeps assistant changed-files headers sticky below the thread header", () => {
+  it("keeps assistant changed-files headers sticky below the thread header", async () => {
     const assistantMessageId = MessageId.make("message-assistant-with-files");
     const turnId = TurnId.make("turn-with-files");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         latestTurn={{
@@ -390,13 +362,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("sticky top-2 z-10");
-    expect(markup).not.toContain("self-start");
-    expect(markup).toContain("whitespace-nowrap");
-    expect(markup).toContain("size-3");
-    expect(markup).not.toContain('aria-label="Collapse all folders"');
-    expect(markup).toContain('aria-label="Open diff"');
-    expect(markup).toContain("1 changed file");
+    expect(view.find(".sticky.top-2.z-10")).not.toBeNull();
+    expect(view.find(".self-start")).toBeNull();
+    expect(view.find(".whitespace-nowrap")).not.toBeNull();
+    expect(view.find(".size-3")).not.toBeNull();
+    expect(view.find('[aria-label="Collapse all folders"]')).toBeNull();
+    expect(view.find('[aria-label="Open diff"]')).not.toBeNull();
+    expect(view.text()).toContain("1 changed file");
   });
 
   it("treats only the strict list end as the live edge", async () => {
@@ -489,7 +461,7 @@ describe("MessagesTimeline", () => {
     expect(resolveTimelineMinimapInteractiveWidth(40, true)).toBe("22rem");
   });
 
-  it("gives browser documents separate preview and download controls", () => {
+  it("gives browser documents separate preview and download controls", async () => {
     const entry = {
       ...buildUserTimelineEntry("Read the report."),
       message: {
@@ -507,17 +479,15 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).toContain('aria-label="Preview report.pdf"');
-    expect(markup).toContain('aria-label="Download report.pdf"');
-    expect(markup).not.toContain('download="report.pdf"');
-    expect(markup).not.toContain('alt="report.pdf"');
+    expect(view.find('[aria-label="Preview report.pdf"]')).not.toBeNull();
+    expect(view.find('[aria-label="Download report.pdf"]')).not.toBeNull();
+    expect(view.find('[download="report.pdf"]')).toBeNull();
+    expect(view.find('[alt="report.pdf"]')).toBeNull();
   });
 
-  it("renders video attachments with the shared video player", () => {
+  it("renders video attachments with the shared video player", async () => {
     const entry = {
       ...buildUserTimelineEntry("Watch the demo."),
       message: {
@@ -535,17 +505,16 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).toContain("<video");
-    expect(markup).toContain('aria-label="demo.mp4"');
-    expect(markup).toContain('controls=""');
-    expect(markup).not.toContain("Expand demo.mp4");
+    expect(view.find("video")).not.toBeNull();
+    expect(view.find('[aria-label="demo.mp4"]')).not.toBeNull();
+    expect(view.find("video")?.hasAttribute("controls")).toBe(true);
+    expect(view.text()).not.toContain("Expand demo.mp4");
+    expect(view.find('[aria-label="Expand demo.mp4"]')).toBeNull();
   });
 
-  it("shows the filename while an optimistic video is unavailable", () => {
+  it("shows the filename while an optimistic video is unavailable", async () => {
     const entry = {
       ...buildUserTimelineEntry("Uploading the demo."),
       message: {
@@ -563,14 +532,15 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).not.toContain("<video");
-    expect(markup).toContain(">pending-demo.mp4</div>");
+    expect(view.find("video")).toBeNull();
+    // The bare filename, rendered as its own element rather than as a player.
+    expect(view.findAll("div").some((element) => element.textContent === "pending-demo.mp4")).toBe(
+      true,
+    );
   });
-  it("renders an ordinary file download button without creating its URL in advance", () => {
+  it("renders an ordinary file download button without creating its URL in advance", async () => {
     const entry = {
       ...buildUserTimelineEntry("Read the report."),
       message: {
@@ -587,17 +557,18 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).toContain(
-      '<button type="button" aria-label="Download archive.zip" class="flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70">',
+    const download = view.find<HTMLButtonElement>('[aria-label="Download archive.zip"]');
+    expect(download?.tagName).toBe("BUTTON");
+    expect(download?.type).toBe("button");
+    expect(download?.className).toBe(
+      "flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
     );
-    expect(markup).not.toContain("<a href=");
+    expect(view.find("a[href]")).toBeNull();
   });
 
-  it("does not download an optimistic file before the server supplies its attachment ID", () => {
+  it("does not download an optimistic file before the server supplies its attachment ID", async () => {
     const entry = {
       ...buildUserTimelineEntry("Read the report."),
       message: {
@@ -615,15 +586,13 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).toContain("report.pdf");
-    expect(markup).not.toContain('aria-label="Download report.pdf"');
+    expect(view.text()).toContain("report.pdf");
+    expect(view.find('[aria-label="Download report.pdf"]')).toBeNull();
   });
 
-  it("renders unknown attachment types as inert rows instead of crashing", () => {
+  it("renders unknown attachment types as inert rows instead of crashing", async () => {
     const entry = {
       ...buildUserTimelineEntry("Play the recording."),
       message: {
@@ -642,20 +611,18 @@ describe("MessagesTimeline", () => {
       },
     };
 
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
+    const view = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={[entry]} />);
 
-    expect(markup).toContain("voice-memo.ogg");
-    expect(markup).not.toContain('aria-label="Download voice-memo.ogg"');
-    expect(markup).not.toContain('alt="voice-memo.ogg"');
-    expect(markup).not.toContain("<a href=");
+    expect(view.text()).toContain("voice-memo.ogg");
+    expect(view.find('[aria-label="Download voice-memo.ogg"]')).toBeNull();
+    expect(view.find('[alt="voice-memo.ogg"]')).toBeNull();
+    expect(view.find("a[href]")).toBeNull();
   });
 
-  it("keeps reserved end space when tool work starts while reading history", () => {
+  it("keeps reserved end space when tool work starts while reading history", async () => {
     const turnId = TurnId.make("turn-with-active-tool");
     const firstEntry = buildUserTimelineEntry("Run the command.");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         isWorking
@@ -691,11 +658,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('data-anchor-index="0"');
-    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(view.find('[data-anchor-index="0"]')).not.toBeNull();
+    expect(view.find(MAINTAIN_SCROLL_AT_END)).toBeNull();
   });
 
-  it("hands end-following back to the list once the send anchor is released", () => {
+  it("hands end-following back to the list once the send anchor is released", async () => {
     const firstEntry = buildUserTimelineEntry("First prompt.");
     const secondEntry = {
       ...buildUserTimelineEntry("Newest prompt."),
@@ -709,78 +676,75 @@ describe("MessagesTimeline", () => {
 
     // While the send anchor holds the end space open, ChatView owns streaming
     // scrolls and LegendList must not re-pin behind it.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={firstEntry.message.id}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).not.toContain('data-maintain-scroll-at-end="enabled"');
+    const anchored = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={firstEntry.message.id}
+        timelineEntries={timelineEntries}
+      />,
+    );
+    expect(anchored.find(MAINTAIN_SCROLL_AT_END)).toBeNull();
 
     // Dropping the anchor is what actually gives end-following back, so
     // returning to the live edge has to release it — re-enabling live follow
     // alone leaves nothing pinned to the stream.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={null}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).toContain('data-maintain-scroll-at-end="enabled"');
+    const released = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={null}
+        timelineEntries={timelineEntries}
+      />,
+    );
+    expect(released.find(MAINTAIN_SCROLL_AT_END)).not.toBeNull();
 
     // Reading history still wins over both.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={null}
-          liveFollowEnabled={false}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).not.toContain('data-maintain-scroll-at-end="enabled"');
+    const readingHistory = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={null}
+        liveFollowEnabled={false}
+        timelineEntries={timelineEntries}
+      />,
+    );
+    expect(readingHistory.find(MAINTAIN_SCROLL_AT_END)).toBeNull();
   });
 
-  it("renders collapse controls for long user messages", () => {
-    const markup = renderToStaticMarkup(
+  it("renders collapse controls for long user messages", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
       />,
     );
 
-    expect(markup).toContain("Show full message");
-    expect(markup).toContain('data-maintain-scroll-at-end="enabled"');
-    expect(markup).toContain('data-maintain-scroll-at-end-animated="false"');
-    expect(markup).toContain('data-maintain-scroll-at-end-data-change="true"');
-    expect(markup).toContain('data-maintain-scroll-at-end-footer-layout="false"');
-    expect(markup).toContain('data-maintain-scroll-at-end-item-layout="true"');
-    expect(markup).toContain('data-maintain-scroll-at-end-layout="true"');
-    expect(markup).toContain('data-user-message-collapsed="true"');
-    expect(markup).toContain('data-user-message-fade="true"');
-    expect(markup).toContain('data-user-message-footer="true"');
+    expect(view.text()).toContain("Show full message");
+    expect(view.find(MAINTAIN_SCROLL_AT_END)).not.toBeNull();
+    expect(view.find('[data-maintain-scroll-at-end-animated="false"]')).not.toBeNull();
+    expect(view.find('[data-maintain-scroll-at-end-data-change="true"]')).not.toBeNull();
+    expect(view.find('[data-maintain-scroll-at-end-footer-layout="false"]')).not.toBeNull();
+    expect(view.find('[data-maintain-scroll-at-end-item-layout="true"]')).not.toBeNull();
+    expect(view.find('[data-maintain-scroll-at-end-layout="true"]')).not.toBeNull();
+    expect(view.find('[data-user-message-collapsed="true"]')).not.toBeNull();
+    expect(view.find('[data-user-message-fade="true"]')).not.toBeNull();
+    expect(view.find('[data-user-message-footer="true"]')).not.toBeNull();
   });
 
-  it("does not render collapse controls for short user messages", () => {
-    const markup = renderToStaticMarkup(
+  it("does not render collapse controls for short user messages", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry("Short prompt.")]}
       />,
     );
 
-    expect(markup).not.toContain("Show full message");
-    expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-message p-3");
+    expect(view.text()).not.toContain("Show full message");
+    expect(view.find('[data-user-message-collapsible="false"]')).not.toBeNull();
+    expect(view.find(".rounded-2xl.bg-message.p-3")).not.toBeNull();
   });
 
   it("preserves arbitrary XML-like tags and comparisons in rendered user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -796,17 +760,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("&lt;global-agent-instructions scope=&quot;workspace&quot;&gt;");
-    expect(markup).toContain(
-      "Before &lt;nested data-value=&quot;a&amp;b&quot;&gt;inside&lt;/nested&gt; after",
-    );
-    expect(markup).toContain("&lt;/global-agent-instructions&gt; in your context?");
-    expect(markup).toContain("Comparison: 2 &lt; 3 and 5 &gt; 4.");
+    expect(view.text()).toContain('<global-agent-instructions scope="workspace">');
+    expect(view.text()).toContain('Before <nested data-value="a&b">inside</nested> after');
+    expect(view.text()).toContain("</global-agent-instructions> in your context?");
+    expect(view.text()).toContain("Comparison: 2 < 3 and 5 > 4.");
   });
 
   it("preserves XML-like source inside user code spans and fences", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -823,13 +785,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('<code data-inline-code="">&lt;tag attr=&quot;x&quot;&gt;</code>');
-    expect(markup).toContain("&lt;root&gt;&lt;child enabled=&quot;true&quot; /&gt;&lt;/root&gt;");
+    expect(view.find("code[data-inline-code]")?.textContent).toBe('<tag attr="x">');
+    expect(view.text()).toContain('<root><child enabled="true" /></root>');
   });
 
   it("does not render markdown title attributes in user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -840,15 +802,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('href="https://example.com"');
-    expect(markup).toContain('src="https://example.com/image.png"');
-    expect(markup).not.toContain('title="link tip"');
-    expect(markup).not.toContain('title="image tip"');
+    expect(view.find('a[href="https://example.com"]')).not.toBeNull();
+    expect(view.find('img[src="https://example.com/image.png"]')).not.toBeNull();
+    expect(view.find('[title="link tip"]')).toBeNull();
+    expect(view.find('[title="image tip"]')).toBeNull();
   });
 
   it("renders unsafe user HTML as inert source text", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -859,17 +821,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("&lt;script&gt;globalThis.__t3Xss = 1&lt;/script&gt;");
-    expect(markup).toContain(
-      "&lt;img src=&quot;x&quot; onerror=&quot;globalThis.__t3Xss = 2&quot;&gt;",
-    );
-    expect(markup).not.toMatch(/<script(?:\s|>)/i);
-    expect(markup).not.toMatch(/<img(?:\s|>)/i);
+    expect(view.text()).toContain("<script>globalThis.__t3Xss = 1</script>");
+    expect(view.text()).toContain('<img src="x" onerror="globalThis.__t3Xss = 2">');
+    expect(view.find("script")).toBeNull();
+    expect(view.find("img")).toBeNull();
   });
 
   it("continues to render sanitized raw HTML in assistant messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -878,14 +838,14 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('data-markdown-details=""');
-    expect(markup).toContain("More");
-    expect(markup).not.toContain("&lt;details&gt;");
+    expect(view.find("[data-markdown-details]")).not.toBeNull();
+    expect(view.text()).toContain("More");
+    expect(view.text()).not.toContain("<details>");
   });
 
   it("sanitizes executable HTML while preserving supported assistant markup", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -903,18 +863,19 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('data-markdown-details=""');
-    expect(markup).toContain("Safe details");
-    expect(markup).not.toMatch(/<script(?:\s|>)/i);
-    expect(markup).not.toContain("onclick=");
-    expect(markup).not.toContain("onerror=");
-    expect(markup).not.toContain("javascript:");
-    expect(markup).not.toContain("globalThis.__t3Xss");
+    expect(view.find("[data-markdown-details]")).not.toBeNull();
+    expect(view.text()).toContain("Safe details");
+    expect(view.find("script")).toBeNull();
+    expect(view.find("[onclick]")).toBeNull();
+    expect(view.find("[onerror]")).toBeNull();
+    expect(attributeValues(view).some((value) => value.includes("javascript:"))).toBe(false);
+    expect(view.text()).not.toContain("globalThis.__t3Xss");
+    expect(attributeValues(view).some((value) => value.includes("globalThis.__t3Xss"))).toBe(false);
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -933,15 +894,20 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("lucide-terminal");
-    expect(markup).toContain("yoo what&#x27;s</p>");
-    expect(markup).toContain('<span aria-hidden="true"> </span>');
-    expect(markup).toContain("Show full message");
+    expect(view.text()).toContain("Terminal 1 lines 1-5");
+    expect(view.find(".lucide-terminal")).not.toBeNull();
+    // The prompt's own trailing paragraph, followed by the chip's spacing span.
+    expect(view.findAll("p").some((element) => element.textContent?.endsWith("yoo what's"))).toBe(
+      true,
+    );
+    expect(
+      view.findAll('span[aria-hidden="true"]').some((element) => element.textContent === " "),
+    ).toBe(true);
+    expect(view.text()).toContain("Show full message");
   }, 20_000);
 
-  it("renders chips for standalone element-pick context messages", () => {
-    const markup = renderToStaticMarkup(
+  it("renders chips for standalone element-pick context messages", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -961,26 +927,29 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("SubmitButton");
-    expect(markup).not.toContain("&lt;element_context");
-    expect(markup).not.toContain("<element_context");
+    expect(view.text()).toContain("SubmitButton");
+    expect(view.text()).not.toContain("<element_context");
+    // The raw tag must not have become a real (unknown) element either.
+    expect(
+      view.findAll("*").some((element) => element.tagName.toLowerCase() === "element_context"),
+    ).toBe(false);
   });
 
-  it("keeps the copy button for collapsed long user messages", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the copy button for collapsed long user messages", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
       />,
     );
 
-    expect(markup).toContain('aria-label="Copy link"');
-    expect(markup).toContain('data-user-message-collapsed="true"');
-    expect(markup).toContain('data-user-message-footer="true"');
+    expect(view.find('[aria-label="Copy link"]')).not.toBeNull();
+    expect(view.find('[data-user-message-collapsed="true"]')).not.toBeNull();
+    expect(view.find('[data-user-message-footer="true"]')).not.toBeNull();
   });
 
-  it("renders context compaction entries in the normal work log", () => {
-    const markup = renderToStaticMarkup(
+  it("renders context compaction entries in the normal work log", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -999,11 +968,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Compacted context 899K → 19K tokens");
+    expect(view.text()).toContain("Compacted context 899K → 19K tokens");
   });
 
-  it("summarizes changed files in one line", () => {
-    const markup = renderToStaticMarkup(
+  it("summarizes changed files in one line", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1024,12 +993,14 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Changed 1 file");
-    expect(markup).not.toContain("C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts");
+    expect(view.text()).toContain("Changed 1 file");
+    expect(view.text()).not.toContain(
+      "C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts",
+    );
   });
 
-  it("keeps mixed-success tool groups neutral", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps mixed-success tool groups neutral", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1063,12 +1034,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Ran 2 commands");
-    expect(markup).not.toContain('aria-label="Tool call failed"');
+    expect(view.text()).toContain("Ran 2 commands");
+    expect(view.find('[aria-label="Tool call failed"]')).toBeNull();
   });
 
-  it("keeps the collapsed summary icon neutral when the group ends in a failure", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the collapsed summary icon neutral when the group ends in a failure", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1102,18 +1073,18 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Ran 2 commands");
-    expect(markup).toContain("lucide-terminal");
-    expect(markup).not.toContain("lucide-x");
-    expect(markup).not.toContain("text-destructive");
+    expect(view.text()).toContain("Ran 2 commands");
+    expect(view.find(".lucide-terminal")).not.toBeNull();
+    expect(view.find(".lucide-x")).toBeNull();
+    expect(view.find(".text-destructive")).toBeNull();
     // The failure stays discoverable for screen readers.
-    expect(markup).toContain("tool call failed");
+    expect(ariaLabelsContaining(view, "tool call failed")).not.toHaveLength(0);
   });
 
-  it("renders trailing tool calls as part of the terminal assistant block", () => {
+  it("renders trailing tool calls as part of the terminal assistant block", async () => {
     const turnId = TurnId.make("turn-trailing-tools");
     const assistantMessageId = MessageId.make("assistant-trailing-tools");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         latestTurn={{
@@ -1155,19 +1126,21 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    const messageIndex = markup.indexOf('data-timeline-row-id="assistant-entry"');
-    const toolIndex = markup.indexOf('data-timeline-row-id="trailing-work-entry"');
-    const metaIndex = markup.indexOf(
-      'data-timeline-row-id="assistant-meta:assistant-trailing-tools"',
-    );
+    // `querySelectorAll` yields document order, which is the render order this pins.
+    const rowIds = view
+      .findAll("[data-timeline-row-id]")
+      .map((row) => row.getAttribute("data-timeline-row-id"));
+    const messageIndex = rowIds.indexOf("assistant-entry");
+    const toolIndex = rowIds.indexOf("trailing-work-entry");
+    const metaIndex = rowIds.indexOf("assistant-meta:assistant-trailing-tools");
     expect(messageIndex).toBeGreaterThanOrEqual(0);
     expect(toolIndex).toBeGreaterThan(messageIndex);
     expect(metaIndex).toBeGreaterThan(toolIndex);
-    expect(markup.match(/I’ll search for it now\./gu)).toHaveLength(1);
+    expect(view.text().match(/I’ll search for it now\./gu)).toHaveLength(1);
   });
 
-  it("keeps mixed work logs neutral after a later tool call succeeds", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps mixed work logs neutral after a later tool call succeeds", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1212,13 +1185,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Ran 2 commands and received 1 update");
-    expect(markup).not.toContain('aria-label="Hidden work includes a failure"');
+    expect(view.text()).toContain("Ran 2 commands and received 1 update");
+    expect(view.find('[aria-label="Hidden work includes a failure"]')).toBeNull();
   });
 
-  it("shows the one-line label for a live tool group", () => {
+  it("shows the one-line label for a live tool group", async () => {
     const turnId = TurnId.make("turn-live");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         isWorking
@@ -1251,13 +1224,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Working for");
-    expect(markup).toContain("Running pnpm");
+    expect(view.text()).toContain("Working for");
+    expect(view.text()).toContain("Running pnpm");
   });
 
-  it("scopes a live row failure to the tool named by the row", () => {
+  it("scopes a live row failure to the tool named by the row", async () => {
     const turnId = TurnId.make("turn-live");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         isWorking
@@ -1306,13 +1279,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Running pnpm");
-    expect(markup).not.toContain("tool call failed");
+    expect(view.text()).toContain("Running pnpm");
+    expect(ariaLabelsContaining(view, "tool call failed")).toHaveLength(0);
   });
 
-  it("renders initial thinking as the shared live activity row", () => {
+  it("renders initial thinking as the shared live activity row", async () => {
     const turnId = TurnId.make("turn-live");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         isWorking
@@ -1328,14 +1301,14 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Thinking");
-    expect(markup).toContain("lucide-brain");
-    expect(markup).toContain('data-timeline-row-id="live-activity-row"');
+    expect(view.text()).toContain("Thinking");
+    expect(view.find(".lucide-brain")).not.toBeNull();
+    expect(view.find('[data-timeline-row-id="live-activity-row"]')).not.toBeNull();
   });
 
-  it("keeps the completed command in the shared activity row with a present-tense label", () => {
+  it("keeps the completed command in the shared activity row with a present-tense label", async () => {
     const turnId = TurnId.make("turn-live");
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         isWorking
@@ -1368,15 +1341,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Running pnpm");
-    expect(markup).toContain("lucide-terminal");
-    expect(markup).not.toContain("Ran pnpm");
-    expect(markup).not.toContain("Thinking");
-    expect(markup).not.toContain('data-timeline-row-kind="thinking"');
+    expect(view.text()).toContain("Running pnpm");
+    expect(view.find(".lucide-terminal")).not.toBeNull();
+    expect(view.text()).not.toContain("Ran pnpm");
+    expect(view.text()).not.toContain("Thinking");
+    expect(view.find('[data-timeline-row-kind="thinking"]')).toBeNull();
   });
 
-  it("renders review comment contexts as structured cards instead of raw tags", () => {
-    const markup = renderToStaticMarkup(
+  it("renders review comment contexts as structured cards instead of raw tags", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1407,16 +1380,18 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("contextWindow.test.ts");
-    expect(markup).toContain("Wadduo");
-    expect(markup).toContain('data-testid="file-diff"');
-    expect(markup).not.toContain(">Review comment<");
-    expect(markup).not.toContain("&lt;review_comment");
-    expect(markup).not.toContain("&lt;/review_comment&gt;");
+    expect(view.text()).toContain("contextWindow.test.ts");
+    expect(view.text()).toContain("Wadduo");
+    expect(view.find('[data-testid="file-diff"]')).not.toBeNull();
+    expect(view.findAll("*").some((element) => element.textContent === "Review comment")).toBe(
+      false,
+    );
+    expect(view.text()).not.toContain("<review_comment");
+    expect(view.text()).not.toContain("</review_comment>");
   });
 
-  it("renders file review comments as source code instead of diffs", () => {
-    const markup = renderToStaticMarkup(
+  it("renders file review comments as source code instead of diffs", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1446,14 +1421,14 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("plan.md");
-    expect(markup).toContain("Clarify this.");
-    expect(markup).toContain("# Plan");
-    expect(markup).not.toContain('data-testid="file-diff"');
+    expect(view.text()).toContain("plan.md");
+    expect(view.text()).toContain("Clarify this.");
+    expect(view.text()).toContain("# Plan");
+    expect(view.find('[data-testid="file-diff"]')).toBeNull();
   });
 
-  it("offers to load earlier turns when older history exists beyond the window", () => {
-    const markup = renderToStaticMarkup(
+  it("offers to load earlier turns when older history exists beyond the window", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry("Hello")]}
@@ -1461,13 +1436,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Load earlier turns");
+    expect(view.text()).toContain("Load earlier turns");
   });
 
-  it("hides the load-earlier control on a thread that starts at the beginning", () => {
+  it("hides the load-earlier control on a thread that starts at the beginning", async () => {
     // A thread whose snapshot covered its whole history has nothing older; a
     // permanently visible control there would be noise on every short thread.
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry("Hello")]}
@@ -1475,11 +1450,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).not.toContain("Load earlier turns");
+    expect(view.text()).not.toContain("Load earlier turns");
   });
 
-  it("disables the load-earlier control while a page is in flight", () => {
-    const markup = renderToStaticMarkup(
+  it("disables the load-earlier control while a page is in flight", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry("Hello")]}
@@ -1487,12 +1462,17 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Loading earlier turns");
-    expect(markup).toContain("disabled");
+    expect(view.text()).toContain("Loading earlier turns");
+    // The `disabled` PROPERTY of the control, not the substring "disabled": the class list
+    // carries `disabled:` Tailwind variants, so the markup check matched unconditionally.
+    const loadEarlier = view
+      .findAll<HTMLButtonElement>("button")
+      .find((button) => button.textContent?.includes("Loading earlier turns"));
+    expect(loadEarlier?.disabled).toBe(true);
   });
 
-  it("keeps the top spacer when the load-earlier control is shown", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the top spacer when the load-earlier control is shown", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry("Hello")]}
@@ -1503,12 +1483,14 @@ describe("MessagesTimeline", () => {
 
     // Retargeted for upstream #8799, which moved this spacer from a literal
     // padding to the shared titlebar scroll-fade variable. Same subject.
-    expect(markup).toContain("pt-[var(--workspace-titlebar-scroll-fade-height)]");
-    expect(markup).toContain("Load earlier turns");
+    expect(
+      view.find('[class~="pt-[var(--workspace-titlebar-scroll-fade-height)]"]'),
+    ).not.toBeNull();
+    expect(view.text()).toContain("Load earlier turns");
   });
 
-  it("keeps failed lifecycle entries discoverable in mixed activity summaries", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps failed lifecycle entries discoverable in mixed activity summaries", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1540,13 +1522,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Received 1 update and used 1 tool, tool call failed"');
+    expect(
+      view.find('[aria-label="Received 1 update and used 1 tool, tool call failed"]'),
+    ).not.toBeNull();
     // Ordinary tool failures do not use destructive row styling.
-    expect(markup).not.toContain("text-destructive");
+    expect(view.find(".text-destructive")).toBeNull();
   });
 
-  it("keeps the red treatment for severe orchestration failures", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the red treatment for severe orchestration failures", async () => {
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1577,8 +1561,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("lucide-circle-alert");
-    expect(markup).toContain("text-destructive");
+    expect(view.find(".lucide-circle-alert")).not.toBeNull();
+    expect(view.find(".text-destructive")).not.toBeNull();
   });
 });
 
@@ -1598,29 +1582,137 @@ describe("work log coalescing (rendered)", () => {
     },
   });
 
-  it("collapses a burst behind the group toggle before coalescing is visible", () => {
-    // Documents the reachability boundary honestly. A burst first collapses into a tool
-    // group whose toggle summarises it ("Received 3 updates"); the coalesced xN badge only
-    // appears once the user EXPANDS that group, and expansion is internal component state a
-    // static render cannot set. The count arithmetic is covered in MessagesTimeline.logic.test.ts.
+  it("collapses a burst behind the group toggle before coalescing is visible", async () => {
+    // A burst first collapses into a tool group whose toggle summarises it ("Received 3
+    // updates"), so the individual rows are not rendered until it is expanded. Expanding it
+    // does not produce a coalesced xN badge either — see the interaction test below. The
+    // count arithmetic is covered in MessagesTimeline.logic.test.ts.
     //
     // Upstream #8734 replaced the old "+N previous log entries" control with this grouping,
     // so the label moved -- the boundary this test documents did not.
-    const markup = renderToStaticMarkup(
+    const view = await renderDom(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[warning("1"), warning("2"), warning("3")]}
       />,
     );
-    expect(markup).toContain("Received 3 updates");
-    expect(markup.split("Runtime warning").length - 1).toBeLessThan(3);
+    expect(view.text()).toContain("Received 3 updates");
+    expect(view.text().split("Runtime warning").length - 1).toBeLessThan(3);
   });
 
-  it("shows no count for a single occurrence", () => {
-    const markup = renderToStaticMarkup(
+  it("shows no count for a single occurrence", async () => {
+    const view = await renderDom(
       <MessagesTimeline {...buildProps()} timelineEntries={[warning("1")]} />,
     );
-    expect(markup).toContain("Runtime warning");
-    expect(markup).not.toContain("×1");
+    expect(view.text()).toContain("Runtime warning");
+    expect(view.text()).not.toContain("×1");
+  });
+});
+
+// These are the tests a static render could not reach: every one of them needs an event.
+describe("MessagesTimeline interactions", () => {
+  it("reveals the hidden tail of a long user message when it is expanded", async () => {
+    const tail = "deep hidden detail only after expand";
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText(tail))]}
+      />,
+    );
+
+    const toggle = () =>
+      view
+        .findAll("button")
+        .find(
+          (button) =>
+            button.textContent === "Show full message" || button.textContent === "Show less",
+        ) ?? null;
+
+    expect(view.find('[data-user-message-collapsed="true"]')).not.toBeNull();
+
+    await view.click(toggle());
+
+    expect(view.find('[data-user-message-collapsed="true"]')).toBeNull();
+    expect(view.text()).toContain(tail);
+    expect(view.text()).toContain("Show less");
+
+    // The way back out: a one-way expand would be a one-way door.
+    await view.click(toggle());
+
+    expect(view.find('[data-user-message-collapsed="true"]')).not.toBeNull();
+    expect(view.text()).toContain("Show full message");
+  });
+
+  it("asks for an earlier page when the load-earlier control is pressed", async () => {
+    const onLoadEarlier = vi.fn();
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        loadEarlier={{ loading: false, onLoadEarlier }}
+      />,
+    );
+
+    const control = view
+      .findAll("button")
+      .find((button) => button.textContent?.includes("Load earlier turns"));
+    await view.click(control ?? null);
+
+    expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask for a second page while one is already in flight", async () => {
+    // The paired half of "disables the load-earlier control while a page is in flight":
+    // a disabled control that still fires would double-fetch on every impatient click.
+    const onLoadEarlier = vi.fn();
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hello")]}
+        loadEarlier={{ loading: true, onLoadEarlier }}
+      />,
+    );
+
+    const control = view
+      .findAll("button")
+      .find((button) => button.textContent?.includes("Loading earlier turns"));
+    await view.click(control ?? null);
+
+    expect(onLoadEarlier).not.toHaveBeenCalled();
+  });
+
+  it("expands the burst into its individual rows rather than a coalesced count", async () => {
+    // Measured here, now that expansion is reachable: expanding the group does NOT produce
+    // the coalesced ×N badge. `ExpandedWorkGroupEntries` renders every entry with count 1;
+    // the badge belongs to the ungrouped activity section, which runs the entries through
+    // `coalesceRepeatedWorkLogEntries`. The static version of this file asserted the
+    // opposite in a comment it had no way to check.
+    const warning = (n: string) => ({
+      id: `entry-${n}`,
+      kind: "work" as const,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id: `work-${n}`,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label: "Runtime warning",
+        tone: "info" as const,
+      },
+    });
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[warning("1"), warning("2"), warning("3")]}
+      />,
+    );
+
+    expect(view.text()).not.toContain("×3");
+
+    const groupToggle = view
+      .findAll("button")
+      .find((button) => button.textContent?.includes("Received 3 updates"));
+    await view.click(groupToggle ?? null);
+
+    expect(view.text().split("Runtime warning").length - 1).toBe(3);
+    expect(view.text()).not.toContain("×3");
   });
 });

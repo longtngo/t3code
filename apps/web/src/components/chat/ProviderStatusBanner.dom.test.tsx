@@ -1,7 +1,7 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { renderDom } from "../../testing/renderDom";
 import {
   getProviderStatusBannerKey,
   getProviderStatusMessage,
@@ -71,34 +71,51 @@ describe("ProviderStatusBanner", () => {
     expect(shouldShowProviderStatusBanner(status, getProviderStatusBannerKey(status))).toBe(false);
   });
 
-  it("renders an accessible dismiss control for provider warnings", () => {
-    const markup = renderToStaticMarkup(
+  it("renders an accessible dismiss control for provider warnings", async () => {
+    const view = await renderDom(
       <ProviderStatusBanner status={warningProvider()} onDismiss={() => {}} />,
     );
 
-    expect(markup).toContain('role="alert"');
-    expect(markup).toContain('aria-label="Dismiss Codex provider warning"');
-    expect(markup).toContain("absolute top-2 right-2");
+    expect(view.find('[role="alert"]')).not.toBeNull();
+    // Pinned to the banner's own corner rather than laid out in the flow, so a
+    // long message cannot push the dismiss control out of reach.
+    expect(
+      view.find('button[aria-label="Dismiss Codex provider warning"].absolute.top-2.right-2'),
+    ).not.toBeNull();
   });
 
-  it("renders on a glass surface so the timeline never reads through the banner", () => {
-    const markup = renderToStaticMarkup(
+  // The banner covers the top of the timeline, so it is the only way back to
+  // the conversation; a dismiss control that renders but reports nothing is
+  // exactly the failure static markup could not see.
+  it("reports a dismiss to its owner", async () => {
+    const onDismiss = vi.fn();
+    const view = await renderDom(
+      <ProviderStatusBanner status={warningProvider()} onDismiss={onDismiss} />,
+    );
+
+    await view.click(view.find('button[aria-label="Dismiss Codex provider warning"]'));
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders on a glass surface so the timeline never reads through the banner", async () => {
+    const view = await renderDom(
       <ProviderStatusBanner status={warningProvider()} onDismiss={() => {}} />,
     );
 
-    expect(markup).toContain("alert-glass");
-    expect(markup).toContain('data-variant="warning"');
+    expect(view.find(".alert-glass")).not.toBeNull();
+    expect(view.find('[data-variant="warning"]')).not.toBeNull();
   });
 
-  it("labels error dismiss controls with the correct severity", () => {
-    const markup = renderToStaticMarkup(
+  it("labels error dismiss controls with the correct severity", async () => {
+    const view = await renderDom(
       <ProviderStatusBanner
         status={{ ...warningProvider(), status: "error" }}
         onDismiss={() => {}}
       />,
     );
 
-    expect(markup).toContain('aria-label="Dismiss Codex provider error"');
+    expect(view.find('[aria-label="Dismiss Codex provider error"]')).not.toBeNull();
   });
 });
 
