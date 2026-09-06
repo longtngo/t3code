@@ -19,6 +19,7 @@ import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ViewerSplatRouteImport } from './routes/viewer.$'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsLocalModelsRouteImport } from './routes/settings.local-models'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
@@ -81,6 +82,11 @@ const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
@@ -174,6 +180,7 @@ export interface FileRoutesByFullPath {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/viewer/$': typeof ViewerSplatRoute
@@ -198,6 +205,7 @@ export interface FileRoutesByTo {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/viewer/$': typeof ViewerSplatRoute
@@ -225,6 +233,7 @@ export interface FileRoutesById {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/local-models': typeof SettingsLocalModelsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/viewer/$': typeof ViewerSplatRoute
@@ -253,6 +262,7 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/local-models'
     | '/settings/notifications'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/source-control'
     | '/viewer/$'
@@ -277,6 +287,7 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/local-models'
     | '/settings/notifications'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/source-control'
     | '/viewer/$'
@@ -303,6 +314,7 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/local-models'
     | '/settings/notifications'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/source-control'
     | '/viewer/$'
@@ -393,6 +405,13 @@ declare module '@tanstack/react-router' {
       path: '/providers'
       fullPath: '/settings/providers'
       preLoaderRoute: typeof SettingsProvidersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/projects': {
+      id: '/settings/projects'
+      path: '/projects'
+      fullPath: '/settings/projects'
+      preLoaderRoute: typeof SettingsProjectsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/notifications': {
@@ -522,6 +541,7 @@ interface SettingsRouteChildren {
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsLocalModelsRoute: typeof SettingsLocalModelsRoute
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute
+  SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
 }
@@ -536,6 +556,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsLocalModelsRoute: SettingsLocalModelsRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
+  SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
 }

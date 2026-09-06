@@ -16,8 +16,8 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 
-export const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
-export const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
+const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
+const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
 
 export function providerSupportsManualCompaction(
   provider: ProviderInstanceEntry | null | undefined,

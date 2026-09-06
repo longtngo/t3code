@@ -1,3 +1,4 @@
+import { Spinner } from "~/components/ui/spinner";
 import type {
   ChatFileAttachment,
   EditorId,
@@ -215,7 +216,7 @@ function WorkspaceImagePreview(props: {
     </div>
   ) : (
     <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-      <LoaderCircle className="size-5 animate-spin" />
+      <Spinner className="size-5" />
     </div>
   );
 }
@@ -319,7 +320,7 @@ function AttachmentBrowserPreview(props: {
   if (assetUrl._tag !== "Success") {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
+        <Spinner className="size-5" />
       </div>
     );
   }
@@ -375,7 +376,7 @@ function WorkspaceBrowserPreview(props: {
   if (assetUrl._tag !== "Success") {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-        <LoaderCircle className="size-5 animate-spin" />
+        <Spinner className="size-5" />
       </div>
     );
   }
@@ -1399,7 +1400,7 @@ export default function FilePreviewPanel({
             </div>
           ) : relativePath && file.data === null ? (
             <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-              <LoaderCircle className="size-5 animate-spin" />
+              <Spinner className="size-5" />
             </div>
           ) : relativePath && file.data ? (
             isMarkdown && renderMarkdown ? (

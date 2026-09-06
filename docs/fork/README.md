@@ -37,9 +37,10 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-09-03 (28th reconcile): 54 entries, all ids unique, monotonic, max 55; upstream's
-`046`/`047` took applied ids 54/55. Id `34` is intentionally burned (an
-earlier fork DB applied a since-renamed `034_PushSubscriptions`).
+Verified 2026-09-06 (31st reconcile): 55 entries, all ids unique, monotonic, max 56; upstream's
+`048_ProjectionThreadBranchPullRequest` took applied id 56. Filename numbers now double up on
+`041` and `042` as well. Id `34` is intentionally burned (an earlier fork DB applied a
+since-renamed `034_PushSubscriptions`).
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
 object literals. A probe grepping for `id:` matches only the doc comment and reports nothing.
@@ -814,6 +815,50 @@ would sit unreachable behind the fork's arm and re-open the spam if the arms wer
 `ClaudeAdapter.test.ts`'s "consumes undeclared and UX-internal system subtypes without warning
 rows" pins the whole shape: exactly three warnings, two notifications.
 
+### 34. Ingestion command ids: the fork skips the receipt, upstream only adds entropy
+
+`ProviderRuntimeIngestion.ts` keeps a **synchronous** `providerCommandId` (a plain
+`provider:<eventId>:<tag>` name) and dispatches through the fork's `dispatchWithFreshCommandId`,
+which appends a UUID _and_ passes `{ singleUseCommandId: true }` so the engine writes no receipt.
+Ingestion receipts were 98.5% of a real 2.08M-row receipt table and none was ever read back.
+
+Upstream shipped a competing version at the 31st reconcile: it moved the UUID **into**
+`providerCommandId`, making it an Effect, and dispatches through plain `orchestrationEngine.dispatch`.
+That fixes replayable ids but still writes every receipt - `singleUseCommandId` does not exist
+upstream at all (it is fork-only across 8 files). The fork's version is strictly stronger, so keep it.
+
+**The tell after a merge:** a `yield* providerCommandId(...)` anywhere in this file. The fork's is
+not an Effect, so yielding it produces `undefined` where a `CommandId` is required. Count them:
+upstream has 11, the fork must have 0.
+
+### 35. The Claude result classifier is the fork's pair, not upstream's `resultOutcome`
+
+Upstream #10296 folded `turnStatusFromResult` and `resultUserFacingError` into one `resultOutcome`
+that classifies from `terminal_reason` alone. Adopting it silently drops four things the fork's
+pair does: abort handling (`isAbortedResult`, so a user Stop is not recorded as a failure), the
+guard for a non-string `result` (the CLI runs ahead of the typed SDK and throwing here tears down
+the session), per-**line** diagnostic filtering (`[ede_diagnostic]` can sit on any line), and the
+529 `OVERLOADED_RESULT_MESSAGE` fallback. Keep the fork's two functions and its
+`FAILED_TERMINAL_REASONS` set, which upstream does not have.
+
+The 31st reconcile took upstream's _call site_ without its _declaration_, which typecheck caught.
+The dangerous version of this merge is the one that takes both.
+
+### 36. Web tests run two projects; `--project dom` is fork-only
+
+`apps/web/package.json`'s `test` script is `vp test run --passWithNoTests --project unit --project dom`.
+Upstream ships only `unit`. The fork's `*.dom.test.tsx` files - real-DOM tests via
+`src/testing/renderDom` - are invisible to a merge that takes upstream's script, and they fail
+open: `--passWithNoTests` means a run that matches nothing still exits 0. A gate that "passed"
+having never executed the dom project has happened twice; the only reliable signal is the **test
+count**, not the exit code.
+
+The fork also renamed several upstream test files to `.dom.test.tsx` (`MessagesTimeline`,
+`ChatMarkdown`, `ProviderStatusBanner`, `ComposerPrimaryActions`, `sidebarChromeFooter`). Git is
+rename-blind mid-merge, so upstream's edits to the old name arrive as a **new file** rather than a
+conflict. After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`,
+and port any tests upstream added to its copy.
+
 ### 18. The event hub is unbounded; every consumer of it must not be
 
 `apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
@@ -822,6 +867,13 @@ slow reader - and it is exactly why every consumer needs its own bound. Two conf
 crash-loops came from this hub, and each fix is a separate piece that a merge can revert on its
 own:
 
+- **Internal reactors must use `subscribeDomainEventsLossless`, never `subscribeDomainEvents`.**
+  The 31st reconcile brought upstream's new `ThreadPullRequestReactor` in on the **bounded**
+  accessor, where a consumer that falls behind does not drop one event - it _ends the stream_, so
+  the reactor silently stops reacting for the life of the process. Nothing catches this: its test
+  mocks the engine with an unbounded `Stream.fromSubscription`, so the bounded path never runs
+  under test, and typecheck cannot tell the two accessors apart. Grep non-test server source for
+  `subscribeDomainEvents` without `Lossless`; only the definition and the WS layer may match.
 - **`boundedSubscriberStream`** wraps `subscribeDomainEvents`. A forked pump takes from the
   PubSub subscription _unconditionally_ into a bounded queue (`T3CODE_WS_SUBSCRIBER_BUFFER`,
   default 4096). A WebSocket consumer that stops draining therefore ends its own subscription

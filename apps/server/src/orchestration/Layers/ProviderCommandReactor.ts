@@ -97,33 +97,6 @@ type ProviderIntentEvent = Extract<
   }
 >;
 
-/**
- * Decode a thread's one-shot `pendingForkResume` directive (set by the projector
- * when handling `thread.forked`) into a `forkFrom` reference for session start.
- * Returns undefined for anything that is not a well-formed fork directive.
- */
-function readPendingForkResume(
-  value: unknown,
-): { readonly sourceThreadId: ThreadId; readonly resumeSessionAt?: string } | undefined {
-  if (value === null || typeof value !== "object") {
-    return undefined;
-  }
-  const directive = value as {
-    fork?: unknown;
-    sourceThreadId?: unknown;
-    resumeSessionAt?: unknown;
-  };
-  if (directive.fork !== true || typeof directive.sourceThreadId !== "string") {
-    return undefined;
-  }
-  return {
-    sourceThreadId: directive.sourceThreadId as ThreadId,
-    ...(typeof directive.resumeSessionAt === "string"
-      ? { resumeSessionAt: directive.resumeSessionAt }
-      : {}),
-  };
-}
-
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -932,13 +905,14 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    // First session for a forked thread: carry the parent agent context over by
-    // forking the source thread's session (consumed once; cleared on session-set).
-    // The directive lives on the thread detail, not the shell read above; only
-    // the first-session path needs it, so the heavier read stays off the hot path.
-    const forkResumeThread = yield* resolveThreadDetail(threadId);
-    const forkFrom = readPendingForkResume(forkResumeThread?.pendingForkResume);
-    const startedSession = yield* startProviderSession(forkFrom ? { forkFrom } : undefined);
+    // No fork-resume directive is read here. `pendingForkResume` is set by the
+    // projector onto the in-memory `OrchestrationThread` only - no column carries
+    // it - so the SQL-backed detail read this used to do could never return one,
+    // and `forkFrom` was always undefined. It also decoded every message body in
+    // the thread on what is the first-session path for EVERY new thread, not the
+    // cold path its comment claimed. Reviving fork-resume needs the directive
+    // persisted first; see docs/design/2026-06-16-fork-thread-design.md.
+    const startedSession = yield* startProviderSession();
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -1307,12 +1281,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* resolveThreadDetail(event.payload.threadId);
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     if (!thread) {
       return;
     }
-    const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
-    if (!message || message.role !== "user") {
+    const turnStart = yield* projectionSnapshotQuery.getTurnStartMessage({
+      threadId: thread.id,
+      messageId: event.payload.messageId,
+    });
+    if (Option.isNone(turnStart) || turnStart.value.message.role !== "user") {
       yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.start.failed",
@@ -1324,6 +1301,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const { message, hasOtherUserMessages } = turnStart.value;
     const appendTurnStartFailure = (summary: string, detail: string) =>
       appendProviderFailureActivity({
         threadId: event.payload.threadId,
@@ -1416,10 +1394,7 @@ const make = Effect.gen(function* () {
     yield* ensureThreadWorktree(thread);
 
     const isCompactCommand = isCompactCommandMessage(message);
-    const nonCompactUserMessageCount = thread.messages.filter(
-      (entry) => entry.role === "user" && !isCompactCommandMessage(entry),
-    ).length;
-    if (nonCompactUserMessageCount === 1 && !isCompactCommand) {
+    if (!hasOtherUserMessages && !isCompactCommand) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
         resolveThreadWorkspaceCwd({
@@ -1490,7 +1465,7 @@ const make = Effect.gen(function* () {
         ),
       );
     if (isCompactCommand) {
-      if (nonCompactUserMessageCount === 0) {
+      if (!hasOtherUserMessages) {
         return yield* appendTurnStartFailure(
           "Context compaction failed",
           "Context compaction requires an existing conversation.",

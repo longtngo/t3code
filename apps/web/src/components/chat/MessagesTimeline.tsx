@@ -217,8 +217,19 @@ interface TimelineRowSharedState {
    * this the bubble is indistinguishable from one being worked on.
    */
   waitingUserMessageIds: ReadonlySet<string>;
-  /** `promptText` is the text as rendered, so the composer gets back what the user sees. */
-  onRevertUserMessage: (messageId: MessageId, promptText: string, attachmentCount: number) => void;
+  onRevertToTurnCount: (targetTurnCount: number) => void;
+  /**
+   * Fork-only: arms the composer restore before the revert runs. Upstream's
+   * revert carries only a turn count, so the message's own text has to be
+   * handed over separately - `ChatView` stashes it and replays it once the
+   * message actually leaves the thread.
+   */
+  onArmRevertPromptRestore: (
+    messageId: MessageId,
+    promptText: string,
+    attachmentCount: number,
+    targetTurnCount: number,
+  ) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
@@ -322,14 +333,19 @@ interface MessagesTimelineProps {
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
-  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  revertTurnCountByUserMessageId: Map<MessageId, number>;
+  supportsConversationRollback: boolean;
   /** Display-only, defaulted like the other optional presentation props. */
   waitingUserMessageIds?: ReadonlySet<string>;
-  /** `promptText` is the text as rendered, so the composer gets back what the user sees. */
-  onRevertUserMessage: (messageId: MessageId, promptText: string, attachmentCount: number) => void;
+  onRevertToTurnCount: (targetTurnCount: number) => void;
+  onArmRevertPromptRestore: (
+    messageId: MessageId,
+    promptText: string,
+    attachmentCount: number,
+    targetTurnCount: number,
+  ) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -385,12 +401,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   latestTurn,
   runningTurnId,
-  turnDiffSummaryByAssistantMessageId,
+  turnDiffSummaries,
   routeThreadKey,
   onOpenTurnDiff,
-  revertTurnCountByUserMessageId,
+  supportsConversationRollback,
   waitingUserMessageIds = EMPTY_WAITING_MESSAGE_IDS,
-  onRevertUserMessage,
+  onRevertToTurnCount,
+  onArmRevertPromptRestore,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   isRevertingCheckpoint,
   onImageExpand,
@@ -561,8 +578,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedWorkGroupIds,
         isWorking,
         activeTurnStartedAt,
-        turnDiffSummaryByAssistantMessageId,
-        revertTurnCountByUserMessageId,
+        turnDiffSummaries,
+        supportsConversationRollback,
       },
       previous?.threadKey === routeThreadKey && previous.workspaceRoot === workspaceRoot
         ? previous.projection
@@ -581,8 +598,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     expandedWorkGroupIds,
     isWorking,
     activeTurnStartedAt,
-    turnDiffSummaryByAssistantMessageId,
-    revertTurnCountByUserMessageId,
+    turnDiffSummaries,
+    supportsConversationRollback,
   ]);
   const rows = useStableRows(rawRows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
@@ -749,7 +766,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       waitingUserMessageIds,
-      onRevertUserMessage,
+      onRevertToTurnCount,
+      onArmRevertPromptRestore,
       onUseArtifactTemplate,
       onImageExpand,
       onFileOpen,
@@ -774,7 +792,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       waitingUserMessageIds,
-      onRevertUserMessage,
+      onRevertToTurnCount,
+      onArmRevertPromptRestore,
       onUseArtifactTemplate,
       onImageExpand,
       onFileOpen,
@@ -1365,7 +1384,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   ];
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
-  const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const revertTurnCount = row.revertTurnCount;
 
   return (
     <div className="group flex flex-col items-end gap-1">
@@ -1532,8 +1551,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
-            {canRevertAgentWork && (
+            {typeof revertTurnCount === "number" && (
               <RevertUserMessageButton
+                turnCount={revertTurnCount}
                 messageId={row.message.id}
                 promptText={elementContextState.promptText}
                 attachmentCount={row.message.attachments?.length ?? 0}
@@ -1550,10 +1570,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 }
 
 function RevertUserMessageButton({
+  turnCount,
   messageId,
   promptText,
   attachmentCount,
 }: {
+  turnCount: number;
   messageId: MessageId;
   promptText: string;
   attachmentCount: number;
@@ -1570,7 +1592,12 @@ function RevertUserMessageButton({
             size="xs"
             variant="ghost"
             disabled={activity.isRevertingCheckpoint || activity.isWorking}
-            onClick={() => ctx.onRevertUserMessage(messageId, promptText, attachmentCount)}
+            onClick={() => {
+              // Arm first: the restore fires when the message leaves the thread,
+              // so it has to be stashed before the revert can remove it.
+              ctx.onArmRevertPromptRestore(messageId, promptText, attachmentCount, turnCount);
+              ctx.onRevertToTurnCount(turnCount);
+            }}
             aria-label="Revert to this message"
           />
         }

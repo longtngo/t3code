@@ -119,6 +119,11 @@ import Migration0053 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 // numbers. Their tests are retargeted to those applied ids.
 import Migration0054 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration0055 from "./Migrations/047_ProjectionProjectIcon.ts";
+// Upstream's 048 (projection_threads.branch_pull_request) arrives after the fork
+// already deployed ids 33-55, so it takes the next free id (56) rather than its
+// filename number. It backs `branchPullRequest`, which replaced the fork's
+// client-side pull-request derivation in the command palette.
+import Migration0056 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -185,6 +190,7 @@ export const migrationEntries = [
   [53, "ProjectionProjectsAutoPull", Migration0053],
   [54, "RepairAutomaticSettlementTimestamps", Migration0054],
   [55, "ProjectionProjectIcon", Migration0055],
+  [56, "ProjectionThreadBranchPullRequest", Migration0056],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

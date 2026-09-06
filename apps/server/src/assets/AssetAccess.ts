@@ -22,6 +22,11 @@ import {
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
+import {
+  IMAGE_DIMENSIONS_HEADER_BYTES,
+  readImageDimensions,
+  type ImageDimensions,
+} from "@t3tools/shared/imageDimensions";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -45,7 +50,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
-import { openMediaFile, type OpenMediaFile } from "./MediaFile.ts";
+import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
@@ -225,6 +230,34 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     Effect.orElseSucceed(() => null),
   );
 
+/**
+ * Reads pixel dimensions from an image's header so clients can reserve the
+ * exact box before the bytes arrive. Best effort: an unreadable or unsupported
+ * file just leaves the field out, and the client measures after decode. Only
+ * formats the parser understands are opened; SVG and the rest are skipped.
+ */
+const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+/** From the identity-checked, non-blocking handle the caller already holds. */
+const readImageDimensionsFromOpenFile = (filePath: string, file: OpenMediaFile) =>
+  readMediaFileHeader(filePath, file, IMAGE_DIMENSIONS_HEADER_BYTES).pipe(
+    Effect.map(readImageDimensions),
+    Effect.orElseSucceed((): ImageDimensions | null => null),
+  );
+
+/**
+ * Opens through `openMediaFile` so a path swapped for a FIFO cannot block the
+ * request; a regular open would wait for a writer that never comes.
+ */
+const readImageDimensionsFromHeader = (filePath: string) =>
+  openMediaFile(filePath).pipe(
+    Effect.flatMap((file) =>
+      file === null ? Effect.succeed(null) : readImageDimensionsFromOpenFile(filePath, file),
+    ),
+    Effect.scoped,
+    Effect.orElseSucceed((): ImageDimensions | null => null),
+  );
+
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
@@ -237,6 +270,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let claims: AssetClaims;
   let fileName: string;
   let sourcePath: string | undefined;
+  let imageDimensions: ImageDimensions | null = null;
 
   switch (input.resource._tag) {
     case "media-file": {
@@ -266,18 +300,33 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       if (hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
         return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
       }
-      const identity = yield* openMediaFile(canonicalFile).pipe(
-        Effect.map((file) =>
-          file ? { device: file.info.dev.toString(), inode: file.info.ino.toString() } : null,
+      const wantsDimensions = HEADER_IMAGE_EXTENSIONS.has(
+        path.extname(canonicalFile).toLowerCase(),
+      );
+      const opened = yield* openMediaFile(canonicalFile).pipe(
+        Effect.flatMap((file) =>
+          file === null
+            ? Effect.succeed(null)
+            : Effect.map(
+                wantsDimensions
+                  ? readImageDimensionsFromOpenFile(canonicalFile, file)
+                  : Effect.succeed(null),
+                (dimensions) => ({
+                  identity: { device: file.info.dev.toString(), inode: file.info.ino.toString() },
+                  dimensions,
+                }),
+              ),
         ),
         Effect.scoped,
         Effect.mapError(
           (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
         ),
       );
-      if (!identity) {
+      if (!opened) {
         return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
       }
+      const identity = opened.identity;
+      imageDimensions = opened.dimensions;
       claims = {
         version: 1,
         kind: "media-file-exact",
@@ -354,6 +403,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
+      if (HEADER_IMAGE_EXTENSIONS.has(path.extname(resolved.relativePath).toLowerCase())) {
+        imageDimensions = yield* readImageDimensionsFromHeader(canonicalFile);
+      }
       // Audio and video take the exact branch with images, and the reason is the token, not
       // tidiness: the `workspace-file` alternative is a directory-scoped bearer
       // grant that would sit in a <video>/<audio> src attribute for an hour. An entry
@@ -403,6 +455,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         INLINE_DOCUMENT_EXTENSIONS.has(extension)
           ? INLINE_DOCUMENT_MIME_TYPES[extension]
           : undefined;
+      if (!isGenericFile) {
+        imageDimensions = yield* readImageDimensionsFromHeader(attachmentPath);
+      }
       claims = {
         version: 1,
         kind: "attachment",
@@ -560,6 +615,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
+    ...(imageDimensions !== null ? { imageDimensions } : {}),
   };
 });
 

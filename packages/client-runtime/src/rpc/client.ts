@@ -175,6 +175,10 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
 }
 
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  /** Reports protocol or programming defects without changing their recovery policy. */
+  readonly onDefect?: (
+    cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+  ) => Effect.Effect<void, never, never>;
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
@@ -293,8 +297,12 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 EnvironmentRpcStreamFailure<TTag>
               >;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
-                Stream.suspend(() =>
-                  Stream.unwrap(
+                Stream.suspend(() => {
+                  // Hoisted out of the `Effect.gen` because the recovery below now reads it
+                  // from the pipe level. Same lifetime either way: the gen runs once per
+                  // `subscribeToSession()` call, and each call re-enters this closure.
+                  let producedValue = false;
+                  return Stream.unwrap(
                     Effect.gen(function* () {
                       const input = yield* makeInput(session);
                       const startedAtMillis = yield* Clock.currentTimeMillis;
@@ -315,7 +323,6 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       // `switchMap` drop a value the old session had already buffered
                       // when the session changes - which is why upstream's `mapStream`
                       // tag is a plain `Stream.map` too.
-                      let producedValue = false;
                       const liveOnce = mapStream(session, method(input)).pipe(
                         Stream.map((value) => {
                           producedValue = true;
@@ -363,83 +370,93 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                                 ),
                               ),
                             );
-                      return live.pipe(
-                        Stream.catchCause((cause) => {
-                          const hasOnlyExpectedFailures =
-                            cause.reasons.length > 0 &&
-                            cause.reasons.every((reason) => reason._tag === "Fail");
-                          const isTransportFailure =
-                            hasOnlyExpectedFailures &&
-                            cause.reasons.every(
-                              (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
-                            );
-                          if (isTransportFailure) {
-                            return Stream.fromEffect(
-                              Effect.logWarning(
-                                "Durable RPC subscription lost its transport; waiting for the next session.",
-                                {
-                                  cause: Cause.pretty(cause),
-                                  method: tag,
-                                  environmentId: supervisor.target.environmentId,
-                                },
-                              ),
-                            ).pipe(Stream.drain);
-                          }
-                          if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
-                            const handled = Stream.fromEffect(
-                              options.onExpectedFailure(cause),
-                            ).pipe(Stream.drain);
-                            const retryAfter = options.retryExpectedFailureAfter;
-                            if (retryAfter === undefined) {
-                              return handled;
-                            }
-                            // Backed off and capped. A permanent "no" from the
-                            // server — a thread it has never heard of, or an
-                            // archived one — used to retry every 250ms forever,
-                            // re-issuing the snapshot fetch each time, because
-                            // an expected failure was read as a transient one.
-                            const giveUp: Stream.Stream<
-                              A,
-                              EnvironmentRpcStreamFailure<TTag>
-                            > = Stream.empty;
-                            return handled.pipe(
-                              Stream.concat(
-                                Stream.unwrap(
-                                  Effect.gen(function* () {
-                                    if (producedValue) {
-                                      producedValue = false;
-                                      yield* resetExpectedFailures;
-                                    }
-                                    const attempt = yield* Ref.getAndUpdate(
-                                      expectedFailures,
-                                      (count) => count + 1,
-                                    );
-                                    if (attempt >= EXPECTED_FAILURE_RETRY_LIMIT) {
-                                      yield* Effect.logWarning(
-                                        "Durable RPC subscription gave up after repeated expected failures; a new session, refresh or remount will retry.",
-                                        {
-                                          attempts: attempt,
-                                          method: tag,
-                                          environmentId: supervisor.target.environmentId,
-                                        },
-                                      );
-                                      return giveUp;
-                                    }
-                                    yield* Effect.sleep(
-                                      subscriptionRetryDelay(retryAfter, attempt),
-                                    );
-                                    return subscribeToSession();
-                                  }),
-                                ),
-                              ),
-                            );
-                          }
-                          return Stream.failCause(cause);
-                        }),
-                      );
+                      return live;
                     }),
-                  ),
-                );
+                  ).pipe(
+                    Stream.tapCause((cause) =>
+                      options?.onDefect !== undefined &&
+                      cause.reasons.some(
+                        (reason) =>
+                          reason._tag === "Die" ||
+                          (reason._tag === "Fail" &&
+                            isRpcClientError(reason.error) &&
+                            reason.error.reason._tag === "RpcClientDefect"),
+                      )
+                        ? options.onDefect(cause)
+                        : Effect.void,
+                    ),
+                    Stream.catchCause((cause) => {
+                      const hasOnlyExpectedFailures =
+                        cause.reasons.length > 0 &&
+                        cause.reasons.every((reason) => reason._tag === "Fail");
+                      const isTransportFailure =
+                        hasOnlyExpectedFailures &&
+                        cause.reasons.every(
+                          (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
+                        );
+                      if (isTransportFailure) {
+                        return Stream.fromEffect(
+                          Effect.logWarning(
+                            "Durable RPC subscription lost its transport; waiting for the next session.",
+                            {
+                              cause: Cause.pretty(cause),
+                              method: tag,
+                              environmentId: supervisor.target.environmentId,
+                            },
+                          ),
+                        ).pipe(Stream.drain);
+                      }
+                      if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
+                        const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
+                          Stream.drain,
+                        );
+                        const retryAfter = options.retryExpectedFailureAfter;
+                        if (retryAfter === undefined) {
+                          return handled;
+                        }
+                        // Backed off and capped. A permanent "no" from the
+                        // server — a thread it has never heard of, or an
+                        // archived one — used to retry every 250ms forever,
+                        // re-issuing the snapshot fetch each time, because
+                        // an expected failure was read as a transient one.
+                        const giveUp: Stream.Stream<
+                          A,
+                          EnvironmentRpcStreamFailure<TTag>
+                        > = Stream.empty;
+                        return handled.pipe(
+                          Stream.concat(
+                            Stream.unwrap(
+                              Effect.gen(function* () {
+                                if (producedValue) {
+                                  producedValue = false;
+                                  yield* resetExpectedFailures;
+                                }
+                                const attempt = yield* Ref.getAndUpdate(
+                                  expectedFailures,
+                                  (count) => count + 1,
+                                );
+                                if (attempt >= EXPECTED_FAILURE_RETRY_LIMIT) {
+                                  yield* Effect.logWarning(
+                                    "Durable RPC subscription gave up after repeated expected failures; a new session, refresh or remount will retry.",
+                                    {
+                                      attempts: attempt,
+                                      method: tag,
+                                      environmentId: supervisor.target.environmentId,
+                                    },
+                                  );
+                                  return giveUp;
+                                }
+                                yield* Effect.sleep(subscriptionRetryDelay(retryAfter, attempt));
+                                return subscribeToSession();
+                              }),
+                            ),
+                          ),
+                        );
+                      }
+                      return Stream.failCause(cause);
+                    }),
+                  );
+                });
               // A new session is fresh evidence the subscription can work, so it
               // re-arms the resubscribe budget the way an emitted value re-arms
               // the failure budget.
@@ -500,8 +517,3 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
 > {
   return subscribeDynamic(tag, () => Effect.succeed(input), options);
 }
-
-export const config = Effect.gen(function* () {
-  const session = yield* currentSession();
-  return yield* session.initialConfig;
-}).pipe(Effect.withSpan("EnvironmentRpc.config"));

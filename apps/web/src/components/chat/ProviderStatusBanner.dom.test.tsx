@@ -86,7 +86,10 @@ describe("ProviderStatusBanner", () => {
 
   // The banner covers the top of the timeline, so it is the only way back to
   // the conversation; a dismiss control that renders but reports nothing is
-  // exactly the failure static markup could not see.
+  // exactly the failure static markup could not see. Upstream dropped the matching
+  // assertions from its own copy in #10148 as styling detail; they are kept here
+  // because all three still render, and the glass surface is what stops the
+  // timeline reading through the banner.
   it("reports a dismiss to its owner", async () => {
     const onDismiss = vi.fn();
     const view = await renderDom(
