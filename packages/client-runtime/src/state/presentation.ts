@@ -21,6 +21,30 @@ function mapsEqual<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boo
   return true;
 }
 
+/**
+ * Whether two presentations are interchangeable to a consumer.
+ *
+ * This covers the value's whole shape rather than a chosen subset: `entry` and
+ * `serverConfig` are rebuilt on change rather than mutated in place, so identity is the
+ * right test for them, and `connection` is three primitives. Nothing a consumer can read
+ * off a presentation is left out, so a suppressed notification cannot hide a change.
+ */
+function presentationsEqual(
+  left: EnvironmentPresentation | null,
+  right: EnvironmentPresentation | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return (
+    left.entry === right.entry &&
+    left.serverConfig === right.serverConfig &&
+    left.connection.phase === right.connection.phase &&
+    left.connection.error === right.connection.error &&
+    left.connection.traceId === right.connection.traceId
+  );
+}
+
 export function createEnvironmentPresentationAtoms<E>(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly stateAtom: (
@@ -44,7 +68,17 @@ export function createEnvironmentPresentationAtoms<E>(input: {
         connection: presentEnvironmentConnection(state),
         serverConfig: get(input.serverConfigValueAtom(environmentId)),
       } satisfies EnvironmentPresentation;
-    }).pipe(Atom.withLabel(`environment-presentation:${environmentId}`)),
+    }).pipe(
+      // An atom notifies on every rebuild unless it declares equality, and several rebuilds
+      // here cannot change the value. The catalog map is replaced on every registration, so
+      // one environment connecting recomputes every other environment's presentation; and
+      // the supervisor state carries `stage`, `generation`, `retryAt`, `desired` and
+      // `network`, none of which `presentConnectionState` reads - `stage` alone advances
+      // twice per connect attempt. Each of those used to hand consumers a fresh object and
+      // re-render them, and to defeat `presentationsAtom`'s identity check below.
+      Atom.withEquality<EnvironmentPresentation | null>(presentationsEqual),
+      Atom.withLabel(`environment-presentation:${environmentId}`),
+    ),
   );
 
   let previous: ReadonlyMap<EnvironmentId, EnvironmentPresentation> = new Map();

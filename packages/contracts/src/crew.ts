@@ -89,9 +89,22 @@ export type CrewReport = typeof CrewReport.Type;
 export const CrewRole = Schema.Literals(["bridge", "crewmate", "crewmate-closed"]);
 export type CrewRole = typeof CrewRole.Type;
 
-/** The two roles the session reaper skips. `crewmate-closed` is deliberately absent. */
-export const isReaperExemptCrewRole = (role: CrewRole | null): boolean =>
-  role === "bridge" || role === "crewmate";
+/**
+ * The two roles the session reaper skips. `crewmate-closed` is deliberately
+ * absent: after teardown's zombie-stop attempts the reaper is the last thing
+ * that can stop a crewmate whose `stopSession` failed, so exempting the closed
+ * role would turn that stated residual into a permanent leak.
+ *
+ * Accepts both absent shapes so neither can read as exempt. Only `undefined`
+ * occurs today: the sole caller reads the thread shell, where `crewRole` is
+ * `Schema.optionalKey`, and all three row-to-shell mappings in
+ * `ProjectionSnapshotQuery` turn the projection row's `Schema.NullOr` into an
+ * omitted key. The `| null` arm is there so a future caller reading the row
+ * directly cannot reintroduce the bug, not because a caller passes null now.
+ */
+export const isReaperExemptCrewRole = (
+  role: CrewRole | null | undefined,
+): role is "bridge" | "crewmate" => role === "bridge" || role === "crewmate";
 
 /**
  * How a task presents in the panel. `closed` is stored; everything else is derived

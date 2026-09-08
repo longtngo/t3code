@@ -1234,7 +1234,6 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       yield* fs.writeFileString(path.join(cwd, "notes.txt"), "one\ntwo\nthree\n");
       yield* h.adapter.startSession({ threadId, cwd, runtimeMode: "approval-required" });
       expect(h.launches[0]?.clientFileSystem).toBe(true);
-      expect(h.launches[0]?.additionalDirectories).toEqual([attachmentsDir]);
       const read = h.fileHandlers.read;
       const write = h.fileHandlers.write;
       if (!read || !write) return yield* Effect.die("File handlers were not registered.");
@@ -1268,6 +1267,16 @@ it.layer(layer)("AntigravityAdapter", (it) => {
         path: path.join(cwd, "missing.txt"),
       }).pipe(Effect.flip);
       expect(missing._tag).toBe("AcpRequestError");
+
+      // The attachments directory is the second allowed root: pasted files land there and
+      // the agent reads them at the paths ProviderService injects into the turn text.
+      yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fs.writeFileString(path.join(attachmentsDir, "pasted.txt"), "pasted\n");
+      const pasted = yield* read({
+        sessionId: nativeSessionId,
+        path: path.join(attachmentsDir, "pasted.txt"),
+      });
+      expect(pasted.content).toBe("pasted\n");
     }).pipe(Effect.scoped),
   );
 

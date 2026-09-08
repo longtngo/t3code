@@ -152,6 +152,13 @@ management is available through `npx t3 auth --help`.
 A session with an open connection stays listed after its access credential
 expires.
 
+A browser session is bound to the address it was paired from. Reaching the same
+server by a different scheme, host, or port - `localhost` instead of `127.0.0.1`,
+a LAN address instead of the tailnet name, or a server that restarted on another
+port - is refused until you pair that browser again from the address you are now
+using. The app falls back to its pairing screen when this happens. Sessions on
+the desktop app are not bound this way.
+
 To remove an environment from T3 Connect, open your account menu's **T3 Connect**
 page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is

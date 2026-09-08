@@ -41,6 +41,7 @@ export interface IssuedSession {
   readonly expiresAt: DateTime.DateTime;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
+  readonly httpOrigin?: string;
 }
 
 export interface VerifiedSession {
@@ -52,6 +53,7 @@ export interface VerifiedSession {
   readonly subject: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
+  readonly httpOrigin?: string;
 }
 
 export type SessionCredentialChange =
@@ -370,6 +372,8 @@ export class SessionStore extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly client?: AuthClientMetadata;
       readonly proofKeyThumbprint?: string;
+      /** Request `Origin` this session was minted from, signed into the token. */
+      readonly httpOrigin?: string;
       /**
        * Atomically revoke active sessions with the same subject and method
        * before storing this session.
@@ -427,6 +431,7 @@ const SessionClaims = Schema.Struct({
   scopes: AuthEnvironmentScopes,
   method: Schema.Literals(["browser-session-cookie", "bearer-access-token", "dpop-access-token"]),
   jkt: Schema.optionalKey(Schema.String),
+  org: Schema.optionalKey(Schema.String),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -637,6 +642,7 @@ export const make = Effect.gen(function* () {
         scopes: input?.scopes ?? AuthStandardClientScopes,
         method: input?.method ?? "browser-session-cookie",
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
+        ...(input?.httpOrigin ? { org: input.httpOrigin } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -713,6 +719,7 @@ export const make = Effect.gen(function* () {
         expiresAt: expiresAt,
         scopes: claims.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+        ...(claims.org ? { httpOrigin: claims.org } : {}),
       } satisfies IssuedSession;
     },
   );
@@ -775,6 +782,7 @@ export const make = Effect.gen(function* () {
         subject: claims.sub,
         scopes: claims.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+        ...(claims.org ? { httpOrigin: claims.org } : {}),
       } satisfies VerifiedSession;
     },
   );

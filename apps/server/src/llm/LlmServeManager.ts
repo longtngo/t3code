@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import type { LocalLlmSettings } from "@t3tools/contracts";
 import { LlmServeError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,15 @@ import {
 
 /** Empty config used when settings can't be read (keeps `list` total). */
 const EMPTY_LOCAL_LLM: LocalLlmSettings = { ramBudgetBytes: 0, providers: {}, models: [] };
+
+/**
+ * Grace period between SIGTERM and SIGKILL when stopping a model server.
+ *
+ * Generous on purpose: releasing tens of gigabytes of mapped weights takes a
+ * moment, and killing a healthy server mid-release buys nothing. The point is
+ * that the wait terminates, not that it is short.
+ */
+export const MODEL_SERVER_FORCE_KILL_AFTER = Duration.seconds(10);
 
 type LaunchState = "loading" | "stopping";
 
@@ -174,6 +184,20 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
               shell: false,
               stdout: "ignore",
               stderr: "ignore",
+              // Without this the spawner sends SIGTERM and waits for exit with no
+              // bound at all (`forceKillAfter` defaults to undefined, meaning no
+              // timeout). A model server that is slow to release its weights, or
+              // that ignores SIGTERM outright, therefore hangs `unload` forever -
+              // and hangs the shutdown finalizer below with it, because that
+              // closes the same scopes.
+              //
+              // The escalation is what bounds it *without* orphaning anything: a
+              // plain timeout on our side would give up waiting and leave a
+              // process holding tens of gigabytes of weights with nothing
+              // tracking it. SIGKILL after the grace period actually reaps it.
+              // 10s is generous for releasing mapped weights and exiting; the
+              // point is that the wait terminates, not that it is short.
+              forceKillAfter: MODEL_SERVER_FORCE_KILL_AFTER,
             }),
           )
           .pipe(
@@ -231,13 +255,19 @@ export const make = Effect.fn("makeLlmServeManager")(function* () {
     });
 
   // On server shutdown, stop every managed launch (closing scopes reaps their groups).
+  //
+  // Concurrently, because each close can burn the whole `MODEL_SERVER_FORCE_KILL_AFTER`
+  // grace period before its SIGKILL lands. Sequentially the shutdown bound is N x 10s,
+  // which for two or three resident models exceeds launchd's 20s ExitTimeOut - past
+  // which the server is killed mid-chain and the servers it had not reached yet are
+  // orphaned holding their weights, the exact leak the grace period exists to prevent.
   yield* Effect.addFinalizer(() =>
     Ref.get(registry).pipe(
       Effect.flatMap((reg) =>
         Effect.forEach(
           Array.from(reg.values()),
           (launch) => Scope.close(launch.scope, Exit.void).pipe(Effect.ignore),
-          { discard: true },
+          { discard: true, concurrency: "unbounded" },
         ),
       ),
       Effect.ignore,

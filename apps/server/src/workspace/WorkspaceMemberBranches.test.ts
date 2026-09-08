@@ -12,6 +12,7 @@ import { ServerConfig } from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { isCheckpointComplete, resolveCheckpointDrift } from "./CheckpointMemberDrift.ts";
 import { memberOwnerConfigKey, memberPrBaseConfigKey } from "./MemberBranches.ts";
 import * as WorkspaceMemberBranches from "./WorkspaceMemberBranches.ts";
 
@@ -119,9 +120,11 @@ describe("WorkspaceMemberBranches", () => {
   );
 
   // Checkpoint states are read concurrently, so the answer must still line up
-  // with the members that were asked for — and a member that cannot be read
-  // must drop out rather than shift every later member's state onto the wrong id.
-  it.effect("reads checkpoint states in member order and skips unreadable members", () =>
+  // with the members that were asked for. A member that cannot be read is
+  // recorded with no head rather than dropped: dropping it used to shift the
+  // question onto whether it was ever attached, which the comparison answers
+  // with "no drift".
+  it.effect("reads checkpoint states in member order, recording ones it cannot read", () =>
     Effect.gen(function* () {
       const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -140,14 +143,96 @@ describe("WorkspaceMemberBranches", () => {
 
       assert.deepEqual(
         states.map((state) => state.memberId),
-        ["member-first", "member-second", "member-third"],
+        ["member-first", "member-missing", "member-second", "member-third"],
+      );
+      assert.deepEqual(
+        states.map((state) => state.headSha === undefined),
+        [false, true, false, false],
       );
       assert.deepEqual(
         states.map((state) => state.isDirty),
-        [false, false, true],
+        [false, false, false, true],
       );
       assert.strictEqual(states[0]?.headSha, yield* git(first.cwd, ["rev-parse", "HEAD"]));
-      assert.strictEqual(states[2]?.headSha, yield* git(third.cwd, ["rev-parse", "HEAD"]));
+      assert.strictEqual(states[3]?.headSha, yield* git(third.cwd, ["rev-parse", "HEAD"]));
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // The defect lives in the COMPOSITION of capture and comparison, which is why
+  // neither half's own tests can see it: capture drops a member it could not
+  // read, and the comparison only walks what was recorded, so that member can
+  // never drift. A transient git failure at capture therefore disarms the
+  // revert guard for that member, for that checkpoint, permanently.
+  it.effect(
+    "reports drift for a member that could not be read when the checkpoint was captured",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const stable = yield* makeMemberRepo();
+        // Not a repository yet. This stands in for the realistic trigger: both
+        // reads in `readCheckpointStates` are git subprocesses under a timeout,
+        // and both are swallowed by `orElseSucceed`.
+        const flaky = yield* fileSystem.makeTempDirectoryScoped({ prefix: "flaky-member-" });
+        const members = [
+          { id: "member-stable", path: stable.cwd },
+          { id: "member-flaky", path: flaky },
+        ];
+
+        const recorded = yield* service.readCheckpointStates(members);
+
+        // The member is readable again by the time the user asks to revert.
+        yield* driver.initRepo({ cwd: flaky });
+        yield* git(flaky, ["config", "user.email", "test@test.com"]);
+        yield* git(flaky, ["config", "user.name", "Test"]);
+        yield* writeFile(flaky, "README.md", "# member\n");
+        yield* git(flaky, ["add", "."]);
+        yield* git(flaky, ["commit", "-m", "initial commit"]);
+
+        const drift = resolveCheckpointDrift(
+          recorded,
+          yield* service.readCheckpointStates(members),
+        );
+
+        assert.deepEqual(drift.driftedMembers, [
+          { memberId: "member-flaky", reason: "unobserved" },
+        ]);
+        assert.isFalse(isCheckpointComplete(drift));
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  // The worst shape of the same defect: with every member unreadable the record
+  // is empty, and an empty record is a positive claim that the turn ran with no
+  // members attached. It must not be, and a member still unreadable at revert
+  // time must not compare equal to its own unreadable record either.
+  it.effect("does not read an all-unreadable capture as a turn with no members attached", () =>
+    Effect.gen(function* () {
+      const service = yield* WorkspaceMemberBranches.WorkspaceMemberBranches;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const members = [
+        {
+          id: "member-first",
+          path: yield* fileSystem.makeTempDirectoryScoped({ prefix: "not-a-repo-" }),
+        },
+        {
+          id: "member-second",
+          path: yield* fileSystem.makeTempDirectoryScoped({ prefix: "not-a-repo-" }),
+        },
+      ];
+
+      const recorded = yield* service.readCheckpointStates(members);
+
+      assert.deepEqual(
+        recorded.map((state) => state.memberId),
+        ["member-first", "member-second"],
+      );
+      const drift = resolveCheckpointDrift(recorded, yield* service.readCheckpointStates(members));
+      assert.deepEqual(drift.driftedMembers, [
+        { memberId: "member-first", reason: "unobserved" },
+        { memberId: "member-second", reason: "unobserved" },
+      ]);
+      assert.isFalse(isCheckpointComplete(drift));
     }).pipe(Effect.provide(TestLayer)),
   );
 

@@ -51,14 +51,19 @@ describe("snapshotCookieDatabase", () => {
         });
         const source = path.join(sourceDirectory, "Cookies");
         yield* fileSystem.writeFileString(source, "not a sqlite database");
-        const prefix = `t3code-cookie-failed-${process.pid}-`;
-        const error = yield* snapshotCookieDatabase(source, prefix).pipe(
+        // A parent this test owns. Watching the shared system temp directory
+        // instead would mean reading six figures of unrelated entries, which
+        // stalls for seconds whenever anything else is writing there, and would
+        // key the assertion on a pid prefix that the OS recycles.
+        const snapshotParent = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3code-cookie-failed-parent-",
+        });
+        const error = yield* snapshotCookieDatabase(source, snapshotParent).pipe(
           Effect.scoped,
           Effect.flip,
         );
         expect(error._tag).toBe("SqlError");
-        const temporaryEntries = yield* fileSystem.readDirectory(path.dirname(sourceDirectory));
-        expect(temporaryEntries.some((entry) => entry.startsWith(prefix))).toBe(false);
+        expect(yield* fileSystem.readDirectory(snapshotParent)).toEqual([]);
       }),
     ),
   );
@@ -76,8 +81,16 @@ describe("snapshotCookieDatabase", () => {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`CREATE TABLE cookies(name TEXT NOT NULL)`;
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: source })));
-        const snapshot = yield* snapshotCookieDatabase(source).pipe(Effect.scoped);
+        const snapshotParent = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3code-cookie-cleanup-parent-",
+        });
+        const snapshot = yield* snapshotCookieDatabase(source, snapshotParent).pipe(Effect.scoped);
+        // The snapshot really was made under the parent we gave it. Without this
+        // the cleanup assertions below hold vacuously for a build that ignored
+        // the parameter and wrote to the shared system temp directory instead.
+        expect(snapshot.startsWith(`${snapshotParent}${path.sep}`)).toBe(true);
         expect(yield* fileSystem.exists(snapshot)).toBe(false);
+        expect(yield* fileSystem.readDirectory(snapshotParent)).toEqual([]);
       }),
     ),
   );

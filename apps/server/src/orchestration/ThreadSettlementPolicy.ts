@@ -95,13 +95,26 @@ export function resolveAutoSettlementAt(input: {
     : null;
 }
 
+/**
+ * Whether anything is, or is about to be, working on this thread's behalf.
+ *
+ * `latestTurn.state === "running"` alone is not it: a thread whose last turn
+ * completed can still have a background task writing into its checkout
+ * (`backgroundLiveness`), a queued turn about to start, or a session starting.
+ * Auto-settlement and the auto-pull guard both need the whole set, so it lives
+ * here once rather than as two lists that drift apart.
+ */
+export function isThreadActive(thread: OrchestrationThreadShell, now: string): boolean {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return true;
+  if (thread.session?.status === "starting" || thread.session?.status === "running") return true;
+  if (thread.backgroundLiveness != null) return true;
+  return threadHasQueuedTurnStart(thread, now);
+}
+
 /** Cheap checks that run before any source control lookup. */
 export function isAutoSettlementCandidate(thread: OrchestrationThreadShell, now: string): boolean {
   if (thread.archivedAt !== null || thread.settledOverride !== null) return false;
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
-  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
-  if (thread.backgroundLiveness != null) return false;
-  if (threadHasQueuedTurnStart(thread, now)) return false;
+  if (isThreadActive(thread, now)) return false;
   if (thread.snoozedUntil == null || Date.parse(thread.snoozedUntil) <= Date.parse(now))
     return true;
   const wokeOnError =

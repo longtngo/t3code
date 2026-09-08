@@ -105,7 +105,6 @@ describe("ThreadDeletionReactor", () => {
           return { sequence: recorded.dispatched.length };
         }),
       streamDomainEvents: Stream.fromIterable(events),
-      subscribeDomainEvents: Effect.die(new Error("unused")),
       subscribeDomainEventsLossless: Effect.die(new Error("unused")),
       latestSequence: Effect.succeed(0),
     } as unknown as OrchestrationEngineShape);

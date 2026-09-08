@@ -75,6 +75,22 @@ describe("mapManagedRelayError", () => {
   });
 });
 
+describe("mapRemoteEnvironmentError", () => {
+  // A session refused for being paired from another address has a specific way
+  // out; rendering it as "invalid" sends the user to the wrong fix.
+  it("tells an origin-mismatched session to pair again from this address", () => {
+    const error = new EnvironmentAuthInvalidError({
+      code: "auth_invalid",
+      reason: "origin_mismatch",
+      traceId: "trace-origin",
+    });
+    expect(mapRemoteEnvironmentError(error).message).toBe(
+      "This session was paired from a different address for this server. Pair this device again from the address you are using now.",
+    );
+    expect(mapRemoteEnvironmentError(error).reason).toBe("authentication");
+  });
+});
+
 describe("mapRemoteDpopEnvironmentError", () => {
   it("keeps relay descriptor auth failures distinct from DPoP proof failures", () => {
     const error = new EnvironmentAuthInvalidError({

@@ -44,8 +44,10 @@ import {
   ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderWorkspaceMissingError,
+  ProviderInstanceNotFoundError,
   type ProviderServiceError,
 } from "../../provider/Errors.ts";
+import type { ProviderAdapterCapabilities } from "../../provider/Services/ProviderAdapter.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -181,6 +183,13 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    /**
+     * Answers `getCapabilities` for one instance id. Returning undefined falls back to
+     * the shared default, so a test only describes the instances it cares about.
+     */
+    readonly capabilities?: (
+      instanceId: string,
+    ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError> | undefined;
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
@@ -372,7 +381,11 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       listSessions: () => Effect.succeed(runtimeSessions),
-      getCapabilities: (_provider) =>
+      // Per instance, because the reactor deliberately asks the ACTIVE session's
+      // instance rather than the desired one. A stub that ignores the argument cannot
+      // tell those apart: every capability-driven branch reads the same.
+      getCapabilities: (instanceId) =>
+        input?.capabilities?.(String(instanceId)) ??
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
         }),
@@ -461,7 +474,6 @@ describe("ProviderCommandReactor", () => {
           get streamDomainEvents() {
             return engine.streamDomainEvents;
           },
-          subscribeDomainEvents: engine.subscribeDomainEvents,
           subscribeDomainEventsLossless: engine.subscribeDomainEventsLossless,
           latestSequence: engine.latestSequence,
         } satisfies OrchestrationEngineService["Service"];
@@ -989,6 +1001,223 @@ describe("ProviderCommandReactor", () => {
       );
     }),
   );
+
+  // The workspace member grant is fixed when a session starts, so attaching or
+  // detaching a repository mid-thread only takes effect if the session restarts.
+  // `workspaceMemberGrantChanged` decides that from a capability, and these cover the
+  // wiring that feeds it - which capability is read, and what happens when it cannot be.
+  describe("workspace member grant restarts", () => {
+    type Harness = Awaited<ReturnType<typeof createHarness>>;
+
+    const attachMember = (harness: Harness) =>
+      harness.engine.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.make("cmd-attach-member"),
+        projectId: asProjectId("project-1"),
+        members: [
+          {
+            id: "member-1",
+            path: "/srv/warehouse",
+            title: "warehouse",
+            integrationBranch: "main",
+          },
+        ],
+      });
+
+    const startTurn = (harness: Harness) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-grant"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-grant"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+
+    // Both halves are needed. `runtimeSessions` is what `listSessions` returns, and the
+    // projection's own session is what makes the reactor take the "a session already
+    // exists" branch at all. With only the first, every case starts a fresh session and
+    // calls startSession once - so a test asserting "restarted" would pass without the
+    // branch under test ever running.
+    const seedRunningSession = (
+      harness: Harness,
+      overrides?: { readonly providerInstanceId?: string | null },
+    ) =>
+      Effect.gen(function* () {
+        harness.runtimeSessions.push(runningSession(overrides));
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-grant"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make(
+              overrides?.providerInstanceId === null
+                ? "codex"
+                : (overrides?.providerInstanceId ?? "codex"),
+            ),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+      });
+
+    const runningSession = (overrides?: { readonly providerInstanceId?: string | null }) => ({
+      provider: ProviderDriverKind.make("codex"),
+      // null means the running session records no instance at all, which the reactor
+      // treats as "does not grant" rather than looking one up.
+      ...(overrides?.providerInstanceId === null
+        ? {}
+        : {
+            providerInstanceId: ProviderInstanceId.make(overrides?.providerInstanceId ?? "codex"),
+          }),
+      status: "running" as const,
+      runtimeMode: "approval-required" as const,
+      threadId: ThreadId.make("thread-1"),
+      cwd: "/tmp/provider-project",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    effectIt.effect("restarts the session when the granting adapter's member set changed", () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            capabilities: () =>
+              Effect.succeed({
+                sessionModelSwitch: "in-session" as const,
+                grantsWorkspaceMemberPaths: true,
+              }),
+          }),
+        );
+        // The running session was granted nothing; the project now declares a member.
+        yield* seedRunningSession(harness);
+        yield* attachMember(harness);
+
+        yield* startTurn(harness);
+        yield* Effect.promise(() => harness.drain());
+
+        expect(harness.startSession.mock.calls.length).toBeGreaterThan(0);
+      }),
+    );
+
+    // An adapter that never applies the grant also never echoes it back, so its sessions
+    // always report an empty set. Treating that as "changed" would restart every turn.
+    effectIt.effect("leaves the session alone when the adapter does not apply the grant", () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            capabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" as const }),
+          }),
+        );
+        yield* seedRunningSession(harness);
+        yield* attachMember(harness);
+
+        yield* startTurn(harness);
+        yield* Effect.promise(() => harness.drain());
+
+        expect(harness.startSession).not.toHaveBeenCalled();
+      }),
+    );
+
+    // The question is what the RUNNING session was granted, so the capability comes from
+    // the active session's instance. Reading the desired one instead would answer "grants"
+    // here and restart a session that was never given anything to lose.
+    effectIt.effect("reads the capability from the active instance, not the desired one", () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            capabilities: (instanceId) =>
+              Effect.succeed({
+                sessionModelSwitch: "in-session" as const,
+                grantsWorkspaceMemberPaths: instanceId !== "codex-legacy",
+              }),
+          }),
+        );
+        yield* seedRunningSession(harness, { providerInstanceId: "codex-legacy" });
+        yield* attachMember(harness);
+
+        yield* startTurn(harness);
+        yield* Effect.promise(() => harness.drain());
+
+        expect(harness.startSession).not.toHaveBeenCalled();
+      }),
+    );
+
+    // Why the grant code's own "no active instance" branch is unreachable: a running
+    // session without an instance id is refused much earlier, before anything asks what
+    // it was granted. Pinned here because a test that only asserted "no restart" would
+    // pass through this path while proving nothing about the grant.
+    effectIt.effect("refuses the turn outright when the active session records no instance", () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            capabilities: () =>
+              Effect.succeed({
+                sessionModelSwitch: "in-session" as const,
+                grantsWorkspaceMemberPaths: true,
+              }),
+          }),
+        );
+        yield* seedRunningSession(harness, { providerInstanceId: null });
+        yield* attachMember(harness);
+
+        yield* startTurn(harness);
+        yield* Effect.promise(() => harness.drain());
+
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads[0];
+        expect(
+          thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+        ).toMatchObject({
+          payload: {
+            detail: expect.stringContaining("without a provider instance id"),
+          },
+        });
+        expect(harness.startSession).not.toHaveBeenCalled();
+      }),
+    );
+
+    // A capability read that fails answers "does not grant", which suppresses the
+    // restart. Restarting on an unknown answer would kill a working session over a
+    // transient read.
+    effectIt.effect("does not restart when the capability cannot be read", () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            // Only the ACTIVE instance's read fails. Failing every read would abort the
+            // whole session resolution on an unrelated `getCapabilities` call earlier in
+            // the flow, and the test would see no restart for a reason that has nothing
+            // to do with the grant.
+            capabilities: (instanceId) =>
+              instanceId === "codex-legacy"
+                ? Effect.fail(new ProviderInstanceNotFoundError({ instanceId }))
+                : Effect.succeed({
+                    sessionModelSwitch: "in-session" as const,
+                    grantsWorkspaceMemberPaths: true,
+                  }),
+          }),
+        );
+        yield* seedRunningSession(harness, { providerInstanceId: "codex-legacy" });
+        yield* attachMember(harness);
+
+        yield* startTurn(harness);
+        yield* Effect.promise(() => harness.drain());
+
+        expect(harness.startSession).not.toHaveBeenCalled();
+      }),
+    );
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();

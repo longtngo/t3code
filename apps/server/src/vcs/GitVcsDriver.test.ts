@@ -1,5 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -64,6 +67,120 @@ runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
       }),
   },
 });
+
+// Real clock, real git: the pull has to be genuinely in flight, holding
+// `.git/index.lock`, at the moment it is interrupted.
+it.live(
+  "an interrupted pull leaves no index.lock behind and does not move HEAD",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-git-interrupt-" });
+      const upstream = path.join(root, "upstream");
+      const clone = path.join(root, "clone");
+      yield* fileSystem.makeDirectory(upstream);
+
+      // Upstream: a base commit the clone will sit on, then a commit that adds
+      // many files. `.gitattributes` is in the BASE commit so the clone already
+      // routes every file through the filter configured below.
+      yield* runGit(upstream, ["init", "-q", "-b", "main"]);
+      yield* runGit(upstream, ["config", "user.email", "test@test.com"]);
+      yield* runGit(upstream, ["config", "user.name", "Test"]);
+      yield* fileSystem.writeFileString(path.join(upstream, ".gitattributes"), "* filter=slow\n");
+      yield* runGit(upstream, ["add", ".gitattributes"]);
+      yield* runGit(upstream, ["commit", "-q", "-m", "base"]);
+      for (let index = 0; index < 60; index += 1) {
+        yield* fileSystem.writeFileString(path.join(upstream, `file-${index}.txt`), `${index}\n`);
+      }
+      yield* runGit(upstream, ["add", "."]);
+      yield* runGit(upstream, ["commit", "-q", "-m", "many files"]);
+
+      // Clone at the tip, then step back so the pull has real work to do. A smudge
+      // filter that sleeps per file makes the checkout - the part of the pull that
+      // holds index.lock - take seconds instead of milliseconds, deterministically.
+      yield* runGit(root, ["clone", "-q", `file://${upstream}`, clone]);
+      yield* runGit(clone, ["config", "filter.slow.smudge", "sleep 0.1; cat"]);
+      yield* runGit(clone, ["reset", "-q", "--hard", "HEAD~1"]);
+      const before = yield* driver.readHeadSha(clone);
+      assert.isString(before);
+
+      const lockPath = path.join(clone, ".git", "index.lock");
+      const pull = yield* driver.pullCurrentBranch(clone).pipe(Effect.forkChild);
+
+      // Positive control: the lock is really held before we interrupt. Without this
+      // the assertions below would pass on a pull that simply never started.
+      let lockSeen = false;
+      for (let attempt = 0; attempt < 2_000 && !lockSeen; attempt += 1) {
+        lockSeen = yield* fileSystem.exists(lockPath);
+        if (!lockSeen) yield* Effect.sleep("5 millis");
+      }
+      assert.isTrue(lockSeen, "the pull never took index.lock, so nothing was interrupted");
+
+      yield* Fiber.interrupt(pull);
+
+      assert.isFalse(yield* fileSystem.exists(lockPath), "index.lock was left behind");
+      assert.isFalse(yield* fileSystem.exists(path.join(clone, ".git", "MERGE_HEAD")));
+      // Unmoved HEAD is what separates "interrupted" from "left to finish on its own".
+      assert.strictEqual(yield* driver.readHeadSha(clone), before);
+    }).pipe(Effect.provide(GitContractLayer)),
+  30_000,
+);
+
+// Real clock, real spawner, and a `git` that ignores SIGTERM. This pins
+// `FORCE_KILL_AFTER`: without it the release finalizer waits on a wedged git
+// forever, and the command timeout that was meant to bound it never resolves.
+it.live(
+  "a git that ignores SIGTERM is still reaped, so its command timeout resolves",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-git-wedged-" });
+      const shimDir = path.join(root, "bin");
+      yield* fileSystem.makeDirectory(shimDir);
+      const pidFile = path.join(root, "git.pid");
+      // The loop matters: a group SIGTERM kills an untrapped `sleep` child, and a
+      // shell whose only child died would fall through and exit on its own.
+      yield* fileSystem.writeFileString(
+        path.join(shimDir, "git"),
+        `#!/bin/sh\necho $$ > "${pidFile}"\ntrap "" TERM\nwhile true; do sleep 0.2; done\n`,
+      );
+      yield* fileSystem.chmod(path.join(shimDir, "git"), 0o755);
+
+      // Live clock under `it.live`: the wall time is the whole measurement.
+      const startedAt = yield* Clock.currentTimeMillis;
+      const exit = yield* driver
+        .execute({
+          operation: "GitVcsDriver.test.wedged",
+          cwd: root,
+          args: ["status"],
+          timeoutMs: 500,
+          env: { PATH: `${shimDir}:${process.env.PATH ?? ""}` },
+        })
+        .pipe(Effect.exit);
+      const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
+
+      assert.isTrue(Exit.isFailure(exit), "a wedged git must surface as a failed command");
+      // The command timeout (0.5s) plus the SIGTERM grace, with slack for a busy
+      // host. Well under the 30s a plain timeout would sit at, and nowhere near
+      // the forever it sits at without the escalation.
+      assert.isBelow(elapsedMs, 15_000, `took ${elapsedMs}ms: the escalation did not fire`);
+
+      const pid = Number((yield* fileSystem.readFileString(pidFile)).trim());
+      assert.isTrue(Number.isInteger(pid) && pid > 0, "the shim never reported its pid");
+      let alive = true;
+      try {
+        process.kill(pid, 0);
+      } catch {
+        alive = false;
+      }
+      assert.isFalse(alive, `git shim ${pid} survived the escalation`);
+    }).pipe(Effect.provide(GitContractLayer)),
+  30_000,
+);
 
 it("copiedIndexStampSeconds never stamps a copied index later than its source", () => {
   // A source whose nanosecond tail Node rounded UP to the next millisecond, and so to a

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   deriveAuthClientMetadata,
   isRemoteReachableHost,
+  resolveClientIpAddress,
   resolveSessionCookieName,
 } from "./utils.ts";
 
@@ -158,5 +159,49 @@ describe("session cookie isolation", () => {
     expect(isRemoteReachableHost("[::1]")).toBe(false);
     expect(isRemoteReachableHost("0.0.0.0")).toBe(true);
     expect(isRemoteReachableHost("192.168.1.50")).toBe(true);
+  });
+});
+describe("resolveClientIpAddress", () => {
+  // The reported case: a co-located proxy makes every remote device look local.
+  it("reports the forwarded client when the peer is the local proxy", () => {
+    expect(
+      resolveClientIpAddress({ socketAddress: "127.0.0.1", forwardedFor: "203.0.113.7" }),
+    ).toBe("203.0.113.7");
+  });
+
+  it("takes the original client from the left of a proxy chain", () => {
+    expect(
+      resolveClientIpAddress({
+        socketAddress: "::1",
+        forwardedFor: "203.0.113.7, 198.51.100.2, 127.0.0.1",
+      }),
+    ).toBe("203.0.113.7");
+  });
+
+  // The direction that costs something. The recorded address is shown as the connecting
+  // device, so a remote client that sets this header must not get to choose what the
+  // audit screen says about it.
+  it("ignores the header from a remote peer, which could be forging it", () => {
+    expect(resolveClientIpAddress({ socketAddress: "203.0.113.7", forwardedFor: "10.0.0.1" })).toBe(
+      "203.0.113.7",
+    );
+  });
+
+  it("keeps the loopback peer when no proxy set the header", () => {
+    expect(resolveClientIpAddress({ socketAddress: "127.0.0.1", forwardedFor: undefined })).toBe(
+      "127.0.0.1",
+    );
+  });
+
+  it("keeps the loopback peer when the header is present but empty", () => {
+    expect(resolveClientIpAddress({ socketAddress: "127.0.0.1", forwardedFor: " , " })).toBe(
+      "127.0.0.1",
+    );
+  });
+
+  it("reports nothing when the socket had no address and no proxy spoke for it", () => {
+    expect(
+      resolveClientIpAddress({ socketAddress: undefined, forwardedFor: "203.0.113.7" }),
+    ).toBeUndefined();
   });
 });

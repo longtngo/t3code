@@ -28,9 +28,7 @@ import {
   downloadContentDisposition,
   isGrantableViewerAssetDirectory,
   resolveViewerAssetGrantDecision,
-  isLocalLoopbackRequest,
   isLoopbackHostname,
-  isWaivableLocalRequest,
   logRouteRefusals,
   resolveDevRedirectUrl,
 } from "./http.ts";
@@ -349,53 +347,6 @@ describe("http dev routing", () => {
   });
 });
 
-function fakeRequest(input: {
-  readonly headers?: Record<string, string>;
-  readonly remoteAddress?: string | null;
-}): HttpServerRequest.HttpServerRequest {
-  return {
-    headers: input.headers ?? {},
-    source: input.remoteAddress === undefined ? undefined : { remoteAddress: input.remoteAddress },
-  } as unknown as HttpServerRequest.HttpServerRequest;
-}
-
-describe("isLocalLoopbackRequest", () => {
-  it("trusts a loopback TCP peer", () => {
-    expect(isLocalLoopbackRequest(fakeRequest({ remoteAddress: "127.0.0.1" }))).toBe(true);
-    expect(isLocalLoopbackRequest(fakeRequest({ remoteAddress: "::1" }))).toBe(true);
-    // IPv4-mapped IPv6 loopback is normalized before the check.
-    expect(isLocalLoopbackRequest(fakeRequest({ remoteAddress: "::ffff:127.0.0.1" }))).toBe(true);
-  });
-
-  it("does not trust a remote TCP peer (Host header is irrelevant)", () => {
-    expect(isLocalLoopbackRequest(fakeRequest({ remoteAddress: "192.168.1.20" }))).toBe(false);
-    // Even a spoofed Host: localhost cannot flip the decision — peer is what counts.
-    expect(
-      isLocalLoopbackRequest(
-        fakeRequest({ headers: { host: "localhost" }, remoteAddress: "203.0.113.5" }),
-      ),
-    ).toBe(false);
-  });
-
-  it("never trusts a forwarded/proxied request even from a loopback peer", () => {
-    expect(
-      isLocalLoopbackRequest(
-        fakeRequest({ headers: { "x-forwarded-for": "203.0.113.5" }, remoteAddress: "127.0.0.1" }),
-      ),
-    ).toBe(false);
-    expect(
-      isLocalLoopbackRequest(
-        fakeRequest({ headers: { forwarded: "for=203.0.113.5" }, remoteAddress: "127.0.0.1" }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not trust a request with no resolvable peer", () => {
-    expect(isLocalLoopbackRequest(fakeRequest({}))).toBe(false);
-    expect(isLocalLoopbackRequest(fakeRequest({ remoteAddress: null }))).toBe(false);
-  });
-});
-
 describe("classifyViewerPath", () => {
   it("classifies markdown extensions and decodes the suffix", () => {
     expect(classifyViewerPath("/Users/me/report.md")).toEqual({
@@ -597,130 +548,6 @@ describe("classifyViewerAssetPath", () => {
       classifyViewerAssetPath("/Users/me/.local/proto", "/Users/me/.local/proto/app.js")
         ?.contentType,
     ).toBe("text/javascript; charset=utf-8");
-  });
-});
-
-describe("isWaivableLocalRequest", () => {
-  const loopback = { remoteAddress: "127.0.0.1" } as const;
-
-  it("waives a genuine top-level navigation from a local browser", () => {
-    expect(
-      isWaivableLocalRequest(
-        fakeRequest({
-          ...loopback,
-          headers: {
-            host: "127.0.0.1:13773",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "document",
-          },
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("waives a non-browser caller, which sends no Sec-Fetch-* at all", () => {
-    // curl or an editor can already read the file directly with the user's own
-    // permissions, which is the premise the waiver rests on.
-    expect(
-      isWaivableLocalRequest(fakeRequest({ ...loopback, headers: { host: "localhost:13773" } })),
-    ).toBe(true);
-  });
-
-  it("refuses a cross-origin fetch from a page the user is merely visiting", () => {
-    // The disclosure path: any site could read any file, because this server answers
-    // with `access-control-allow-origin: *`.
-    expect(
-      isWaivableLocalRequest(
-        fakeRequest({
-          ...loopback,
-          headers: {
-            host: "127.0.0.1:13773",
-            origin: "https://evil.example",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-dest": "empty",
-          },
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("refuses a no-cors fetch and a subresource load", () => {
-    for (const headers of [
-      { "sec-fetch-mode": "no-cors", "sec-fetch-dest": "empty" },
-      { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" },
-    ]) {
-      expect(
-        isWaivableLocalRequest(
-          fakeRequest({ ...loopback, headers: { host: "localhost", ...headers } }),
-        ),
-      ).toBe(false);
-    }
-  });
-
-  it("refuses a DNS-rebound request, whose peer is loopback but whose Host is not", () => {
-    expect(
-      isWaivableLocalRequest(
-        fakeRequest({
-          ...loopback,
-          headers: {
-            host: "evil.example",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "document",
-          },
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("refuses a cross-site top-level navigation, which is still a navigation", () => {
-    // `evil.example` calling window.open on this origin satisfies both the mode and
-    // dest checks; only Sec-Fetch-Site distinguishes it from the user's own tab.
-    expect(
-      isWaivableLocalRequest(
-        fakeRequest({
-          ...loopback,
-          headers: {
-            host: "127.0.0.1:13773",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "document",
-            "sec-fetch-site": "cross-site",
-          },
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("waives a navigation the browser marks same-origin or none", () => {
-    for (const site of ["same-origin", "none"]) {
-      expect(
-        isWaivableLocalRequest(
-          fakeRequest({
-            ...loopback,
-            headers: {
-              host: "127.0.0.1:13773",
-              "sec-fetch-mode": "navigate",
-              "sec-fetch-dest": "document",
-              "sec-fetch-site": site,
-            },
-          }),
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it("still refuses anything that is not a loopback peer", () => {
-    expect(
-      isWaivableLocalRequest(
-        fakeRequest({
-          remoteAddress: "192.168.1.20",
-          headers: {
-            host: "127.0.0.1",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-dest": "document",
-          },
-        }),
-      ),
-    ).toBe(false);
   });
 });
 
@@ -1125,20 +952,63 @@ describe("viewer route auth ordering", () => {
     expect(route.slice(videoBranchIndex)).toContain("fileSystem.stat(absolutePath)");
   });
 
-  it("never waives authentication for any byte kind", () => {
+  // Replaces a guard that used to check every byte kind was excluded from a
+  // local-process waiver. The waiver is gone: a co-located reverse proxy is
+  // indistinguishable from a local process at every signal the server can read, and
+  // seven of eight measured proxy configurations handed a remote unauthenticated
+  // visitor the contents of any readable file. What has to be pinned now is that no
+  // condition of any shape gets in front of the auth call again.
+  it("authenticates unconditionally, with no branch ahead of the auth call", () => {
     const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
-    // Anchored on the waiver call itself rather than on the first kind in the
-    // condition, which is what broke when audio was added: the condition wrapped
-    // and `if (kind === "image"` started matching the image BRANCH instead.
-    const waiverIndex = source.indexOf("!isWaivableLocalRequest(request)");
-    expect(waiverIndex).toBeGreaterThan(-1);
-    const conditionStart = source.lastIndexOf("if (", waiverIndex);
-    expect(conditionStart).toBeGreaterThan(-1);
-    const condition = source.slice(conditionStart, waiverIndex);
-    // Every kind served as raw bytes must be excluded from the local-navigation
-    // waiver; a kind missing here is served to an unauthenticated local caller.
-    for (const kind of ["image", "video", "audio"]) {
-      expect(condition).toContain(`kind === "${kind}"`);
+    // A waiver predicate must not come back under any name.
+    expect(source).not.toContain("WaivableLocalRequest");
+    expect(source).not.toContain("LocalLoopbackRequest");
+
+    const routeStart = source.indexOf("export const viewerRouteLayer");
+    expect(routeStart).toBeGreaterThan(-1);
+    const route = source.slice(routeStart);
+    // Route-body indent (four spaces) with no `if` wrapping it. A conditional would
+    // indent the call further, so the exact prefix is the assertion.
+    const authStatement = "\n    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);";
+    expect(route).toContain(authStatement);
+    // And nothing keyed on the file kind may run before it, or a kind could skip auth.
+    const authIndex = route.indexOf(authStatement);
+    const firstKindBranch = route.indexOf('kind === "');
+    expect(firstKindBranch).toBeGreaterThan(-1);
+    expect(authIndex).toBeLessThan(firstKindBranch);
+
+    // The two assertions above pin the auth call's own shape and the kind
+    // branches, and between them they still let the deleted bypass back in:
+    // `if (looksLocal(request)) return yield* serve();` placed ABOVE the auth
+    // call leaves that call unindented and keyed on nothing, so both pass. An
+    // early exit IS the bypass, whatever it is named, so the route may contain
+    // exactly the two documented early returns before it authenticates.
+    //
+    // Line-based and comment-skipping on purpose. A substring scan anchored at
+    // the destructuring had two holes: prose in the long comment above the auth
+    // call turned it red on the word "returns", and a bypass placed above the
+    // destructuring (reading `target.absolutePath` directly) sat outside the
+    // window entirely.
+    const earlyReturns = route
+      .slice(0, authIndex)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => {
+        if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) return false;
+        return /\breturn\b/.test(line);
+      });
+    // Both are 400s, and both must stay ahead of auth so that an unreadable URL
+    // or an unsupported extension is not reported as "not signed in". The status
+    // check is load-bearing, not decoration: without it, swapping a bypass IN for
+    // one of these two keeps the count at 2 and passes.
+    //
+    // If this fails on the `status: 400` assertion rather than the count, suspect
+    // the formatter before the code. The `!target` return sits ~90 chars against a
+    // 100-char width, so lengthening that message wraps `status: 400` onto its own
+    // line and fails here with a message that does not say so.
+    expect(earlyReturns).toHaveLength(2);
+    for (const line of earlyReturns) {
+      expect(line).toContain("status: 400");
     }
   });
 });

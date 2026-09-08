@@ -40,10 +40,8 @@ import {
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
-import { parsePositiveIntEnv } from "../../provider/Layers/parsePositiveIntEnv.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
-import { boundedSubscriberStream } from "./boundedSubscriberStream.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
@@ -91,15 +89,6 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
-/**
- * Per-WS-subscription buffer capacity for the domain-event hub. Bounds how far
- * behind a single WebSocket consumer may fall before its subscription is ended
- * cleanly (the client then resubscribes from its last-applied sequence). This is
- * what stops one slow/dead socket from pinning the unbounded hub and OOM-ing the
- * server. Override with T3CODE_WS_SUBSCRIBER_BUFFER.
- */
-const DEFAULT_WS_SUBSCRIBER_BUFFER_CAPACITY = 4096;
-
 const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const eventStore = yield* OrchestrationEventStore;
@@ -114,9 +103,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
-  const wsSubscriberBufferCapacity =
-    parsePositiveIntEnv("T3CODE_WS_SUBSCRIBER_BUFFER") ?? DEFAULT_WS_SUBSCRIBER_BUFFER_CAPACITY;
-
   const projectEventsOntoReadModel = (
     baseReadModel: OrchestrationReadModel,
     events: ReadonlyArray<OrchestrationEvent>,
@@ -484,24 +470,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     // so a caller can subscribe to the live tail before reading a snapshot and
     // lose nothing in the read window.
     //
-    // The subscription is wrapped in a bounded, self-draining buffer
-    // (`boundedSubscriberStream`): a forked pump takes from the subscription
-    // unconditionally (so a slow/dead WebSocket consumer can never backpressure
-    // its take-loop and pin this unbounded hub — the confirmed OOM leak) into a
-    // bounded queue the consumer drains at its own pace. If the consumer falls
-    // `wsSubscriberBufferCapacity` behind, the stream ends cleanly and the client
-    // resubscribes from its last-applied sequence. Only WS callers use this;
-    // internal reactors consume the lossless `streamDomainEvents`.
-    // Eager like the above, unbounded like `streamDomainEvents`. The reactors take this
-    // one: upstream #9152 pointed them at the WS accessor, which put the fork's bounded,
+    // Eager like the above, unbounded like `streamDomainEvents`. The reactors take
+    // this one: upstream #9152 pointed them at a bounded WS accessor, which put a
     // droppable buffer in front of the one consumer that must never lose an event.
     subscribeDomainEventsLossless: PubSub.subscribe(eventPubSub).pipe(
       Effect.map(Stream.fromSubscription),
-    ),
-    subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
-      Effect.flatMap((subscription) =>
-        boundedSubscriberStream(subscription, wsSubscriberBufferCapacity),
-      ),
     ),
     // The command read model's snapshotSequence tracks the latest committed
     // event sequence (updated on the worker fiber). A plain property read is a

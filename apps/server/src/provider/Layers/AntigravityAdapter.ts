@@ -806,14 +806,10 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             stopOwned,
             Effect.gen(function* () {
               const mcp = McpProviderSession.readMcpProviderSession(input.threadId);
-              // The attachments dir grant lets the agent read pasted files at
-              // the paths ProviderService injects into the turn text. It is a
-              // leaf directory holding only uploads.
               const runtime = yield* options.makeRuntime({
                 cwd,
                 clientInfo: { name: "t3-code", version: "0.0.0" },
                 clientFileSystem: true,
-                additionalDirectories: [serverConfig.attachmentsDir],
                 ...(Option.isSome(cursor) ? { resumeSessionId: cursor.value.sessionId } : {}),
                 mcpServers: mcp
                   ? [
@@ -835,6 +831,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               // capability. The agent gates each write behind
               // `session/request_permission`, so only path containment is
               // checked here.
+              //
+              // The attachments directory is a root because ProviderService injects pasted
+              // files into the turn text by path and the agent reads them back through here.
+              // It is a leaf directory holding only uploads. This is the whole of the grant:
+              // ACP has no session-setup field for extra roots, so an agent that reads files
+              // itself rather than through this capability sees only its own policy.
               const allowedRoots = [cwd, serverConfig.attachmentsDir];
               yield* runtime.handleReadTextFile((request) =>
                 readClientTextFile({ fileSystem, path, allowedRoots, request }),

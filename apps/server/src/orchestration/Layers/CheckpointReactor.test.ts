@@ -303,6 +303,13 @@ describe("CheckpointReactor", () => {
   });
 
   async function createHarness(options?: {
+    readonly checkpointMemberStates?: (
+      members: ReadonlyArray<{ readonly id: string; readonly path: string }>,
+    ) => ReadonlyArray<{
+      readonly memberId: string;
+      readonly headSha?: string;
+      readonly isDirty: boolean;
+    }>;
     readonly hasSession?: boolean;
     readonly seedFilesystemCheckpoints?: boolean;
     readonly initializeGit?: boolean;
@@ -383,7 +390,18 @@ describe("CheckpointReactor", () => {
           ensureFeatureBranch: () =>
             Effect.succeed({ state: "idle" as const, branch: null, ownerThreadId: null }),
           resolvePrBase: () => Effect.succeed(null),
-          readCheckpointStates: () => Effect.succeed([]),
+          // Defaults to the shape every other test needs: no members, so no
+          // member states. A test that attaches members overrides it, because
+          // the real service is what decides whether one was readable.
+          readCheckpointStates: (members) =>
+            Effect.succeed(
+              options?.checkpointMemberStates?.(members) ??
+                members.map((member) => ({
+                  memberId: member.id,
+                  headSha: "aaa111",
+                  isDirty: false,
+                })),
+            ),
           writePrBase: () => Effect.succeed(true),
         }),
       ),
@@ -1912,6 +1930,133 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
   });
+
+  // The revert guard only speaks when the user tries to revert, possibly days
+  // later. A member the server could not read at capture is a failure that
+  // happened now, so it is reported now, in the same partial-success shape the
+  // turn diff summary already uses.
+  it("reports a workspace member it could not read when capturing a checkpoint", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      // What the real service returns for a path it could not read, measured in
+      // WorkspaceMemberBranches.test.ts against a real non-repository directory.
+      checkpointMemberStates: (members) =>
+        members.map((member) => ({ memberId: member.id, isDirty: false })),
+    });
+    const missingMemberPath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "not-a-repo-"));
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.make("cmd-attach-unreadable-member"),
+        projectId: asProjectId("project-1"),
+        members: [
+          {
+            id: "member-unreadable",
+            path: missingMemberPath,
+            title: "uniuni_api_prm",
+            integrationBranch: "main",
+          },
+        ],
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.make("evt-turn-completed-unreadable-member"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-unreadable-member"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    );
+    const failure = thread.activities.find(
+      (activity) => activity.kind === "checkpoint.capture.failed",
+    );
+    const detail = (failure?.payload as { detail?: string } | undefined)?.detail;
+    expect(detail).toContain("could not be read");
+    expect(detail).toContain(missingMemberPath);
+  });
+
+  // A capture failure is usually a property of the workspace, not of the turn, so it
+  // reproduces every turn and reads identically each time. Measured on the developer's
+  // own history: one thread recorded 37 of these across 37 consecutive turns spanning
+  // three and a half days. Two turns is the smallest fixture that can tell a fix from a
+  // no-op, and the clear-and-return turns are what stop the fix going silent for good.
+  effectIt.effect("reports a persistent capture failure once, and again after it clears", () =>
+    Effect.gen(function* () {
+      let readable = false;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          seedFilesystemCheckpoints: false,
+          checkpointMemberStates: (members) =>
+            members.map((member) =>
+              readable
+                ? { memberId: member.id, headSha: "aaa111", isDirty: false }
+                : { memberId: member.id, isDirty: false },
+            ),
+        }),
+      );
+      const missingMemberPath = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "not-a-repo-"));
+      const createdAt = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.make("cmd-attach-repeating-member"),
+        projectId: asProjectId("project-1"),
+        members: [
+          {
+            id: "member-unreadable",
+            path: missingMemberPath,
+            title: "uniuni_api_prm",
+            integrationBranch: "main",
+          },
+        ],
+      });
+
+      const completeTurn = (name: string) =>
+        Effect.gen(function* () {
+          harness.provider.emit({
+            type: "turn.completed",
+            eventId: EventId.make(`evt-turn-completed-${name}`),
+            provider: ProviderDriverKind.make("codex"),
+            createdAt,
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId(`turn-${name}`),
+            payload: { state: "completed" },
+          });
+          yield* Effect.promise(harness.drain);
+        });
+      const failureCount = Effect.map(
+        Effect.promise(harness.readModel),
+        (model) =>
+          model.threads[0]?.activities.filter(
+            (activity) => activity.kind === "checkpoint.capture.failed",
+          ).length ?? 0,
+      );
+
+      yield* completeTurn("repeat-1");
+      expect(yield* failureCount).toBe(1);
+
+      yield* completeTurn("repeat-2");
+      expect(yield* failureCount).toBe(1);
+
+      readable = true;
+      yield* completeTurn("repeat-3");
+      expect(yield* failureCount).toBe(1);
+
+      readable = false;
+      yield* completeTurn("repeat-4");
+      expect(yield* failureCount).toBe(2);
+    }),
+  );
 
   it("appends an error activity when no git workspace can be resolved for the thread", async () => {
     const harness = await createHarness({

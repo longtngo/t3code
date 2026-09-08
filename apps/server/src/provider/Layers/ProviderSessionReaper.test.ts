@@ -223,7 +223,6 @@ describe("ProviderSessionReaper", () => {
         return dispatchStop({ threadId: command.threadId });
       },
       streamDomainEvents: Stream.empty,
-      subscribeDomainEvents: Effect.die("unused"),
       subscribeDomainEventsLossless: Effect.die("unused"),
       latestSequence: Effect.succeed(0),
     } as unknown as OrchestrationEngineShape;

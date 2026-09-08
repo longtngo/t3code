@@ -121,7 +121,13 @@ export function mapRemoteEnvironmentError(
     case "EnvironmentAuthInvalidError":
       return new ConnectionBlockedError({
         reason: "authentication",
-        detail: "The environment credential is invalid.",
+        // A session is bound to the address it was paired from, so reaching the
+        // same server by another name (localhost vs an IP vs a tailnet name) is a
+        // refusal with a specific way out - say so, rather than "invalid".
+        detail:
+          error.reason === "origin_mismatch"
+            ? "This session was paired from a different address for this server. Pair this device again from the address you are using now."
+            : "The environment credential is invalid.",
         traceId: error.traceId,
       });
     case "EnvironmentScopeRequiredError":

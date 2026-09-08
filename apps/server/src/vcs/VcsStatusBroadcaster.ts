@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -28,6 +29,7 @@ import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { isThreadActive } from "../orchestration/ThreadSettlementPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
@@ -146,8 +148,22 @@ interface StreamStatusOptions {
 
 export class VcsAutoPullPolicy extends Context.Reference<{
   readonly isEnabled: (cwd: string) => Effect.Effect<boolean, never>;
+  /**
+   * Whether nothing is working in any of these checkouts right now.
+   *
+   * A pull moves HEAD under whatever is running there, so a checkout with an
+   * active thread is skipped and the next poll asks again. Takes every name the
+   * caller has for the checkout at once - the broadcaster works in realpath
+   * space while project rows record the path the user gave - and reads the
+   * projection once for all of them. Fails safe: an unreadable projection
+   * reads as busy.
+   */
+  readonly isIdle: (cwds: ReadonlyArray<string>) => Effect.Effect<boolean, never>;
 }>("t3/vcs/VcsAutoPullPolicy", {
-  defaultValue: () => ({ isEnabled: () => Effect.succeed(false) }),
+  defaultValue: () => ({
+    isEnabled: () => Effect.succeed(false),
+    isIdle: () => Effect.succeed(true),
+  }),
 }) {}
 
 export const autoPullPolicyLayer = Layer.effect(
@@ -162,6 +178,25 @@ export const autoPullPolicyLayer = Layer.effect(
           if (project._tag === "None") return false;
           const settings = yield* serverSettings.getSettings;
           return resolveProjectAutoPull(settings, project.value.id, project.value.autoPull);
+        },
+        Effect.orElseSucceed(() => false),
+      ),
+      isIdle: Effect.fn("VcsAutoPullPolicy.isIdle")(
+        function* (cwds: ReadonlyArray<string>) {
+          const checkouts = new Set(cwds);
+          const snapshot = yield* snapshots.getShellSnapshot();
+          const rootByProjectId = new Map(
+            snapshot.projects.map((project) => [project.id, project.workspaceRoot] as const),
+          );
+          const now = DateTime.formatIso(yield* DateTime.now);
+          // A thread in a worktree does not touch the project root's checkout,
+          // so only threads whose effective checkout is one of ours count.
+          return !snapshot.threads.some(
+            (thread) =>
+              thread.archivedAt === null &&
+              checkouts.has(thread.worktreePath ?? rootByProjectId.get(thread.projectId) ?? "") &&
+              isThreadActive(thread, now),
+          );
         },
         Effect.orElseSucceed(() => false),
       ),
@@ -433,6 +468,16 @@ export const make = Effect.gen(function* () {
       yield* workflow.invalidateLocalStatus(cwd);
       const local = yield* workflow.localStatus({ cwd });
       if (!local.isRepo || !local.isDefaultRef || local.hasWorkingTreeChanges) return null;
+
+      // Last, because it reads the whole shell projection (~100ms on a real
+      // database) and a pull is rarely imminent: only enabled, behind, and clean
+      // reaches here. A clean tree says nobody has written yet, not that nobody
+      // is working - an agent mid-turn, or a background task in its checkout, is
+      // exactly what a moving HEAD would confuse.
+      if (!(yield* autoPullPolicy.isIdle([...new Set([cwd, ...policyCwds])]))) {
+        yield* Effect.logDebug("Skipped automatic project pull", { cwd, reason: "checkout-busy" });
+        return null;
+      }
 
       yield* workflow.pullCurrentBranch(cwd);
       yield* workflow.invalidateStatus(cwd);

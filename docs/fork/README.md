@@ -871,6 +871,24 @@ rename-blind mid-merge, so upstream's edits to the old name arrive as a **new fi
 conflict. After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`,
 and port any tests upstream added to its copy.
 
+### 37. `FORCE_KILL_AFTER` on the git spawn is fork-only, and every git timeout depends on it
+
+`apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: FORCE_KILL_AFTER` (5s) as a
+spawn option on every git child. Upstream does not: zero occurrences of `forceKillAfter` in
+`origin/main`'s driver. It is consumed by the Node spawner's release finalizer — SIGTERM, await
+exit, SIGKILL after the grace — which runs on _any_ scope close, so the driver's own command
+timeouts and any external interruption (the startup auto-pull bound, `serverRuntimeStartup.ts`)
+all go through it. Without it the finalizer waits on a git that ignores SIGTERM forever: measured
+on an upstream-main tree, a SIGTERM-proof child hung a 2s timeout past **180s**; on the fork the
+same case resolves at budget + 5s. Every bound in the driver is therefore `timeout +
+FORCE_KILL_AFTER`, and the retry a timeout exists to trigger can only fire because of it. The 5s
+is also the accepted `index.lock` residue window (a git that ignores SIGTERM for the whole grace
+is SIGKILLed holding the lock; an ordinary git releases it in ~50ms). Pinned by
+`GitVcsDriver.test.ts` "a git that ignores SIGTERM is still reaped": a `git` shim on the child's
+PATH that traps TERM and loops; the test hangs to its 30s ceiling with the option removed, and
+passes at ~5.5s with it. A merge that drops this line reads as a clean upstream sync and
+un-bounds every git command in the server.
+
 ### 18. The event hub is unbounded; every consumer of it must not be
 
 `apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
@@ -879,17 +897,58 @@ slow reader - and it is exactly why every consumer needs its own bound. Two conf
 crash-loops came from this hub, and each fix is a separate piece that a merge can revert on its
 own:
 
-- **Internal reactors must use `subscribeDomainEventsLossless`, never `subscribeDomainEvents`.**
-  The 31st reconcile brought upstream's new `ThreadPullRequestReactor` in on the **bounded**
-  accessor, where a consumer that falls behind does not drop one event - it _ends the stream_, so
-  the reactor silently stops reacting for the life of the process. Nothing catches this: its test
-  mocks the engine with an unbounded `Stream.fromSubscription`, so the bounded path never runs
-  under test, and typecheck cannot tell the two accessors apart. Grep non-test server source for
-  `subscribeDomainEvents` without `Lossless`; only the definition and the WS layer may match.
-- **`boundedSubscriberStream`** wraps `subscribeDomainEvents`. A forked pump takes from the
-  PubSub subscription _unconditionally_ into a bounded queue (`T3CODE_WS_SUBSCRIBER_BUFFER`,
-  default 4096). A WebSocket consumer that stops draining therefore ends its own subscription
-  cleanly and resubscribes from its last-applied sequence; it can never pin the hub.
+- **There is exactly one eager accessor, `subscribeDomainEventsLossless`, and it is unbounded.**
+  A bounded sibling, `subscribeDomainEvents`, used to sit beside it for WebSocket callers, backed
+  by `boundedSubscriberStream` and `T3CODE_WS_SUBSCRIBER_BUFFER`. It was **removed in a standalone
+  cleanup after the 31st reconcile**: `ws.ts` had already moved to `makeLiveStreamBudget`
+  (invariant 31), leaving the bounded accessor with **zero production callers** while it went on
+  attracting reactors by mistake - `d2bb199d4` (the 112-commit merge) put `ProviderCommandReactor`
+  on it, and the 31st reconcile brought `ThreadPullRequestReactor` in on it. Both were caught by
+  review, neither by a test.
+
+  **The `Lossless` suffix is a live merge tripwire, not a leftover contrast.** Upstream has its own
+  `subscribeDomainEvents` **today**: `git show origin/main:apps/server/src/orchestration/Layers/OrchestrationEngine.ts`
+  defines it, upstream has no `Lossless` accessor at all, and upstream's `ProviderCommandReactor`
+  calls it. Every reconcile therefore arrives carrying call sites named `subscribeDomainEvents`.
+  Measured by replaying upstream's exact call site into both trees:
+
+  ```
+  PARENT (bounded sibling present) + upstream's line   typecheck exit 0, 0 errors
+  HEAD   (sibling deleted)         + upstream's line   typecheck exit 1
+    ProviderCommandReactor.ts: error TS2339: Property 'subscribeDomainEvents'
+      does not exist on type 'OrchestrationEngineShape'
+  ```
+
+  That is what the deletion buys: a merge that used to silently put a droppable buffer in front of
+  a reactor is now a compile error. Do **not** rename `Lossless` away to match upstream - that
+  re-opens exactly this door, and upstream's accessor is unbounded, so a later upstream change to
+  it would land unreviewed.
+
+  **Probing this invariant.** The compiler now enforces the half that mattered: there is no bounded
+  accessor left to bind to. For the rest, grep non-test server source for `subscribeDomainEvents`
+  without `Lossless`. On the tree this ships with it matches **exactly one line** - the comment in
+  `OrchestrationEngine.ts` that records why the name is a tripwire. Any _other_ hit is an upstream
+  call site that arrived in a merge.
+
+  Read the matched lines, never the count, and note that the expected count is one rather than
+  zero: an earlier wording here said it "should match nothing", which the fork's own comment
+  falsifies on every run. That is the same comment-matches-the-probe trap that made three
+  invariant probes flag a correct tree in reconcile 22. An earlier wording still ("only the
+  definition and the WS layer may match") had gone **stale, not vacuous**: it would still have
+  caught a mis-wired reactor, but `ws.ts` had stopped matching and two other files matched that
+  the wording did not permit.
+
+  **Known gap:** deleting `boundedSubscriberStream.test.ts` removed the only test that drove a
+  stalled consumer against a **live hub**. The unit-level bound is covered - the single test in
+  `LiveStreamBudget.test.ts` retains to `maxItems`, deliberately never resumes the consumer, and
+  asserts the next `retain` fails - but there is still no end-to-end `subscribeShell` /
+  `subscribeThread` overflow test. The accessor invariant is structural; the bound is covered in
+  isolation and not at the seam.
+
+  (An earlier version of this paragraph said that file held "two `it` blocks, neither of which is
+  overflow-under-stall". It has one, and that one is overflow-under-stall. Corrected after being
+  measured - in the section rewritten to remove exactly this kind of claim.)
+
 - **`ws.ts` bounds through `makeLiveStreamBudget`** (see invariant 31). Upstream's coalescer
   (#8368) was `Queue.unbounded` at _both_ ends - the precise shape that OOM-ed this server - and
   the fork chained it into a `Queue.dropping`. Upstream has since put every offer behind a budget
@@ -906,14 +965,11 @@ own:
   `ws.ts` shell-coalescing sites are safe by virtue of the **pinned effect version alone**.
   Re-measure with `scripts/idle-aggregate-probe.ts` on any effect bump.
 
-- **Internal reactors take `subscribeDomainEventsLossless`, never `subscribeDomainEvents`.**
-  Upstream #9152 moved `ProviderCommandReactor` off `streamDomainEvents` onto the _WS-facing_
-  accessor so its subscription exists before `start()` returns (a real fix - reverting it locally
-  took the reactor suite from 3 failures to 18 and a 235s run). But that accessor carries the
-  bounded drop-buffer above, which **ends the stream** on a slow consumer; a reactor that loses
-  events silently stops reacting. `subscribeDomainEventsLossless` is the same eager subscription
-  without the bound. Any new internal reactor uses it. The merge that introduced this violated the
-  invariant and typechecked, linted and tested clean.
+- **Why reactors need the eager accessor at all.** Moving `ProviderCommandReactor` off
+  `streamDomainEvents` onto an eager accessor was a real fix - its subscription then exists before
+  `start()` returns; reverting it locally took the reactor suite from 3 failures to 18 and a 235s
+  run. The mistake was only _which_ eager accessor. Any new internal reactor takes
+  `subscribeDomainEventsLossless`.
 
   A side effect worth knowing when writing tests: with the subscription eager but the _enqueue_
   still happening on a separate stream fiber, `reactor.drain` is **not** a barrier for work

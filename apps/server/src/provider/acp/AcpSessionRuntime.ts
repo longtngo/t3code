@@ -94,8 +94,6 @@ export interface AcpSessionRuntimeOptions {
   };
   readonly authMethodId: string;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
-  /** Extra workspace roots the agent may read and write besides `cwd`. */
-  readonly additionalDirectories?: ReadonlyArray<string>;
   /** Transforms provider stdout before protocol parsing and protocol logging. */
   readonly transformStdout?: EffectAcpClient.AcpClientOptions["transformStdout"];
   /** Normalizes provider-specific fields before notification queues or runtime state retain them. */
@@ -731,9 +729,6 @@ export const make = (
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
           mcpServers: options.mcpServers ?? [],
-          ...(options.additionalDirectories && options.additionalDirectories.length > 0
-            ? { additionalDirectories: options.additionalDirectories }
-            : {}),
         } satisfies EffectAcpSchema.ResumeSessionRequest;
         sessionId = options.resumeSessionId;
         sessionSetupResult = yield* runLoggedRequest(
@@ -833,9 +828,6 @@ export const make = (
         const createPayload = {
           cwd: options.cwd,
           mcpServers: options.mcpServers ?? [],
-          ...(options.additionalDirectories && options.additionalDirectories.length > 0
-            ? { additionalDirectories: options.additionalDirectories }
-            : {}),
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",

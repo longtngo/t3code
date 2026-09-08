@@ -52,9 +52,17 @@ const retryTransientRead = <A, E extends { readonly _tag: string }, R>(
  * How long a terminated git process has to exit before it is killed outright.
  *
  * Long enough that an ordinary git handling SIGTERM finishes its own cleanup —
- * releasing `index.lock` matters, since a killed git leaves it behind and the
- * next command in that repository fails on it. Short enough that a wedged one
- * cannot outlast the command timeout it is holding open.
+ * releasing `index.lock` matters, since a killed git leaves it behind and every
+ * index-writing command in that repository then fails on it. Short enough that
+ * a wedged one cannot outlast the command timeout it is holding open.
+ *
+ * Measured: a git pull interrupted mid-checkout releases the lock within ~50ms
+ * of SIGTERM and leaves HEAD unmoved; the same pull SIGKILLed leaves the lock
+ * (`GitVcsDriver.test.ts` pins both). So the only way a checkout is left with a
+ * stale lock is a git that ignores SIGTERM for this whole grace period — the
+ * kind of host saturation that is already timing out every command in it. That
+ * window is accepted rather than closed: deleting a lock this process did not
+ * watch being abandoned could unlock a git someone else is running there.
  */
 const FORCE_KILL_AFTER = "5 seconds";
 // `git worktree add` checks out the full tree, so on large repositories it can
@@ -2634,7 +2642,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const readHeadSha: GitVcsDriver.GitVcsDriver["Service"]["readHeadSha"] = (cwd) =>
     // A repository with no commits exits non-zero here, which is an absent
     // head rather than a failure.
-    runGitStdout("GitVcsDriver.readHeadSha", cwd, ["rev-parse", "HEAD"], true).pipe(
+    //
+    // `--verify` is load-bearing, not decoration. Without it `rev-parse HEAD`
+    // prints the literal string "HEAD" on STDOUT before exiting 128, and this
+    // call allows the non-zero exit and reads stdout regardless - so an unborn
+    // repository reported a head sha of "HEAD". Two members in that state then
+    // compared EQUAL at revert time and read as "nothing moved". `--verify`
+    // prints nothing when it cannot resolve the ref, so the empty-string check
+    // below returns null and the comment above becomes true.
+    runGitStdout("GitVcsDriver.readHeadSha", cwd, ["rev-parse", "--verify", "HEAD"], true).pipe(
       Effect.map((stdout) => stdout.trim()),
       Effect.map((sha) => (sha.length > 0 ? sha : null)),
     );

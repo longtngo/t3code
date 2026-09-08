@@ -1,27 +1,12 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  providerGrantsWorkspaceMembers,
-  workspaceMemberGrantChanged,
-} from "./workspaceMemberGrant.ts";
-
-describe("providerGrantsWorkspaceMembers", () => {
-  it("recognises the claude driver", () => {
-    expect(providerGrantsWorkspaceMembers(ProviderDriverKind.make("claudeAgent"))).toBe(true);
-  });
-
-  it("rejects drivers that ignore the grant", () => {
-    expect(providerGrantsWorkspaceMembers(ProviderDriverKind.make("codex"))).toBe(false);
-    expect(providerGrantsWorkspaceMembers(undefined)).toBe(false);
-  });
-});
+import { workspaceMemberGrantChanged } from "./workspaceMemberGrant.ts";
 
 describe("workspaceMemberGrantChanged", () => {
   it("is false when the running grant already matches", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("claudeAgent"),
+        providerGrantsMemberPaths: true,
         sessionMemberPaths: ["/srv/prm_portal_api", "/srv/warehouse"],
         desiredMemberPaths: ["/srv/prm_portal_api", "/srv/warehouse"],
       }),
@@ -31,7 +16,7 @@ describe("workspaceMemberGrantChanged", () => {
   it("is false for a project with no members on a session with no grant", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("claudeAgent"),
+        providerGrantsMemberPaths: true,
         sessionMemberPaths: undefined,
         desiredMemberPaths: [],
       }),
@@ -44,7 +29,7 @@ describe("workspaceMemberGrantChanged", () => {
   it("is true when a member is attached mid-thread", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("claudeAgent"),
+        providerGrantsMemberPaths: true,
         sessionMemberPaths: undefined,
         desiredMemberPaths: ["/srv/warehouse"],
       }),
@@ -54,7 +39,7 @@ describe("workspaceMemberGrantChanged", () => {
   it("is true when a member is detached mid-thread", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("claudeAgent"),
+        providerGrantsMemberPaths: true,
         sessionMemberPaths: ["/srv/prm_portal_api", "/srv/warehouse"],
         desiredMemberPaths: ["/srv/prm_portal_api"],
       }),
@@ -64,20 +49,20 @@ describe("workspaceMemberGrantChanged", () => {
   it("is true when a member is swapped for a different path", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("claudeAgent"),
+        providerGrantsMemberPaths: true,
         sessionMemberPaths: ["/srv/prm_portal_api"],
         desiredMemberPaths: ["/srv/warehouse"],
       }),
     ).toBe(true);
   });
 
-  // A driver that never applies the grant also never echoes it, so its
-  // sessions always report an empty set. Without the driver gate this would be
+  // An adapter that never applies the grant also never echoes it, so its
+  // sessions always report an empty set. Without this gate that would be
   // "changed" on every turn and restart the session each time.
-  it("never reports a change for a driver that does not apply the grant", () => {
+  it("never reports a change for an adapter that does not apply the grant", () => {
     expect(
       workspaceMemberGrantChanged({
-        sessionProvider: ProviderDriverKind.make("codex"),
+        providerGrantsMemberPaths: false,
         sessionMemberPaths: undefined,
         desiredMemberPaths: ["/srv/warehouse"],
       }),

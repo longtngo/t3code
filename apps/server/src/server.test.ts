@@ -1539,6 +1539,30 @@ class TestHttpRequestError extends Data.TaggedError("TestHttpRequestError")<{
   readonly cause: unknown;
 }> {}
 
+/**
+ * A response that is not the JSON this suite asked for.
+ *
+ * Raised instead of letting the decode fail, because the decode error says only that
+ * some bytes were not JSON. On 2026-09-07 a full-gate run answered
+ * `POST /api/auth/browser-session` with a plain-text 401 "auth required" - a string that
+ * appears nowhere in this repository or its dependencies, so it came from a listener that
+ * was not our test server. The suite reports through a loopback port taken from the live
+ * bound address, so a foreign peer on that port is answerable.
+ *
+ * The point is not the failure, which was loud enough to notice. It is that a foreign
+ * peer returning plausible JSON would have been silently BELIEVED. This names the peer's
+ * status, content type and body so the next one is identifiable rather than mysterious.
+ */
+class TestUnexpectedResponseError extends Data.TaggedError("TestUnexpectedResponseError")<{
+  readonly status: number;
+  readonly contentType: string;
+  readonly bodyPreview: string;
+}> {
+  override get message(): string {
+    return `Expected a JSON response, got status ${this.status} with content-type '${this.contentType}'. This is not a response our test server produces - check for another listener on the port. Body: ${this.bodyPreview}`;
+  }
+}
+
 const testRequestUrl = (input: Parameters<typeof fetch>[0]): string => {
   const value = input.toString();
   if (!/^https?:\/\//i.test(value)) {
@@ -1576,10 +1600,67 @@ const jsonRequestBody = (value: unknown): string => {
 };
 
 const responseJsonEffect = <A>(response: HttpClientResponse.HttpClientResponse) =>
-  response.json.pipe(
-    Effect.map((json) => json as A),
-    Effect.mapError((cause) => new TestHttpRequestError({ cause })),
+  Effect.suspend(() => {
+    const contentType = response.headers["content-type"] ?? "";
+    // Checked before decoding so an unexpected peer is named rather than surfacing as
+    // "not valid JSON". See `TestUnexpectedResponseError`.
+    if (!contentType.includes("json")) {
+      return response.text.pipe(
+        Effect.mapError((cause) => new TestHttpRequestError({ cause })),
+        Effect.flatMap(
+          (body) =>
+            new TestUnexpectedResponseError({
+              status: response.status,
+              contentType,
+              bodyPreview: body.slice(0, 200),
+            }),
+        ),
+      );
+    }
+    return response.json.pipe(
+      Effect.map((json) => json as A),
+      Effect.mapError((cause) => new TestHttpRequestError({ cause })),
+    );
+  });
+
+// Proves the guard above can actually fire, on the exact shape the 2026-09-07 gate saw.
+// A guard nobody has watched trip is indistinguishable from one that never trips.
+const responseWith = (init: { status: number; contentType: string; body: string }) =>
+  HttpClientResponse.fromWeb(
+    HttpClientRequest.get("/api/auth/browser-session"),
+    new Response(init.body, {
+      status: init.status,
+      headers: { "content-type": init.contentType },
+    }),
   );
+
+it.effect("names an unexpected peer instead of failing to decode its body", () =>
+  Effect.gen(function* () {
+    const failure = yield* responseJsonEffect<{ readonly authenticated: boolean }>(
+      responseWith({ status: 401, contentType: "text/plain", body: "auth required" }),
+    ).pipe(Effect.flip);
+
+    assert.equal(failure._tag, "TestUnexpectedResponseError");
+    assertInclude(failure.message, "auth required");
+    assertInclude(failure.message, "another listener on the port");
+  }),
+);
+
+it.effect("decodes a JSON body as before", () =>
+  Effect.gen(function* () {
+    const body = yield* responseJsonEffect<{ readonly authenticated: boolean }>(
+      responseWith({
+        status: 200,
+        contentType: "application/json",
+        // A literal rather than JSON.stringify: this is a fixture of bytes on the wire,
+        // and the repo routes real encoding through Schema.
+        body: '{"authenticated":true}',
+      }),
+    );
+
+    assert.deepEqual(body, { authenticated: true });
+  }),
+);
 
 const responseOk = (response: HttpClientResponse.HttpClientResponse) =>
   response.status >= 200 && response.status < 300;
@@ -1672,6 +1753,51 @@ const assertBrowserApiCorsPreflightHeaders = (
   ]);
 };
 const crossOriginClientOrigin = "http://remote-client.test:3773";
+
+// ---- session origin binding helpers ----
+const originA = "http://127.0.0.1:41111";
+const originB = "http://127.0.0.1:42222";
+
+type WsHandshakeResult = { readonly status: number; readonly body: string };
+
+const wsHandshake = (url: string, headers: Record<string, string>) =>
+  Effect.promise(
+    () =>
+      new Promise<WsHandshakeResult>((resolve, reject) => {
+        let settled = false;
+        const socket = new NodeSocket.NodeWS.WebSocket(url, undefined, { headers });
+        socket.on("open", () => {
+          settled = true;
+          socket.close();
+          resolve({ status: 101, body: "" });
+        });
+        socket.on("unexpected-response", (_request, response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          response.on("end", () => {
+            settled = true;
+            resolve({ status: response.statusCode ?? 0, body });
+          });
+        });
+        socket.on("error", (error) => {
+          if (!settled) reject(error);
+        });
+      }),
+  );
+
+const mintCookieAtOrigin = (origin?: string) =>
+  Effect.gen(function* () {
+    const { response, cookie } = yield* bootstrapBrowserSession(
+      defaultDesktopBootstrapToken,
+      origin ? { headers: { origin } } : undefined,
+    );
+    assert.equal(response.status, 200);
+    if (!cookie) throw new Error("expected a session cookie");
+    return cookie.split(";")[0] ?? cookie;
+  });
 
 const getWsServerUrl = (
   pathname = "",
@@ -4558,6 +4684,220 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(body.code, "auth_invalid");
       assert.equal(body.reason, "missing_credential");
       assert.equal(typeof body.traceId, "string");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // ---- session origin binding ----
+
+  // Q1/acceptance 1+2: the gate lives at authenticateRequest, so a surface the
+  // design never enumerates is covered. websocket-ticket is a cookie-authenticated
+  // POST that goes through environmentAuthenticatedAuthLayer.
+  it.effect("ticket mint from the minting origin succeeds", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie, origin: originA },
+      });
+      assert.equal(response.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("ticket mint from a different origin is refused as origin_mismatch", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie, origin: originB },
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+      assert.equal(response.status, 401);
+      assert.equal(body.code, "auth_invalid");
+      assert.equal(body.reason, "origin_mismatch");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The discriminator: a genuinely broken cookie must NOT report origin_mismatch,
+  // or the reason fires on everything and tells an operator nothing.
+  it.effect("a bad cookie still reports invalid_credential, not origin_mismatch", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const name = cookie.split("=")[0];
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie: `${name}=garbage.garbage`, origin: originB },
+      });
+      const body = yield* responseJsonEffect<{ readonly reason?: string }>(response);
+      assert.equal(response.status, 401);
+      assert.equal(body.reason, "invalid_credential");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Acceptance 3: request carries no Origin -> fail open.
+  it.effect("a request with no Origin fails open", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, { method: "POST", headers: { cookie } });
+      assert.equal(response.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Acceptance 4: session minted with no Origin (desktop, every existing row) -> fail open.
+  it.effect("a session minted without an Origin fails open from any origin", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(undefined);
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie, origin: originB },
+      });
+      assert.equal(response.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Q1 second surface: pairing-token, the omission the 6a sweep named.
+  it.effect("POST /api/auth/pairing-token is gated too", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const allowed = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie, origin: originA },
+        body: yield* HttpBody.json({}),
+      });
+      assert.equal(allowed.status, 200);
+
+      const refused = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie, origin: originB },
+        body: yield* HttpBody.json({}),
+      });
+      const body = yield* responseJsonEffect<{ readonly reason?: string }>(refused);
+      assert.equal(refused.status, 401);
+      assert.equal(body.reason, "origin_mismatch");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Q2: the fall-through. Bearer + origin-A cookie, request from origin B must
+  // authenticate AS BEARER, not merely return 200 and not as the cookie.
+  it.effect("an origin-rejected cookie falls through to the bearer credential", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const bearer = yield* getAuthenticatedBearerSessionToken();
+      const url = yield* getHttpServerUrl("/api/auth/session");
+
+      // Control: from the minting origin the cookie wins, as it always has.
+      const sameOrigin = yield* fetchEffect(url, {
+        headers: { cookie, authorization: `Bearer ${bearer}`, origin: originA },
+      });
+      const sameOriginBody = yield* responseJsonEffect<{
+        readonly authenticated: boolean;
+        readonly sessionMethod?: string;
+      }>(sameOrigin);
+      assert.equal(sameOriginBody.authenticated, true);
+      assert.equal(sameOriginBody.sessionMethod, "browser-session-cookie");
+
+      // The case under test.
+      const crossOrigin = yield* fetchEffect(url, {
+        headers: { cookie, authorization: `Bearer ${bearer}`, origin: originB },
+      });
+      const crossOriginBody = yield* responseJsonEffect<{
+        readonly authenticated: boolean;
+        readonly sessionMethod?: string;
+      }>(crossOrigin);
+      assert.equal(crossOriginBody.authenticated, true);
+      assert.equal(crossOriginBody.sessionMethod, "bearer-access-token");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Same case on a surface that 401s rather than reporting authenticated:false.
+  it.effect("bearer + mismatched cookie still mints a ticket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const bearer = yield* getAuthenticatedBearerSessionToken();
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie, authorization: `Bearer ${bearer}`, origin: originB },
+      });
+      assert.equal(response.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Q1/Q3/Q4 on the real /ws upgrade.
+  it.effect("/ws refuses a mismatched cookie and accepts a matching one twice", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false });
+
+      const first = yield* wsHandshake(wsUrl, { cookie, origin: originA });
+      assert.equal(first.status, 101);
+      // Q4: recordClientConnection has now run for this session. A signed claim
+      // cannot be overwritten by it, so the second connect behaves identically.
+      const second = yield* wsHandshake(wsUrl, { cookie, origin: originA });
+      assert.equal(second.status, 101);
+
+      const refused = yield* wsHandshake(wsUrl, { cookie, origin: originB });
+      assert.equal(refused.status, 401);
+      assertInclude(refused.body, "origin_mismatch");
+
+      // ...and still refused after the reconnects, i.e. the claim survived.
+      const refusedAgain = yield* wsHandshake(wsUrl, { cookie, origin: originB });
+      assert.equal(refusedAgain.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Q3: a ticket is a bearer credential and is exempt for free.
+  it.effect("a cookie-minted wsTicket still connects from another origin", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin(originA);
+      const ticketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const ticketResponse = yield* fetchEffect(ticketUrl, {
+        method: "POST",
+        headers: { cookie, origin: originA },
+      });
+      const ticketBody = yield* responseJsonEffect<{ readonly ticket: string }>(ticketResponse);
+      assert.equal(ticketResponse.status, 200);
+
+      const wsUrl = yield* getWsServerUrl(`/ws?wsTicket=${encodeURIComponent(ticketBody.ticket)}`, {
+        authenticated: false,
+      });
+      const connected = yield* wsHandshake(wsUrl, { origin: originB });
+      assert.equal(connected.status, 101);
+
+      // And with the mismatched cookie also present, the ticket still wins.
+      const connectedWithCookie = yield* wsHandshake(wsUrl, { cookie, origin: originB });
+      assert.equal(connectedWithCookie.status, 101);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Q5: the port-shift lockout, and that it is distinguishable from expiry.
+  it.effect("a port shift on the same host is refused with a recoverable reason", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* mintCookieAtOrigin("http://127.0.0.1:13773");
+      const url = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(url, {
+        method: "POST",
+        headers: { cookie, origin: "http://127.0.0.1:13774" },
+      });
+      const body = yield* responseJsonEffect<{ readonly reason?: string }>(response);
+      assert.equal(response.status, 401);
+      assert.equal(body.reason, "origin_mismatch");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

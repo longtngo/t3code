@@ -6108,6 +6108,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // The SDK `query` call takes `additionalDirectories` directly, so this is
+      // the one adapter where the grant reaches the agent.
+      grantsWorkspaceMemberPaths: true,
     },
     compaction: { type: "slash-command", command: "/compact" },
     startSession,

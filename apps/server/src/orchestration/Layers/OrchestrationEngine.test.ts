@@ -900,7 +900,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("subscribeDomainEvents delivers events published before the stream is consumed", async () => {
+  it("subscribeDomainEventsLossless delivers events published before the stream is consumed", async () => {
     // The read-then-live gap fix: a caller subscribes eagerly BEFORE reading a
     // snapshot, so an event committed during the read still arrives. Here we
     // subscribe, publish, THEN consume — a lazy (subscribe-on-run) stream would
@@ -912,7 +912,7 @@ describe("OrchestrationEngine", () => {
     const eventTypes = await system.run(
       Effect.scoped(
         Effect.gen(function* () {
-          const liveStream = yield* engine.subscribeDomainEvents;
+          const liveStream = yield* engine.subscribeDomainEventsLossless;
 
           yield* engine.dispatch({
             type: "project.create",

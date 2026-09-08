@@ -235,6 +235,42 @@ describe("VitalsGauge detail", () => {
     expect(text).toContain("MEM");
   });
 
+  // On a phone or a second laptop these are the server's numbers, not the
+  // reader's, and until now nothing on the panel said whose they were.
+  it("names the environment the machine numbers come from", async () => {
+    const view = await renderDom(
+      <VitalsDetail
+        context={null}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+        machineName="studio-mini"
+      />,
+    );
+    expect(view.text()).toContain("studio-mini");
+  });
+
+  it("renders nothing at all beside the caption when the environment has no name", async () => {
+    const view = await renderDom(
+      <VitalsDetail
+        context={null}
+        accountUsage={null}
+        host={host}
+        now={0}
+        timestampFormat="24-hour"
+      />,
+    );
+    const text = view.text();
+    expect(text).toContain("CPU");
+    // The caption runs straight into the live/paused toggle. Asserting only
+    // `not.toContain("undefined")` was close to vacuous — React renders nothing
+    // for an undefined child, so only an explicit String()/template coercion
+    // could ever have tripped it. This pins the whole slot instead, so a
+    // placeholder like "unknown" or a stray separator fails too.
+    expect(text).toContain("Machinelive");
+  });
+
   it("explains a missing context block when the session's provider never reports usage", async () => {
     // Silently omitting it is what got this popover reported as broken. Cursor
     // reports no token usage at all over ACP - a raw ACP client against

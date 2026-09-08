@@ -53,6 +53,37 @@ export interface ProviderAdapterCapabilities {
   readonly promptlessTurnContinuation?: boolean;
   /** False when native conversation history cannot be rewound. */
   readonly supportsConversationRollback?: boolean;
+  /**
+   * True when the adapter actually grants `ProviderSessionStartInput.workspaceMemberPaths`
+   * to the agent, and echoes the granted set back on its `ProviderSession`.
+   *
+   * Omitted means it does not. That matters in both directions: an adapter that
+   * ignores the field also never echoes it, so its sessions always report an
+   * empty grant — comparing those against a non-empty desired set would read as
+   * "members changed" on every turn and restart the session each time.
+   *
+   * Declared per adapter rather than centrally because only the adapter knows
+   * whether its transport carries the field, and the answer differs by adapter
+   * rather than by "is it Claude":
+   *
+   * - Claude passes the paths straight to the SDK's `query`, so it declares this.
+   * - Cursor, Grok and Antigravity share the ACP runtime, and ACP has no
+   *   session-setup field for extra roots at all: `NewSessionRequest` is exactly
+   *   `{_meta?, cwd, mcpServers}` and `ResumeSessionRequest` adds only `sessionId`.
+   *   Both are encoded through those schemas, which drop anything else, so no ACP
+   *   adapter can grant a path by asking the agent for it. Antigravity does grant
+   *   its attachments directory, but through the client-filesystem roots it serves
+   *   reads and writes from, which is a different mechanism and not a member grant.
+   * - Codex is NOT ACP and COULD carry a grant: it has
+   *   `workspaceWrite.writableRoots`, which `CodexSessionRuntime` already builds with
+   *   no roots. It omits this flag by decision rather than by limitation. Granting a
+   *   member repository makes it writable without a per-tool approval, and that is a
+   *   wider default than Codex has today; the narrower behaviour was kept, and a Codex
+   *   agent goes on asking before it writes outside the thread's own workspace. Revisit
+   *   this only with a reason to widen it, not because the field exists.
+   * - OpenCode is not ACP either, and has no grant path wired.
+   */
+  readonly grantsWorkspaceMemberPaths?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

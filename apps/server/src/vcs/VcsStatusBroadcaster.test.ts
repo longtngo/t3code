@@ -27,6 +27,9 @@ import { GitManagerError } from "@t3tools/contracts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { PersistenceSqlError } from "../persistence/Errors.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -162,6 +165,7 @@ describe("VcsStatusBroadcaster", () => {
         Layer.provide(
           Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
             isEnabled: (cwd) => Effect.succeed(cwd === configuredWorkspaceRoot),
+            isIdle: () => Effect.succeed(true),
           }),
         ),
         Layer.provide(
@@ -1127,4 +1131,244 @@ describe("VcsStatusBroadcaster", () => {
       assert.isTrue(Option.isSome(yield* Deferred.poll(remoteInterrupted)));
     }).pipe(Effect.provide(testLayer));
   });
+});
+
+describe("auto-pull idle guard", () => {
+  /**
+   * A broadcaster whose pull is enabled, behind, and clean by default - so the
+   * idle check is the only thing standing between a refresh and a pull.
+   */
+  const makeHarness = (input: {
+    readonly idle: boolean;
+    readonly enabled?: boolean;
+    readonly behindCount?: number;
+    readonly hasWorkingTreeChanges?: boolean;
+  }) => {
+    const state = {
+      pullCalls: 0,
+      isIdleCalls: [] as Array<ReadonlyArray<string>>,
+      remoteStatus: { ...baseRemoteStatus, behindCount: input.behindCount ?? 2 },
+    };
+    const localStatus: VcsStatusLocalResult = {
+      ...baseLocalStatus,
+      isDefaultRef: true,
+      refName: "main",
+      hasWorkingTreeChanges: input.hasWorkingTreeChanges ?? false,
+    };
+    const layer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+          isEnabled: () => Effect.succeed(input.enabled ?? true),
+          isIdle: (cwds) =>
+            Effect.sync(() => {
+              state.isIdleCalls.push(cwds);
+              return input.idle;
+            }),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () => Effect.succeed(localStatus),
+          remoteStatus: () => Effect.succeed(state.remoteStatus),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+          pullCurrentBranch: () =>
+            Effect.sync(() => {
+              state.pullCalls += 1;
+              state.remoteStatus = { ...state.remoteStatus, behindCount: 0 };
+              return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+            }),
+        }),
+      ),
+    );
+    return { state, layer };
+  };
+
+  const refresh = (harness: ReturnType<typeof makeHarness>) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-vcs-idle-guard-" });
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const status = yield* broadcaster.refreshStatus(cwd);
+      return { cwd, status };
+    }).pipe(Effect.provide(harness.layer));
+
+  it.effect("pulls when nothing is working in the checkout", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ idle: true });
+      const { status } = yield* refresh(harness);
+      assert.equal(harness.state.pullCalls, 1);
+      assert.equal(status.behindCount, 0);
+    }),
+  );
+
+  it.effect("skips the pull while something is working there, and still reports status", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ idle: false });
+      const { status } = yield* refresh(harness);
+      assert.equal(harness.state.pullCalls, 0);
+      // Still behind: the refresh reported the real state rather than pretending.
+      assert.equal(status.behindCount, 2);
+    }),
+  );
+
+  // The broadcaster works in realpath space while `isEnabled` was asked about the
+  // raw path the client gave. A thread's checkout is recorded in the raw space,
+  // so the guard has to ask about both or it silently misses under a symlink.
+  it.effect.skipIf(!symlinksSupported)(
+    "asks about every name the checkout goes by, not just the realpath",
+    () => {
+      const harness = makeHarness({ idle: true });
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const realDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-vcs-idle-real-" });
+        const linkParent = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-vcs-idle-link-",
+        });
+        const linked = path.join(linkParent, "repo-link");
+        yield* fileSystem.symlink(realDir, linked);
+        const realPath = yield* fileSystem.realPath(realDir);
+
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        yield* broadcaster.refreshStatus(linked);
+
+        assert.equal(harness.state.isIdleCalls.length, 1);
+        const asked = new Set(harness.state.isIdleCalls[0]);
+        assert.isTrue(asked.has(linked), "the raw path the client gave was not asked about");
+        assert.isTrue(
+          asked.has(realPath),
+          "the realpath the broadcaster works in was not asked about",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  // The check reads the whole shell projection, so it must be the LAST gate:
+  // a refresh that is not going to pull anyway must never pay for it.
+  it.effect.each([
+    { name: "not enabled", enabled: false },
+    { name: "not behind", behindCount: 0 },
+    { name: "dirty tree", hasWorkingTreeChanges: true },
+  ])("does not consult the idle check when the pull is already gated out ($name)", (input) =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ idle: true, ...input });
+      yield* refresh(harness);
+      assert.equal(harness.state.pullCalls, 0);
+      assert.equal(harness.state.isIdleCalls.length, 0);
+    }),
+  );
+});
+
+describe("autoPullPolicyLayer.isIdle", () => {
+  const ROOT = "/repo";
+  const project = { id: "project-1", workspaceRoot: ROOT } as never;
+  const quietThread = {
+    id: "thread-1",
+    projectId: "project-1",
+    archivedAt: null,
+    worktreePath: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    session: null,
+    backgroundLiveness: null,
+    latestUserMessageAt: null,
+    latestTurn: null,
+  };
+
+  const isIdle = (threads: ReadonlyArray<unknown>, cwds: ReadonlyArray<string> = [ROOT]) =>
+    Effect.gen(function* () {
+      const policy = yield* VcsStatusBroadcaster.VcsAutoPullPolicy;
+      return yield* policy.isIdle(cwds);
+    }).pipe(
+      Effect.provide(
+        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+          Layer.provide(
+            Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+              getShellSnapshot: () => Effect.succeed({ projects: [project], threads } as never),
+            }),
+          ),
+          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, {} as never)),
+        ),
+      ),
+    );
+
+  it.effect("is idle when no thread in the checkout is doing anything", () =>
+    Effect.gen(function* () {
+      assert.isTrue(yield* isIdle([quietThread]));
+    }),
+  );
+
+  it.effect.each([
+    { name: "a running session", patch: { session: { status: "running" } } },
+    { name: "a starting session", patch: { session: { status: "starting" } } },
+    { name: "a pending approval", patch: { hasPendingApprovals: true } },
+    { name: "pending user input", patch: { hasPendingUserInput: true } },
+    // The case `latestTurn.state` alone misses: the turn is over, and a background
+    // task is still running git in this checkout.
+    {
+      name: "background work after the turn completed",
+      patch: { latestTurn: { state: "completed" }, backgroundLiveness: { kind: "shell" } },
+    },
+  ])("is busy while a thread in the checkout has $name", ({ patch }) =>
+    Effect.gen(function* () {
+      assert.isFalse(yield* isIdle([{ ...quietThread, ...patch }]));
+    }),
+  );
+
+  it.effect("ignores a busy thread whose checkout is a worktree, not the root", () =>
+    Effect.gen(function* () {
+      const inWorktree = {
+        ...quietThread,
+        worktreePath: "/repo/.worktrees/feature",
+        session: { status: "running" },
+      };
+      assert.isTrue(yield* isIdle([inWorktree]));
+    }),
+  );
+
+  it.effect("ignores an archived thread, whatever it was doing", () =>
+    Effect.gen(function* () {
+      const archived = {
+        ...quietThread,
+        archivedAt: "2026-09-01T00:00:00.000Z",
+        session: { status: "running" },
+      };
+      assert.isTrue(yield* isIdle([archived]));
+    }),
+  );
+
+  it.effect("matches on any of the names it is asked about", () =>
+    Effect.gen(function* () {
+      const busy = { ...quietThread, session: { status: "running" } };
+      // Asked in realpath space alone, the raw-recorded root is missed...
+      assert.isTrue(yield* isIdle([busy], ["/private/repo"]));
+      // ...asked about both, the thread is found.
+      assert.isFalse(yield* isIdle([busy], ["/private/repo", ROOT]));
+    }),
+  );
+
+  it.effect("reads as busy when the projection cannot be read", () =>
+    Effect.gen(function* () {
+      const policy = yield* VcsStatusBroadcaster.VcsAutoPullPolicy;
+      assert.isFalse(yield* policy.isIdle([ROOT]));
+    }).pipe(
+      Effect.provide(
+        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+          Layer.provide(
+            Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+              getShellSnapshot: () =>
+                Effect.fail(
+                  new PersistenceSqlError({ operation: "getShellSnapshot", detail: "locked" }),
+                ),
+            }),
+          ),
+          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, {} as never)),
+        ),
+      ),
+    ),
+  );
 });

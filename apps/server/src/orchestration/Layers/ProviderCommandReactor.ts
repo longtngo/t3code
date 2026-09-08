@@ -829,8 +829,25 @@ const make = Effect.gen(function* () {
       // session starts — so the session has to be restarted, exactly as it is
       // for a changed cwd.
       const activeMemberPaths = activeSession?.workspaceMemberPaths ?? [];
+      // The ACTIVE session's instance, not the desired one: the question is what the
+      // running session was granted, and asking the desired instance would restart a
+      // session that was never given anything to lose.
+      //
+      // The undefined case is what the type allows, not a state reachable here - an
+      // active session with no instance id is refused far earlier, before anything asks
+      // about its grant. `false` is still the right answer to write: an unreadable
+      // capability suppresses the restart rather than killing a working session over a
+      // question that could not be put.
+      const activeInstanceId = activeSession?.providerInstanceId;
+      const activeGrantsMemberPaths =
+        activeInstanceId === undefined
+          ? false
+          : yield* providerService.getCapabilities(activeInstanceId).pipe(
+              Effect.map((capabilities) => capabilities.grantsWorkspaceMemberPaths === true),
+              Effect.orElseSucceed(() => false),
+            );
       const membersChanged = workspaceMemberGrantChanged({
-        sessionProvider: activeSession?.provider,
+        providerGrantsMemberPaths: activeGrantsMemberPaths,
         sessionMemberPaths: activeSession?.workspaceMemberPaths,
         desiredMemberPaths: workspaceMemberPaths,
       });

@@ -30,8 +30,8 @@ export interface KeepAliveCapableSocket {
 /**
  * Enable TCP keepalive on the connection behind `request`.
  *
- * Reads the raw socket off the Node request the same way `isLocalLoopbackRequest`
- * does. This has to happen in the route handler, before the upgrade: afterwards
+ * Reads the raw socket off the Node request by reaching through `request.source`.
+ * This has to happen in the route handler, before the upgrade: afterwards
  * the socket belongs to the `ws` library inside the platform layer and is no
  * longer reachable from application code without patching it.
  *

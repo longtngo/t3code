@@ -733,73 +733,6 @@ const VIEWER_CSP = "sandbox allow-scripts allow-popups";
  */
 const VIEWER_MARKDOWN_CSP = "sandbox allow-popups";
 
-/**
- * Whether a request genuinely originates from a local process — the basis for
- * waiving auth on the `/viewer` route. Trust is keyed on the real TCP peer
- * address (which a remote client cannot spoof), NEVER the client-controlled
- * `Host` header: an earlier version read `url.hostname` and was an auth bypass.
- * A forwarded request (reverse proxy, Tailscale Serve, …) is never trusted —
- * its loopback peer is the proxy, not the real client.
- */
-export function isLocalLoopbackRequest(request: HttpServerRequest.HttpServerRequest): boolean {
-  if (request.headers["x-forwarded-for"] || request.headers["forwarded"]) {
-    return false;
-  }
-  const source = request.source as
-    | {
-        readonly remoteAddress?: string | null;
-        readonly socket?: { readonly remoteAddress?: string | null };
-      }
-    | null
-    | undefined;
-  const rawPeer = source?.socket?.remoteAddress ?? source?.remoteAddress ?? null;
-  if (!rawPeer) return false;
-  const peer = rawPeer.startsWith("::ffff:") ? rawPeer.slice("::ffff:".length) : rawPeer;
-  return isLoopbackHostname(peer);
-}
-
-/**
- * Whether an unauthenticated request may be waived on the strength of its loopback peer.
- *
- * The peer check alone is not enough once a *browser* is the local process. A page the user
- * visits runs attacker-controlled code with a loopback TCP peer, so "local process" stops
- * meaning "the user". Two browser-only escapes have to be closed:
- *
- * - **DNS rebinding.** `evil.example` re-resolved to 127.0.0.1 gives the attacker a
- *   same-origin loopback connection. The peer is genuinely loopback, so only the `Host`
- *   header distinguishes it — a rebound request still carries the attacker's hostname.
- *   (Reading `Host` is safe *here*, as a narrowing check on top of the peer test; it was an
- *   auth bypass only when it was the sole basis for trust.)
- * - **Cross-origin reads.** A top-level navigation is the case this waiver exists for
- *   ("Open in new tab" has no way to send a bearer token). A `fetch()` from another page is
- *   not, and is the shape that turns this route into arbitrary file disclosure. Browsers
- *   mark the difference: only a navigation carries `Sec-Fetch-Mode: navigate`. Non-browser
- *   callers (curl, an editor) send no `Sec-Fetch-*` at all and keep the waiver — they can
- *   already read the file directly with the user's own permissions, which is the whole
- *   premise of the waiver.
- */
-export function isWaivableLocalRequest(request: HttpServerRequest.HttpServerRequest): boolean {
-  if (!isLocalLoopbackRequest(request)) return false;
-  const host = request.headers["host"];
-  if (host !== undefined) {
-    const hostname = host.startsWith("[")
-      ? host.slice(1, host.indexOf("]"))
-      : (host.split(":")[0] ?? "");
-    if (!isLoopbackHostname(hostname)) return false;
-  }
-  const fetchMode = request.headers["sec-fetch-mode"];
-  if (fetchMode !== undefined && fetchMode !== "navigate") return false;
-  const fetchDest = request.headers["sec-fetch-dest"];
-  if (fetchDest !== undefined && fetchDest !== "document") return false;
-  // A cross-site top-level navigation (`evil.example` calling window.open on this
-  // origin) is still a navigation, so the two checks above admit it. Harmless while
-  // the opener cannot read the response, but it is free to deny here and it keeps
-  // the waiver to what it claims to cover: the user's own local navigation.
-  const fetchSite = request.headers["sec-fetch-site"];
-  if (fetchSite !== undefined && fetchSite !== "same-origin" && fetchSite !== "none") return false;
-  return true;
-}
-
 /** How a `/viewer` request should be served. */
 export type ViewerPathKind = "markdown" | "html" | "text" | "image" | "video" | "audio";
 
@@ -1129,14 +1062,10 @@ export function classifyViewerPath(
  * HTML; `.html` is served as-is; everything else is served as text/plain.
  *
  * `readTrustedFile` applies no path sandbox, so the `orchestration:read` scope below is
- * the boundary for anything that is not a genuine local navigation.
- *
- * The waiver is deliberately narrower than "the peer is loopback" — see
- * `isWaivableLocalRequest`. The premise that makes it safe ("a local process already reads
- * the user's files with the user's own permissions") holds for curl or an editor, but NOT
- * for a browser: a page the user visits is attacker-controlled code running behind a
- * loopback peer. Waiving on the peer alone let any website read any file on disk via a
- * cross-origin `fetch`, because this server answers with `access-control-allow-origin: *`.
+ * the only boundary — every path this route serves is an arbitrary absolute path, and
+ * every request must present the scope. There is deliberately no local-process waiver:
+ * a request's locality cannot be established from what it carries, because a co-located
+ * proxy is indistinguishable from a local process at every signal the server can read.
  */
 export const viewerRouteLayer = HttpRouter.add(
   "GET",
@@ -1149,33 +1078,34 @@ export const viewerRouteLayer = HttpRouter.add(
     }
 
     // The matched suffix is an absolute filesystem path (leading "/" preserved).
-    // Classified BEFORE the waiver, because the waiver does not extend to images.
+    // Classified first so a bad path is a 400 rather than a 401, which would
+    // otherwise make "unsupported extension" and "not signed in" indistinguishable.
     const target = classifyViewerPath(url.value.pathname.slice(VIEWER_ROUTE_PREFIX.length));
     if (!target) {
       return HttpServerResponse.text("Invalid or unsupported file path", { status: 400 });
     }
     const { absolutePath, kind } = target;
 
-    // Images are never waived, unlike the text kinds. An unauthenticated response a
-    // browser can DECODE is an oracle the text kinds do not offer: `onload` vs
-    // `onerror` reveals whether an arbitrary absolute path exists, and
-    // naturalWidth/naturalHeight leak its dimensions. Two ways an <img> reaches here
-    // without the waiver's intended user: a browser that sends no `Sec-Fetch-*`
-    // (the checks above are `!== undefined` guarded, so absence keeps the waiver),
-    // and any other 127.0.0.1 port, which is the SAME SITE for a `SameSite=Lax`
-    // cookie. Requiring the scope closes both without touching the text paths.
-    // Video joins images in never being waived, and the reason is stronger: with
-    // Range, `bytes=0-1` returns literal file bytes, so an unauthenticated video
-    // path would be a byte-ranged arbitrary-file read rather than merely an
-    // existence oracle.
-    if (
-      kind === "image" ||
-      kind === "video" ||
-      kind === "audio" ||
-      !isWaivableLocalRequest(request)
-    ) {
-      yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    }
+    // Unconditional, because `readTrustedFile` applies no path sandbox: every byte
+    // this route can serve is an arbitrary absolute path.
+    //
+    // This used to waive auth when the request looked like it came from a process on
+    // this machine. It cannot: a co-located reverse proxy has the same loopback peer
+    // as a local process, and nginx's default `Host: $proxy_host` rewrites the one
+    // header that distinguished them. Measured against real proxies, seven of eight
+    // configurations — including a bare `proxy_pass` with no `proxy_set_header` at
+    // all — handed a remote, unauthenticated visitor the contents of any readable
+    // text file. An L4/TCP forward (`stream`, HAProxy `mode tcp`, `socat`,
+    // `ssh -L`) is worse still: the client supplies `Host` itself and no operator
+    // configuration can intervene.
+    //
+    // Nothing shipped lost anything. "Open in new tab" opens this app's own origin
+    // (`ChatMarkdown.tsx`), so it is a same-origin top-level navigation and carries
+    // the `SameSite=Lax` session cookie; the `<img>`/`<iframe>` byte source is a
+    // different URL built against the environment's base (`viewerPath.ts`), and was
+    // never waived anyway. The waiver's stated beneficiary was a local `curl`, whose
+    // own justification was that it can already read the file directly.
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
 
     // `nosniff` makes the text/plain guarantee robust: a code file whose bytes
     // happen to look like HTML must never be content-sniffed and rendered as a

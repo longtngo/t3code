@@ -25,9 +25,10 @@ import * as Stream from "effect/Stream";
  * streaming traffic serializing behind those reads. Re-measure that before
  * switching, not just the idle heap.
  *
- * The twin of
- * {@link ./boundedSubscriberStream.boundedSubscriberStream}: same shape (a bounded
- * `Queue` + a scoped forked pump), here to batch rather than to drop-behind.
+ * Same shape as the WS hub's old per-subscription drop-behind buffer (a bounded
+ * `Queue` + a scoped forked pump), here to batch rather than to drop behind.
+ * That buffer is gone; the per-subscription bound now lives in
+ * {@link ../LiveStreamBudget.makeLiveStreamBudget}.
  *
  * ## Why this exists (the OOM it fixed, on the effect version of the time)
  *
@@ -55,9 +56,9 @@ import * as Stream from "effect/Stream";
  *   growth. This is the exact property `groupedWithin` lacked.
  * - **Memory bounded.** The hand-off queue is `Queue.bounded`. If the consumer
  *   (socket writer) stalls, `offerAll` in the pump backpressures once the queue is
- *   full, so memory is capped at `bufferCapacity` here plus the upstream
- *   `boundedSubscriberStream` buffer. For a *slow-but-alive* consumer the upstream
- *   then drops+ends → source ends → `Queue.end` → clean stream end → resubscribe.
+ *   full, so memory is capped at `bufferCapacity` here plus whatever the upstream
+ *   retains. For a *slow-but-alive* consumer the upstream live-stream budget fails
+ *   the stream → source ends → `Queue.end` → clean stream end → resubscribe.
  *   For a *fully dead* socket the pump simply stays parked in `offerAll` (bounded,
  *   not growing) until the WS transport's dead-socket detection tears down the RPC
  *   scope, which interrupts the parked pump — reclaim is via transport teardown,
@@ -95,8 +96,8 @@ export const batchWithinStackSafe = <A>(
       const queue = yield* Queue.bounded<A, Cause.Done>(bufferCapacity);
       // Pump: drain source arrays into the queue; end the queue when the source
       // ends OR fails. `ensuring(Queue.end)` intentionally maps a source *failure*
-      // to clean completion too (same philosophy as boundedSubscriberStream; the
-      // live event stream realistically only ends cleanly). `runForEachArray` is
+      // to clean completion too (the live event stream realistically only ends
+      // cleanly). `runForEachArray` is
       // `Effect.forever`/`whileLoop` — trampolined, so the pump holds constant
       // stack depth regardless of event volume.
       yield* Effect.forkScoped(

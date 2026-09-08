@@ -125,6 +125,11 @@ import Migration0055 from "./Migrations/047_ProjectionProjectIcon.ts";
 // client-side pull-request derivation in the command palette.
 import Migration0056 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 
+// Fork-authored. Applied id 57, filename 052: 52-56 were already taken by
+// upstream migrations that kept their own filename numbers, so the next free
+// filename and the next free id have diverged (registry section 1).
+import Migration0057 from "./Migrations/052_ProjectionThreadActivityKindIndex.ts";
+
 /**
  * Migration loader with all migrations defined inline.
  *
@@ -191,6 +196,7 @@ export const migrationEntries = [
   [54, "RepairAutomaticSettlementTimestamps", Migration0054],
   [55, "ProjectionProjectIcon", Migration0055],
   [56, "ProjectionThreadBranchPullRequest", Migration0056],
+  [57, "ProjectionThreadActivityKindIndex", Migration0057],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

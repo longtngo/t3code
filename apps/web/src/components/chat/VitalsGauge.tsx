@@ -14,6 +14,7 @@ import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { useAccountUsageRefresh } from "~/hooks/useAccountUsageRefresh";
 import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
+import { useEnvironment } from "~/state/environments";
 import {
   type AccountUsageView,
   type UsageBalanceView,
@@ -472,12 +473,23 @@ function MachineBlock(props: {
   streaming: boolean;
   enabled: boolean;
   onToggle: (next: boolean) => void;
+  /**
+   * The environment these numbers belong to. On a phone or a second laptop the
+   * CPU/GPU/MEM here are the server's, not the reader's, and nothing else on
+   * the panel says so.
+   */
+  machineName?: string | null | undefined;
 }) {
-  const { sample, streaming, enabled, onToggle } = props;
+  const { sample, streaming, enabled, onToggle, machineName } = props;
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-center justify-between gap-2">
-        <span className={CAP_CLASS}>Machine</span>
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className={cn(CAP_CLASS, "shrink-0")}>Machine</span>
+          {machineName ? (
+            <span className="truncate text-[10px] text-muted-foreground/70">{machineName}</span>
+          ) : null}
+        </div>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -485,7 +497,7 @@ function MachineBlock(props: {
                 type="button"
                 onClick={() => onToggle(!enabled)}
                 aria-label={enabled ? "Pause host metrics" : "Resume host metrics"}
-                className="flex items-center gap-1 rounded-md p-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                className="flex shrink-0 items-center gap-1 rounded-md p-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
               />
             }
           >
@@ -670,6 +682,8 @@ export function VitalsDetail(props: {
    */
   sessionProvider?: string | null | undefined;
   reportsContextUsage?: boolean | undefined;
+  /** Environment whose machine the host block reports on. */
+  machineName?: string | null | undefined;
 }) {
   const { context, accountUsage, host, now, timestampFormat } = props;
   const missingContextReason = context
@@ -714,6 +728,7 @@ export function VitalsDetail(props: {
         streaming={host.streaming}
         enabled={host.enabled}
         onToggle={host.onToggle}
+        machineName={props.machineName}
       />
     </div>
   );
@@ -728,6 +743,8 @@ export function VitalsGauge(props: {
   modelDisplayName?: string | null | undefined;
   sessionProvider?: string | null | undefined;
   reportsContextUsage?: boolean | undefined;
+  /** Environment whose machine the host block reports on. */
+  machineName?: string | null | undefined;
 }) {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
@@ -789,6 +806,7 @@ export function VitalsGauge(props: {
           modelDisplayName={props.modelDisplayName}
           sessionProvider={props.sessionProvider}
           reportsContextUsage={props.reportsContextUsage}
+          machineName={props.machineName}
         />
       </PopoverPopup>
     </Popover>
@@ -837,6 +855,9 @@ export function VitalsGaugeConnected(props: {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
   const refreshUsage = useAccountUsageRefresh(props.environmentId, props.threadId);
+  // The environment the metrics are streamed from, which is the machine they
+  // describe - not necessarily the one the reader is holding.
+  const environment = useEnvironment(props.environmentId);
   return (
     <VitalsGauge
       context={props.context}
@@ -847,6 +868,7 @@ export function VitalsGaugeConnected(props: {
       modelDisplayName={props.modelDisplayName}
       sessionProvider={props.sessionProvider}
       reportsContextUsage={props.reportsContextUsage}
+      machineName={environment?.label}
     />
   );
 }

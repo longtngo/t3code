@@ -71,6 +71,8 @@ export interface AuthenticatedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  /** `Origin` recorded in the session token at mint, when one was sent. */
+  readonly httpOrigin?: string;
 }
 
 const serverAuthInternalErrorContext = {
@@ -354,6 +356,7 @@ export class ServerAuthInvalidCredentialError extends Schema.TaggedErrorClass<Se
   {
     diagnostic: Schema.optional(Schema.String),
     dpopFailureReason: Schema.optionalKey(DpopFailureReason),
+    originMismatch: Schema.optionalKey(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -370,8 +373,12 @@ export type ServerAuthCredentialError = typeof ServerAuthCredentialError.Type;
 export const isServerAuthCredentialError = Schema.is(ServerAuthCredentialError);
 export const serverAuthCredentialReason = (
   error: ServerAuthCredentialError,
-): "missing_credential" | "invalid_credential" =>
-  error._tag === "ServerAuthMissingCredentialError" ? "missing_credential" : "invalid_credential";
+): "missing_credential" | "invalid_credential" | "origin_mismatch" =>
+  error._tag === "ServerAuthMissingCredentialError"
+    ? "missing_credential"
+    : error.originMismatch === true
+      ? "origin_mismatch"
+      : "invalid_credential";
 
 export const serverAuthDpopFailureReason = (
   error: ServerAuthCredentialError,
@@ -426,6 +433,7 @@ export class EnvironmentAuth extends Context.Service<
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
+      httpOrigin?: string,
     ) => Effect.Effect<
       {
         readonly response: AuthBrowserSessionResult;
@@ -566,6 +574,46 @@ function parseDpopToken(request: HttpServerRequest.HttpServerRequest): string | 
   return token.length > 0 ? token : null;
 }
 
+/**
+ * The request's `Origin`, or undefined when the caller sent none. Electron and
+ * every non-browser client fall in the second case; the origin gate fails open
+ * there by design.
+ */
+export function readRequestHttpOrigin(
+  request: HttpServerRequest.HttpServerRequest,
+): string | undefined {
+  const header = request.headers["origin"];
+  if (typeof header !== "string") return undefined;
+  const value = header.trim();
+  return value.length > 0 ? value : undefined;
+}
+
+/**
+ * True unless both sides are present and disagree. Absence on either side is a
+ * deliberate fail-open: pre-change sessions carry no claim, and non-browser
+ * callers send no `Origin`.
+ */
+export function httpOriginMatches(
+  recorded: string | undefined,
+  observed: string | undefined,
+): boolean {
+  if (recorded === undefined || observed === undefined) return true;
+  return recorded === observed;
+}
+
+/** Bearer/DPoP only, for the fall-through when a cookie is origin-rejected. */
+function selectNonCookieRequestCredential(request: HttpServerRequest.HttpServerRequest) {
+  const bearerToken = parseBearerToken(request);
+  if (bearerToken !== null) {
+    return { token: bearerToken, source: "bearer" } as const;
+  }
+  const dpopToken = parseDpopToken(request);
+  if (dpopToken !== null) {
+    return { token: dpopToken, source: "dpop" } as const;
+  }
+  return undefined;
+}
+
 export function selectRequestCredential(
   request: HttpServerRequest.HttpServerRequest,
   cookieName: string,
@@ -632,6 +680,7 @@ export const make = Effect.gen(function* () {
         scopes: session.scopes,
         ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+        ...(session.httpOrigin ? { httpOrigin: session.httpOrigin } : {}),
       })),
       mapSessionVerificationErrors,
     );
@@ -691,6 +740,55 @@ export const make = Effect.gen(function* () {
     if (!credential?.token) {
       return Effect.fail(new ServerAuthMissingCredentialError({}));
     }
+    const verified = verifySelectedCredential(request, credential);
+    // A shortcut, not the guard. Bearer and DPoP sessions never carry a recorded
+    // origin - only `createBrowserSession` threads one in - so the comparison
+    // below would pass them anyway. What protects a bearer client is the
+    // fall-through: a cookie is selected BEFORE bearer is ever looked at, so a
+    // bearer client that also carries a stale cookie IS a cookie client here,
+    // and scoping on the source cannot exclude it. Measured: removing this
+    // return changes no test; removing the fall-through breaks two.
+    if (credential.source !== "cookie" && credential.source !== "legacy-cookie") {
+      return verified;
+    }
+    // A cookie rides along on any same-site request, so it is the only source
+    // that can be replayed by a page the user did not open. Compare the origin
+    // it was minted from against the one this request came from; on a mismatch
+    // fall through to whatever non-cookie credential the caller also sent, so a
+    // bearer client is authenticated on the credential it intended rather than
+    // sunk by a stale cookie it never meant to use.
+    const observedOrigin = readRequestHttpOrigin(request);
+    return verified.pipe(
+      Effect.flatMap((session) => {
+        if (httpOriginMatches(session.httpOrigin, observedOrigin)) {
+          return Effect.succeed(session);
+        }
+        const fallback = selectNonCookieRequestCredential(request);
+        if (fallback) {
+          return verifySelectedCredential(request, fallback);
+        }
+        return Effect.logWarning("Rejected a session cookie minted from another origin.").pipe(
+          Effect.annotateLogs({
+            recordedOrigin: session.httpOrigin,
+            observedOrigin,
+          }),
+          Effect.andThen(
+            Effect.fail(
+              new ServerAuthInvalidCredentialError({
+                diagnostic: "Session cookie was minted from a different origin.",
+                originMismatch: true,
+              }),
+            ),
+          ),
+        );
+      }),
+    );
+  };
+
+  const verifySelectedCredential = (
+    request: HttpServerRequest.HttpServerRequest,
+    credential: { readonly token: string; readonly source: string },
+  ): Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError> => {
     const dpopToken = parseDpopToken(request);
     return authenticateToken(credential.token).pipe(
       Effect.flatMap((session) => {
@@ -775,6 +873,7 @@ export const make = Effect.gen(function* () {
   const createBrowserSession: EnvironmentAuth["Service"]["createBrowserSession"] = (
     credential,
     requestMetadata,
+    httpOrigin,
   ) =>
     bootstrapCredentials.consume(credential).pipe(
       Effect.mapError(toBootstrapExchangeError),
@@ -788,6 +887,7 @@ export const make = Effect.gen(function* () {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
             },
+            ...(httpOrigin ? { httpOrigin } : {}),
           })
           .pipe(
             Effect.mapError((cause) => new ServerAuthAuthenticatedSessionIssueError({ cause })),

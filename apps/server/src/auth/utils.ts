@@ -163,6 +163,37 @@ function inferOs(userAgent: string | undefined): string | undefined {
   return undefined;
 }
 
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "0000:0000:0000:0000:0000:0000:0000:0001"]);
+
+/**
+ * The address to record for a client, honouring a co-located reverse proxy.
+ *
+ * The socket's peer is the proxy when one is in front of us, so every remote device
+ * records as loopback and Settings - Connections shows them all as local. That is the
+ * one screen a user checks to spot a device they do not recognise, so it has to say
+ * where the request came from.
+ *
+ * `x-forwarded-for` supplies that, but only from a loopback peer. Unlike
+ * `x-forwarded-proto` (see `requestScheme.ts`), a spoof here costs something in the
+ * direction an attacker wants: the value is shown as the connecting device, so an
+ * unchecked header lets a remote client plant whatever address it likes on the audit
+ * screen. A remote peer's socket address is therefore authoritative and its header is
+ * ignored outright. A loopback peer is either the proxy or something already running on
+ * this machine, which has more direct means than forging a label.
+ *
+ * The left-most entry is the original client; the rest are intermediate proxies.
+ */
+export function resolveClientIpAddress(input: {
+  readonly socketAddress: string | undefined;
+  readonly forwardedFor: string | undefined;
+}): string | undefined {
+  if (input.socketAddress === undefined || !LOOPBACK_ADDRESSES.has(input.socketAddress)) {
+    return input.socketAddress;
+  }
+  const forwarded = normalizeIpAddress(input.forwardedFor?.split(",")[0]);
+  return forwarded ?? input.socketAddress;
+}
+
 function readRemoteAddressFromSource(source: unknown): string | undefined {
   if (!source || typeof source !== "object") {
     return undefined;
@@ -183,7 +214,10 @@ export function deriveAuthClientMetadata(input: {
   readonly presented?: AuthClientPresentationMetadata;
 }): AuthClientMetadata {
   const userAgent = normalizeNonEmptyString(input.request.headers["user-agent"]);
-  const ipAddress = readRemoteAddressFromSource(input.request.source);
+  const ipAddress = resolveClientIpAddress({
+    socketAddress: readRemoteAddressFromSource(input.request.source),
+    forwardedFor: input.request.headers["x-forwarded-for"],
+  });
   const os = input.presented?.os ?? inferOs(userAgent);
   const browser = inferBrowser(userAgent);
   return {

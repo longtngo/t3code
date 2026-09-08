@@ -759,12 +759,83 @@ interface StartupOptions {
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
 
+/**
+ * How far the auto-pull phase got, readable while it is still running.
+ *
+ * The phase is bounded by an interrupting timeout, so when it is cut short nothing
+ * it returns survives to say how much it did. `total` is set once the enabled roots
+ * are known; `completed` counts roots the phase finished with, including ones it
+ * skipped and ones whose pull failed.
+ */
+export interface AutoPullProgress {
+  readonly total: number;
+  readonly completed: number;
+}
+
+const AUTO_PULL_PROGRESS_START: AutoPullProgress = { total: 0, completed: 0 };
+
+/**
+ * How long the whole startup auto-pull phase may take before startup abandons it.
+ *
+ * Measured rather than guessed: a healthy phase over four real clones of this repo
+ * (17k tracked files each, one commit behind, origin on local disk so no network at
+ * all) takes ~5.0s. So this is roughly a 4x margin, not a generous one - a user with
+ * a dozen enabled roots on a slow link will routinely be cut short. That is the
+ * intended trade: partial progress is safe, and the point is to cap what a user waits
+ * for, not to let every root finish.
+ *
+ * The real wall-clock cost is this budget PLUS `FORCE_KILL_AFTER`
+ * (`vcs/GitVcsDriverCore.ts`), because interrupting a git command closes its scope and
+ * the release finalizer awaits the child's exit before escalating to SIGKILL.
+ */
+const AUTO_PULL_STARTUP_BUDGET = Duration.seconds(20);
+
+/**
+ * Runs the auto-pull phase under its startup budget, reporting how far it got.
+ *
+ * Startup blocks on this phase, and `commandReadinessLayer` gates every route
+ * including the `/ws` upgrade until startup finishes - so an unbounded phase is a
+ * silent total outage, not a slow start.
+ *
+ * The bound must INTERRUPT, not merely stop waiting. `timeoutOption` awaits the
+ * interruption, which closes each git command's scope and reaps the child process.
+ * Do not replace it with `Effect.disconnect`, `Effect.fork`, or a hand-rolled race:
+ * each would let git keep writing into a workspace root past the activation fence,
+ * which is the defect the earlier fork of this phase was reverted for.
+ *
+ * The warning is annotated because it is the only thing this phase says at the
+ * production log level - every per-root outcome below is `logDebug`.
+ */
+export const runBoundedAutoPull = <A, E, R>(
+  phase: Effect.Effect<A, E, R>,
+  progress: Ref.Ref<AutoPullProgress>,
+  budget: Duration.Duration = AUTO_PULL_STARTUP_BUDGET,
+): Effect.Effect<void, E, R> =>
+  phase.pipe(
+    Effect.timeoutOption(budget),
+    Effect.tap((finished) =>
+      Option.isNone(finished)
+        ? Ref.get(progress).pipe(
+            Effect.flatMap(({ total, completed }) =>
+              Effect.logWarning("Automatic project pull did not finish within its startup budget", {
+                budgetMs: Duration.toMillis(budget),
+                totalRoots: total,
+                completedRoots: completed,
+              }),
+            ),
+          )
+        : Effect.void,
+    ),
+    Effect.asVoid,
+  );
+
 export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   projects: ReadonlyArray<OrchestrationProjectShell>,
   settings: Pick<
     typeof DEFAULT_SERVER_SETTINGS,
     "defaultAutoPull" | "projectAutoPullOverrides"
   > = DEFAULT_SERVER_SETTINGS,
+  progress?: Ref.Ref<AutoPullProgress>,
 ) {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const workspaceRoots = [
@@ -774,6 +845,10 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
         .map((project) => project.workspaceRoot),
     ),
   ];
+
+  if (progress !== undefined) {
+    yield* Ref.set(progress, { total: workspaceRoots.length, completed: 0 });
+  }
 
   yield* Effect.forEach(
     workspaceRoots,
@@ -817,6 +892,17 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
             cause,
           }),
         ),
+        // After the catch, so a root that failed still counts as one the phase is
+        // done with. Interruption skips this, which is what makes the count mean
+        // "roots finished before the budget ran out".
+        Effect.tap(() =>
+          progress === undefined
+            ? Effect.void
+            : Ref.update(progress, (current) => ({
+                ...current,
+                completed: current.completed + 1,
+              })),
+        ),
       ),
     { concurrency: 4, discard: true },
   );
@@ -843,10 +929,13 @@ export const make = (options?: StartupOptions) =>
     const httpListening = yield* Deferred.make<void>();
     const reactorScope = yield* Scope.make("sequential");
 
+    const autoPullProgress = yield* Ref.make(AUTO_PULL_PROGRESS_START);
     const syncAutoPullProjects = projectionSnapshotQuery.getShellSnapshot().pipe(
       Effect.flatMap((snapshot) =>
         serverSettings.getSettings.pipe(
-          Effect.flatMap((settings) => autoPullProjects(snapshot.projects, settings)),
+          Effect.flatMap((settings) =>
+            autoPullProjects(snapshot.projects, settings, autoPullProgress),
+          ),
         ),
       ),
       Effect.catch((cause) =>
@@ -934,8 +1023,22 @@ export const make = (options?: StartupOptions) =>
 
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
 
+      // Awaited, deliberately, and bounded. Forking this to keep it off the readiness
+      // path was tried and reverted: `forkParked` roots all resume together at the
+      // activation boundary, so the pull would run concurrently with the boot
+      // turn-continuation forked above, which sends a real turn to a provider.
+      // `autoPullProjects` reads `hasWorkingTreeChanges` and then pulls, and this
+      // ordering is what closes the STARTUP instance of that check-then-act window.
+      // It does not close the race: the same read-then-pull runs at runtime in
+      // `VcsStatusBroadcaster`, concurrently with live agents, behind no fence.
+      //
+      // The cost of awaiting it is capped by `runBoundedAutoPull` rather than left
+      // to the remote - see there for why the bound has to interrupt.
       yield* Effect.logDebug("startup phase: syncing clean projects");
-      yield* runStartupPhase("projects.auto-pull", syncAutoPullProjects);
+      yield* runBoundedAutoPull(
+        runStartupPhase("projects.auto-pull", syncAutoPullProjects),
+        autoPullProgress,
+      );
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;

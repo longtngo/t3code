@@ -83,14 +83,22 @@ export const bareHost = (host: string): string => (host.startsWith(".") ? host.s
  * browser's own file for writing.
  *
  * Scoped: the temporary directory goes away when the caller's scope closes.
+ *
+ * `parentDirectory` places the snapshot under a directory the caller owns; it
+ * defaults to the system temp directory. Callers that want to observe the
+ * snapshot's cleanup pass one, so they can watch a directory holding only their
+ * own entries.
  */
 export const snapshotCookieDatabase = Effect.fn("CookieDatabase.snapshotCookieDatabase")(function* (
   cookiePath: string,
-  tempPrefix = "t3code-cookie-import-",
+  parentDirectory?: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: tempPrefix });
+  const directory = yield* fileSystem.makeTempDirectoryScoped({
+    prefix: "t3code-cookie-import-",
+    directory: parentDirectory,
+  });
   const target = path.join(directory, path.basename(cookiePath));
   yield* Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

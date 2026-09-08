@@ -515,7 +515,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           dispatch: () => Effect.succeed({ sequence: 1 }),
           streamDomainEvents: Stream.fromQueue(events),
           hubBacklog: Effect.succeed(0),
-          subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
           subscribeDomainEventsLossless: Effect.succeed(Stream.fromQueue(events)),
           latestSequence: Effect.succeed(0),
         } satisfies OrchestrationEngineShape;
@@ -744,7 +743,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             dispatch: () => Effect.succeed({ sequence: 1 }),
             streamDomainEvents: Stream.fromQueue(events),
             hubBacklog: Effect.succeed(0),
-            subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
             subscribeDomainEventsLossless: Effect.succeed(Stream.fromQueue(events)),
             latestSequence: Effect.succeed(0),
           } satisfies OrchestrationEngineShape),

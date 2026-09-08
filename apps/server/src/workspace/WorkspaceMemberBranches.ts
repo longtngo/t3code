@@ -39,7 +39,8 @@ export interface MemberBranchTarget {
 
 export interface MemberCheckpointState {
   readonly memberId: string;
-  readonly headSha: string;
+  /** Absent when the member could not be read. See the contract for why. */
+  readonly headSha?: string;
   readonly isDirty: boolean;
 }
 
@@ -83,8 +84,13 @@ export class WorkspaceMemberBranches extends Context.Service<
     }) => Effect.Effect<MemberPrBase | null>;
     /**
      * Where each member stands right now, for recording on a checkpoint or for
-     * comparing against one. Members that cannot be read are omitted, which the
-     * comparison reads as drift — a revert cannot restore what it cannot see.
+     * comparing against one. Every member asked for comes back, including ones
+     * that could not be read: those carry no `headSha`, and the comparison
+     * treats that as drift — a revert cannot restore what it cannot see.
+     *
+     * Omitting them instead is what this used to do, and it silently disarmed
+     * the guard: the comparison walks the recorded list, so a member missing
+     * from the record can never drift.
      */
     readonly readCheckpointStates: (
       members: ReadonlyArray<{ readonly id: string; readonly path: string }>,
@@ -309,16 +315,28 @@ export const make = Effect.gen(function* () {
         (member) =>
           Effect.gen(function* () {
             const local = yield* readLocalState(member.path);
-            if (local === null) return null;
-            const headSha = yield* git
-              .readHeadSha(member.path)
-              .pipe(Effect.orElseSucceed(() => null));
-            if (headSha === null) return null;
-            return { memberId: member.id, headSha, isDirty: local.isDirty };
+            if (local !== null) {
+              const headSha = yield* git
+                .readHeadSha(member.path)
+                .pipe(Effect.orElseSucceed(() => null));
+              if (headSha !== null) {
+                return { memberId: member.id, headSha, isDirty: local.isDirty };
+              }
+            }
+            // Both reads are git subprocesses under a timeout with their errors
+            // swallowed, so this is a transient host-saturation shape as much as
+            // a missing checkout. Recorded either way. `isDirty` is not a claim
+            // here: the absent head short-circuits the comparison before it is
+            // ever reached.
+            yield* Effect.logWarning("workspace member could not be read for a checkpoint", {
+              memberId: member.id,
+              path: member.path,
+            });
+            return { memberId: member.id, isDirty: false };
           }),
         { concurrency: MEMBER_READ_CONCURRENCY },
       );
-      return states.filter((state): state is MemberCheckpointState => state !== null);
+      return states;
     });
 
   const writePrBase: WorkspaceMemberBranches["Service"]["writePrBase"] = (input) =>

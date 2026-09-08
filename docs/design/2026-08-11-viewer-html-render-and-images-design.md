@@ -87,10 +87,11 @@ headers are kept.
 - **SVG is served under the no-scripts CSP** (`sandbox allow-popups`, the one markdown already
   uses), not the `allow-scripts` one `.html` gets. A top-level SVG navigation executes embedded
   script; an image viewer has no reason to allow that.
-- The auth posture is unchanged. The loopback waiver is navigation-only
-  (`isWaivableLocalRequest`), and an `<img>` subresource sends `Sec-Fetch-Mode: no-cors`, so it
-  falls through to the `orchestration:read` scope check and authenticates by session cookie —
-  same-origin, so this works locally and over Tailscale.
+- The auth posture is unchanged. An `<img>` subresource authenticates by the
+  `orchestration:read` scope check using the session cookie — same-origin, so this works locally
+  and over Tailscale. (Superseded 2026-09-06: the loopback waiver this bullet referred to has since
+  been removed, and every `/viewer` request now takes that scope check. The conclusion here is
+  unaffected.)
 
 **Client**: `classifyFileViewerKind` gains `"image"`, which both makes image paths openable chips
 and lets `TrustedFileView` render `<img src="/viewer/<abs>">`. For an image the text RPC is
@@ -132,8 +133,9 @@ found defects that changed the approach; the sections above are the **revised** 
   server) into a cross-origin **file-existence and image-dimension oracle** for arbitrary absolute
   paths. Classification happens before the waiver check; the image kind always requires
   `orchestration:read`.
-- `isWaivableLocalRequest` additionally denies a present `Sec-Fetch-Site` that is not
-  `same-origin`/`none`, closing the same fail-open for the existing text kinds.
+- The loopback waiver additionally denies a present `Sec-Fetch-Site` that is not
+  `same-origin`/`none`, closing the same fail-open for the existing text kinds. (Superseded
+  2026-09-06: the waiver was removed outright.)
 - SVG reuses the existing, stricter `SVG_CONTENT_SECURITY_POLICY` (`default-src 'none'; …;
 sandbox`) via `assetResponseHeaders`, not the weaker `sandbox allow-popups` I proposed — which
   would have permitted subresource beacons out of a crafted SVG.

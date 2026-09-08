@@ -159,6 +159,36 @@ const initRepoWithCommit = (
     return { initialBranch };
   });
 
+// `git rev-parse HEAD` in a repository with no commits prints the literal string
+// "HEAD" on STDOUT and exits 128. `readHeadSha` allows the non-zero exit and returns
+// stdout regardless, so the absent head came back as the string "HEAD" - and two
+// members in that state then compare EQUAL at revert time, reading as "nothing
+// moved". That is the defect the checkpoint drift comparison exists to prevent.
+it.effect("reports no head sha for a repository with no commits", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    yield* driver.initRepo({ cwd });
+
+    const head = yield* driver.readHeadSha(cwd);
+    assert.isNull(head);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+// The control: a real head still comes back, so the fix above cannot be "return
+// null always", which would pass the assertion by making the reader blind.
+it.effect("still reports the head sha once a commit exists", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+
+    const head = yield* driver.readHeadSha(cwd);
+    assert.isNotNull(head);
+    assert.match(head ?? "", /^[0-9a-f]{40}$/);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("uses stable diagnostics for every parsed non-repository command", () => {
   const commands: Array<{ readonly args: ReadonlyArray<string>; readonly lcAll?: string }> = [];
   const spawner = ChildProcessSpawner.make((command) =>

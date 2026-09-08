@@ -3,11 +3,11 @@ import { CpuIcon, Loader2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatBytes } from "~/lib/hostMetrics";
 import { formatContext } from "~/lib/llmModels";
-import { MODEL_DOT_CLASS } from "../llm/modelPresentation";
 import { useLlmModelActions, useLlmModels } from "~/hooks/useLlmModels";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
+  type SidebarModelStatus,
   type SidebarRow,
   countBusy,
   countOnline,
@@ -27,6 +27,15 @@ import {
 import { Button } from "../ui/button";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
+/** Status -> dot colour for the local-model rows below. */
+const MODEL_DOT_CLASS: Record<SidebarModelStatus, string> = {
+  online: "bg-green-500",
+  loading: "bg-amber-500",
+  stopping: "bg-amber-500",
+  offline: "bg-muted-foreground/40",
+  error: "bg-red-500",
+};
 
 /** Links the trigger to the panel it expands, matching its neighbour in the footer row. */
 const LOCAL_MODELS_PANEL_ID = "sidebar-local-models-panel";

@@ -134,9 +134,14 @@ let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 // The DOM this file needs is the real one now: it runs under the `dom` project, so the
 // stub `window`/`document`/`Element` this suite used to install for the `node` environment
 // would replace a working DOM with a broken one.
+//
+// No per-hook timeout here on purpose. The `dom` project sets hookTimeout to 120s
+// precisely because these imports are heavy, and a local override could only lower
+// it. This import measures ~3.5s idle but exceeded a 30s cap twice during full-gate
+// runs on 2026-09-07, failing the suite at import with zero tests failing.
 beforeAll(async () => {
   ({ MessagesTimeline } = await import("./MessagesTimeline"));
-}, 30_000);
+});
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
@@ -900,7 +905,7 @@ describe("MessagesTimeline", () => {
       view.findAll('span[aria-hidden="true"]').some((element) => element.textContent === " "),
     ).toBe(true);
     expect(view.text()).toContain("Show full message");
-  }, 20_000);
+  });
 
   it("renders chips for standalone element-pick context messages", async () => {
     const view = await renderDom(

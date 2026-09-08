@@ -127,27 +127,24 @@ export interface OrchestrationEngineShape {
    * in the subscription and are delivered once the returned stream is consumed
    * (the caller deduplicates the read/live overlap by sequence). The subscription
    * is released when the surrounding scope closes.
-   */
-  /**
-   * The same eager subscription as {@link subscribeDomainEvents}, WITHOUT the bounded
-   * WS buffer in front of it.
    *
-   * Internal reactors need both halves: they must not miss an event published between
-   * layer construction and their own stream being run, and they must not be dropped when
-   * they fall behind — a reactor that silently loses a `thread.session.stop` leaves the
-   * thread wedged. The bound on the WS accessor exists for consumers that can stop
-   * draining, which a reactor cannot; it drains on the command worker.
+   * Lossless, and deliberately the only eager accessor. Internal reactors must
+   * not miss an event published between layer construction and their own stream
+   * being run, and must not be dropped when they fall behind — a reactor that
+   * silently loses a `thread.session.stop` leaves the thread wedged. A bounded
+   * sibling used to sit beside this one for WebSocket callers; it outlived its
+   * last caller and twice attracted a reactor by mistake, so it is gone and the
+   * WS bound lives in `makeLiveStreamBudget` instead.
    *
-   * This is unbounded, and that is the same exposure `streamDomainEvents` already has.
-   * Do NOT hand it to a WebSocket consumer — see invariant 18 in docs/fork/README.md.
+   * The `Lossless` name is a live merge tripwire, not a leftover contrast:
+   * upstream has its own `subscribeDomainEvents` today and its reactors call it,
+   * so a reconcile that takes an upstream call site verbatim fails to compile
+   * here instead of binding silently. Do not rename this to match upstream.
+   *
+   * This is unbounded, and that is the same exposure `streamDomainEvents` already
+   * has. See invariant 18 in docs/fork/README.md.
    */
   readonly subscribeDomainEventsLossless: Effect.Effect<
-    Stream.Stream<OrchestrationEvent>,
-    never,
-    Scope.Scope
-  >;
-
-  readonly subscribeDomainEvents: Effect.Effect<
     Stream.Stream<OrchestrationEvent>,
     never,
     Scope.Scope

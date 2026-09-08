@@ -286,6 +286,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
               deriveAuthClientMetadata({ request }),
+              EnvironmentAuth.readRequestHttpOrigin(request),
             );
             yield* appendSessionCookie(
               sessions.cookieName,

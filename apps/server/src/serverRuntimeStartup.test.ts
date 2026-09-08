@@ -1,14 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -189,7 +192,6 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
           ),
         streamDomainEvents: Stream.empty,
         hubBacklog: Effect.succeed(0),
-        subscribeDomainEvents: Effect.succeed(Stream.empty),
         subscribeDomainEventsLossless: Effect.succeed(Stream.empty),
         latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
@@ -280,7 +282,6 @@ it.effect.each([
           ),
         streamDomainEvents: Stream.empty,
         hubBacklog: Effect.succeed(0),
-        subscribeDomainEvents: Effect.succeed(Stream.empty),
         subscribeDomainEventsLossless: Effect.succeed(Stream.empty),
         latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
@@ -351,7 +352,6 @@ it.effect(
               Effect.as({ sequence: 1 }),
             ),
           streamDomainEvents: Stream.empty,
-          subscribeDomainEvents: Effect.succeed(Stream.empty),
           hubBacklog: Effect.succeed(0),
           subscribeDomainEventsLossless: Effect.succeed(Stream.empty),
           latestSequence: Effect.succeed(0),
@@ -417,7 +417,6 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
           ),
         streamDomainEvents: Stream.empty,
         hubBacklog: Effect.succeed(0),
-        subscribeDomainEvents: Effect.succeed(Stream.empty),
         subscribeDomainEventsLossless: Effect.succeed(Stream.empty),
         latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
@@ -460,3 +459,139 @@ it.effect("completeAutoBootstrapWelcome settles an empty bootstrap result", () =
     assert.deepStrictEqual(completion, { bootstrapStatus: "complete" });
   }),
 );
+
+describe("startup auto-pull budget", () => {
+  const captureLogs = () => {
+    const logs: Array<{ readonly message: unknown }> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push({ message });
+    });
+    return { logs, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+  };
+
+  /** The `{ totalRoots, completedRoots }` payload of the budget warning, if it was logged. */
+  const budgetWarning = (logs: ReadonlyArray<{ readonly message: unknown }>) => {
+    const parts = logs.flatMap((entry) =>
+      Array.isArray(entry.message) ? entry.message : [entry.message],
+    );
+    if (!parts.some((part) => typeof part === "string" && part.includes("startup budget"))) {
+      return undefined;
+    }
+    return parts.find(
+      (part): part is { budgetMs: number; totalRoots: number; completedRoots: number } =>
+        typeof part === "object" && part !== null && "completedRoots" in part,
+    );
+  };
+
+  it.effect("counts every root it finished, including skipped and failed ones", () =>
+    Effect.gen(function* () {
+      const git = {
+        statusDetails: (cwd: string) =>
+          Effect.succeed({
+            isRepo: true,
+            isDefaultBranch: true,
+            hasUpstream: true,
+            hasWorkingTreeChanges: false,
+            aheadCount: 0,
+            // `/current` is already up to date, so its body returns before pulling.
+            behindCount: cwd === "/current" ? 0 : 1,
+          } as never),
+        pullCurrentBranch: (cwd: string) =>
+          cwd === "/broken"
+            ? Effect.fail(new Error("remote exploded") as never)
+            : Effect.succeed({
+                status: "pulled" as const,
+                refName: "main",
+                upstreamRef: "origin/main",
+              }),
+      } as unknown as GitVcsDriver.GitVcsDriver["Service"];
+      const project = (workspaceRoot: string) =>
+        ({ id: ProjectId.make(workspaceRoot), workspaceRoot, autoPull: true }) as never;
+
+      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
+        total: 0,
+        completed: 0,
+      });
+      yield* ServerRuntimeStartup.autoPullProjects(
+        [project("/clean"), project("/current"), project("/broken")],
+        undefined,
+        progress,
+      ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
+
+      // A failed root and a skipped root are both roots the phase is done with, so
+      // the count answers "how far did it get", not "how many pulls succeeded".
+      assert.deepStrictEqual(yield* Ref.get(progress), { total: 3, completed: 3 });
+    }),
+  );
+
+  it.effect("a phase that finishes inside its budget logs nothing", () =>
+    Effect.gen(function* () {
+      const capture = captureLogs();
+      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
+        total: 2,
+        completed: 2,
+      });
+
+      yield* ServerRuntimeStartup.runBoundedAutoPull(
+        Effect.void,
+        progress,
+        Duration.seconds(20),
+      ).pipe(Effect.provide(capture.layer));
+
+      assert.strictEqual(budgetWarning(capture.logs), undefined);
+    }),
+  );
+
+  it.effect("a phase that exceeds its budget warns with how far it got", () =>
+    Effect.gen(function* () {
+      const capture = captureLogs();
+      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
+        total: 0,
+        completed: 0,
+      });
+      // Set once the roots are known, exactly as `autoPullProjects` does, so the
+      // warning reports a partially-finished phase rather than an empty one.
+      const phase = Ref.set(progress, { total: 7, completed: 3 }).pipe(
+        Effect.andThen(Effect.never),
+      );
+
+      const fiber = yield* ServerRuntimeStartup.runBoundedAutoPull(
+        phase,
+        progress,
+        Duration.seconds(20),
+      ).pipe(Effect.provide(capture.layer), Effect.forkChild);
+      yield* TestClock.adjust("21 seconds");
+      yield* Fiber.join(fiber);
+
+      assert.deepStrictEqual(budgetWarning(capture.logs), {
+        budgetMs: 20_000,
+        totalRoots: 7,
+        completedRoots: 3,
+      });
+    }),
+  );
+
+  it.effect("exceeding the budget interrupts the phase rather than leaving it running", () =>
+    Effect.gen(function* () {
+      const interrupted = yield* Ref.make(false);
+      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
+        total: 1,
+        completed: 0,
+      });
+      // Standing in for a live `git` child: if the bound merely stopped waiting, this
+      // would never run and the process would keep writing past the activation fence.
+      const phase = Effect.never.pipe(Effect.onInterrupt(() => Ref.set(interrupted, true)));
+
+      const fiber = yield* ServerRuntimeStartup.runBoundedAutoPull(
+        phase,
+        progress,
+        Duration.seconds(20),
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("21 seconds");
+      // Joining rather than awaiting: a timeout must not turn startup into a failure.
+      yield* Fiber.join(fiber);
+
+      assert.isTrue(yield* Ref.get(interrupted));
+    }),
+  );
+});

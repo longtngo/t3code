@@ -40,9 +40,17 @@ import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
 import { WorkspaceMemberBranches } from "../../workspace/WorkspaceMemberBranches.ts";
 import {
+  CAPTURE_FAILED,
+  DIFF_SUMMARY_UNAVAILABLE,
+  UNREADABLE_MEMBERS,
+  makeCaptureFailureLog,
+} from "../../workspace/CaptureFailureLog.ts";
+import {
   describeCheckpointDrift,
   isCheckpointComplete,
   resolveCheckpointDrift,
+  resolveTurnZeroDrift,
+  shouldCheckMemberDrift,
 } from "../../workspace/CheckpointMemberDrift.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -98,6 +106,8 @@ const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const startedTurns = new Map<ThreadId, TurnId>();
   const pending = new Set<ThreadId>();
+  // Says a standing capture failure once instead of once per turn. See the module.
+  const captureFailures = makeCaptureFailureLog();
 
   /**
    * Puts every member repository a turn touched onto a feature branch that
@@ -199,6 +209,29 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly detail: string;
     readonly createdAt: string;
+    /** Defaults to the outright-failure wording; a partial success must say so. */
+    readonly summary?: string;
+  }) =>
+    Effect.suspend(() => {
+      const summary = input.summary ?? CAPTURE_FAILED;
+      if (
+        !captureFailures.shouldReport({ threadId: input.threadId, summary, detail: input.detail })
+      ) {
+        return Effect.logDebug("checkpoint capture failure unchanged since the last report", {
+          threadId: input.threadId,
+          turnId: input.turnId,
+          summary,
+        });
+      }
+      return appendCaptureFailureActivityNow({ ...input, summary });
+    });
+
+  const appendCaptureFailureActivityNow = (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId | null;
+    readonly detail: string;
+    readonly createdAt: string;
+    readonly summary: string;
   }) =>
     Effect.all({
       commandId: serverCommandId("checkpoint-capture-failure"),
@@ -213,7 +246,7 @@ const make = Effect.gen(function* () {
             id: activityId,
             tone: "error",
             kind: "checkpoint.capture.failed",
-            summary: "Checkpoint capture failed",
+            summary: input.summary,
             payload: {
               detail: input.detail,
             },
@@ -332,6 +365,7 @@ const make = Effect.gen(function* () {
     // Git may have been initialized during this turn, leaving no pre-turn
     // snapshot. Keep the completion checkpoint for future turns, but do not
     // invent a baseline or attempt a diff against a ref that does not exist.
+    let diffSummaryFailed = false;
     const files = yield* (
       fromCheckpointExists
         ? checkpointStore.diffCheckpoints({
@@ -352,14 +386,16 @@ const make = Effect.gen(function* () {
           deletions: file.deletions,
         })),
       ),
-      Effect.tapError((error) =>
-        appendCaptureFailureActivity({
+      Effect.tapError((error) => {
+        diffSummaryFailed = true;
+        return appendCaptureFailureActivity({
           threadId: input.threadId,
           turnId: input.turnId,
+          summary: DIFF_SUMMARY_UNAVAILABLE,
           detail: `Checkpoint captured, but turn diff summary is unavailable: ${error.message}`,
           createdAt: input.createdAt,
-        }),
-      ),
+        });
+      }),
       Effect.catch((error) =>
         Effect.logWarning("failed to derive checkpoint file summary", {
           threadId: input.threadId,
@@ -369,6 +405,32 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.as([])),
       ),
     );
+
+    const memberStates = yield* memberBranches.readCheckpointStates(input.members);
+    // A member we could not read is recorded rather than dropped, which arms the
+    // revert guard — but the guard only speaks when the user tries to revert,
+    // possibly days later. Say it here too, in the same partial-success shape
+    // the diff summary already uses, so the failure is visible when it happens.
+    const unobservedMembers = memberStates.filter((state) => state.headSha === undefined);
+    // Forget each kind this capture did not hit, so its next occurrence speaks even
+    // when it is the same one that was standing before. See `lastCaptureFailure`.
+    // Reaching here at all means the capture itself did not fail.
+    captureFailures.forget(input.threadId, CAPTURE_FAILED);
+    if (!diffSummaryFailed) captureFailures.forget(input.threadId, DIFF_SUMMARY_UNAVAILABLE);
+    if (unobservedMembers.length === 0) captureFailures.forget(input.threadId, UNREADABLE_MEMBERS);
+    if (unobservedMembers.length > 0) {
+      const names = unobservedMembers.map(
+        (state) =>
+          input.members.find((member) => member.id === state.memberId)?.path ?? state.memberId,
+      );
+      yield* appendCaptureFailureActivity({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        summary: UNREADABLE_MEMBERS,
+        detail: `Checkpoint captured, but these repositories could not be read and cannot be checked when reverting: ${names.join(", ")}`,
+        createdAt: input.createdAt,
+      }).pipe(Effect.catch(() => Effect.void));
+    }
 
     const assistantMessageId =
       input.assistantMessageId ??
@@ -388,7 +450,7 @@ const make = Effect.gen(function* () {
       files,
       // Recorded, not snapshotted: enough to tell at revert time whether
       // restoring staging alone still produces the tree this describes.
-      memberStates: yield* memberBranches.readCheckpointStates(input.members),
+      memberStates,
       assistantMessageId,
       checkpointTurnCount: input.turnCount,
       createdAt: input.createdAt,
@@ -848,36 +910,35 @@ const make = Effect.gen(function* () {
     // implies a clean undo, so the revert is refused and the repositories are
     // named — the user has to know which checkouts to deal with by hand.
     const revertMembers = revertProjects[0]?.members ?? [];
-    if (revertMembers.length > 0) {
-      // Reverting to turn 0 discards everything this thread did, and there is
-      // no recorded baseline to compare against — no checkpoint is ever
-      // projected for turn count 0. Comparing state would report "no claim" and
-      // wave through the deepest revert of all, so this asks the other question
-      // instead: is any member still carrying this thread's work?
-      const drift =
-        event.payload.turnCount === 0
-          ? {
-              hasClaim: true,
-              driftedMemberIds: (yield* Effect.forEach(revertMembers, (member) =>
-                memberBranches
-                  .inspect({
-                    cwd: member.path,
-                    integrationBranch: member.integrationBranch,
-                    threadId: event.payload.threadId,
-                  })
-                  .pipe(
-                    Effect.map((report) =>
-                      report.state === "cut-needed" || report.state === "owned-by-self"
-                        ? member.id
-                        : null,
-                    ),
-                  ),
-              )).filter((memberId): memberId is string => memberId !== null),
-            }
-          : resolveCheckpointDrift(
-              targetCheckpoint?.memberStates,
-              yield* memberBranches.readCheckpointStates(revertMembers),
-            );
+    const isTurnZero = event.payload.turnCount === 0;
+    // Keyed on both sides. The live list alone made detaching every repository
+    // the one way to skip this check, while detaching just one refused the
+    // revert - see `shouldCheckMemberDrift`.
+    if (
+      shouldCheckMemberDrift({
+        isTurnZero,
+        liveMemberCount: revertMembers.length,
+        recordedMemberCount: targetCheckpoint?.memberStates?.length ?? 0,
+      })
+    ) {
+      // Turn 0 has no recorded baseline to compare against, so it asks a
+      // different question — see `resolveTurnZeroDrift`.
+      const drift = isTurnZero
+        ? resolveTurnZeroDrift(
+            yield* Effect.forEach(revertMembers, (member) =>
+              memberBranches
+                .inspect({
+                  cwd: member.path,
+                  integrationBranch: member.integrationBranch,
+                  threadId: event.payload.threadId,
+                })
+                .pipe(Effect.map((report) => ({ memberId: member.id, state: report.state }))),
+            ),
+          )
+        : resolveCheckpointDrift(
+            targetCheckpoint?.memberStates,
+            yield* memberBranches.readCheckpointStates(revertMembers),
+          );
       if (!isCheckpointComplete(drift)) {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,

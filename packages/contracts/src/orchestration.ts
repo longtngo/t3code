@@ -546,7 +546,26 @@ export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus
  */
 export const OrchestrationCheckpointMemberState = Schema.Struct({
   memberId: TrimmedNonEmptyString,
-  headSha: TrimmedNonEmptyString,
+  /**
+   * Absent when the server could not read this member at all — the checkout was
+   * gone, or a git read timed out. Absence means "not observed", never "fine":
+   * a revert cannot restore a state nobody looked at, so the comparison treats
+   * it as drift.
+   *
+   * Optional rather than a sentinel string, because a member that was recorded
+   * without a head is exactly a member with no head recorded, and nothing then
+   * has to agree on a magic value. It also keeps `headSha` single-meaning for
+   * every reader that does have one.
+   *
+   * ONE-WAY DOOR. Relaxing this from required is forward-only: a build that
+   * predates it decodes `memberStates` strictly and fails the whole thread-detail
+   * payload with `Missing key ... ["headSha"]`, not just the member list. Rolling
+   * the server back past this point will therefore break threads whose
+   * checkpoints recorded an unreadable member. Safe against upstream and App
+   * Store clients only because `memberStates` is fork-only and they drop it as an
+   * excess property; a fork-built client pinned before this commit is not safe.
+   */
+  headSha: Schema.optional(TrimmedNonEmptyString),
   isDirty: Schema.Boolean,
 });
 export type OrchestrationCheckpointMemberState = typeof OrchestrationCheckpointMemberState.Type;

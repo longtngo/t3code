@@ -7,42 +7,31 @@
  * effect if the session is restarted — otherwise the very next tool call in the
  * new repository prompts for approval and the feature reads as broken.
  *
+ * Which providers act on the grant is not decided here: the adapter declares it
+ * through `ProviderAdapterCapabilities.grantsWorkspaceMemberPaths`, because only
+ * the adapter knows whether its transport carries the field. This module used to
+ * keep a hardcoded set of driver slugs, which was correct but had no way to stay
+ * correct.
+ *
  * @module workspaceMemberGrant
  */
-import { ProviderDriverKind } from "@t3tools/contracts";
-
-/** Driver slug of the Claude Agent adapter — the only grant consumer today. */
-const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
-
-/**
- * Drivers that consume `ProviderSessionStartInput.workspaceMemberPaths` and
- * echo the granted set back on their `ProviderSession`.
- *
- * The set matters because a driver that ignores the field also never echoes
- * it, so its sessions always report an empty grant. Comparing those against a
- * non-empty desired set would read as "members changed" on every single turn
- * and restart the session each time.
- */
-const DRIVERS_GRANTING_WORKSPACE_MEMBERS: ReadonlySet<ProviderDriverKind> = new Set([
-  CLAUDE_AGENT_DRIVER,
-]);
-
-export function providerGrantsWorkspaceMembers(
-  provider: ProviderDriverKind | undefined,
-): provider is ProviderDriverKind {
-  return provider !== undefined && DRIVERS_GRANTING_WORKSPACE_MEMBERS.has(provider);
-}
 
 /**
  * True when the running session's grant differs from what the project now
- * declares, and the session's driver is one that acts on the grant.
+ * declares, on an adapter that acts on the grant.
+ *
+ * `providerGrantsMemberPaths` comes from the adapter's own capabilities. When it
+ * is false this always answers false: such an adapter never echoes a granted set
+ * back, so its sessions report an empty grant, and comparing that against a
+ * non-empty desired set would read as "members changed" on every single turn and
+ * restart the session each time.
  */
 export function workspaceMemberGrantChanged(input: {
-  readonly sessionProvider: ProviderDriverKind | undefined;
+  readonly providerGrantsMemberPaths: boolean;
   readonly sessionMemberPaths: ReadonlyArray<string> | undefined;
   readonly desiredMemberPaths: ReadonlyArray<string>;
 }): boolean {
-  if (!providerGrantsWorkspaceMembers(input.sessionProvider)) {
+  if (!input.providerGrantsMemberPaths) {
     return false;
   }
   const granted = input.sessionMemberPaths ?? [];

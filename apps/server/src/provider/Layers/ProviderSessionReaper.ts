@@ -1,4 +1,4 @@
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, isReaperExemptCrewRole } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -118,14 +118,13 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         // this reaper's ideal target and none of the guards above can see the
         // queued note.
         //
-        // Scoped to the two live roles on purpose. `crewmate-closed` is *not*
-        // exempt, because after teardown's zombie-stop attempts the reaper is the
-        // last thing that can stop a crewmate whose `stopSession` failed; an
-        // unscoped exemption would turn that stated residual into a permanent leak.
-        if (thread?.crewRole === "bridge" || thread?.crewRole === "crewmate") {
+        // Which roles are exempt is `isReaperExemptCrewRole`'s to state, next to
+        // the role literals themselves, so the two cannot drift apart.
+        const crewRole = thread?.crewRole;
+        if (isReaperExemptCrewRole(crewRole)) {
           yield* Effect.logDebug("provider.session.reaper.skipped-crew-thread", {
             threadId: binding.threadId,
-            crewRole: thread.crewRole,
+            crewRole,
             idleDurationMs,
           });
           continue;

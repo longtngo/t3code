@@ -2141,8 +2141,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   /**
    * Open the file through the app's `/viewer` route — a real, refreshable URL,
    * so reloading the tab re-reads the file rather than showing a frozen snapshot.
-   * Same-origin, so the tab carries the session cookie; the route additionally
-   * trusts genuine loopback requests.
+   * Same-origin, so the tab carries the session cookie - which is now the only
+   * way in: the route's local-process waiver was deleted, because a co-located
+   * reverse proxy is indistinguishable from a local process at every signal the
+   * server can read.
    *
    * The origin is deliberately this app's own, unlike `viewerHttpUrl`: this opens
    * the CLIENT route, which then reads bytes over the environment's own transport.

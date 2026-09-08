@@ -73,6 +73,10 @@ export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidRe
 export const EnvironmentAuthInvalidReason = Schema.Literals([
   "missing_credential",
   "invalid_credential",
+  // The session cookie was minted from a different origin than the one this
+  // request came from. Distinct from `invalid_credential` so an operator can
+  // tell "your origin changed, re-pair" from "your session expired".
+  "origin_mismatch",
 ]);
 export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.Type;
 
