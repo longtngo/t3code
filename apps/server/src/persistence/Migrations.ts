@@ -130,6 +130,11 @@ import Migration0056 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts
 // filename and the next free id have diverged (registry section 1).
 import Migration0057 from "./Migrations/052_ProjectionThreadActivityKindIndex.ts";
 
+// Upstream-authored. Applied id 58, filename 049: upstream numbered it 49, but ids 49-57
+// are already spent on live fork databases, so it takes the next free id and keeps its
+// own filename (registry section 1).
+import Migration0058 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
+
 /**
  * Migration loader with all migrations defined inline.
  *
@@ -197,11 +202,12 @@ export const migrationEntries = [
   [55, "ProjectionProjectIcon", Migration0055],
   [56, "ProjectionThreadBranchPullRequest", Migration0056],
   [57, "ProjectionThreadActivityKindIndex", Migration0057],
+  [58, "ProjectionThreadsActiveOrderKey", Migration0058],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries

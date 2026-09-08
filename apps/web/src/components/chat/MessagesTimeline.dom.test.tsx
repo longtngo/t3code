@@ -1,5 +1,10 @@
-import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
-import { codexFeedbackMessage } from "@t3tools/client-runtime/state/threads";
+import {
+  ApprovalRequestId,
+  CheckpointRef,
+  EnvironmentId,
+  MessageId,
+  TurnId,
+} from "@t3tools/contracts";
 import { act, createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -229,61 +234,6 @@ function attributeValues(view: Awaited<ReturnType<typeof renderDom>>): string[] 
 }
 
 describe("MessagesTimeline", () => {
-  it("renders a feedback command and its pending response as normal thread messages", async () => {
-    const submission = {
-      id: MessageId.make("feedback-command"),
-      command: "/feedback The agent stopped early.",
-      createdAt: MESSAGE_CREATED_AT,
-      status: "uploading" as const,
-    };
-    const messages = [
-      codexFeedbackMessage(submission),
-      codexFeedbackMessage(submission, "assistant"),
-    ];
-    const view = await renderDom(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={messages.map((message) => ({
-          id: message.id,
-          kind: "message" as const,
-          createdAt: message.createdAt,
-          message,
-        }))}
-      />,
-    );
-
-    expect(view.text()).toContain("/feedback The agent stopped early.");
-    expect(view.text()).toContain("Sending feedback to OpenAI...");
-  });
-
-  it("renders the returned Codex thread ID in the feedback response", async () => {
-    const submission = {
-      id: MessageId.make("feedback-command"),
-      command: "/feedback The agent stopped early.",
-      createdAt: MESSAGE_CREATED_AT,
-      status: "sent" as const,
-      feedbackId: "codex-thread-1",
-    };
-    const messages = [
-      codexFeedbackMessage(submission),
-      codexFeedbackMessage(submission, "assistant"),
-    ];
-    const view = await renderDom(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={messages.map((message) => ({
-          id: message.id,
-          kind: "message" as const,
-          createdAt: message.createdAt,
-          message,
-        }))}
-      />,
-    );
-
-    expect(view.text()).toContain("Feedback sent to OpenAI.");
-    expect(view.text()).toContain("codex-thread-1");
-  });
-
   it("renders elapsed time for a completed turn", async () => {
     const turnId = TurnId.make("turn-with-fold");
     const assistantEntry = buildAssistantTimelineEntry("Done.");
@@ -376,6 +326,7 @@ describe("MessagesTimeline", () => {
     const {
       resolveTimelineIsAtEnd,
       resolveTimelineMinimapHasPersistentGutter,
+      resolveTimelineMinimapCurrentIndex,
       resolveTimelineMinimapHeightStyle,
       resolveTimelineMinimapHitStripWidth,
       resolveTimelineMinimapIndexFromPointer,
@@ -435,6 +386,35 @@ describe("MessagesTimeline", () => {
         pointerY: 999,
       }),
     ).toBe(100);
+    expect(
+      resolveTimelineMinimapCurrentIndex({
+        scrollTop: 100,
+        scrollBottom: 500,
+        itemBounds: [
+          { top: 80, height: 20 },
+          { top: 120, height: 20 },
+          { top: 220, height: 20 },
+        ],
+      }),
+    ).toBe(1);
+    expect(
+      resolveTimelineMinimapCurrentIndex({
+        scrollTop: 150,
+        scrollBottom: 200,
+        itemBounds: [
+          { top: 80, height: 20 },
+          { top: 120, height: 20 },
+          { top: 220, height: 20 },
+        ],
+      }),
+    ).toBe(1);
+    expect(
+      resolveTimelineMinimapCurrentIndex({
+        scrollTop: 0,
+        scrollBottom: 50,
+        itemBounds: [{ top: 80, height: 20 }],
+      }),
+    ).toBeNull();
     expect(resolveTimelineMinimapHasPersistentGutter(832)).toBe(false);
     expect(resolveTimelineMinimapHasPersistentGutter(863)).toBe(false);
     expect(resolveTimelineMinimapHasPersistentGutter(864)).toBe(true);
@@ -1716,4 +1696,197 @@ describe("MessagesTimeline interactions", () => {
     expect(view.text().split("Runtime warning").length - 1).toBe(3);
     expect(view.text()).not.toContain("×3");
   });
+});
+
+// Ported from upstream's MessagesTimeline.test.tsx, which this fork renamed to a real-DOM
+// suite (docs/fork/README.md invariant 36) - so upstream's additions arrive as a
+// delete/modify rather than a conflict and are easy to drop. Upstream asserts on
+// renderToStaticMarkup strings; AGENTS.md rules that out, so these drive the mounted tree.
+function buildSnapShotTimelineEntry(previewUrl?: string) {
+  const entry = buildUserTimelineEntry("First prompt.");
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      attachments: [
+        {
+          type: "image" as const,
+          id: "attachment-1",
+          name: "screenshot.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+          ...(previewUrl ? { previewUrl } : {}),
+          source: {
+            kind: "snap-shot" as const,
+            capturedAt: "2026-03-17T19:12:28.000Z",
+            appName: "Terminal",
+            windowTitle: "t3code — Tests",
+            appIconDataUrl: "data:image/png;base64,aWNvbg==",
+          },
+        },
+      ],
+    },
+  };
+}
+
+describe("MessagesTimeline snap shots and turn navigation", () => {
+  it("renders previous and next controls with the minimap", async () => {
+    const first = buildUserTimelineEntry("First turn");
+    const secondBase = buildUserTimelineEntry("Second turn");
+    const second = {
+      ...secondBase,
+      id: "entry-2",
+      message: { ...secondBase.message, id: MessageId.make("message-2") },
+    };
+    const view = await renderDom(
+      <MessagesTimeline {...buildProps()} timelineEntries={[first, second]} />,
+    );
+
+    expect(view.find('[aria-label="Previous turn"]')).not.toBeNull();
+    expect(view.find('[aria-label="Next turn"]')).not.toBeNull();
+  });
+
+  it("anchors the first user message using its measured height", async () => {
+    const onAnchorReady = vi.fn();
+    const firstEntry = buildSnapShotTimelineEntry("data:image/png;base64,iVBORw0KGgo=");
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={firstEntry.message.id}
+        onAnchorReady={onAnchorReady}
+        contentInsetEndAdjustment={144}
+        timelineEntries={[firstEntry]}
+      />,
+    );
+
+    expect(view.find('[data-anchor-index="0"]')).not.toBeNull();
+    expect(view.find('[data-anchor-offset="24"]')).not.toBeNull();
+    expect(view.find("[data-anchor-max-size]")).toBeNull();
+    expect(view.find('[data-content-inset-end="144"]')).not.toBeNull();
+    expect(attributeValues(view).some((value) => value.includes("[overflow-anchor:none]"))).toBe(
+      true,
+    );
+    // A pinned anchor is the opposite of following the end: both at once would fight.
+    expect(view.find(MAINTAIN_SCROLL_AT_END)).toBeNull();
+    expect(view.find('[data-maintain-visible-content-position="object"]')).not.toBeNull();
+    expect(view.find('[data-maintain-visible-content-position-data="true"]')).not.toBeNull();
+    expect(view.find('[data-maintain-visible-content-position-size="true"]')).not.toBeNull();
+    expect(view.find('[data-maintain-visible-content-position-restore="true"]')).not.toBeNull();
+    expect(view.text()).toContain("Terminal");
+    expect(view.text()).toContain("t3code — Tests");
+    expect(view.find('img[src="data:image/png;base64,aWNvbg=="]')).not.toBeNull();
+    expect(attributeValues(view).some((value) => value.includes("h-28 w-52 max-w-full"))).toBe(
+      true,
+    );
+    expect(attributeValues(view).some((value) => value.includes("col-span-2"))).toBe(false);
+    // Upstream asserts a single call, which only holds for its one-pass static render. A real
+    // mount measures and re-renders, so the list reports the anchor again; what matters is that
+    // every report names the same anchor, not how many passes it took.
+    expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
+    expect(
+      onAnchorReady.mock.calls.every(
+        ([messageId, anchorIndex]) => messageId === firstEntry.message.id && anchorIndex === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not render window details before the preview URL resolves", async () => {
+    const view = await renderDom(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildSnapShotTimelineEntry()]} />,
+    );
+
+    expect(view.text()).toContain("screenshot.png");
+    expect(view.text()).not.toContain("Terminal");
+    expect(view.text()).not.toContain("t3code — Tests");
+    expect(view.find('img[src="data:image/png;base64,aWNvbg=="]')).toBeNull();
+    expect(attributeValues(view).some((value) => value.includes("h-28 w-52 max-w-full"))).toBe(
+      false,
+    );
+  });
+
+  it("does not reserve end space for a follow-up user message", async () => {
+    const onAnchorReady = vi.fn();
+    const firstEntry = buildUserTimelineEntry("First prompt.");
+    const secondBase = buildUserTimelineEntry("Newest prompt.");
+    const secondEntry = {
+      ...secondBase,
+      id: "entry-2",
+      message: { ...secondBase.message, id: MessageId.make("message-2") },
+    };
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={secondEntry.message.id}
+        onAnchorReady={onAnchorReady}
+        timelineEntries={[firstEntry, secondEntry]}
+      />,
+    );
+
+    expect(view.find("[data-anchor-index]")).toBeNull();
+    expect(view.find(MAINTAIN_SCROLL_AT_END)).not.toBeNull();
+    expect(onAnchorReady).not.toHaveBeenCalled();
+  });
+
+  // The answer history lives in the row's expanded body, so the row has to be opened first.
+  // Upstream drives that through `react-test-renderer`, deprecated in React 19 and the reason
+  // its own copy of this test carries a "migrate when a DOM setup exists" note; this is that
+  // setup, so the toggle is clicked as a real control.
+  it.each([{}, { text: "Text-only answer", file: "Answer with a file" }])(
+    "renders question answer history with its attachments: %j",
+    async (answers) => {
+      const view = await renderDom(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[
+            {
+              id: "answer-entry",
+              kind: "work" as const,
+              createdAt: MESSAGE_CREATED_AT,
+              entry: {
+                id: "answer-work",
+                createdAt: MESSAGE_CREATED_AT,
+                label: "Question answer submitted",
+                tone: "info" as const,
+                questionAnswer: {
+                  requestId: ApprovalRequestId.make("question-request"),
+                  answers,
+                  questionTextById: { file: "Provide a spec", image: "Provide a screenshot" },
+                  attachmentsByQuestionId: {
+                    file: [
+                      {
+                        type: "file" as const,
+                        id: "spec",
+                        name: "spec.txt",
+                        mimeType: "text/plain",
+                        sizeBytes: 4,
+                      },
+                    ],
+                    image: [
+                      {
+                        type: "image" as const,
+                        id: "shot",
+                        name: "shot.png",
+                        mimeType: "image/png",
+                        sizeBytes: 4,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ]}
+        />,
+      );
+
+      await view.click(view.find('[aria-expanded="false"]'));
+
+      const text = view.text();
+      // Each question is named once, not once per attachment and once per answer.
+      expect(text.match(/Provide a spec/g)).toHaveLength(1);
+      expect(text.match(/spec\.txt/g)).toHaveLength(1);
+      expect(text).toContain("Provide a screenshot");
+      expect(text).toContain("shot.png");
+      for (const answer of Object.values(answers)) expect(text).toContain(answer);
+    },
+  );
 });

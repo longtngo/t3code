@@ -78,7 +78,7 @@ export interface InvariantFailure {
   readonly detail?: string;
 }
 
-export class DependencyInvariantsViolatedError extends Schema.TaggedErrorClass<DependencyInvariantsViolatedError>()(
+export class DependencyInvariantsViolatedError extends Schema.TaggedError<DependencyInvariantsViolatedError>()(
   "DependencyInvariantsViolatedError",
   {
     ids: Schema.Array(Schema.String),
@@ -89,7 +89,7 @@ export class DependencyInvariantsViolatedError extends Schema.TaggedErrorClass<D
   }
 }
 
-export class DependencyInvariantResolutionError extends Schema.TaggedErrorClass<DependencyInvariantResolutionError>()(
+export class DependencyInvariantResolutionError extends Schema.TaggedError<DependencyInvariantResolutionError>()(
   "DependencyInvariantResolutionError",
   {
     id: Schema.String,
@@ -188,7 +188,7 @@ export const checkInvariants = Effect.fn("checkInvariants")(function* (
   return failures;
 });
 
-export class DependencyProbeError extends Schema.TaggedErrorClass<DependencyProbeError>()(
+export class DependencyProbeError extends Schema.TaggedError<DependencyProbeError>()(
   "DependencyProbeError",
   {
     id: Schema.String,

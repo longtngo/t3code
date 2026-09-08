@@ -131,6 +131,15 @@ These rules override the ones above for this fork only.
   with neither - `--project unit` alone silently skips all 34 `*.dom.test.tsx` files and still
   reports a green run, which is exactly how a failing DOM test survived a "passes in isolation"
   check on 2026-09-07.
+- **A red package CANCELS the packages still queued behind it, so count them.** `pnpm test` is
+  `vp run -r test` over 14 packages, and `apps/server` is the slowest, so it starts last. On
+  2026-09-08 a web failure ended the run while `apps/server` was still queued: the summary said
+  `0/13 cache hit (0%), 2 failed`, printed one package's failures, and never ran the other 5,198
+  tests. Nothing in the output says a package was skipped - the only tell is the task count
+  (14 when the whole graph runs) and the absence of that package's `~/apps/server$ vp test run`
+  line. After any red gate, fix and re-run the WHOLE script; never conclude that the packages
+  which did report are the only ones with something wrong.
+
 - **Run web tests from `apps/web`, not from the repo root.** A root-level path filter
   (`vp test run apps/web/...`) uses the root config, which has no `.wasm?inline` handling, so
   `src/terminal/ghostty/runtimeAbi.test.ts` dies in transform. Measured 2026-08-26: 312 files pass,

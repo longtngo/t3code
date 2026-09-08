@@ -25,8 +25,16 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-06 (31st reconcile), against `origin/main`. Concentrated in `apps/server`
-and `apps/web`.
+As of 2026-09-08 (32nd reconcile, 164 commits), against `origin/main`. Concentrated in
+`apps/server` and `apps/web`.
+
+**This reconcile carried two toolchain bumps**, and both are the kind that retire fork work
+silently: `effect` beta.103 -> **rc.112** (which renamed `Schema.TaggedErrorClass` to
+`Schema.TaggedError` repo-wide) and `@typescript/native-preview` -> **`typescript` 7.0.2**
+(which renames the binary from `tsgo` to `tsc` in every package's `typecheck` script and
+deletes `scripts/clean-tsgo-backups.mjs`). It also carried ten upstream **knip
+export-classification** commits, whose whole purpose is to make exports module-private -
+see invariant 38.
 
 ## Invariants a merge must not break
 
@@ -37,10 +45,18 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-09-06 (31st reconcile): 55 entries, all ids unique, monotonic, max 56; upstream's
-`048_ProjectionThreadBranchPullRequest` took applied id 56. Filename numbers now double up on
-`041` and `042` as well. Id `34` is intentionally burned (an earlier fork DB applied a
-since-renamed `034_PushSubscriptions`).
+Verified 2026-09-08 (32nd reconcile): 57 entries, all ids unique, monotonic, max 58; upstream's
+`049_ProjectionThreadsActiveOrderKey` took applied id **58** (49-57 were already spent), and the
+fork's `052_ProjectionThreadActivityKindIndex` holds 57. Filename numbers double up on `033`,
+`037`, `038`, `039`, `041` and `042`. Id `34` is intentionally burned (an earlier fork DB applied
+a since-renamed `034_PushSubscriptions`).
+
+The 32nd reconcile is a worked example of the test half below: upstream's
+`049_ProjectionThreadsActiveOrderKey.test.ts` ran `toMigrationInclusive: 48` then `49` - its
+filename numbers - and was retargeted to `57`/`58`, with a `pragma_table_info` control asserting
+`active_order_key` is ABSENT at 57. Without that control the test passes whether or not the
+renumbering is right, because a column added earlier than intended is indistinguishable from one
+added on time.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
 object literals. A probe grepping for `id:` matches only the doc comment and reports nothing.
@@ -57,21 +73,29 @@ in a comment above its import in `Migrations.ts`; keep that up when adding one.
 
 A merge that "tidies" these into filename order will re-run or skip migrations on a live DB.
 
-### 2. One patch in `patches/` is fork-owned
+### 2. No patch in `patches/` is fork-owned any more — CLOSED at the 32nd reconcile
 
-15 of the 16 files in `patches/` are byte-identical to upstream. Exactly one is not:
+Every file in `patches/` is now upstream's. The fork's one entry,
+`patches/@effect__platform-node@4.0.0-beta.103.patch`, added a no-op `socket.on("error")`
+handler in `makeUpgradeHandler`: without it a peer RST between Node emitting `upgrade` and
+`ws` attaching its listeners becomes an unhandled `error` event that **kills the server
+process**. It was a backport of Effect-TS/effect#6927, which merged 95 minutes after beta.103
+shipped and landed in beta.104.
 
-- `patches/@effect__platform-node@4.0.0-beta.103.patch` — adds a no-op `socket.on("error")`
-  handler in `makeUpgradeHandler`. Without it a peer RST between Node emitting `upgrade` and
-  `ws` attaching its listeners becomes an unhandled `error` event that **kills the server
-  process**. Backport of Effect-TS/effect#6927, which merged 95 minutes after beta.103 shipped.
+The 32nd reconcile moved to `effect@4.0.0-rc.112`, so the fix is upstream's own code and the
+patch is **deleted**, not re-pinned. That was confirmed against the published artifact rather
+than by version arithmetic: the rc.112 `@effect/platform-node` tarball's
+`src/NodeHttpServer.ts` contains `socket.on("error", () => {})` in `makeUpgradeHandler`.
 
-Patch filenames are version-pinned, so an effect bump rewrites the whole `patchedDependencies`
-block in `pnpm-workspace.yaml` and can drop this entry with nothing failing — that has happened
-before. The entry now carries a `FORK-ONLY` comment so the loss shows up in the conflict.
+**The guard that replaces it is `pnpm run check:deps`** (`scripts/check-dependency-invariants.ts`),
+which probes the _installed_ module for the handler and passes on upstream's own code. It is
+NOT part of `pnpm verify` - run it by hand on any effect bump. It also owns invariant 18's
+`idle-aggregate-probe.ts` re-measurement, so one command covers both. Verified 2026-09-08:
+"All 2 dependency invariants hold" on rc.112.
 
-Deleting it is correct **only** on a release containing #6927 (landed in beta.104). On any other
-bump, re-pin it to the new version.
+The original trap still applies to any future fork-owned patch: filenames are version-pinned,
+so an effect bump rewrites the whole `patchedDependencies` block and can drop an entry with
+nothing failing. Give any new one a `FORK-ONLY` comment so the loss shows up in the conflict.
 
 ### 3. Sidebar: which file is the default flipped
 
@@ -157,6 +181,17 @@ ordinary upstream additions by the 17th reconcile:
   genuine fixes**: the 28th reconcile's conflict here was upstream's `optionLabel` → `optionValue`
   migration, half of which had already merged outside the markers. Taking the fork's side untouched
   would have left the file half-migrated.
+
+- **Codex feedback is a composer banner, not thread messages (32nd reconcile).** The fork carried
+  upstream's `codexFeedbackMessage` and rendered `/feedback` and its reply as ordinary user and
+  assistant bubbles. Upstream #10398 **deleted that builder outright** and replaced it with
+  `ComposerFeedback` / `codexFeedbackNotice` banners. It was never a fork feature - the merge-base
+  has it and upstream removed its own code - so the deletion is adopted on every surface: the
+  `localMessages` spread in `ChatView.tsx`, the `localFeedbackMessages` memo in mobile's
+  `use-thread-composer-state.ts`, and the two `MessagesTimeline` tests that asserted the bubbles
+  (upstream deleted its own copies of those in the same commit). What survives from the fork's
+  side of those two files is unrelated and must not be dropped with it: the offline-outbox
+  pending bubbles (`queuedMessages`) and the held-message strip filter.
 
 - `ComposerPrimaryActions` has no `showSendWhileRunning` prop. Upstream gates Send behind it while a
   turn runs; here Send is always mounted beside Stop because a mid-turn send queues (invariant 5).
@@ -547,8 +582,15 @@ feature from every existing user on the next launch.
 The gate itself is upstream's and is KEPT: a settings switch that changes nothing is worse than
 the divergence. Only the default flips, in
 `packages/contracts/src/settings.ts`. `packages/contracts/src/settings.test.ts` ("defaults on and
-preserves an explicit opt-out"), `apps/desktop/src/settings/DesktopClientSettings.test.ts`, and
-the "(legacy)" wording in `SettingsPanels.tsx` / `settingsSearch.ts` follow it.
+preserves an explicit opt-out") and the "(legacy)" wording in `SettingsPanels.tsx` /
+`settingsSearch.ts` follow it.
+
+**Corrected 2026-09-08.** This entry used to list
+`apps/desktop/src/settings/DesktopClientSettings.test.ts` as following the flip. It no longer
+does and should not: upstream rewrote that fixture to spread `DEFAULT_CLIENT_SETTINGS`, and its
+only defaults assertion compares `settings.get` against a re-decode of `{}` - self-referential,
+so it pins no particular value. The fixture's `contextWindowMeterEnabled` is now arbitrary and
+carries upstream's `false`. `settings.ts` is the single load-bearing site.
 
 **A reconcile that restores `Effect.succeed(false)` here turns the Vitals gauge's context ring
 off for everyone, and nothing fails.**
@@ -829,7 +871,9 @@ rows" pins the whole shape: exactly three warnings, two notifications.
 
 ### 34. Ingestion command ids: the fork skips the receipt, upstream only adds entropy
 
-`ProviderRuntimeIngestion.ts` keeps a **synchronous** `providerCommandId` (a plain
+`apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` (the path in this entry used
+to say `apps/server/src/provider/`, which has never existed - corrected 2026-09-08) keeps a
+**synchronous** `providerCommandId` (a plain
 `provider:<eventId>:<tag>` name) and dispatches through the fork's `dispatchWithFreshCommandId`,
 which appends a UUID _and_ passes `{ singleUseCommandId: true }` so the engine writes no receipt.
 Ingestion receipts were 98.5% of a real 2.08M-row receipt table and none was ever read back.
@@ -855,6 +899,63 @@ the session), per-**line** diagnostic filtering (`[ede_diagnostic]` can sit on a
 
 The 31st reconcile took upstream's _call site_ without its _declaration_, which typecheck caught.
 The dangerous version of this merge is the one that takes both.
+
+**Widened 2026-09-08 (32nd reconcile).** Upstream #10321 and #10549 gave `resultOutcome` something
+the fork's pair did not have: a `failureHint` assembled from evidence the turn recorded while it
+was failing - `authenticationFailureMessage` (set when the CLI reports `authentication_failed`,
+via `claudeSignedOutMessage`) and `rejectedRateLimitTypes` / `latestAssistantRateLimited`. Its
+point is that `terminal_reason: "api_error"` should name the expired login or the usage window
+instead of "Claude gave up after repeated API errors."
+
+That is adopted, on the fork's classifier rather than upstream's. `resultOutcome` and
+`terminalResultError` are still rejected; the hint is threaded into
+`resultUserFacingError(result, failureHint)` and `structuredResultFailureMessage(result, failureHint)`,
+which is where the shared `switch` already reads it. The three `ClaudeTurnState` fields and every
+site that writes them are upstream's, merged unchanged. Status classification did NOT move:
+`api_error` is already in the fork's `FAILED_TERMINAL_REASONS`, so `turnStatusFromResult` needs no
+hint.
+
+**Threading the hint is not the whole graft, and the first attempt at it was wrong twice** - nine
+upstream tests caught both. The message for a result the CLI tags `success` while setting
+`is_error` now has a strict order, in `successTaggedFailureMessage`:
+
+1. **The typed `errors[]` entry**, if any. The fork previously read that list only for
+   non-`success` subtypes, so a success-tagged failure carrying `Tool execution failed: EACCES`
+   reported the _hint_ instead - a rate-limit or expired-login line, describing the category while
+   throwing away the actual error.
+2. **The CLI's own prose**, per-line diagnostic filtering intact.
+3. **A structured fallback, and here the fork and upstream genuinely disagree.** The fork refuses
+   to build a message out of `terminal_reason`, because it reads `api_error` for every provider
+   HTTP failure and would claim a turn was abandoned after repeated retries when it was not.
+   Upstream's new tests require exactly that message. **The discriminator is whether the payload
+   HAS a `result` field**: present but unusable (blank, or not a string) means the CLI had a place
+   to say why and said nothing, so only the turn's recorded evidence may speak and the caller's
+   generic "Claude turn failed." otherwise stands; absent entirely is a different payload shape -
+   upstream's rate-limit results carry no `result` at all - where `terminal_reason` is the only
+   account of the failure there is. Both sides' tests pass on that split; picking either rule
+   outright reddens three tests belonging to the other.
+
+### 40. `homePath` and `configDirPath` are two settings here, and a blank one SCRUBS
+
+Upstream's `makeClaudeEnvironment` has one path setting and maps it straight onto
+`CLAUDE_CONFIG_DIR`, deliberately leaving `HOME` alone (overriding `HOME` moves the macOS login
+keychain and the CLI then reports "Not logged in"). A blank `homePath` returns the base env
+untouched, so an **inherited** `CLAUDE_CONFIG_DIR` survives into the spawned CLI.
+
+The fork splits them: `homePath` sets `HOME`, the fork-only `configDirPath` sets
+`CLAUDE_CONFIG_DIR`, and a blank `configDirPath` **deletes** any inherited one. The deletion is
+the load-bearing part. Continuation and capabilities keys resolve a blank config dir to `""`
+(invariant 28), so an instance that inherited someone else's `CLAUDE_CONFIG_DIR` would run against
+a different login than its own keys encode - it would resume, and be refused resumption, on the
+wrong transcript store. `ClaudeHome.test.ts` pins all three cases, including that `homePath` alone
+leaves `CLAUDE_CONFIG_DIR` unset.
+
+Upstream's new `ClaudeAdapter` test "reports the same Claude config and cwd used by the spawned
+query" drives `homePath` and asserts the inherited value survives - true upstream, false here. The
+property it pins IS fork-relevant (the auth-failure message must name the config dir and cwd the
+query was _actually_ spawned with, JSON-quoted, not a re-derived guess), so its rows drive
+`configDirPath` instead, and the blank row asserts the scrub end to end: no config dir in the env,
+and none named in the message.
 
 ### 36. Web tests run two projects; `--project dom` is fork-only
 
@@ -888,6 +989,47 @@ is SIGKILLed holding the lock; an ordinary git releases it in ~50ms). Pinned by
 PATH that traps TERM and loops; the test hangs to its 30s ceiling with the option removed, and
 passes at ~5.5s with it. A merge that drops this line reads as a clean upstream sync and
 un-bounds every git command in the server.
+
+### 38. Upstream's knip pass un-exports things; three fork-only exports live on
+
+Ten upstream commits in the 32nd reconcile were `refactor(<area>): classify <x> exports` plus
+`ci(knip): enforce <area> exports`. Their whole purpose is to narrow the public surface, so each
+one is a chance to take away a symbol the fork imports. The failure is loud (typecheck) when the
+importer is fork code, which is the good case. Three had to be given their `export` back:
+
+- **`migrationEntries`** (`apps/server/src/persistence/Migrations.ts`) - read by the fork's
+  `051_CrewTasks.test.ts`. **This one is the cautionary tale of the reconcile.** The fork's only
+  change to that line was the `export` keyword, and it sat _outside every conflict marker_, so
+  the merge silently took upstream's module-local version. The **line sweep did not report it**:
+  FORK-LOSS for this file came back with two DROPPED lines and nothing else. Only the repo-wide
+  typecheck caught it. Treat the sweep as a supplement to `pnpm run typecheck`, never a
+  substitute, for anything whose loss is a _visibility_ change rather than a deleted line.
+- **`resolveClaudeCatalogContextWindow`** (`apps/server/src/provider/ClaudeModelCatalog.ts`) -
+  still defined, still called internally, no longer exported. The fork's `claudeCliContextWindow`
+  switch (invariant 22) needs the window **mode** (`"1m"`), and upstream's surviving
+  `resolveClaudeCatalogContextWindowTokens` returns a token count, so it is not a substitute.
+- **`ComposerServerUpdateIcon`** (`apps/web/src/components/chat/ComposerServerUpdateStatus.tsx`) -
+  the inverse direction. The **fork** had deleted it as unused; upstream's new
+  `useAutoBalanceUpdateBanner` imports it, so the merge arrived with a live caller and the
+  deletion had to be undone. Restored verbatim.
+
+Expect more of these. `knip` is wired as a script (`pnpm run knip`) but is **not** in
+`pnpm verify`, and its CI job does not run on this fork, so nothing here will flag a fork-only
+export as unused - the pressure is entirely one-way.
+
+### 39. Two interrupts, and only one of them arms the Stop ladder
+
+Upstream #4308 added a keybinding command for stopping a thread, and its handler is a stable
+`useCallback` in `ChatView.tsx` fed by `interruptContextRef`. The fork already had an
+`onInterrupt` there: the two-press Stop ladder (invariant 7). They collided on the name only, and
+the merge produced two `const onInterrupt` in one scope.
+
+Upstream's is renamed **`onInterruptRunningThread`** - it pairs with the
+`canInterruptRunningThread` predicate declared beside it - and the ladder keeps `onInterrupt`.
+The rename is not cosmetic: like Cancel, the keybinding dispatches the plain cooperative
+interrupt and neither reads nor advances the escalation ledger, so a shortcut press cannot arm a
+force-stop. A merge that unifies these two into one handler makes every keyboard interrupt a
+candidate first rung, and the next Stop click a force-stop.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 

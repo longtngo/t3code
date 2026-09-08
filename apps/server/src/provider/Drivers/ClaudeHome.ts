@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import { expandHomePath } from "../../pathExpansion.ts";
 
@@ -12,6 +13,7 @@ import { expandHomePath } from "../../pathExpansion.ts";
 type ClaudeHomeConfig = Pick<ClaudeSettings, "homePath"> & {
   readonly configDirPath?: string | undefined;
 };
+const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
 export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
@@ -123,3 +125,18 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
     return `${config.binaryPath}\0${resolvedHomePath}\0${resolvedConfigDir}\0${cwd ?? ""}`;
   },
 );
+
+/**
+ * Describe the spawned CLI's environment separately from the login command so
+ * paths remain literal on every shell, including relative inherited values.
+ */
+export const claudeSignedOutMessage = (input: {
+  readonly configDir: string | undefined;
+  readonly cwd: string;
+}): string => {
+  const configuration =
+    input.configDir !== undefined
+      ? ` from ${quotePath(input.cwd)}, with CLAUDE_CONFIG_DIR set to ${quotePath(input.configDir)}`
+      : "";
+  return `Claude could not authenticate. For subscription login, run \`claude auth login\` on this environment's machine${configuration}, then start a new thread. For API-key authentication, check this instance's configured credentials.`;
+};

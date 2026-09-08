@@ -23,16 +23,16 @@ import {
 
 /**
  * The MCP server returns `error instanceof Error ? error.message : <generic>`.
- * A `TaggedErrorClass` that declares its `failure:` schema without overriding
+ * A `TaggedError` that declares its `failure:` schema without overriding
  * `message` yields `""` — strictly worse than the generic error it replaces,
  * because a refused crewmate learns nothing and goes on holding its slot.
  */
-class NoOverrideError extends Schema.TaggedErrorClass<NoOverrideError>()("NoOverrideError", {
+class NoOverrideError extends Schema.TaggedError<NoOverrideError>()("NoOverrideError", {
   openTasks: Schema.Number,
 }) {}
 
 describe("crew tool refusal messages", () => {
-  it("DEFECT ARM: a TaggedErrorClass with no message override yields the empty string", () => {
+  it("DEFECT ARM: a TaggedError with no message override yields the empty string", () => {
     // The wrong value, positively. This is what every crew error would produce if
     // the overrides below were dropped.
     expect(new NoOverrideError({ openTasks: 4 }).message).toBe("");

@@ -127,7 +127,7 @@ export type CrewRendering = typeof CrewRendering.Type;
  *
  * Declaring alone is not enough: the MCP server returns
  * `error instanceof Error ? error.message : INTERNAL_TOOL_ERROR_MESSAGE`, and a
- * `TaggedErrorClass` with no override yields `""`. An empty string is strictly
+ * `TaggedError` with no override yields `""`. An empty string is strictly
  * worse than the generic internal error it replaces — a refused crewmate learns
  * nothing and goes on holding its slot.
  *
@@ -146,7 +146,7 @@ export const CrewDispatchRefusalReason = Schema.Literals([
 ]);
 export type CrewDispatchRefusalReason = typeof CrewDispatchRefusalReason.Type;
 
-export class CrewDispatchRefusedError extends Schema.TaggedErrorClass<CrewDispatchRefusedError>()(
+export class CrewDispatchRefusedError extends Schema.TaggedError<CrewDispatchRefusedError>()(
   "CrewDispatchRefusedError",
   {
     reason: CrewDispatchRefusalReason,
@@ -178,7 +178,7 @@ export class CrewDispatchRefusedError extends Schema.TaggedErrorClass<CrewDispat
   }
 }
 
-export class CrewTaskNotFoundError extends Schema.TaggedErrorClass<CrewTaskNotFoundError>()(
+export class CrewTaskNotFoundError extends Schema.TaggedError<CrewTaskNotFoundError>()(
   "CrewTaskNotFoundError",
   {
     /** Which direction the caller was checked against. */
@@ -193,7 +193,7 @@ export class CrewTaskNotFoundError extends Schema.TaggedErrorClass<CrewTaskNotFo
   }
 }
 
-export class CrewAlreadyAnsweredError extends Schema.TaggedErrorClass<CrewAlreadyAnsweredError>()(
+export class CrewAlreadyAnsweredError extends Schema.TaggedError<CrewAlreadyAnsweredError>()(
   "CrewAlreadyAnsweredError",
   { reportId: CrewReportId },
 ) {
@@ -202,7 +202,7 @@ export class CrewAlreadyAnsweredError extends Schema.TaggedErrorClass<CrewAlread
   }
 }
 
-export class CrewReportRefusedError extends Schema.TaggedErrorClass<CrewReportRefusedError>()(
+export class CrewReportRefusedError extends Schema.TaggedError<CrewReportRefusedError>()(
   "CrewReportRefusedError",
   {
     reason: Schema.Literals(["cap", "bad-state", "note-too-large"]),
@@ -221,7 +221,7 @@ export class CrewReportRefusedError extends Schema.TaggedErrorClass<CrewReportRe
   }
 }
 
-export class CrewAnswerRefusedError extends Schema.TaggedErrorClass<CrewAnswerRefusedError>()(
+export class CrewAnswerRefusedError extends Schema.TaggedError<CrewAnswerRefusedError>()(
   "CrewAnswerRefusedError",
   { reason: Schema.Literals(["text-too-large"]) },
 ) {

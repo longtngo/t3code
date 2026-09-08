@@ -44,6 +44,8 @@ export class ReviewService extends Context.Service<
  * the `review:write` these RPCs require, and both live in
  * `AuthStandardClientScopes`. What authorizes a review read is that scope, the
  * same as every sibling VCS RPC.
+ *
+ * @public Service construction is part of the canonical Effect module API.
  */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;

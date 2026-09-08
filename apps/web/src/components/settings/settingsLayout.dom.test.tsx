@@ -6,6 +6,7 @@ import {
   scrollToSettingsTarget,
   SettingsRow,
   SettingsSearchTargetProvider,
+  SettingsUnavailableGroup,
 } from "./settingsLayout";
 
 afterEach(() => {
@@ -13,6 +14,30 @@ afterEach(() => {
 });
 
 const PULSE_CLASS = "settings-search-target-pulse";
+
+// Ported from upstream's settingsLayout.test.tsx, which this fork renamed to a
+// real-DOM suite (docs/fork/README.md invariant 36). Upstream asserts on a static
+// markup string; AGENTS.md rules that out, so this drives the same component and
+// reads the mounted tree - which also drops upstream's HTML-escaped `[&amp;_h3]`.
+describe("unavailable settings", () => {
+  it("groups disabled controls under one reason", async () => {
+    const view = await renderDom(
+      <SettingsUnavailableGroup message="Only available in the desktop app.">
+        <SettingsRow title="Window capture" description="Capture a window." />
+      </SettingsUnavailableGroup>,
+    );
+
+    expect(view.text()).toContain("Only available in the desktop app.");
+    // One reason for the whole group: the row's own heading is dimmed by the
+    // wrapper rather than each row carrying its own disabled styling. Upstream's
+    // markup string sees the group's two divs at once; here they are separate
+    // nodes, so the dimming wrapper is read through its bordered parent.
+    const dimmed = view.find('[class*="[&_h3]:opacity-64"]');
+    expect(dimmed).not.toBeNull();
+    expect(dimmed?.parentElement?.className).toContain("border-border/60");
+    expect(view.text()).toContain("Window capture");
+  });
+});
 
 describe("settings search targets", () => {
   it("does not persist destination styling in the rendered row", async () => {

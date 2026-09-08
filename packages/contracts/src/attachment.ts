@@ -25,7 +25,7 @@ export const AttachmentUploadResult = Schema.Struct({
 });
 export type AttachmentUploadResult = typeof AttachmentUploadResult.Type;
 
-export class AttachmentUploadError extends Schema.TaggedErrorClass<AttachmentUploadError>()(
+export class AttachmentUploadError extends Schema.TaggedError<AttachmentUploadError>()(
   "AttachmentUploadError",
   {
     message: TrimmedNonEmptyString,

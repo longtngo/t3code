@@ -6,7 +6,12 @@ import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 
 function renderPanel(
   optionCount: number,
-  handlers: { onToggleOption?: () => void; onAdvance?: () => void } = {},
+  handlers: {
+    onToggleOption?: () => void;
+    onAdvance?: () => void;
+    onDismiss?: () => void;
+    dismissible?: boolean;
+  } = {},
 ) {
   return renderDom(
     <ComposerPendingUserInputPanel
@@ -26,6 +31,7 @@ function renderPanel(
               })),
             },
           ],
+          dismissible: handlers.dismissible ?? true,
         },
       ]}
       respondingRequestIds={[]}
@@ -33,6 +39,7 @@ function renderPanel(
       questionIndex={0}
       onToggleOption={handlers.onToggleOption ?? (() => {})}
       onAdvance={handlers.onAdvance ?? (() => {})}
+      onDismiss={handlers.onDismiss ?? (() => {})}
     />,
   );
 }
@@ -140,5 +147,23 @@ describe("ComposerPendingUserInputPanel", () => {
 
     expect(onToggleOption).toHaveBeenCalledTimes(1);
     expect(onToggleOption).toHaveBeenCalledWith("question-1", "Option 2");
+  });
+
+  // Ported from upstream's ComposerPendingUserInputPanel.test.tsx, which this fork
+  // replaced with a real-DOM suite (docs/fork/README.md invariant 36). Driven rather
+  // than asserted on markup, because the prop arrived in the merge with nothing
+  // rendering it - a dismiss button that exists but never calls back is the failure.
+  it("offers dismiss only for async questions, and dismissing reports the request", async () => {
+    const onDismiss = vi.fn();
+    const view = await renderPanel(2, { onDismiss });
+
+    const dismiss = view.find("[data-pending-user-input-dismiss]");
+    expect(dismiss).not.toBeNull();
+    await view.click(dismiss);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledWith("request-1");
+
+    const native = await renderPanel(2, { onDismiss, dismissible: false });
+    expect(native.find("[data-pending-user-input-dismiss]")).toBeNull();
   });
 });

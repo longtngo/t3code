@@ -151,7 +151,7 @@ export class CrewService extends Context.Service<CrewService, CrewServiceShape>(
  * this interface does not have to name types from the layers it deliberately
  * cannot depend on.
  */
-export class CrewTeardownHookError extends Schema.TaggedErrorClass<CrewTeardownHookError>()(
+export class CrewTeardownHookError extends Schema.TaggedError<CrewTeardownHookError>()(
   "CrewTeardownHookError",
   { step: Schema.Number, threadId: Schema.String },
 ) {
