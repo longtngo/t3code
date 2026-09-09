@@ -206,6 +206,9 @@ export const ServerProvider = Schema.Struct({
   // older server keeps today's behaviour: show nothing rather than wrongly
   // telling the user their provider cannot report usage.
   reportsContextUsage: Schema.optional(Schema.Boolean),
+  // The driver streams context window usage, so a started thread will have a
+  // meter once its activities load. Clients reserve the meter's space on it.
+  reportsContextWindow: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),

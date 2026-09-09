@@ -65,6 +65,7 @@ const CODEX_PRESENTATION = {
   // Its adapter has no queue to take a turn back out of.
   supportsQueuedMessageRecall: false,
   reportsContextUsage: true,
+  reportsContextWindow: true,
 } as const;
 
 export interface CodexAppServerProviderSnapshot {

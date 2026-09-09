@@ -402,6 +402,26 @@ carries a comment saying so) and `formatContextWindowCompactionMessage` (only ev
 deleted component). `ContextWindowMeter.logic.test.ts` is trimmed to match; upstream's new
 `ContextWindowMeter.test.tsx` is deleted with the component it tests.
 
+**The meter's whole load-time reservation path is rejected too (33rd reconcile).** Upstream #10768
+stops the footer shifting while thread detail loads by holding the meter's slot:
+`ContextWindowMeterPlaceholder`, `shouldReserveContextWindowMeter`, a `reserveContextWindowMeter`
+prop, and a new `reportsContextWindow` flag on `ServerProvider`. Every piece of it serves the
+component this fork deletes. The fork's footer does not have the bug it fixes: the Vitals gauge's
+slot is gated on `showSecondaryStatus={!isComposerResting}`, which is the composer's layout state
+and not the thread's load state, so nothing pops in when activities land.
+
+Two of the four pieces landed OUTSIDE any conflict marker - the render site and the `pr-28` width
+class in `ChatComposer.tsx`, plus the new tests in `ContextWindowMeter.logic.test.ts`, which
+auto-merged - so rejecting the marked declarations alone left the tree red. Only the repo-wide
+typecheck named them.
+
+**`reportsContextWindow` is kept on the server and in contracts, and is NOT the fork's
+`reportsContextUsage`.** They read alike and answer different questions, both live: upstream's is
+a layout hint ("reserve the meter's space", absent means do not) set by two providers; the fork's
+is a capability answer ("does this driver emit usage at all", absent means yes) set by five, and
+`describeMissingContextUsage` uses it to explain an empty gauge. Keeping upstream's field costs a
+schema line and keeps its edits merging; dropping the fork's would blank that explanation.
+
 Upstream's `activeContextWindow: ContextWindowSnapshot | null` prop on `ChatComposer` is also
 rejected: the fork derives the snapshot **and** the account-usage view the Vitals gauge needs from
 `activeThreadActivities`, which stays the prop the parent passes. `compactDisabled` /

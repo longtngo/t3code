@@ -60,6 +60,7 @@ const CLAUDE_PRESENTATION = {
   // name and can be spliced back out. See ClaudeAdapter.withdrawQueuedTurn.
   supportsQueuedMessageRecall: true,
   reportsContextUsage: true,
+  reportsContextWindow: true,
 } as const;
 function toTitleCaseWords(value: string): string {
   const parts: Array<string> = [];

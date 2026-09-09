@@ -66,6 +66,7 @@ export interface ServerProviderPresentation {
   readonly showInteractionModeToggle?: boolean;
   readonly supportsQueuedMessageRecall?: boolean;
   readonly reportsContextUsage?: boolean;
+  readonly reportsContextWindow?: boolean;
   readonly requiresNewThreadForModelChange?: boolean;
 }
 
@@ -219,6 +220,9 @@ export function buildServerProvider(input: {
       : {}),
     ...(typeof input.presentation.reportsContextUsage === "boolean"
       ? { reportsContextUsage: input.presentation.reportsContextUsage }
+      : {}),
+    ...(typeof input.presentation.reportsContextWindow === "boolean"
+      ? { reportsContextWindow: input.presentation.reportsContextWindow }
       : {}),
     ...(typeof input.presentation.requiresNewThreadForModelChange === "boolean"
       ? { requiresNewThreadForModelChange: input.presentation.requiresNewThreadForModelChange }
