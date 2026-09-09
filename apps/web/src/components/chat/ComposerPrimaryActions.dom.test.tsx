@@ -445,3 +445,64 @@ describe("Cancel is not the Stop ladder", () => {
     expect(onCancelQuestion).not.toHaveBeenCalled();
   });
 });
+
+// A collapsed composer (the desktop resting layout, the phone's one-line row)
+// shows Send only when there is something to send. An empty prompt there
+// renders no Send at all rather than a disabled one; Stop is unaffected.
+function renderIdleHidden(options: {
+  hasSendableContent: boolean;
+  isRunning: boolean;
+  isSendBusy?: boolean;
+}) {
+  return renderDom(
+    createElement(ComposerPrimaryActions, {
+      compact: true,
+      hideIdleSend: true,
+      pendingAction: null,
+      isRunning: options.isRunning,
+      showPlanFollowUpPrompt: false,
+      promptHasText: options.hasSendableContent,
+      isSendBusy: options.isSendBusy ?? false,
+      sendDisabledReason: null,
+      isConnecting: false,
+      isEnvironmentUnavailable: false,
+      isSendBlocked: false,
+      isPreparingWorktree: false,
+      hasSendableContent: options.hasSendableContent,
+      isStopEscalated: false,
+      onPreviousPendingQuestion: () => {},
+      onInterrupt: () => {},
+      onCancelQuestion: () => {},
+      onImplementPlanInNewThread: () => {},
+    }),
+  );
+}
+
+describe("ComposerPrimaryActions with hideIdleSend", () => {
+  it("renders no Send when there is nothing to send", async () => {
+    const view = await renderIdleHidden({ hasSendableContent: false, isRunning: false });
+    expect(view.find('[aria-label="Send message"]')).toBeNull();
+  });
+
+  it("renders Send once there is something to send", async () => {
+    const view = await renderIdleHidden({ hasSendableContent: true, isRunning: false });
+    expect(view.find<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(false);
+  });
+
+  // The draft is cleared at dispatch, so mid-send there is nothing sendable;
+  // the "Sending" spinner has to stay until the dispatch settles.
+  it("keeps the Sending spinner while a dispatch is in flight", async () => {
+    const view = await renderIdleHidden({
+      hasSendableContent: false,
+      isRunning: false,
+      isSendBusy: true,
+    });
+    expect(view.find('[aria-label="Sending"]')).not.toBeNull();
+  });
+
+  it("keeps Stop while running and still hides the idle Send", async () => {
+    const view = await renderIdleHidden({ hasSendableContent: false, isRunning: true });
+    expect(view.find(STOP)).not.toBeNull();
+    expect(view.find('[aria-label="Send message"]')).toBeNull();
+  });
+});

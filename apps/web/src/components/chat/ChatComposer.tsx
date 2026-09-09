@@ -1162,7 +1162,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   hasSendableContent: boolean;
   isSendBlocked: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
-  showSecondaryStatus: boolean;
+  /** Resting layout: no Send while there is nothing to send. */
+  hideIdleSend: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   isStopEscalated: boolean;
@@ -1174,18 +1175,16 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
-      {props.showSecondaryStatus ? (
-        <VitalsGaugeConnected
-          environmentId={props.environmentId}
-          threadId={props.activeThreadId}
-          context={props.activeContextWindow}
-          accountUsage={props.activeAccountUsage}
-          providerDisplayName={props.activeThreadProviderDisplayName}
-          modelDisplayName={props.activeThreadModelDisplayName}
-          sessionProvider={props.activeThreadSessionProvider}
-        />
-      ) : null}
-      {props.showSecondaryStatus && props.isPreparingWorktree ? (
+      <VitalsGaugeConnected
+        environmentId={props.environmentId}
+        threadId={props.activeThreadId}
+        context={props.activeContextWindow}
+        accountUsage={props.activeAccountUsage}
+        providerDisplayName={props.activeThreadProviderDisplayName}
+        modelDisplayName={props.activeThreadModelDisplayName}
+        sessionProvider={props.activeThreadSessionProvider}
+      />
+      {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
       ) : null}
       <ComposerPrimaryActions
@@ -1201,6 +1200,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isSendBlocked={props.isSendBlocked}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        hideIdleSend={props.hideIdleSend}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
@@ -5627,7 +5627,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 </button>
                 {inlineTasksBadge}
                 {collapsedComposerImagePreviews}
-                <div className="flex shrink-0 items-center gap-2">
+                <div
+                  className="flex shrink-0 items-center gap-2"
+                  data-chat-composer-transition-actions="true"
+                >
                   <VitalsGaugeConnected
                     environmentId={environmentId}
                     threadId={activeThread?.id ?? null}
@@ -5663,28 +5666,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       </svg>
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    data-chat-composer-transition-actions="true"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
-                    disabled={collapsedComposerPrimaryActionDisabled}
-                    aria-label={collapsedComposerPrimaryActionLabel}
-                    onPointerDown={(event) => event.preventDefault()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      submitComposer();
-                    }}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path
-                        d="M8 3L8 13M8 3L4 7M8 3L12 7"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
+                  {/* Send only once there is something to send: the collapsed row has
+                      no room for a greyed placeholder, and tapping the row expands the
+                      composer anyway. A pending question never reaches this row. */}
+                  {isSendBusy || composerSendState.hasSendableContent ? (
+                    <button
+                      type="button"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
+                      disabled={collapsedComposerPrimaryActionDisabled}
+                      aria-label={collapsedComposerPrimaryActionLabel}
+                      onPointerDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        submitComposer();
+                      }}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M8 3L8 13M8 3L4 7M8 3L12 7"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -6119,12 +6132,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 className={cn(
                   "relative",
                   isComposerResting && "flex min-w-0 items-center gap-1",
-                  isComposerResting &&
-                    (settings.contextWindowMeterEnabled && activeContextWindow
-                      ? "pr-28"
-                      : showComposerAttachAction
-                        ? "pr-20"
-                        : "pr-12"),
+                  // Room for the overlaid footer: gauge (32) + Send (32) + gaps,
+                  // plus the attach button (28) when it renders. The gauge mounts
+                  // whether or not a context snapshot exists, so the padding must
+                  // not key on the context-meter setting.
+                  isComposerResting && (showComposerAttachAction ? "pr-28" : "pr-20"),
                 )}
               >
                 {!isComposerResting &&
@@ -6343,7 +6355,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
-                    showSecondaryStatus={!isComposerResting}
+                    hideIdleSend={isComposerResting}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     isStopEscalated={isStopEscalated}

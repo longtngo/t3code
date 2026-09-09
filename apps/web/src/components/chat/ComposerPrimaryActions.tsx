@@ -34,6 +34,14 @@ interface ComposerPrimaryActionsProps {
   isSendBlocked: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  /**
+   * Omit Send while there is nothing to send. The collapsed layouts (desktop
+   * resting, phone row) have no room for a greyed placeholder; the expanded
+   * footer keeps the disabled Send as its "type here" affordance. Stop is
+   * unaffected, and the pending-question and plan follow-up branches keep
+   * their own primary action.
+   */
+  hideIdleSend?: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -89,6 +97,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isSendBlocked,
   isPreparingWorktree,
   hasSendableContent,
+  hideIdleSend = false,
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -101,6 +110,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     : undefined;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const isSendDisabled = sendDisabledReason !== null;
+  const showSend = !hideIdleSend || hasSendableContent || isSendBusy;
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
   );
@@ -330,7 +340,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
         {renderStopGenerationButton(false)}
-        {sendButton}
+        {showSend ? sendButton : null}
       </div>
     );
   }
@@ -416,5 +426,5 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  return sendButton;
+  return showSend ? sendButton : null;
 });
