@@ -15,7 +15,6 @@
 import { ClockIcon, Undo2Icon, XIcon } from "lucide-react";
 import { memo } from "react";
 
-import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
 
@@ -25,7 +24,11 @@ export interface ComposerQueuedMessage {
   readonly attachmentCount: number;
 }
 
-/** Collapsed affordance. Mirrors `ComposerTasksBadge`'s two placements. */
+/**
+ * Collapsed affordance. Built like `ComposerTasksBadge`'s `tab` placement, on
+ * `ComposerBanner.Root`: the dock hides itself unless a child carries an
+ * attached banner surface, so a bare button here is docked but never drawn.
+ */
 export const ComposerQueuedBadge = memo(function ComposerQueuedBadge({
   count,
   onToggle,
@@ -34,19 +37,26 @@ export const ComposerQueuedBadge = memo(function ComposerQueuedBadge({
   readonly onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      aria-expanded="false"
-      aria-label={`${String(count)} message${count === 1 ? "" : "s"} waiting to send`}
-      className="flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
-      onClick={onToggle}
-      // Keeps composer focus while opening, matching the tasks badge.
-      onPointerDown={(event) => event.preventDefault()}
-    >
-      <ClockIcon aria-hidden className="size-3.5 shrink-0" />
-      <span className="font-medium text-foreground tabular-nums">{count}</span>
-      <span className="hidden sm:inline">waiting</span>
-    </button>
+    <ComposerBanner.Root density="comfortable" data-composer-shoulder-tab>
+      <ComposerBanner.Row
+        render={<button type="button" />}
+        aria-expanded={false}
+        aria-label={`${count} message${count === 1 ? "" : "s"} waiting to send`}
+        className="text-muted-foreground hover:text-foreground"
+        data-chat-composer-queued-badge="true"
+        onClick={onToggle}
+        // Keeps composer focus while opening, matching the tasks badge.
+        onPointerDown={(event) => event.preventDefault()}
+      >
+        <ComposerBanner.Icon>
+          <ClockIcon />
+        </ComposerBanner.Icon>
+        <ComposerBanner.Content>
+          <span className="font-medium text-foreground tabular-nums">{count}</span>
+          <span className="hidden sm:inline">waiting</span>
+        </ComposerBanner.Content>
+      </ComposerBanner.Row>
+    </ComposerBanner.Root>
   );
 });
 

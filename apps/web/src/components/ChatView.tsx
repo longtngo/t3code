@@ -3595,10 +3595,13 @@ export default function ChatView(props: ChatViewProps) {
     threadKey: string | null;
     projection: TimelineEntriesProjection;
   } | null>(null);
+  // The transcript half only: a held message is drawn in the queued strip, not
+  // here. Everything else that reads `timelineMessages` (prompt history, revert
+  // restore, first-message anchoring) wants the full list and keeps it.
   const timelineEntries = useMemo(() => {
     const previous = timelineProjectionRef.current;
     const projection = deriveTimelineEntriesWithState(
-      timelineMessages,
+      heldPartition.transcript,
       activeThread?.proposedPlans ?? [],
       workLogEntries,
       previous?.threadKey === activeThreadKey ? previous.projection : null,
@@ -3609,7 +3612,7 @@ export default function ChatView(props: ChatViewProps) {
     timelineProjectionRef,
     activeThreadKey,
     activeThread?.proposedPlans,
-    timelineMessages,
+    heldPartition.transcript,
     workLogEntries,
   ]);
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
