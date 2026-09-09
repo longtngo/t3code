@@ -1,4 +1,5 @@
 import {
+  type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -82,6 +83,8 @@ export function buildUnavailableModelOptionDescriptors(
 type TraitsPersistence =
   | {
       threadRef?: ScopedThreadRef;
+      /** The server thread's current selection, recorded as the edit's basis. */
+      threadModelSelection?: ModelSelection | null;
       draftId?: DraftId;
       onModelOptionsChange?: never;
     }
@@ -311,6 +314,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         ...(instanceId ? { instanceId } : {}),
         model,
         persistSticky: true,
+        ...(persistence.threadRef && persistence.threadModelSelection
+          ? { basis: persistence.threadModelSelection }
+          : {}),
       });
     },
     [instanceId, model, persistence, provider, setProviderModelOptions],

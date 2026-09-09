@@ -119,14 +119,6 @@ export function resolveQueuedThreadSettings(
   };
 }
 
-export function modelSelectionsEqual(left: ModelSelectionType, right: ModelSelectionType): boolean {
-  return (
-    left.instanceId === right.instanceId &&
-    left.model === right.model &&
-    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null)
-  );
-}
-
 export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown {
   return encodeStoredQueuedThreadMessage({
     schemaVersion: THREAD_OUTBOX_SCHEMA_VERSION,

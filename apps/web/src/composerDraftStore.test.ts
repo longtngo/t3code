@@ -2774,3 +2774,129 @@ describe("createDeferredStorage", () => {
     expect(base.setItem).toHaveBeenCalledWith("key", "s:v2");
   });
 });
+
+describe("composerDraftStore adoptThreadModelSelection", () => {
+  const threadId = ThreadId.make("thread-shared-selection");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+  const personal = createModelSelection(
+    ProviderInstanceId.make("claudeAgent_personalsub"),
+    "claude-opus-5",
+  );
+  const work = createModelSelection(CLAUDE_AGENT_INSTANCE, "claude-opus-5");
+  const workSonnet = createModelSelection(CLAUDE_AGENT_INSTANCE, "claude-sonnet-5");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("a thread whose selection moved since the local pick takes the thread's selection", () => {
+    const store = useComposerDraftStore.getState();
+    // Opened while the thread ran on the work instance; the user picked personal here.
+    store.adoptThreadModelSelection(threadRef, work);
+    store.setModelSelection(threadRef, personal, { explicit: true, basis: work });
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe(personal.instanceId);
+
+    // Another device sent on the work instance with a different model.
+    store.adoptThreadModelSelection(threadRef, workSonnet);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.activeProvider).toBe(CLAUDE_AGENT_INSTANCE);
+    expect(draft?.modelSelectionByProvider[CLAUDE_AGENT_INSTANCE]).toEqual(workSonnet);
+    expect(draft?.modelSelectionExplicit).toBeUndefined();
+  });
+
+  it("keeps a local pick while the thread's selection is the one it was made against", () => {
+    const store = useComposerDraftStore.getState();
+    store.adoptThreadModelSelection(threadRef, work);
+    store.setModelSelection(threadRef, personal, { explicit: true, basis: work });
+
+    store.adoptThreadModelSelection(threadRef, work);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe(personal.instanceId);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBe(true);
+  });
+
+  it("a pick with no recorded basis yields to the thread's selection once", () => {
+    const store = useComposerDraftStore.getState();
+    // A draft persisted by a build before the basis existed.
+    store.setModelSelection(threadRef, personal, { explicit: true });
+
+    store.adoptThreadModelSelection(threadRef, work);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe(CLAUDE_AGENT_INSTANCE);
+  });
+
+  it("keeps other instances' remembered models when adopting", () => {
+    const store = useComposerDraftStore.getState();
+    store.adoptThreadModelSelection(threadRef, work);
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
+    store.setModelSelection(threadRef, personal, { explicit: true, basis: work });
+
+    store.adoptThreadModelSelection(threadRef, workSonnet);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      modelSelection(CODEX_DRIVER, "gpt-5.4"),
+    );
+    expect(draft?.activeProvider).toBe(CLAUDE_AGENT_INSTANCE);
+  });
+
+  it("a pick's basis survives a reload, so the pick is still kept after one", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = useComposerDraftStore.getState();
+      store.setModelSelection(threadRef, personal, { explicit: true, basis: work });
+      await vi.advanceTimersByTimeAsync(300);
+      resetComposerDraftStore();
+      await useComposerDraftStore.persist.rehydrate();
+
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionBasis).toEqual(work);
+      useComposerDraftStore.getState().adoptThreadModelSelection(threadRef, work);
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBe(personal.instanceId);
+    } finally {
+      await useComposerDraftStore.persist.clearStorage();
+      vi.useRealTimers();
+    }
+  });
+
+  it("is a no-op when nothing changed, so the effect that calls it cannot loop", () => {
+    const store = useComposerDraftStore.getState();
+    store.adoptThreadModelSelection(threadRef, work);
+    const before = useComposerDraftStore.getState().draftsByThreadKey;
+    store.adoptThreadModelSelection(threadRef, work);
+    expect(useComposerDraftStore.getState().draftsByThreadKey).toBe(before);
+  });
+
+  // A trait edit is a pick like any other. Without a basis it read as
+  // superseded the moment the thread was re-opened, and the edit vanished.
+  it("keeps a trait edit made against the thread's selection", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProviderModelOptions(
+      threadRef,
+      CLAUDE_AGENT_DRIVER,
+      toSelections({ reasoningEffort: "high" }),
+      { instanceId: CLAUDE_AGENT_INSTANCE, model: work.model, basis: work },
+    );
+
+    store.adoptThreadModelSelection(threadRef, work);
+
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CLAUDE_AGENT_INSTANCE]
+        ?.options,
+    ).toEqual(toSelections({ reasoningEffort: "high" }));
+  });
+
+  // The effective model is read from the thread instance's map entry even when
+  // no active provider is set, so that entry alone is a pick to supersede.
+  it("supersedes a remembered model for the thread's instance with no active provider", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelOptions(threadRef, { claudeAgent: toSelections({ thinking: true }) });
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.activeProvider).toBeNull();
+
+    store.adoptThreadModelSelection(threadRef, workSonnet);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.activeProvider).toBe(CLAUDE_AGENT_INSTANCE);
+    expect(draft?.modelSelectionByProvider[CLAUDE_AGENT_INSTANCE]).toEqual(workSonnet);
+  });
+});

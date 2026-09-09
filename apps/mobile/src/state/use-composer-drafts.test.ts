@@ -152,6 +152,7 @@ import { threadOutboxManager } from "./thread-outbox";
 import {
   appendComposerDraftAttachments,
   archiveCloudComposerDrafts,
+  adoptThreadModelSelection,
   clearComposerDraftContent,
   clearComposerDraftContentState,
   clearComposerDraftsEnvironment,
@@ -175,6 +176,7 @@ import {
   restoreCloudComposerDrafts,
   retargetNewTaskDraft,
   setComposerDraftText,
+  updateComposerDraftSettings,
   setComposerDraftAttachmentUpload,
   waitForComposerDraftsLoaded,
   setStickyComposerModelSelection,
@@ -1984,5 +1986,74 @@ describe("mobile composer drafts", () => {
       "environment-1:thread-1": { text: "Persisted draft", attachments: [file] },
     });
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("mobile composer drafts adoptThreadModelSelection", () => {
+  const draftKey = "environment-1:thread-shared-selection";
+  const personal = {
+    instanceId: ProviderInstanceId.make("claudeAgent_personalsub"),
+    model: "claude-opus-5",
+  };
+  const work = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-opus-5" };
+  const workSonnet = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-sonnet-5",
+  };
+
+  it("a thread whose selection moved since the local pick takes the thread's selection", () => {
+    updateComposerDraftSettings(draftKey, { modelSelection: personal, modelSelectionBasis: work });
+    adoptThreadModelSelection(draftKey, workSonnet);
+    expect(getComposerDraftSnapshot(draftKey).modelSelection).toBeUndefined();
+    expect(getComposerDraftSnapshot(draftKey).modelSelectionBasis).toBeUndefined();
+  });
+
+  it("keeps a local pick while the thread's selection is the one it was made against", () => {
+    updateComposerDraftSettings(draftKey, { modelSelection: personal, modelSelectionBasis: work });
+    adoptThreadModelSelection(draftKey, work);
+    expect(getComposerDraftSnapshot(draftKey).modelSelection).toEqual(personal);
+  });
+
+  it("a pick with no recorded basis yields to a thread selection it does not match", () => {
+    updateComposerDraftSettings(draftKey, { modelSelection: personal });
+    adoptThreadModelSelection(draftKey, work);
+    expect(getComposerDraftSnapshot(draftKey).modelSelection).toBeUndefined();
+  });
+
+  it("is a no-op without a pick, and keeps the draft's text", () => {
+    setComposerDraftText(draftKey, "unsent");
+    const before = appAtomRegistry.get(composerDraftsAtom);
+    adoptThreadModelSelection(draftKey, work);
+    expect(appAtomRegistry.get(composerDraftsAtom)).toBe(before);
+  });
+
+  // The content clear runs at enqueue, before the outbox drain writes the
+  // thread's new selection. Losing the basis there would make the next
+  // adoption read the pick as superseded and drop it while the queued message
+  // still sends on it.
+  it("keeps the basis with the pick through a content clear", () => {
+    updateComposerDraftSettings(draftKey, { modelSelection: personal, modelSelectionBasis: work });
+    setComposerDraftText(draftKey, "queued");
+    const cleared = clearComposerDraftContentState(
+      appAtomRegistry.get(composerDraftsAtom),
+      draftKey,
+    );
+    expect(cleared[draftKey]?.modelSelection).toEqual(personal);
+    expect(cleared[draftKey]?.modelSelectionBasis).toEqual(work);
+  });
+
+  it("round-trips the basis through the persisted document", () => {
+    const decoded = decodePersistedComposerState({
+      schemaVersion: 1,
+      drafts: {
+        [draftKey]: {
+          text: "",
+          attachments: [],
+          modelSelection: personal,
+          modelSelectionBasis: work,
+        },
+      },
+    });
+    expect(decoded.drafts[draftKey]?.modelSelectionBasis).toEqual(work);
   });
 });

@@ -74,12 +74,12 @@ vi.mock("expo-file-system", () => {
   };
 });
 
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
-  modelSelectionsEqual,
   MAX_QUEUED_TURN_AGE_MS,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxDispatchStep,

@@ -1654,6 +1654,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const setComposerDraftReviewComments = useComposerDraftStore((store) => store.setReviewComments);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const adoptThreadModelSelection = useComposerDraftStore(
+    (store) => store.adoptThreadModelSelection,
+  );
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
@@ -2131,6 +2134,44 @@ export default function ChatView(props: ChatViewProps) {
       }),
     );
   }, [draftThreadKeys, shellsBootstrapped, threadShells]);
+  // The thread's selection follows the last turn started anywhere. Keyed on
+  // the selection's content, so a thread-detail replacement that did not move
+  // the selection is free; the action itself is a no-op without a local pick.
+  //
+  // The thread record is written by the sending client BEFORE the server
+  // accepts the turn (thread.meta.update precedes turn.start), so it can name
+  // an instance the session never moved to: a mid-turn switch is refused and
+  // the record keeps the refused instance. Adopt only while the record agrees
+  // with the bound session, or before any session exists. During a real switch
+  // that delays adoption until the new session binds, milliseconds later.
+  const activeServerThreadRef = activeServerThread
+    ? scopeThreadRef(activeServerThread.environmentId, activeServerThread.id)
+    : null;
+  const activeServerThreadModelSelection = activeServerThread?.modelSelection ?? null;
+  const activeServerSessionInstanceId = activeServerThread?.session?.providerInstanceId ?? null;
+  const activeServerThreadModelSelectionKey = activeServerThreadModelSelection
+    ? JSON.stringify([
+        activeServerThreadModelSelection.instanceId,
+        activeServerThreadModelSelection.model,
+        activeServerThreadModelSelection.options ?? null,
+      ])
+    : null;
+  useEffect(() => {
+    if (!activeServerThreadRef || !activeServerThreadModelSelection) return;
+    if (
+      activeServerSessionInstanceId !== null &&
+      activeServerSessionInstanceId !== activeServerThreadModelSelection.instanceId
+    ) {
+      return;
+    }
+    adoptThreadModelSelection(activeServerThreadRef, activeServerThreadModelSelection);
+  }, [
+    adoptThreadModelSelection,
+    activeServerThreadRef?.environmentId,
+    activeServerThreadRef?.threadId,
+    activeServerSessionInstanceId,
+    activeServerThreadModelSelectionKey,
+  ]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeRunningTurnId =
     (activeThread?.session?.status === "running" ? activeThread.session.activeTurnId : null) ??
@@ -8559,13 +8600,17 @@ export default function ChatView(props: ChatViewProps) {
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
-        { explicit: true },
+        // A pick on a server thread is made against the thread's current
+        // selection; if a turn later starts elsewhere with a different one
+        // the pick is superseded (adoptThreadModelSelection).
+        { explicit: true, ...(isServerThread ? { basis: activeThread.modelSelection } : {}) },
       );
       setStickyComposerModelSelection(nextModelSelection);
       scheduleComposerFocus();
     },
     [
       activeThread,
+      isServerThread,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,

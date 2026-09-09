@@ -48,6 +48,7 @@ import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
+  adoptThreadModelSelection,
   clearComposerDraftContent,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
@@ -250,6 +251,27 @@ export function useThreadComposerState() {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  // The thread's selection follows the last turn started anywhere; a local
+  // pick made against an older selection is dropped. Runs on every detail
+  // replacement and whenever the draft itself changes (drafts hydrate from
+  // disk after the first run); without a pick or with a matching basis it
+  // writes nothing. The record is written by the sending client before the
+  // server accepts the turn, so it is adopted only while it agrees with the
+  // bound session (a refused mid-turn switch leaves it on the refused
+  // instance), or before any session exists.
+  const threadModelSelection = selectedThread?.modelSelection ?? null;
+  const threadSessionInstanceId = selectedThread?.session?.providerInstanceId ?? null;
+  const draftPick = selectedDraft?.modelSelection;
+  useEffect(() => {
+    if (!selectedThreadKey || !threadModelSelection || !draftPick) return;
+    if (
+      threadSessionInstanceId !== null &&
+      threadSessionInstanceId !== threadModelSelection.instanceId
+    ) {
+      return;
+    }
+    adoptThreadModelSelection(selectedThreadKey, threadModelSelection);
+  }, [selectedThreadKey, threadModelSelection, threadSessionInstanceId, draftPick]);
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
@@ -621,12 +643,15 @@ export function useThreadComposerState() {
       );
       updateComposerDraftSettings(selectedThreadKey, {
         modelSelection: value,
+        // Picked against the thread's current selection; a turn started
+        // elsewhere with a different one supersedes the pick.
+        ...(threadModelSelection ? { modelSelectionBasis: threadModelSelection } : {}),
         ...(provider?.showInteractionModeToggle === false
           ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
           : {}),
       });
     },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
+    [selectedEnvironmentRuntime?.serverConfig, threadModelSelection, selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(

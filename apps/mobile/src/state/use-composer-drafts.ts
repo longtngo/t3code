@@ -37,6 +37,7 @@ import {
   QueuedThreadMessageSchema,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
@@ -64,6 +65,13 @@ export interface ComposerDraft {
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
+  /**
+   * The server thread's selection `modelSelection` was picked against. The
+   * pick is honoured only while the thread still runs on it; see
+   * `adoptThreadModelSelection`. Absent on new-task drafts and on picks
+   * persisted before the basis existed.
+   */
+  readonly modelSelectionBasis?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
@@ -96,7 +104,12 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
+  | "modelSelection"
+  | "modelSelectionBasis"
+  | "runtimeMode"
+  | "interactionMode"
+  | "workspaceSelection"
+  | "project"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -117,6 +130,7 @@ const ComposerDraftSchema = Schema.Struct({
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
+  modelSelectionBasis: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
@@ -1040,6 +1054,30 @@ export function updateComposerDraftSettings(
   });
 }
 
+/**
+ * The server thread's selection changed or was (re)observed. Drops a local
+ * pick whose basis is not this selection so the composer shows the thread's;
+ * keeps a pick made against it; no-op without a pick.
+ */
+export function adoptThreadModelSelection(draftKey: string, threadSelection: ModelSelection): void {
+  updateComposerDrafts((current) => {
+    const existing = current[draftKey];
+    if (!existing?.modelSelection) {
+      return current;
+    }
+    const basis = existing.modelSelectionBasis;
+    if (
+      basis
+        ? modelSelectionsEqual(basis, threadSelection)
+        : modelSelectionsEqual(existing.modelSelection, threadSelection)
+    ) {
+      return current;
+    }
+    const { modelSelection: _pick, modelSelectionBasis: _basis, ...retained } = existing;
+    return withComposerDraft(current, draftKey, retained);
+  });
+}
+
 export function clearComposerDraftContentState(
   current: Record<string, ComposerDraft>,
   draftKey: string,
@@ -1058,13 +1096,19 @@ export function clearComposerDraftContentState(
   const {
     importedShareIds: _importedShareIds,
     modelSelection,
+    modelSelectionBasis,
     workspaceSelection,
     project: _project,
     ...retained
   } = existing;
   const draft = {
     ...retained,
-    ...(options?.clearModelSelection || modelSelection === undefined ? {} : { modelSelection }),
+    ...(options?.clearModelSelection || modelSelection === undefined
+      ? {}
+      : {
+          modelSelection,
+          ...(modelSelectionBasis === undefined ? {} : { modelSelectionBasis }),
+        }),
     ...(options?.clearWorkspaceSelection || workspaceSelection === undefined
       ? {}
       : { workspaceSelection }),

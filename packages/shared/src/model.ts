@@ -381,6 +381,15 @@ export function createModelSelection(
   return selections.length > 0 ? { ...base, options: selections } : base;
 }
 
+/** Same instance, model, and option list (order-sensitive, as sent on the wire). */
+export function modelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
+  return (
+    left.instanceId === right.instanceId &&
+    left.model === right.model &&
+    JSON.stringify(left.options ?? null) === JSON.stringify(right.options ?? null)
+  );
+}
+
 /**
  * Returns the effort value if it is a prompt-injected value according to
  * any select descriptor in the given capabilities, or null otherwise.

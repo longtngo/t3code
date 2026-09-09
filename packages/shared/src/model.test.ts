@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 
 import {
+  modelSelectionsEqual,
   applyClaudePromptEffortPrefix,
   buildExplicitProviderOptionSelectionsFromDescriptors,
   buildProviderOptionSelectionsFromDescriptors,
@@ -242,5 +243,27 @@ describe("readCustomModelEntries", () => {
       name: "X",
       capabilities,
     });
+  });
+});
+
+describe("modelSelectionsEqual", () => {
+  const instance = ProviderInstanceId.make("claudeAgent");
+  const base = { instanceId: instance, model: "claude-opus-5" };
+
+  it("compares instance, model, and options", () => {
+    expect(modelSelectionsEqual(base, { ...base })).toBe(true);
+    expect(modelSelectionsEqual(base, { ...base, model: "claude-sonnet-5" })).toBe(false);
+    expect(
+      modelSelectionsEqual(base, {
+        ...base,
+        instanceId: ProviderInstanceId.make("claudeAgent_personalsub"),
+      }),
+    ).toBe(false);
+    expect(
+      modelSelectionsEqual(base, {
+        ...base,
+        options: [{ id: "reasoningEffort", value: "high" }],
+      }),
+    ).toBe(false);
   });
 });

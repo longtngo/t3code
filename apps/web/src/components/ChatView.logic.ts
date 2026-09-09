@@ -56,6 +56,7 @@ import {
   resolveSelectableProviderInstanceEntry,
   type ProviderInstanceEntry,
 } from "../providerInstances";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -314,10 +315,7 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   const nextModelSelection = input.nextModelSelection;
   const modelSelectionChanged =
     nextModelSelection !== undefined &&
-    (nextModelSelection.model !== input.currentModelSelection.model ||
-      nextModelSelection.instanceId !== input.currentModelSelection.instanceId ||
-      JSON.stringify(nextModelSelection.options ?? null) !==
-        JSON.stringify(input.currentModelSelection.options ?? null));
+    !modelSelectionsEqual(nextModelSelection, input.currentModelSelection);
   const branchChanged = input.nextBranch !== undefined && input.nextBranch !== input.currentBranch;
   if (!modelSelectionChanged && !branchChanged) {
     return null;

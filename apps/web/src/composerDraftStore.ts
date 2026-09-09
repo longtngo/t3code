@@ -31,7 +31,11 @@ import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
 import { DeepMutable } from "effect/Types";
-import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import {
+  createModelSelection,
+  modelSelectionsEqual,
+  normalizeModelSlug,
+} from "@t3tools/shared/model";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from "./modelSelection";
@@ -64,6 +68,7 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isSnapShotSource = Schema.is(SnapShotSource);
+const isModelSelection = Schema.is(ModelSelection);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
@@ -254,6 +259,9 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   // selections (project default / sticky) leave it unset so later seeds can
   // replace them; legacy entries predate the flag and read as seeded too.
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
+  // The server thread's selection the active pick was made against; see
+  // `ComposerThreadDraftState.modelSelectionBasis`.
+  modelSelectionBasis: Schema.optionalKey(ModelSelection),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
 });
@@ -391,6 +399,14 @@ export interface ComposerThreadDraftState {
    * may replace it. Legacy entries predate the flag and read as seeded.
    */
   modelSelectionExplicit?: boolean;
+  /**
+   * The server thread's selection at the moment the active pick was made.
+   * A pick is honoured only while the thread still runs on this selection;
+   * once a turn starts anywhere with a different one the pick is superseded
+   * (see `adoptThreadModelSelection`). Absent on drafts for new threads and
+   * on picks persisted before the basis existed.
+   */
+  modelSelectionBasis?: ModelSelection;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
 }
@@ -572,7 +588,22 @@ interface ComposerDraftStoreState {
        * thread) rather than a model-only change.
        */
       replaceOptions?: boolean;
+      /**
+       * The server thread's current selection, recorded so a later
+       * `adoptThreadModelSelection` can tell whether the thread moved
+       * after this pick. Omit for drafts that have no server thread yet.
+       */
+      basis?: ModelSelection | null;
     },
+  ) => void;
+  /**
+   * The server thread's selection changed or was (re)observed. Drops a local
+   * pick whose basis is not this selection so the composer follows the
+   * thread; keeps a pick made against it; no-op without a pick.
+   */
+  adoptThreadModelSelection: (
+    threadRef: ComposerThreadTarget,
+    threadSelection: ModelSelection,
   ) => void;
   /** Replace the model options for one or more providers in the draft. */
   setModelOptions: (
@@ -591,6 +622,8 @@ interface ComposerDraftStoreState {
       instanceId?: ProviderInstanceId | null | undefined;
       model?: string | null | undefined;
       persistSticky?: boolean;
+      /** See `setModelSelection`'s `basis`: the server thread's current selection. */
+      basis?: ModelSelection | null;
     },
   ) => void;
   setRuntimeMode: (
@@ -1939,6 +1972,7 @@ function normalizePersistedDraftsByThreadId(
     let modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>> = {};
     let activeProvider: ProviderInstanceId | null = null;
     let modelSelectionExplicit: true | undefined = undefined;
+    let modelSelectionBasis: ModelSelection | undefined = undefined;
 
     if (
       draftCandidate.modelSelectionByProvider &&
@@ -1950,6 +1984,10 @@ function normalizePersistedDraftsByThreadId(
       >;
       activeProvider = normalizeProviderInstanceId(draftCandidate.activeProvider);
       modelSelectionExplicit = draftCandidate.modelSelectionExplicit === true ? true : undefined;
+      // A server value compared with later server values: keep it verbatim.
+      modelSelectionBasis = isModelSelection(draftCandidate.modelSelectionBasis)
+        ? draftCandidate.modelSelectionBasis
+        : undefined;
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
@@ -2021,6 +2059,9 @@ function normalizePersistedDraftsByThreadId(
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
             activeProvider,
             ...(modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
+            ...(modelSelectionBasis
+              ? { modelSelectionBasis: cloneModelSelection(modelSelectionBasis) }
+              : {}),
           }
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
@@ -2202,6 +2243,9 @@ export function partializeComposerDraftStoreState(
             ),
             activeProvider: draft.activeProvider,
             ...(draft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
+            ...(draft.modelSelectionBasis
+              ? { modelSelectionBasis: cloneModelSelection(draft.modelSelectionBasis) }
+              : {}),
           }
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
@@ -2467,6 +2511,9 @@ function toHydratedThreadDraft(
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
+    ...(persistedDraft.modelSelectionBasis
+      ? { modelSelectionBasis: persistedDraft.modelSelectionBasis }
+      : {}),
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
   };
@@ -3051,22 +3098,93 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               }
             }
             const nextActiveProvider = normalized?.instanceId ?? base.activeProvider;
+            const nextBasis = opts?.basis ?? undefined;
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               base.activeProvider === nextActiveProvider &&
-              (base.modelSelectionExplicit ?? false) === (opts?.explicit === true)
+              (base.modelSelectionExplicit ?? false) === (opts?.explicit === true) &&
+              Equal.equals(base.modelSelectionBasis, nextBasis)
             ) {
               return state;
             }
             // Last writer defines intent: picker writes mark the selection
             // explicit; seeding writes leave it unset so future seeds can
-            // replace it.
-            const { modelSelectionExplicit: _previousExplicit, ...restBase } = base;
+            // replace it. The basis is the thread selection this write was
+            // made against; a write without one has nothing to be compared to.
+            const {
+              modelSelectionExplicit: _previousExplicit,
+              modelSelectionBasis: _previousBasis,
+              ...restBase
+            } = base;
             const nextDraft: ComposerThreadDraftState = {
               ...restBase,
               modelSelectionByProvider: nextMap,
               activeProvider: nextActiveProvider,
               ...(opts?.explicit === true ? { modelSelectionExplicit: true as const } : {}),
+              ...(nextBasis ? { modelSelectionBasis: nextBasis } : {}),
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadKey[threadKey];
+            } else {
+              nextDraftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        adoptThreadModelSelection: (threadRef, threadSelection) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) {
+            return;
+          }
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            // No local pick: nothing to supersede, and opening a thread must
+            // not create a persisted draft. A remembered model for the
+            // thread's own instance counts as a pick even with no active
+            // provider, because the effective model is read from that entry.
+            if (
+              !existing ||
+              (existing.activeProvider === null &&
+                existing.modelSelectionByProvider[threadSelection.instanceId] === undefined)
+            ) {
+              return state;
+            }
+            const basis = existing.modelSelectionBasis;
+            if (basis !== undefined && modelSelectionsEqual(basis, threadSelection)) {
+              return state;
+            }
+            // A pick without a basis (persisted before the basis existed) is
+            // superseded the first time it meets a thread selection it does
+            // not match; one that already matches is left alone.
+            if (basis === undefined) {
+              const pickedInstance = existing.activeProvider ?? threadSelection.instanceId;
+              const picked = existing.modelSelectionByProvider[pickedInstance];
+              if (
+                picked !== undefined &&
+                pickedInstance === threadSelection.instanceId &&
+                modelSelectionsEqual(picked, threadSelection)
+              ) {
+                return state;
+              }
+            }
+            const {
+              modelSelectionExplicit: _explicit,
+              modelSelectionBasis: _basis,
+              ...retained
+            } = existing;
+            // Overwrite rather than clear: `activeProvider` is the first
+            // candidate the composer resolves, and the thread's session still
+            // names the previous instance until the new session binds, so a
+            // cleared pick would show that stale instance for the switch window.
+            const nextDraft: ComposerThreadDraftState = {
+              ...retained,
+              activeProvider: threadSelection.instanceId,
+              modelSelectionByProvider: {
+                ...existing.modelSelectionByProvider,
+                [threadSelection.instanceId]: threadSelection,
+              },
+              modelSelectionBasis: threadSelection,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -3184,19 +3302,27 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               Equal.equals(state.stickyModelSelectionByProvider, nextStickyMap) &&
-              state.stickyActiveProvider === nextStickyActiveProvider
+              state.stickyActiveProvider === nextStickyActiveProvider &&
+              Equal.equals(base.modelSelectionBasis, options?.basis ?? undefined)
             ) {
               return state;
             }
 
             // Trait edits are user-driven intent: mark the selection explicit
-            // so later seeds cannot silently replace the chosen options.
-            const { modelSelectionExplicit: _previousExplicit, ...restBase } = base;
+            // so later seeds cannot silently replace the chosen options. They
+            // are a pick like any other, so they carry the thread selection
+            // they were made against or adoption would drop them on re-open.
+            const {
+              modelSelectionExplicit: _previousExplicit,
+              modelSelectionBasis: _previousBasis,
+              ...restBase
+            } = base;
             const nextDraft: ComposerThreadDraftState = {
               ...restBase,
               ...(options?.instanceId ? { activeProvider: instanceKey } : {}),
               modelSelectionByProvider: nextMap,
               modelSelectionExplicit: true,
+              ...(options?.basis ? { modelSelectionBasis: options.basis } : {}),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

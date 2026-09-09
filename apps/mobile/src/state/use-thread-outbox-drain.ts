@@ -41,10 +41,10 @@ import {
   threadOutboxRevision,
   updateThreadOutboxMessage,
 } from "./thread-outbox";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   isQueuedThreadCreationSendable,
-  modelSelectionsEqual,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxDispatchStep,
   resolveThreadOutboxFailureAction,
