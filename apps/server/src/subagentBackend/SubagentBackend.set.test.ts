@@ -58,6 +58,9 @@ afterEach(() => {
   vi.mocked(listCursorModels).mockImplementation(() =>
     Effect.die("listCursorModels should never run inside setBackend"),
   );
+  // Restoring HOME is not teardown: the directory it pointed at is what this test
+  // created, and it outlives the process without this.
+  NodeFS.rmSync(home, { recursive: true, force: true });
 });
 
 const cursorId = ProviderInstanceId.make("cursor");
@@ -181,10 +184,14 @@ describe("setBackend", () => {
         NodeFS.writeFileSync(executablePath, "#!/bin/sh\nexit 0\n");
         NodeFS.chmodSync(executablePath, 0o755);
 
-        const result = yield* setBackend({ backend: "cursor", instanceId: cursorId }).pipe(
-          Effect.provideService(HostProcessEnvironment, { PATH: binDir }),
-        );
-        expect(result.binaryPath).toBe(executablePath);
+        try {
+          const result = yield* setBackend({ backend: "cursor", instanceId: cursorId }).pipe(
+            Effect.provideService(HostProcessEnvironment, { PATH: binDir }),
+          );
+          expect(result.binaryPath).toBe(executablePath);
+        } finally {
+          NodeFS.rmSync(binDir, { recursive: true, force: true });
+        }
       }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 

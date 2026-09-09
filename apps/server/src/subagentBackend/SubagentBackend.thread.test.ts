@@ -42,6 +42,9 @@ afterEach(() => {
   } else {
     process.env.HOME = previousHome;
   }
+  // Restoring HOME is not teardown: the directory it pointed at is what this test
+  // created, and it outlives the process without this.
+  NodeFS.rmSync(home, { recursive: true, force: true });
 });
 
 const t1 = ThreadId.make("t1");
