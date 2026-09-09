@@ -99,11 +99,40 @@ if ($null -ne $env:T3_SSH_AUTH_SECRET) {\r
 exit 1\r
 `;
 
+/**
+ * One askpass directory per process, not per ssh invocation.
+ *
+ * The helper scripts this holds are byte-identical every time, so minting a fresh
+ * `mkdtemp` directory per call only ever produced work and litter: after the first
+ * password is cached, EVERY ssh invocation for a remote environment takes this path
+ * (`tunnel.ts` passes `interactiveAuth: true`), and nothing in the product removes
+ * them. macOS reaps its per-user temp dir after three days, so the growth is bounded
+ * there and nowhere else - on Windows `%TEMP%` is never swept, and a long-uptime
+ * Linux host accumulates until reboot.
+ *
+ * Still `makeTempDirectory` rather than a fixed name: `mkdtemp` creates 0700 and
+ * unique, so on a shared `/tmp` no other user can pre-create the path and hand us
+ * the script we are about to execute with the auth secret in its environment. A
+ * predictable name would trade this leak for that.
+ *
+ * Only a SUCCESS is remembered. Caching a failure would latch one transient EACCES
+ * into "ssh auth is broken for the life of this process". A lost race costs one
+ * spare directory, which is bounded by concurrency rather than by invocation count.
+ *
+ * Self-heals if the directory is swept out from under a long-lived process:
+ * `ensureSshAskpassHelpers` recreates it with `makeDirectory({ recursive: true })`
+ * and rewrites the scripts it then finds missing.
+ */
+let processAskpassParentDirectory: string | undefined;
+
 const getDefaultSshAskpassDirectory = Effect.fn("ssh/auth.getDefaultSshAskpassDirectory")(
   function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const parentDirectory = yield* fs.makeTempDirectory({ prefix: "t3code-ssh-runtime-" });
+    const parentDirectory =
+      processAskpassParentDirectory ??
+      (yield* fs.makeTempDirectory({ prefix: "t3code-ssh-runtime-" }));
+    processAskpassParentDirectory = parentDirectory;
     return path.join(parentDirectory, SSH_ASKPASS_DIR_NAME);
   },
 );

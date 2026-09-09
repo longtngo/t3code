@@ -55,6 +55,29 @@ describe("ssh auth", () => {
     ),
   );
 
+  // Pins the fix for the one shipped temp-directory leak: after the first password is
+  // cached, every ssh invocation for a remote environment reaches this path, and nothing
+  // in the product removes what it creates. One directory per PROCESS is the contract -
+  // a second call must not mint a second directory.
+  it.effect("reuses one askpass directory across invocations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const first = yield* buildSshChildEnvironment({ interactiveAuth: true, baseEnv: {} });
+      const second = yield* buildSshChildEnvironment({ interactiveAuth: true, baseEnv: {} });
+
+      assert.equal(second.SSH_ASKPASS, first.SSH_ASKPASS);
+      assert.equal(yield* fs.exists(first.SSH_ASKPASS ?? ""), true);
+      // Named so a reader can find the directories this leaves behind.
+      assert.include(
+        path.basename(path.dirname(path.dirname(first.SSH_ASKPASS ?? ""))),
+        "t3code-ssh-runtime-",
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(NodeServices.layer, Layer.succeed(HostProcessPlatform, "linux"))),
+    ),
+  );
+
   it.effect("builds a windows askpass launcher pair", () =>
     Effect.gen(function* () {
       const descriptor = yield* buildSshAskpassHelperDescriptor({
