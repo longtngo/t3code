@@ -337,7 +337,7 @@ export type MessagesTimelineRow =
       summaryKind: ToolGroupSummaryKind;
       toolSurface?: WorkLogEntry["toolSurface"];
       toolIcon?: WorkLogEntry["toolIcon"];
-      summaryToolIcon?: "browser" | "t3-code";
+      summaryToolIcon?: "browser" | "t3-code" | "pull-request";
       hasFailure: boolean;
     }
   | {
@@ -1512,5 +1512,7 @@ export function messageMetaVisibilityClasses(
 ): string {
   return alwaysVisible
     ? "opacity-100"
-    : `opacity-0 focus-within:opacity-100 ${hoverGroup}opacity-100`;
+    : // pointer-coarse keeps these visible on touch devices, which have no hover
+      // state to reveal them (upstream #11020).
+      `opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 ${hoverGroup}opacity-100`;
 }

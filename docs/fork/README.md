@@ -25,8 +25,17 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-08 (32nd reconcile, 164 commits), against `origin/main`. Concentrated in
+As of 2026-09-10 (34th reconcile, 17 commits), against `origin/main`. Concentrated in
 `apps/server` and `apps/web`.
+
+**The 34th reconcile was one feature, not seventeen commits.** Upstream's multi-pull-request
+link work (#10839 + #10875 + #10870 + #11007 + #11045) touched 172 files in a single commit,
+added `projection_thread_pull_requests` (a table), `ThreadPullRequestLink` (a contract), three
+new `thread.pull-request-*` events, and derived the legacy `linkedPullRequest` from the new
+array. Everything the fork holds on a thread shell — `crewRole`, `titleRegenerationFailedAt`,
+`hasPendingBackgroundTask` — had to be re-grafted onto upstream's rewritten builders in
+`ProjectionSnapshotQuery.ts`, because upstream re-indented those blocks and git aligned the
+fork's un-indented version against them, cutting each conflict marker off mid-object.
 
 **This reconcile carried two toolchain bumps**, and both are the kind that retire fork work
 silently: `effect` beta.103 -> **rc.112** (which renamed `Schema.TaggedErrorClass` to
@@ -66,6 +75,13 @@ ran `toMigrationInclusive: 40` then `41` — its filename numbers — and found 
 how the 19th reconcile noticed. Retarget such a test to the fork's applied ids rather than
 deleting it, and give it a control asserting the column is absent at the previous id, or it
 passes whether or not the renumbering is right.
+
+The 34th reconcile repeated it once more: upstream's `050_ProjectionThreadPullRequests` became
+applied id **59**, and its test ran `toMigrationInclusive: 49` then `50` — the fork's
+`ProjectionThreadLinkedPullRequest` and `ProjectionThreadsUnsettledAt`, nowhere near the table it
+asserts. Retargeted to 58/59 with a `sqlite_master` control asserting
+`projection_thread_pull_requests` is ABSENT at 58. The tell that this is due: any arriving
+migration whose test names an id below the fork's current maximum.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
@@ -992,6 +1008,19 @@ rename-blind mid-merge, so upstream's edits to the old name arrive as a **new fi
 conflict. After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`,
 and port any tests upstream added to its copy.
 
+**A fork-ORIGINAL `.dom.test.tsx` has no upstream ancestor, so nothing carries upstream's mock
+updates into it — and the sweeps cannot see the gap.** The 34th reconcile is the worked example.
+`git merge` did detect nine of the renames and applied upstream's edits to the renamed copies, so
+`ChatMarkdown.dom.test.tsx` learned upstream's new `useServerConfigs` mock automatically. But
+`ChatMarkdown.remote.dom.test.tsx` is fork-written, never existed upstream, mocks the same
+`../state/entities` module wholesale, and therefore went on returning a module without that export.
+Four tests died at render with `No "useServerConfigs" export is defined on the mock`. Nothing in
+the sweep output named the file: FORK-LOSS reported only the renamed siblings, because the fork
+file lost no line — it needed a line it never had.
+
+After a merge that adds a hook call anywhere in a widely-rendered component, grep the fork's own
+`vi.mock("<module>")` factories for the newly-required export, not just the renamed test files.
+
 ### 37. `FORCE_KILL_AFTER` on the git spawn is fork-only, and every git timeout depends on it
 
 `apps/server/src/vcs/GitVcsDriverCore.ts` passes `forceKillAfter: FORCE_KILL_AFTER` (5s) as a
@@ -1050,6 +1079,34 @@ The rename is not cosmetic: like Cancel, the keybinding dispatches the plain coo
 interrupt and neither reads nor advances the escalation ledger, so a shortcut press cannot arm a
 force-stop. A merge that unifies these two into one handler makes every keyboard interrupt a
 candidate first rung, and the next Stop click a force-stop.
+
+### 41. Work-entry detail is a dialog here, so upstream's in-row expansion has no fork surface
+
+`PlainWorkEntryRow` in `apps/web/src/components/chat/MessagesTimeline.tsx` opens a purpose-built
+detail dialog (`hasWorkEntryDetail` / `onOpenDetail`). Upstream instead expands the row in place,
+and carries `previewText`, `canExpand`, `expandedBody`, `commandMatchesVisibleLabel` and a
+`stopRowToggle` handler for it. **The fork deleted all of that**, so every upstream commit that
+tunes the expansion arrives as a conflict against machinery that no longer exists here. #10981
+("allow expanding duplicate tool call commands") is the 34th reconcile's example: it rewrites
+`canExpand` and a `truncate` class, both fork-absent, and was rejected whole.
+
+The count also lives in a different place: the fork folds `×N` into `displayText` so it reaches
+the accessible name, where upstream renders bare `previewText`. Taking upstream's `<span>` silently
+drops the count from screen readers.
+
+Reject the row-expansion half, but read the rest of such a commit: #11020 in the same batch was a
+genuine touch-device fix (`pointer-coarse:opacity-100`) that belonged in the fork's own
+`messageMetaVisibilityClasses` helper in `MessagesTimeline.logic.ts`. That helper auto-merged
+untouched, so the fix would have been lost on both call sites had only the marked hunks been read.
+
+### 42. Upstream's new server test fixtures do not set `members`
+
+`OrchestrationProject` carries a fork-only required `members` array (migration id 39, workspace
+members). Every project fixture upstream adds needs `members: []` appended, and the only thing
+that names them is the **repo-wide** typecheck — five such fixtures arrived in the 34th reconcile
+(`linkCreatedPullRequest`, `pullRequests/handlers`, `PullRequestSyncReactor`,
+`decider.pullRequests`, `projector`), all in files that merged without a single conflict marker.
+`packages/client-runtime` has the same shape for `OrchestrationThreadShell.pullRequests`.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 

@@ -231,6 +231,8 @@ export const make = Effect.gen(function* () {
       threadActiveReorder: true,
       threadTitleRegeneration: true,
       vcsLocalOnlyStatus: true,
+      threadPullRequests: true,
+      pullRequestStackActions: true,
       threadPullRequestLinking: true,
       subagentBackend: true,
       subagentBackendThreadModes: true,

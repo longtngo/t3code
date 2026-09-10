@@ -392,6 +392,7 @@ describe("streaming row projection", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: null,
+      pullRequests: [],
       worktreePath: null,
       latestTurn: {
         ...initial.input.latestTurn,
@@ -3172,10 +3173,10 @@ describe("coalesceRepeatedWorkLogEntries", () => {
 describe("messageMetaVisibilityClasses", () => {
   it("reveals on hover of the named group unless always visible", () => {
     expect(messageMetaVisibilityClasses(false, "group-hover:")).toBe(
-      "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
+      "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100",
     );
     expect(messageMetaVisibilityClasses(false, "group-hover/assistant:")).toBe(
-      "opacity-0 focus-within:opacity-100 group-hover/assistant:opacity-100",
+      "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
     );
     expect(messageMetaVisibilityClasses(true, "group-hover:")).toBe("opacity-100");
   });

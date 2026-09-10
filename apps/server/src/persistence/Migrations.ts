@@ -135,6 +135,11 @@ import Migration0057 from "./Migrations/052_ProjectionThreadActivityKindIndex.ts
 // own filename (registry section 1).
 import Migration0058 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 
+// Upstream's 050 (projection_thread_pull_requests, multi-PR links) arrives after
+// the fork already deployed ids 33-58, so it takes the next free id (59) rather
+// than its filename number.
+import Migration0059 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+
 /**
  * Migration loader with all migrations defined inline.
  *
@@ -203,6 +208,7 @@ export const migrationEntries = [
   [56, "ProjectionThreadBranchPullRequest", Migration0056],
   [57, "ProjectionThreadActivityKindIndex", Migration0057],
   [58, "ProjectionThreadsActiveOrderKey", Migration0058],
+  [59, "ProjectionThreadPullRequests", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

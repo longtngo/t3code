@@ -60,3 +60,11 @@ Concepts this fork adds on top of upstream. Sources: [SubagentBackend.ts](../../
 | Bridge            | The thread that dispatched a crewmate. Reports flow crewmate to bridge, answers flow bridge to crewmate. A thread's `crewRole` is derived from task rows, not stored on the thread.                |
 | Delivery sweep    | The 60s pass that carries reports to their destination and stamps them handled. While `enableCrew` is off it narrows to answers only, and forks a zombie scan that is deliberately not gated.      |
 | Environment theme | A per-environment colour applied across clients so multiple connected environments stay visually distinct.                                                                                         |
+
+## Pull requests
+
+| Term                 | Meaning                                                                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pull request link    | A persisted thread association identified by host, repository, and number. Links can cross projects within an environment and carry a server-maintained snapshot.                        |
+| Pull request sync    | The reactor that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.               |
+| Current pull request | The link used by single-review controls and older clients. Open work takes precedence; a completed single chain points at its top layer. Unrelated terminal links use the latest update. |

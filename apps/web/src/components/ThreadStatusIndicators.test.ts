@@ -1,4 +1,9 @@
-import { ProjectId, type PullRequestSummary, type VcsStatusResult } from "@t3tools/contracts";
+import {
+  ProjectId,
+  type PullRequestSummary,
+  type ThreadPullRequestLink,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   GitMergeIcon,
@@ -9,6 +14,7 @@ import {
 
 import {
   ChangeRequestStatusIcon,
+  linkedPullRequestSnapshotStatus,
   prStatusIndicator,
   settledPrHoverColorClass,
 } from "./ThreadStatusIndicators";
@@ -132,5 +138,51 @@ describe("settledPrHoverColorClass", () => {
     expect(settledPrHoverColorClass("open", true)).toContain(
       "group-hover/sidebar-row:text-zinc-500",
     );
+  });
+});
+
+// Ported from upstream's ThreadStatusIndicators.test.tsx (#10839). That file is
+// deleted here — its rendering cases live in ThreadStatusIndicators.dom.test.tsx
+// — and this block is pure logic, so it belongs with the rest of the logic.
+describe("linked pull request snapshots", () => {
+  const link: ThreadPullRequestLink = {
+    host: "gitlab.example.com",
+    repository: "acme/web",
+    number: 42,
+    url: "https://gitlab.example.com/acme/web/-/merge_requests/42",
+    source: "manual",
+    linkedAt: "2026-01-01T00:00:00Z",
+    stack: null,
+    snapshot: null,
+  };
+  it("keeps unsynced links unknown", () => {
+    expect(linkedPullRequestSnapshotStatus(link)).toBeNull();
+  });
+  it("uses the snapshot state and branches with the linked identity", () => {
+    const result = linkedPullRequestSnapshotStatus({
+      ...link,
+      snapshot: {
+        state: "merged",
+        title: "Change",
+        headBranch: "feature",
+        baseBranch: "main",
+        isDraft: false,
+        updatedAt: "2026-01-02T00:00:00Z",
+        syncedAt: "2026-01-03T00:00:00Z",
+      },
+    });
+    expect(result).toEqual({
+      pr: {
+        number: 42,
+        url: link.url,
+        title: "Change",
+        state: "merged",
+        isDraft: false,
+        headRef: "feature",
+        baseRef: "main",
+        updatedAt: "2026-01-02T00:00:00Z",
+      },
+      sourceControlProvider: { kind: "gitlab", name: "gitlab", baseUrl: "" },
+    });
   });
 });
