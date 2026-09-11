@@ -1099,6 +1099,23 @@ genuine touch-device fix (`pointer-coarse:opacity-100`) that belonged in the for
 `messageMetaVisibilityClasses` helper in `MessagesTimeline.logic.ts`. That helper auto-merged
 untouched, so the fix would have been lost on both call sites had only the marked hunks been read.
 
+That paragraph is about a **genuine** fix in the same commit that you would lose. The converse
+also happens, and the 35th reconcile hit it three times: the **rejected** feature's own lines land
+outside the markers and you keep them. #11014/#11017 left behind
+
+- `const accessiblePreview = [previewText, answerPreview]…`, referencing two variables the
+  rejection deletes — a typecheck error, so survivable;
+- `stopRowToggleWhileSelectingText`, a self-contained dead helper — **the gate is green with it
+  in**, measured;
+- a new test, "only withholds an expanded tool-call label click while text is selected", which
+  git's rename detection merged into the fork's `MessagesTimeline.dom.test.tsx`. It asserts a
+  `select-text` class the fork never renders, so it is a guaranteed red.
+
+After rejecting these hunks, grep `MessagesTimeline.tsx` **and** `MessagesTimeline.dom.test.tsx`
+for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePreview`, `canExpand`,
+`expandedBody`, `stopRowToggle*`, `select-text`. General rule and its measured detection coverage:
+"Rejecting an upstream feature" below.
+
 ### 42. Upstream's new server test fixtures do not set `members`
 
 `OrchestrationProject` carries a fork-only required `members` array (migration id 39, workspace
@@ -1205,6 +1222,45 @@ epoch, so any test that warps the clock to a real timestamp replays the gauge on
 across the whole span. That wedged upstream #8600's auto-settle test at the full 120s timeout
 while the same test passed in 78ms with the gauge disabled. Anything else that wants a timer
 inside this layer inherits the same trap.
+
+## Rejecting an upstream feature: its own lines land outside the markers too
+
+Several entries above say the fork has no surface for some upstream feature, so the answer is to
+reject it. Rejecting the **marked hunks** is not rejecting the feature. Git puts a conflict marker
+only where both sides edited the same region; the rest of the same commit merges clean and stays.
+
+Three reconciles have now hit this, in both directions:
+
+- 20th — a resolution's own _removals_ landed outside the markers.
+- 33rd — #10768's meter reservation had four pieces; two merged clean (a render site, a width
+  class, a whole `describe` block in an auto-merged test). Rejecting only the marked declarations
+  left the tree red, and the repo-wide typecheck named all four.
+- 35th — #11014/#11017's row expansion left three pieces behind. Detail in invariant 41.
+
+**What the gate catches is only the subset that references something the rejection deleted.**
+Measured on the 35th reconcile, on the real tree:
+
+| Leftover shape                                                        | Caught by                        |
+| --------------------------------------------------------------------- | -------------------------------- |
+| references a variable the rejection removed (`accessiblePreview`)     | repo-wide typecheck, as an error |
+| self-contained dead helper (`stopRowToggleWhileSelectingText`)        | **nothing** — see below          |
+| a test asserting the rejected behaviour, in a rename-paired test file | that test, red                   |
+
+The middle row is the one to plan around. A dead module-local helper was re-introduced
+deliberately as a probe: `typecheck` exited **0** with it in, and `lint` named it exactly
+(`warning eslint(no-unused-vars): Variable … is declared but never used`) but still exited **0**,
+because it is a warning among ~744 of them. The gate is green with it in the tree.
+
+**The sweeps do not see it either**, and the reason is structural rather than a gap worth fixing:
+the line was added by upstream and kept by the merge, which is the ordinary case no direction
+flags. RESURRECTED needs a fork deletion, FORK-LOSS a fork addition, DROPPED an upstream line the
+merge lacks. A leftover from a rejection is none of those.
+
+So after rejecting a feature, **grep the file and its paired test file for the feature's own
+vocabulary** — the identifiers named in the entry that told you to reject it — rather than
+trusting the conflict list, the gate, or the sweep. Renamed test files matter here: upstream edits
+a `*.test.tsx` the fork has migrated to `*.dom.test.tsx`, git's rename detection merges them, and
+the new test lands under the fork's filename.
 
 ## Probing an invariant that asserts ABSENCE
 
