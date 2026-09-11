@@ -531,12 +531,34 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly detail: string;
     readonly createdAt: string;
+    /** Set by failures that never reached the provider's turn. */
+    readonly sparesLiveTurn?: boolean;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
       return;
     }
     const session = thread.session;
+    // A refused follow-up - a switch mid-turn, a failed account command - never
+    // touched the turn already running. Writing `error` and a null turn over it
+    // misreports that turn, carries the refusal forward as `lastError`, and
+    // disarms the running-turn guard so the next switch restarts under the turn.
+    // The failure is still reported, as the activity the caller appends.
+    //
+    // A failed SEND is not spared: it reached the provider, and Cursor and Grok
+    // keep a crashed session listed without emitting its exit, so the turn it
+    // shows may be dead. Nor is a turn whose session is gone, or whose liveness
+    // cannot be read - both fall back to the error write rather than to silence.
+    if (
+      input.sparesLiveTurn === true &&
+      session &&
+      session.activeTurnId !== null &&
+      (yield* hasLiveSessionForThread(input.threadId).pipe(
+        Effect.catchCause(() => Effect.succeed(false)),
+      ))
+    ) {
+      return;
+    }
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
@@ -1418,7 +1440,10 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
+    const handleTurnStartFailure = (
+      cause: Cause.Cause<unknown>,
+      options?: { readonly sparesLiveTurn?: boolean },
+    ) => {
       if (Cause.hasInterruptsOnly(cause)) {
         return Effect.void;
       }
@@ -1427,14 +1452,18 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         detail,
         createdAt: event.payload.createdAt,
+        sparesLiveTurn: options?.sparesLiveTurn === true,
       }).pipe(
         Effect.flatMap(() => appendTurnStartFailure("Provider turn start failed", detail)),
         Effect.asVoid,
       );
     };
 
-    const recoverTurnStartFailure = (cause: Cause.Cause<unknown>) =>
-      handleTurnStartFailure(cause).pipe(
+    const recoverTurnStartFailure = (
+      cause: Cause.Cause<unknown>,
+      options?: { readonly sparesLiveTurn?: boolean },
+    ) =>
+      handleTurnStartFailure(cause, options).pipe(
         Effect.catchCause((recoveryCause) =>
           Effect.logWarning("provider command reactor failed to recover turn start failure", {
             eventType: event.type,
@@ -1491,7 +1520,11 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
       });
       return true;
-    }).pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true))));
+    }).pipe(
+      Effect.catchCause((cause) =>
+        recoverTurnStartFailure(cause, { sparesLiveTurn: true }).pipe(Effect.as(true)),
+      ),
+    );
     if (authCommandHandled) {
       return;
     }
@@ -1655,7 +1688,10 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread(turnStartInput).pipe(
       Effect.map(Option.some),
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+      // Building the request never reaches the provider's turn: its refusals spare it.
+      Effect.catchCause((cause) =>
+        handleTurnStartFailure(cause, { sparesLiveTurn: true }).pipe(Effect.as(Option.none())),
+      ),
     );
 
     if (Option.isNone(sendTurnRequest)) {

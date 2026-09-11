@@ -898,6 +898,99 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  effectIt.effect("clears a running session when session-loss recovery cannot restart it", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-1");
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-recover-restart-fail-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-recover-restart-fail-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      // The projection still shows the first turn in flight.
+      const shell = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      if (!shell?.session) return yield* Effect.die("session missing");
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-recover-restart-fail"),
+        threadId,
+        session: {
+          ...shell.session,
+          status: "running",
+          activeTurnId: asTurnId("turn-recover-restart-fail"),
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      // The follow-up finds the session gone; recovery evicts it, and the
+      // restart for the retry fails, so no provider session is left behind.
+      harness.sendTurn.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterSessionNotFoundError({ provider: "claudeAgent", threadId }),
+          ) as unknown as ReturnType<typeof harness.sendTurn>,
+      );
+      harness.startSession.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "session.start",
+              detail: "spawn failed on retry",
+            }),
+          ) as unknown as ReturnType<typeof harness.startSession>,
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-recover-restart-fail-2"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-recover-restart-fail-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+          return (
+            thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
+      );
+      yield* Effect.promise(() => harness.drain());
+
+      // The turn it showed is dead with its session; a thread left "running"
+      // here would spin until the stall watchdog, if ever.
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.session).toMatchObject({ status: "error", activeTurnId: null });
+    }),
+  );
+
   effectIt.effect("clears a failed sign-out request without sending it as a prompt", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("antigravity-personal");
@@ -3830,6 +3923,144 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
     ).toMatchObject({ payload: { detail: expect.stringContaining("stop it before switching") } });
+    // The turn is still running on instance A, so the refusal must not report the
+    // session as failed or carry the refusal forward as its last error.
+    expect(thread?.session).toMatchObject({
+      status: "running",
+      activeTurnId: "turn-shared-store-running",
+      lastError: null,
+    });
+
+    // A second switch attempt must meet the same guard, not a session the first
+    // refusal marked idle - which would restart it and abandon the running turn.
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-shared-store-running-3"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("user-message-shared-store-running-3"),
+        role: "user",
+        text: "third",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeShared_b"),
+        model: "claude-opus-4-6",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+    await waitFor(async () => {
+      const next = await harness.readModel();
+      const nextThread = next.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        (nextThread?.activities.filter((activity) => activity.kind === "provider.turn.start.failed")
+          .length ?? 0) >= 2
+      );
+    });
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+  });
+
+  describe("a failed follow-up while a turn is projected", () => {
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    const startProjectedTurn = async (harness: Awaited<ReturnType<typeof createHarness>>) => {
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-projected-turn-1"),
+        threadId,
+        message: {
+          messageId: asMessageId("projected-turn-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      const shell = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      if (!shell?.session) throw new Error("session missing");
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-projected-turn-running"),
+        threadId,
+        session: {
+          ...shell.session,
+          status: "running",
+          activeTurnId: asTurnId("turn-projected"),
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+    };
+
+    const sendFollowUp = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+      harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-projected-turn-2"),
+        threadId,
+        message: {
+          messageId: asMessageId("projected-turn-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+    const failureRecorded = async (harness: Awaited<ReturnType<typeof createHarness>>) => {
+      await waitFor(async () => {
+        const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+        return (
+          thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+          false
+        );
+      });
+      await harness.drain();
+      return (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    };
+
+    it("clears the turn when the send reaches a provider that still lists a dead session", async () => {
+      // Cursor and Grok keep a crashed session listed and emit no exit, so a live
+      // listing does not prove the projected turn is alive once a send has failed.
+      const harness = await createHarness();
+      await startProjectedTurn(harness);
+      harness.sendTurn.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "turn/start",
+              detail: "write EPIPE",
+            }),
+          ) as unknown as ReturnType<typeof harness.sendTurn>,
+      );
+      await sendFollowUp(harness);
+      const thread = await failureRecorded(harness);
+      expect(harness.runtimeSessions.length).toBeGreaterThan(0);
+      expect(thread?.session).toMatchObject({ status: "error", activeTurnId: null });
+    });
+
+    it("still reports the failure when the session list cannot be read", async () => {
+      const harness = await createHarness();
+      await startProjectedTurn(harness);
+      const unreadable = () => {
+        throw new Error("listSessions binding mismatch");
+      };
+      Object.assign(harness.runtimeSessions, { find: unreadable, some: unreadable });
+      await sendFollowUp(harness);
+      const thread = await failureRecorded(harness);
+      expect(
+        thread?.activities.filter((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toHaveLength(1);
+    });
   });
 
   it("restarts the session on a switch between instances that share a transcript store", async () => {
