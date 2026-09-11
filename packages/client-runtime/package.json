@@ -131,6 +131,14 @@
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
     },
+    "./state/device": {
+      "types": "./src/state/device.ts",
+      "default": "./src/state/device.ts"
+    },
+    "./state/deviceHubAccess": {
+      "types": "./src/state/deviceHubAccess.ts",
+      "default": "./src/state/deviceHubAccess.ts"
+    },
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"
@@ -246,6 +254,10 @@
     "./state/title-regeneration-failures": {
       "types": "./src/state/titleRegenerationFailures.ts",
       "default": "./src/state/titleRegenerationFailures.ts"
+    },
+    "./work-log/user-input": {
+      "types": "./src/work-log/userInput.ts",
+      "default": "./src/work-log/userInput.ts"
     },
     "./state/stop-ladder": {
       "types": "./src/state/stopLadder.ts",

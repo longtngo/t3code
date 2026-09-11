@@ -38,6 +38,16 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("replaces SSH host lists when saving, editing, and removing hosts", () => {
+    const host = { id: "mini", label: "Mac mini", target: "mini" };
+    const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { deviceHosts: [host] });
+    expect(saved.deviceHosts).toEqual([host]);
+    const replacement = { ...host, target: "other-mini" };
+    const edited = applyServerSettingsPatch(saved, { deviceHosts: [replacement] });
+    expect(edited.deviceHosts).toEqual([replacement]);
+    expect(applyServerSettingsPatch(edited, { deviceHosts: [] }).deviceHosts).toEqual([]);
+  });
+
   it("defaults disableAuthentication to false when absent or invalid", () => {
     expect(parsePersistedServerStartupSettings("{}").disableAuthentication).toBe(false);
     expect(parsePersistedServerStartupSettings("{").disableAuthentication).toBe(false);

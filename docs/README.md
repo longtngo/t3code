@@ -19,6 +19,7 @@
 - [Environment themes](./user/environment-theme.md)
 - [SnapShots](./user/snap-shot.md)
 - [Import browser sessions](./user/browser-import.md)
+- [Devices](./user/devices.md)
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Running in the background](./user/background-service.md)
@@ -51,6 +52,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Mobile navigation](./internals/mobile-navigation.md)
 - [Mobile development lifecycle](./internals/mobile-development.md)
 - [Terminal runtime](./internals/terminal-runtime.md)
+- [Devices](./internals/devices.md)
 - [Voice input](./internals/voice-input.md)
 
 ### Runbooks

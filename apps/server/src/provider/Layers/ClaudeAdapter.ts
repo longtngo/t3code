@@ -5353,7 +5353,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ) => runPromise(handleResumeDialog(request, callbackOptions));
 
       const claudeBinaryPath = claudeSdkExecutablePath;
-      const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
+      const {
+        "permission-mode": launchArgPermissionMode,
+        "dangerously-skip-permissions": launchArgSkipPermissions,
+        ...extraArgs
+      } = parseCliArgs(claudeSettings.launchArgs).flags;
       const selectedModel =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
       const modelSelection = selectedModel
@@ -5394,7 +5398,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         auto: "auto",
         "full-access": "bypassPermissions",
       };
-      const permissionMode = runtimeModeToPermission[input.runtimeMode];
+      // A permission launch arg is folded into the mode T3 sends rather than
+      // passed through: the CLI resolves both inputs together, so argv order
+      // never let the user's flag win.
+      const permissionMode =
+        (launchArgPermissionMode as PermissionMode | null | undefined) ??
+        (launchArgSkipPermissions === null || launchArgSkipPermissions === "true"
+          ? "bypassPermissions"
+          : runtimeModeToPermission[input.runtimeMode]);
       // Claude Code refuses to auto-compact at all when it classifies a context
       // window as "auto", and every >=1M window it holds no model default for
       // lands there - the trigger returns before it even counts tokens. Handing
@@ -5507,13 +5518,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // Points the `subagent-dispatch` wrapper at this thread's own flag file. The base
         // env is shared by reference across sessions (`makeClaudeEnvironment`), so the spread
         // here, not a mutation, is what keeps threads from seeing each other's path.
-        env: {
-          ...claudeEnvironment,
-          SUBAGENT_BACKEND_STATE: threadBackendFilePath(
-            serverConfig.subagentThreadsDir,
-            input.threadId,
-          ),
-        },
+        env: McpProviderSession.withAgentDeviceEnvironment(
+          {
+            ...claudeEnvironment,
+            SUBAGENT_BACKEND_STATE: threadBackendFilePath(
+              serverConfig.subagentThreadsDir,
+              input.threadId,
+            ),
+          },
+          mcpSession,
+        ),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
