@@ -2252,6 +2252,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       true,
     ).pipe(Effect.map((stdout) => stdout.trim()));
     yield* executeGit("GitVcsDriver.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
+      // A server started from a terminal owns a controlling TTY, and without this a
+      // credential prompt there blocks until the timeout instead of failing at once.
+      env: STATUS_UPSTREAM_REFRESH_ENV,
       timeoutMs: 30_000,
       fallbackErrorDetail: "git pull failed",
     });

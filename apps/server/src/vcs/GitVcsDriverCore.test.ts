@@ -1238,7 +1238,11 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("makes background upstream status fetches non-interactive", () =>
+    // Runs `run` against an ssh remote whose transport logs the credential-prompt env
+    // it was handed, with the ambient env set to every interactive value.
+    const expectRemoteGitNonInteractive = (
+      run: (driver: GitVcsDriver.GitVcsDriver["Service"], cwd: string) => Effect.Effect<unknown>,
+    ) =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const tempDir = yield* makeTmpDir("git-vcs-driver-ssh-env-");
@@ -1285,7 +1289,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           process.env.SSH_ASKPASS_REQUIRE = "force";
           process.env.T3_TEST_SSH_ASKPASS_LOG = sshLogPath;
 
-          yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+          yield* run(yield* GitVcsDriver.GitVcsDriver, cwd);
 
           assert.deepEqual((yield* fileSystem.readFileString(sshLogPath)).trim().split(/\r?\n/), [
             "GCM_INTERACTIVE=never",
@@ -1308,7 +1312,16 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
             }),
           ),
         );
-      }),
+      });
+
+    it.effect("makes background upstream status fetches non-interactive", () =>
+      expectRemoteGitNonInteractive((driver, cwd) => driver.statusDetails(cwd).pipe(Effect.orDie)),
+    );
+
+    it.effect("makes a pull non-interactive", () =>
+      expectRemoteGitNonInteractive((driver, cwd) =>
+        driver.pullCurrentBranch(cwd).pipe(Effect.ignore),
+      ),
     );
 
     it.effect("backs a failing upstream fetch off instead of refetching on every status read", () =>
