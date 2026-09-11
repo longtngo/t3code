@@ -326,8 +326,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (isRunning) {
-    // Send stays mounted beside Stop rather than being replaced by it, so the
-    // control never moves between idle and running. Every adapter has a defined
+    // Send sits beside Stop rather than being replaced by it. `hideIdleSend`
+    // still hides it while there is nothing to send, so under that flag Stop can
+    // stand alone until a draft appears. Every adapter has a defined
     // concurrent-send path — Claude queues the follow-up FIFO
     // (`ClaudeAdapter.ts:4637`), Cursor/Grok/OpenCode hold it behind their
     // prompt serialization permit and count it as the running turn — so this is
