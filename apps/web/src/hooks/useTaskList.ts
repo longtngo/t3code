@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
@@ -58,10 +58,10 @@ export function useTaskList(
   // Nulled unless the panel shows: subscribing is what fires the fetch. Also nulled when
   // unsupported, since an older server answers an unknown method with a defect, not a typed error.
   const queryAtom =
-    environmentId === null || threadId === null || !supported || !enabled || !serverThread
+    environmentId === null || threadId === null || supported !== true || !enabled || !serverThread
       ? null
       : threadPlanHistoryEnvironment.list({ environmentId, input: { threadId, latestTurnId } });
-  const { data, error, refresh } = useEnvironmentQuery(queryAtom);
+  const { data, error, isPending, refresh } = useEnvironmentQuery(queryAtom);
   const current = queryAtom === null ? null : data;
 
   // The query starts every new key empty; keep the last landed read so a turn change does not
@@ -96,6 +96,16 @@ export function useTaskList(
     [groups, latestTurnId, nowMinute],
   );
 
-  const historyStatus = taskListHistoryStatus({ supported, enabled, serverThread, error, current });
+  const historyStatusRef = useRef<TaskListState["historyStatus"] | null>(null);
+  const historyStatus = taskListHistoryStatus({
+    supported,
+    enabled,
+    serverThread,
+    error,
+    current,
+    isPending,
+    previousStatus: historyStatusRef.current ?? "pending",
+  });
+  if (enabled) historyStatusRef.current = historyStatus;
   return { ...view, historyStatus, retry: refresh };
 }

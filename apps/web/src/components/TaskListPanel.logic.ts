@@ -73,21 +73,24 @@ export function taskListPanelState(
 }
 
 /**
- * Where the history read stands. The read is requested only while the Task list panel shows, so
- * a hidden panel reads `pending`: the instant it shows, the query starts, and a thread whose
- * primary is outside the live window must show loading, never "No task list yet" or
- * "unavailable". A thread the server does not know yet (a draft) has no history to read.
+ * Where the history read stands. The read is requested only while the Task list panel shows.
+ * While hidden, `previousStatus` is returned so a close animation does not flash loading. A
+ * thread the server does not know yet (a draft) has no history to read.
  */
 export function taskListHistoryStatus(read: {
-  readonly supported: boolean;
+  readonly supported: boolean | null;
   readonly enabled: boolean;
   readonly serverThread: boolean;
   readonly error: string | null;
   readonly current: unknown;
+  readonly isPending: boolean;
+  readonly previousStatus: TaskListState["historyStatus"];
 }): TaskListState["historyStatus"] {
   if (!read.serverThread) return "ready";
+  if (read.supported === null) return "pending";
   if (!read.supported) return "unsupported";
-  if (!read.enabled) return "pending";
+  if (!read.enabled) return read.previousStatus;
+  if (read.error !== null && read.isPending) return "pending";
   if (read.error !== null) return "error";
   return read.current !== null ? "ready" : "pending";
 }

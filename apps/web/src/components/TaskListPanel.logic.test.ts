@@ -113,12 +113,52 @@ describe("taskListPanelState", () => {
 });
 
 describe("taskListHistoryStatus", () => {
-  const read = { supported: true, enabled: true, serverThread: true, error: null, current: null };
+  const read = {
+    supported: true,
+    enabled: true,
+    serverThread: true,
+    error: null,
+    current: null,
+    isPending: false,
+    previousStatus: "pending" as const,
+  };
 
-  it("reads pending, never unavailable, while the panel is not showing", () => {
+  it("reads pending while server config has not arrived", () => {
+    expect(taskListHistoryStatus({ ...read, supported: null })).toBe("pending");
+  });
+
+  it("is unsupported once config says the server has no history read", () => {
+    expect(taskListHistoryStatus({ ...read, supported: false })).toBe("unsupported");
+    expect(taskListHistoryStatus({ ...read, supported: false, enabled: false })).toBe(
+      "unsupported",
+    );
+  });
+
+  it("reads pending while a failed read is retrying", () => {
+    expect(
+      taskListHistoryStatus({ ...read, error: "timed out", isPending: true, current: [] }),
+    ).toBe("pending");
+    expect(taskListHistoryStatus({ ...read, error: "timed out", isPending: false })).toBe("error");
+  });
+
+  it("keeps the last status while the panel is not showing", () => {
+    expect(
+      taskListHistoryStatus({
+        ...read,
+        enabled: false,
+        previousStatus: "ready",
+        current: [],
+      }),
+    ).toBe("ready");
+    expect(
+      taskListHistoryStatus({
+        ...read,
+        enabled: false,
+        previousStatus: "error",
+        error: "timed out",
+      }),
+    ).toBe("error");
     expect(taskListHistoryStatus({ ...read, enabled: false })).toBe("pending");
-    expect(taskListHistoryStatus({ ...read, enabled: false, error: "timed out" })).toBe("pending");
-    expect(taskListHistoryStatus({ ...read, enabled: false, current: [] })).toBe("pending");
   });
 
   it("follows the read once the panel shows", () => {
@@ -126,13 +166,6 @@ describe("taskListHistoryStatus", () => {
     expect(taskListHistoryStatus({ ...read, current: [] })).toBe("ready");
     expect(taskListHistoryStatus({ ...read, error: "timed out" })).toBe("error");
     expect(taskListHistoryStatus({ ...read, error: "timed out", current: [] })).toBe("error");
-  });
-
-  it("is unsupported when the server has no history read, open or not", () => {
-    expect(taskListHistoryStatus({ ...read, supported: false })).toBe("unsupported");
-    expect(taskListHistoryStatus({ ...read, supported: false, enabled: false })).toBe(
-      "unsupported",
-    );
   });
 
   it("is ready without a read for a thread the server does not know yet", () => {

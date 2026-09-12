@@ -225,16 +225,16 @@ export function useEnvironmentSupportsCrew(environmentId: EnvironmentId | null):
   );
 }
 
-/** Whether the environment's server serves `thread.planHistory.list`. Absent on older
+/** Whether the environment's server serves `thread.planHistory.list`: `null` until its server
+    config arrives, so the Task list can show loading rather than "unavailable". Absent on older
     servers, where the method would fail as a generic request error. */
 export function useEnvironmentSupportsThreadPlanHistory(
   environmentId: EnvironmentId | null,
-): boolean {
+): boolean | null {
   const serverConfigs = useServerConfigs();
-  return (
-    environmentId != null &&
-    serverConfigs.get(environmentId)?.environment.capabilities.threadPlanHistory === true
-  );
+  if (environmentId == null) return false;
+  const config = serverConfigs.get(environmentId);
+  return config === undefined ? null : config.environment.capabilities.threadPlanHistory === true;
 }
 
 /** Whether the environment's server understands thread.pin/unpin.
