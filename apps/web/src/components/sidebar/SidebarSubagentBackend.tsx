@@ -12,7 +12,6 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 
-import { cn } from "~/lib/utils";
 import {
   useClientSettings,
   useEnvironmentSettings,
@@ -25,7 +24,8 @@ import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/provid
 import { getAppModelOptionsForInstance } from "~/modelSelection";
 import { primaryServerProvidersAtom } from "~/state/server";
 import { WindowRow } from "~/components/chat/VitalsGauge";
-import { cycleWindow } from "~/lib/vitals";
+import { computeWindowPace, cycleWindow, paceDiffLabel, windowSeverity } from "~/lib/vitals";
+import { sidebarFooterSeverityBadgeClass } from "./sidebarFooterBadge";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
@@ -49,20 +49,19 @@ const THREAD_MODE_LABELS: Record<SubagentBackendThreadMode, string> = {
 };
 
 /**
- * Re-renders once a second while, and only while, the panel is open, so the usage bar's
- * reset-time readout stays "now"-relative (`formatWindowReset`) and the pace marker advances
- * when a billing-cycle window is present. A permanently-mounted ticker in the sidebar footer
- * is exactly the repainting cost the project guidelines forbid — most of the time this row is
- * collapsed and nothing here should be painting at all.
+ * The clock for the usage pace. Once a second while the panel is open, so its reset readout and
+ * pace marker stay current. Once a minute while closed, for the footer badge's colour: pace on a
+ * month-long cycle moves about 3% a day, and a per-second ticker on a permanently mounted footer
+ * control is repainting cost for nothing. No clock at all while neither needs one.
  */
-function usePanelNow(active: boolean): number {
+function usePanelNow(intervalMs: number | null): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!active) return;
+    if (intervalMs === null) return;
     setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
-  }, [active]);
+  }, [intervalMs]);
   return now;
 }
 
@@ -140,7 +139,9 @@ export function SidebarSubagentBackend() {
   const environmentId = supported ? primaryEnvironmentId : null;
   const [open, setOpen] = useState(false);
   const { state, usage, pending, set } = useSubagentBackend(environmentId, open);
-  const now = usePanelNow(open);
+  const now = usePanelNow(
+    open ? 1000 : state?.backend === SUBAGENT_BACKEND_CURSOR && usage ? 60_000 : null,
+  );
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -175,6 +176,17 @@ export function SidebarSubagentBackend() {
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
   const usageCycle = usage ? cycleWindow(usage.startsAt, usage.resetsAt) : null;
+  // The same pace -> severity pair the panel's `WindowRow` colours its bar with.
+  // Shown only while offload is genuinely on (the green-icon rule), not merely while Cursor is the
+  // stored backend: with the master switch off, a coloured percent would say the opposite.
+  const usagePace =
+    status.dot === "on" && usage
+      ? computeWindowPace(
+          { utilization: usage.usedPercent, resetsAt: usage.resetsAt },
+          usageCycle?.windowMs ?? null,
+          now,
+        )
+      : null;
   const controlsDisabled = pending || state == null;
 
   const applyBackend = (backend: string) => {
@@ -190,7 +202,7 @@ export function SidebarSubagentBackend() {
             render={
               <SidebarMenuButton
                 size="sm"
-                className="h-8 w-auto px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
                 onClick={() => setOpen((value) => !value)}
                 aria-expanded={open}
                 aria-controls={open ? PANEL_ID : undefined}
@@ -198,9 +210,26 @@ export function SidebarSubagentBackend() {
               >
                 {pending ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
+                ) : status.dot === "on" ? (
+                  // Wrapped, not coloured directly: the menu button colours its direct `svg`
+                  // children with a more specific selector (hover included), so a class on the
+                  // icon itself never shows.
+                  <span className="flex text-emerald-500">
+                    <BotIcon className="size-3.5" />
+                  </span>
                 ) : (
-                  <BotIcon className={cn("size-3.5", status.dot === "on" && "text-emerald-500")} />
+                  <BotIcon className="size-3.5" />
                 )}
+                {usagePace ? (
+                  <span
+                    aria-label={`Cursor usage ${usagePace.usage}%${
+                      usagePace.diff !== null ? `, ${paceDiffLabel(usagePace.diff)}` : ""
+                    }`}
+                    className={sidebarFooterSeverityBadgeClass(windowSeverity(usagePace))}
+                  >
+                    {usagePace.usage}%
+                  </span>
+                ) : null}
               </SidebarMenuButton>
             }
           />

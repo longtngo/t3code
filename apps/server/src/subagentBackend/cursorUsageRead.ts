@@ -7,8 +7,8 @@
  * `CursorAdapter`'s per-thread broadcast). A subagent-backend toggle panel with
  * no thread open has nothing to subscribe to, so this polls
  * `makeAccountUsagePoll` (token resolution + `fetchUsageSnapshot`, from
- * `CursorUsage.ts`) directly, cached for 60s so repeatedly opening the panel
- * does not repeatedly hit Cursor's API. A failed or unauthenticated fetch
+ * `CursorUsage.ts`) directly, cached for 60s so the sidebar's once-a-minute
+ * refresh and repeated panel opens do not repeatedly hit Cursor's API. A failed or unauthenticated fetch
  * resolves to `null`, never an error — the panel simply shows no usage.
  *
  * @module subagentBackend/cursorUsageRead

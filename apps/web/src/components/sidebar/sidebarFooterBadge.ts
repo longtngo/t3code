@@ -1,3 +1,5 @@
+import { SEVERITY_BG, type Severity } from "~/lib/vitals";
+
 /**
  * The count badge shared by the sidebar footer's status controls.
  *
@@ -19,4 +21,9 @@ const BADGE_TONE: Record<SidebarFooterBadgeTone, string> = {
 
 export function sidebarFooterBadgeClass(tone: SidebarFooterBadgeTone): string {
   return `${BADGE_BASE} ${BADGE_TONE[tone]}`;
+}
+
+/** A percentage badge coloured by the same severity as the usage bar it summarises. */
+export function sidebarFooterSeverityBadgeClass(level: Severity): string {
+  return `${BADGE_BASE} ${SEVERITY_BG[level]} font-semibold text-black`;
 }

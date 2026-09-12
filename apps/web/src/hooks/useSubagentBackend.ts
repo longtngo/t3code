@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type {
-  CursorUsageSnapshot,
-  EnvironmentId,
-  SubagentBackendSetInput,
-  SubagentBackendState,
+import {
+  SUBAGENT_BACKEND_CURSOR,
+  type CursorUsageSnapshot,
+  type EnvironmentId,
+  type SubagentBackendSetInput,
+  type SubagentBackendState,
 } from "@t3tools/contracts";
 
 import { subagentBackendEnvironment } from "../state/subagentBackend";
@@ -22,7 +23,7 @@ export interface SubagentBackendController {
   /** Last committed state: from a `get` response, or directly from a `set` response. Never
    *  flipped ahead of either — see the module doc for why. */
   readonly state: SubagentBackendState | null;
-  /** Cursor's usage snapshot. Only fetched while the panel is open. */
+  /** Cursor's usage snapshot. Fetched while the Cursor backend is selected. */
   readonly usage: CursorUsageSnapshot | null;
   /** True from the moment `set` is called until its response lands. */
   readonly pending: boolean;
@@ -103,13 +104,14 @@ export function useSubagentBackend(
       : subagentBackendEnvironment.get({ environmentId, input: { refreshModels: true } });
   const { data: panelState, isPending: panelIsPending } = useEnvironmentQuery(panelAtom);
 
+  const [commit, dispatch] = useReducer(commitReducer, INITIAL_SUBAGENT_BACKEND_COMMIT);
+
+  // Read while the Cursor backend is selected, panel open or not: the footer badge shows it.
   const usageAtom =
-    environmentId == null || !panelOpen
+    environmentId == null || commit.state?.backend !== SUBAGENT_BACKEND_CURSOR
       ? null
       : subagentBackendEnvironment.usage({ environmentId, input: {} });
   const { data: usage } = useEnvironmentQuery(usageAtom);
-
-  const [commit, dispatch] = useReducer(commitReducer, INITIAL_SUBAGENT_BACKEND_COMMIT);
 
   useEffect(() => {
     dispatch({ type: "reset" });

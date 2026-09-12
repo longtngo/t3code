@@ -26,6 +26,9 @@ export function createSubagentBackendEnvironmentAtoms<R, E>(
       label: "environment-data:subagent-backend:usage",
       tag: WS_METHODS.subagentBackendUsage,
       staleTimeMs: 30_000,
+      // The sidebar footer badge shows this while the panel is closed; the server caches the
+      // Cursor read for 60s, so polling faster would only re-read the same snapshot.
+      refreshIntervalMs: 60_000,
     }),
     set: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:subagent-backend:set",
