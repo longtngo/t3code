@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { useParams } from "@tanstack/react-router";
-import { BotIcon, ChevronRightIcon, Loader2Icon } from "lucide-react";
+import { BotIcon, Loader2Icon } from "lucide-react";
 import {
   ProviderInstanceId,
   SUBAGENT_BACKEND_CURSOR,
@@ -28,7 +28,7 @@ import { WindowRow } from "~/components/chat/VitalsGauge";
 import { cycleWindow } from "~/lib/vitals";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -120,10 +120,10 @@ function ThreadOffloadControl(props: {
 }
 
 /**
- * Sidebar footer disclosure for the machine-level subagent-dispatch-backend toggle: whether
- * subagents on this host route through Cursor or the provider's default. Expands in place
- * (pushing the thread list up) rather than floating, unlike its footer-row neighbours, because
- * this is a settings surface with real controls rather than a glanceable status popover.
+ * Sidebar footer icon for the machine-level subagent-dispatch-backend toggle: whether subagents
+ * on this host route through Cursor or the provider's default. The icon is green while Cursor
+ * offload is on; clicking it expands the panel in place above the footer row. Renders two items
+ * into the footer's `SidebarMenu`: the icon, and the panel while open.
  *
  * Rendered only when some connected environment reports the `subagentBackend` capability,
  * mirroring how `pullRequestsSupported` is computed in `SidebarUtilityMenu`.
@@ -183,38 +183,38 @@ export function SidebarSubagentBackend() {
   };
 
   return (
-    <SidebarMenu>
+    <>
       <SidebarMenuItem className="shrink-0">
-        <SidebarMenuButton
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          aria-controls={open ? PANEL_ID : undefined}
-        >
-          <BotIcon />
-          <span className="min-w-0 flex-1 truncate">Subagents</span>
-          {pending ? (
-            <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground" />
-          ) : (
-            <span
-              aria-hidden
-              className={cn(
-                "size-1.5 shrink-0 rounded-full",
-                status.dot === "on" ? "bg-emerald-500" : "bg-muted-foreground/40",
-              )}
-            />
-          )}
-          <span className="max-w-24 shrink truncate text-xs text-muted-foreground">
-            {status.text}
-          </span>
-          <ChevronRightIcon
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground/60 transition-transform",
-              open && "rotate-90",
-            )}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <SidebarMenuButton
+                size="sm"
+                className="h-8 w-auto px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                onClick={() => setOpen((value) => !value)}
+                aria-expanded={open}
+                aria-controls={open ? PANEL_ID : undefined}
+                aria-label="Subagents"
+              >
+                {pending ? (
+                  <Loader2Icon className="size-3.5 animate-spin" />
+                ) : (
+                  <BotIcon className={cn("size-3.5", status.dot === "on" && "text-emerald-500")} />
+                )}
+              </SidebarMenuButton>
+            }
           />
-        </SidebarMenuButton>
+          {/* The row used to print the status beside its label; an icon has nowhere to put it. */}
+          <TooltipPopup side="top">Subagents · {status.text}</TooltipPopup>
+        </Tooltip>
+      </SidebarMenuItem>
 
-        {open ? (
+      {/* A full-width first item of the footer row, so it still expands in place above the
+          icons and pushes the thread list up. It stays in the flow rather than floating like
+          Local models: its Selects open in body portals, and the footer's outside-click
+          dismissal would close a floating panel mid-selection. */}
+      {open ? (
+        <SidebarMenuItem className="order-first basis-full">
           <div id={PANEL_ID} className="space-y-2.5 px-1 pt-2 pb-1 [--segment-gap:var(--sidebar)]">
             <ToggleGroup
               aria-label="Subagent backend"
@@ -359,8 +359,8 @@ export function SidebarSubagentBackend() {
               />
             ) : null}
           </div>
-        ) : null}
-      </SidebarMenuItem>
-    </SidebarMenu>
+        </SidebarMenuItem>
+      ) : null}
+    </>
   );
 }

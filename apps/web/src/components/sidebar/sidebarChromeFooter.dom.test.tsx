@@ -45,7 +45,7 @@ vi.mock("./SidebarCrew", () => ({
 }));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
 vi.mock("./SidebarSubagentBackend", () => ({
-  SidebarSubagentBackend: () => createElement("div", { "data-panel": "subagents" }),
+  SidebarSubagentBackend: () => createElement("li", { "data-panel": "subagents" }),
 }));
 vi.mock("./SidebarUpdatePill", () => ({
   SidebarUpdatePill: () => null,
@@ -80,6 +80,7 @@ describe("SidebarChromeFooter panel placement", () => {
     expect(view.text()).toContain("Back");
     expect(view.find('[data-panel="models"]')).not.toBeNull();
     expect(view.find('[data-panel="queue"]')).not.toBeNull();
+    expect(view.find('[data-panel="subagents"]')).not.toBeNull();
   });
 
   it("KEEPS both status panels on the Pull Requests page", async () => {
@@ -110,6 +111,8 @@ describe("SidebarChromeFooter panel placement", () => {
     expect(row).not.toBeNull();
     expect(row?.querySelector('[data-panel="models"]')).not.toBeNull();
     expect(row?.querySelector('[data-panel="queue"]')).not.toBeNull();
+    // Subagents is an icon in the same row now, and its panel expands as that row's first item.
+    expect(row?.querySelector('ul > [data-panel="subagents"]')).not.toBeNull();
   });
 
   it("mounts the subagent disclosure inside the utility menu, which is what the settings page renders", async () => {

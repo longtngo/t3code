@@ -223,14 +223,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <>
-      <SidebarSubagentBackend />
-      {/* This wrapper is the positioning context for the two fork-only panels in the row
-       below. Their trigger items opt out of `relative`, so each panel draws at exactly
+      {/* This wrapper is the positioning context for the two floating fork-only panels in the
+       row below. Their trigger items opt out of `relative`, so each panel draws at exactly
        footer width above the whole row instead of against its own ~40px button — correct
        on the 16rem desktop sidebar and the wider mobile drawer alike, with no width
        arithmetic.
 
-       The row wraps: five controls plus the Electron update pill do not always fit 240px,
+       The row wraps: six controls plus the Electron update pill do not always fit 240px,
        and wrapping to a second line beats overflowing or shrinking the badges past
        legibility. */}
       <div className="relative" ref={footerRowRef}>
@@ -265,13 +264,15 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           )}
           {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
             Usage are navigation, so "Back" rightly replaces them once you are on one of
-            those pages. These two are live status readouts — hiding them there would be a
-            silent capability loss for no gain. `SidebarUpdatePill` below sits outside for
-            the same reason.
+            those pages. Subagents, Local models and Resource Queue are live status readouts —
+            hiding them there would be a silent capability loss for no gain.
+            `SidebarUpdatePill` below sits outside for the same reason.
 
-            Their open state lives in this component rather than in each panel: both anchor
-            to the wrapper above with identical insets, so two open panels would occupy the
-            same box. */}
+            Local models' and Resource Queue's open state lives in this component rather than
+            in each panel: both anchor to the wrapper above with identical insets, so two open
+            panels would occupy the same box. Subagents keeps its own state; its panel is an
+            in-flow first item of this row, not an overlay. */}
+          <SidebarSubagentBackend />
           <SidebarLocalModels
             isOpen={openFooterPanel === "models"}
             onOpenChange={(open) => setFooterPanelOpen("models", open)}
