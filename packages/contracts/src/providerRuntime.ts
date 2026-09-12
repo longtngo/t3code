@@ -869,6 +869,7 @@ const AccountUsageCursorPayload = Schema.Struct({
   onDemand: Schema.NullOr(AccountUsageExtra),
   onDemandScope: Schema.optional(Schema.Literals(["team", "individual"])),
   requests: Schema.optional(AccountUsageCursorRequests),
+  cycleStartsAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type AccountUsageCursorPayload = typeof AccountUsageCursorPayload.Type;
 

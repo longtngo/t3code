@@ -74,6 +74,7 @@ describe("CursorUsage.normalizeCurrentPeriodUsage", () => {
       currency: "USD",
     });
     assert.equal(result.cursor?.onDemandScope, "team");
+    assert.equal(result.cursor?.cycleStartsAt, unixMsToIso("1780445696000"));
   });
 
   it("keeps auto and api as separate cursor windows", () => {
@@ -162,6 +163,35 @@ describe("CursorUsage.mergeUsageSnapshots", () => {
     );
     assert.equal(merged.cursor?.total?.utilization, 30);
     assert.equal(hasUsageSignal(merged), true);
+  });
+
+  it("fills cycleStartsAt from fallback when primary omits it", () => {
+    const merged = mergeUsageSnapshots(
+      {
+        fiveHour: null,
+        sevenDay: null,
+        extra: null,
+        cursor: {
+          auto: null,
+          api: null,
+          total: { utilization: 30, resetsAt: "2026-10-03T00:14:56.000Z" },
+          onDemand: null,
+        },
+      },
+      {
+        fiveHour: null,
+        sevenDay: null,
+        extra: null,
+        cursor: {
+          auto: null,
+          api: null,
+          total: null,
+          onDemand: null,
+          cycleStartsAt: "2026-09-03T00:14:56.000Z",
+        },
+      },
+    );
+    assert.equal(merged.cursor?.cycleStartsAt, "2026-09-03T00:14:56.000Z");
   });
 });
 

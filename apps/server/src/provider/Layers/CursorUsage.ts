@@ -178,6 +178,7 @@ export const normalizeCurrentPeriodUsage = (
     }
   }
 
+  const cycleStartsAt = unixMsToIso(raw.billingCycleStart);
   return {
     fiveHour: null,
     sevenDay: null,
@@ -188,6 +189,7 @@ export const normalizeCurrentPeriodUsage = (
       total,
       onDemand: spend.onDemand,
       ...(spend.scope ? { onDemandScope: spend.scope } : {}),
+      ...(cycleStartsAt !== null ? { cycleStartsAt } : {}),
     },
   };
 };
@@ -257,6 +259,7 @@ export const mergeUsageSnapshots = (
       onDemand: primaryCursor?.onDemand ?? fallbackCursor?.onDemand ?? null,
       onDemandScope: primaryCursor?.onDemandScope ?? fallbackCursor?.onDemandScope,
       requests: primaryCursor?.requests ?? fallbackCursor?.requests,
+      cycleStartsAt: primaryCursor?.cycleStartsAt ?? fallbackCursor?.cycleStartsAt,
     },
   };
 };

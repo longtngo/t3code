@@ -6,6 +6,7 @@ import {
   billingMonthWindow,
   clampPct,
   computeWindowPace,
+  cycleWindow,
   daysInUtcMonth,
   deriveLatestAccountUsage,
   formatSnapshotAge,
@@ -201,7 +202,7 @@ describe("deriveLatestAccountUsage", () => {
     ]);
   });
 
-  it("surfaces Cursor windows with no fixed duration (utilization only)", () => {
+  it("surfaces Cursor windows with no fixed duration when cycleStartsAt is absent", () => {
     const view = deriveLatestAccountUsage(
       [
         makeActivity("cursor", "account.usage.updated", {
@@ -223,6 +224,58 @@ describe("deriveLatestAccountUsage", () => {
         windowMs: null,
       },
     ]);
+  });
+
+  it("paces Cursor windows when cycleStartsAt is present", () => {
+    const view = deriveLatestAccountUsage(
+      [
+        makeActivity("cursor", "account.usage.updated", {
+          cursor: {
+            auto: null,
+            api: null,
+            total: { utilization: 40, resetsAt: "2026-10-03T00:14:56.000Z" },
+            cycleStartsAt: "2026-09-03T00:14:56.000Z",
+          },
+        }),
+      ],
+      NOW_MS,
+    );
+    expect(view?.extraWindows).toEqual([
+      {
+        label: "Cursor total",
+        utilization: 40,
+        resetsAt: "2026-10-03T00:14:56.000Z",
+        windowMs: 30 * 24 * 60 * 60 * 1000,
+        segmentCount: 30,
+      },
+    ]);
+  });
+});
+
+describe("cycleWindow", () => {
+  const start = "2026-09-03T00:14:56.000Z";
+  const end = "2026-10-03T00:14:56.000Z";
+
+  it("derives a 30-day window from the billing cycle", () => {
+    expect(cycleWindow(start, end)).toEqual({
+      windowMs: 30 * 24 * 60 * 60 * 1000,
+      segmentCount: 30,
+    });
+  });
+
+  it("returns null when the start is missing", () => {
+    expect(cycleWindow(null, end)).toBeNull();
+    expect(cycleWindow(undefined, end)).toBeNull();
+  });
+
+  it("returns null when the reset is missing or inverted", () => {
+    expect(cycleWindow(start, null)).toBeNull();
+    expect(cycleWindow(start, start)).toBeNull();
+    expect(cycleWindow(end, start)).toBeNull();
+  });
+
+  it("returns null for an unparseable start", () => {
+    expect(cycleWindow("not-a-date", end)).toBeNull();
   });
 });
 
@@ -665,6 +718,11 @@ describe("segmentBoundariesBackground", () => {
 
   it("still produces boundaries at a month's worth of segments", () => {
     expect(segmentBoundariesBackground(31)).toContain("linear-gradient");
+  });
+
+  it("uses a segment-gap custom property with popover fallback", () => {
+    const background = segmentBoundariesBackground(5) ?? "";
+    expect(background).toContain("var(--segment-gap, var(--popover))");
   });
 });
 

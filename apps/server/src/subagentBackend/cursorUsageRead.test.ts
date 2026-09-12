@@ -17,6 +17,7 @@ const payload = (utilization: number): AccountUsageUpdatedPayload => ({
     api: null,
     total: { utilization, resetsAt: "2026-09-01T00:00:00.000Z" },
     onDemand: null,
+    cycleStartsAt: "2026-08-03T00:14:56.000Z",
   },
   fetchedAt: "2026-08-30T00:00:00.000Z",
 });
@@ -44,6 +45,7 @@ describe("readCursorUsage", () => {
       Effect.gen(function* () {
         const first = yield* readCursorUsage();
         expect(first?.usedPercent).toBe(10);
+        expect(first?.startsAt).toBe("2026-08-03T00:14:56.000Z");
         expect(poll).toHaveBeenCalledTimes(1);
 
         // Still inside the TTL: a second call must not refetch.

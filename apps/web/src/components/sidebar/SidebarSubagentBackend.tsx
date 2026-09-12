@@ -25,6 +25,7 @@ import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/provid
 import { getAppModelOptionsForInstance } from "~/modelSelection";
 import { primaryServerProvidersAtom } from "~/state/server";
 import { WindowRow } from "~/components/chat/VitalsGauge";
+import { cycleWindow } from "~/lib/vitals";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
@@ -49,9 +50,8 @@ const THREAD_MODE_LABELS: Record<SubagentBackendThreadMode, string> = {
 
 /**
  * Re-renders once a second while, and only while, the panel is open, so the usage bar's
- * reset-time readout stays "now"-relative (`formatWindowReset`). `WindowRow` is called here
- * with `windowMs: null`, so `computeWindowPace` never produces a pace projection to advance —
- * there is nothing else this ticker does. A permanently-mounted ticker in the sidebar footer
+ * reset-time readout stays "now"-relative (`formatWindowReset`) and the pace marker advances
+ * when a billing-cycle window is present. A permanently-mounted ticker in the sidebar footer
  * is exactly the repainting cost the project guidelines forbid — most of the time this row is
  * collapsed and nothing here should be painting at all.
  */
@@ -174,6 +174,7 @@ export function SidebarSubagentBackend() {
   const cursorAvailable = subagentCursorAvailable(state);
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
+  const usageCycle = usage ? cycleWindow(usage.startsAt, usage.resetsAt) : null;
   const controlsDisabled = pending || state == null;
 
   const applyBackend = (backend: string) => {
@@ -214,7 +215,7 @@ export function SidebarSubagentBackend() {
         </SidebarMenuButton>
 
         {open ? (
-          <div id={PANEL_ID} className="space-y-2.5 px-1 pt-2 pb-1">
+          <div id={PANEL_ID} className="space-y-2.5 px-1 pt-2 pb-1 [--segment-gap:var(--sidebar)]">
             <ToggleGroup
               aria-label="Subagent backend"
               variant="segmented"
@@ -326,7 +327,8 @@ export function SidebarSubagentBackend() {
               <WindowRow
                 label={usage.label}
                 window={{ utilization: usage.usedPercent, resetsAt: usage.resetsAt }}
-                windowMs={null}
+                windowMs={usageCycle?.windowMs ?? null}
+                segmentCount={usageCycle?.segmentCount}
                 now={now}
                 timestampFormat={timestampFormat}
               />

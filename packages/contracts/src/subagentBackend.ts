@@ -64,5 +64,6 @@ export const CursorUsageSnapshot = Schema.Struct({
   usedPercent: Schema.Number,
   resetsAt: Schema.NullOr(Schema.String),
   fetchedAt: Schema.String,
+  startsAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type CursorUsageSnapshot = typeof CursorUsageSnapshot.Type;

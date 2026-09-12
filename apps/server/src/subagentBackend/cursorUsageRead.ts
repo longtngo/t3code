@@ -46,11 +46,13 @@ function toSnapshot(
 ): CursorUsageSnapshot | null {
   const total = payload?.cursor?.total ?? null;
   if (total === null) return null;
+  const startsAt = payload?.cursor?.cycleStartsAt ?? null;
   return {
     label: "Cursor",
     usedPercent: total.utilization,
     resetsAt: total.resetsAt,
     fetchedAt: payload?.fetchedAt ?? fetchedAtIso,
+    ...(startsAt !== null && startsAt !== undefined ? { startsAt } : {}),
   };
 }
 

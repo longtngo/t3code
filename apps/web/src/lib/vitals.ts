@@ -73,6 +73,7 @@ export function clampPct(value: number): number {
 /** Rolling-window durations, in ms, used to turn `resetsAt` into an elapsed fraction. */
 export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface UsageWindowView {
   /** Float percent 0..100(+). */
@@ -90,6 +91,7 @@ export interface UsageWindowView {
 export interface LabeledUsageWindowView extends UsageWindowView {
   readonly label: string;
   readonly windowMs: number | null;
+  readonly segmentCount?: number | undefined;
 }
 
 /**
@@ -192,12 +194,30 @@ function parseCodexWindows(value: unknown): LabeledUsageWindowView[] {
 }
 
 /**
- * Cursor usage windows (auto / api / total). Cursor exposes a period utilization
- * but no fixed window length, so `windowMs` is null (utilization-only rows).
+ * Derive a pace-able window from a billing-cycle start and reset instant.
+ * Returns null unless both parse and `resetsAt > startsAt`.
+ */
+export function cycleWindow(
+  startsAt: string | null | undefined,
+  resetsAt: string | null,
+): { windowMs: number; segmentCount: number } | null {
+  if (startsAt == null || resetsAt == null) return null;
+  const startMs = Date.parse(startsAt);
+  const endMs = Date.parse(resetsAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  const windowMs = endMs - startMs;
+  const segmentCount = Math.round(windowMs / ONE_DAY_MS);
+  return { windowMs, segmentCount };
+}
+
+/**
+ * Cursor usage windows (auto / api / total). When `cycleStartsAt` is present,
+ * pace and day dividers follow the provider's billing cycle.
  */
 function parseCursorWindows(value: unknown): LabeledUsageWindowView[] {
   const record = asRecord(value);
   if (!record) return [];
+  const cycleStartsAt = typeof record.cycleStartsAt === "string" ? record.cycleStartsAt : null;
   const windows: LabeledUsageWindowView[] = [];
   for (const [key, label] of [
     ["auto", "Cursor auto"],
@@ -206,7 +226,13 @@ function parseCursorWindows(value: unknown): LabeledUsageWindowView[] {
   ] as const) {
     const parsed = parseUsageWindow(record[key]);
     if (!parsed) continue;
-    windows.push({ ...parsed, label, windowMs: null });
+    const cycle = cycleWindow(cycleStartsAt, parsed.resetsAt);
+    windows.push({
+      ...parsed,
+      label,
+      windowMs: cycle?.windowMs ?? null,
+      ...(cycle !== null ? { segmentCount: cycle.segmentCount } : {}),
+    });
   }
   return windows;
 }
@@ -428,8 +454,6 @@ export function windowSeverity(pace: WindowPace): Severity {
   return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff);
 }
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
 /** Date half of a distant reset. System locale, matching `formatShortTimestamp`. */
 const resetDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "numeric",
@@ -488,8 +512,8 @@ export function segmentBoundariesBackground(segments: number): string | undefine
     const at = (index / count) * 100;
     stops.push(
       `transparent calc(${at}% - 0.5px)`,
-      `var(--popover) calc(${at}% - 0.5px)`,
-      `var(--popover) calc(${at}% + 0.5px)`,
+      `var(--segment-gap, var(--popover)) calc(${at}% - 0.5px)`,
+      `var(--segment-gap, var(--popover)) calc(${at}% + 0.5px)`,
       `transparent calc(${at}% + 0.5px)`,
     );
   }

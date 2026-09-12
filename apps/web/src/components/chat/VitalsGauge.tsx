@@ -323,8 +323,8 @@ function LimitsBlock(props: {
         {/*
           The `pace` legend that sat here is gone. Every row's footer already
           reads "· pace 49%", so it labelled something self-labelling — and on a
-          window with no projection (Cursor's, which carry no fixed length) it
-          labelled nothing at all. Its space buys the refresh control a text
+          window with no projection (one whose provider sends no window length)
+          it labelled nothing at all. Its space buys the refresh control a text
           label, which is what makes the control findable: as a bare 12px icon
           at 60% opacity beside a word, it read as decoration.
 
@@ -403,6 +403,7 @@ function LimitsBlock(props: {
             windowMs={window.windowMs}
             now={now}
             timestampFormat={timestampFormat}
+            segmentCount={window.segmentCount}
           />
         ))}
         {usage.balances.map((balance) => (
