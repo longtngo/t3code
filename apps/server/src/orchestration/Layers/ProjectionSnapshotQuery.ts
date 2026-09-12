@@ -38,6 +38,7 @@ import {
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
 import * as Arr from "effect/Array";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -1523,6 +1524,120 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.getUserInputActivity:query",
           "ProjectionSnapshotQuery.getUserInputActivity:decodeRow",
+        ),
+      ),
+    );
+
+  // Task list history. Selects TURNS, then returns each selected turn's full plan row set:
+  // bounding rows by time instead would cut a turn's early rows and with them the step
+  // durations the panel renders from them. A turn is its turn_id; a NULL turn_id row is its
+  // own turn, never merged with another. A turn is selected when its newest plan row is at
+  // or after `since`, or when it is the newest turn whose last plan row still holds a step
+  // (the web client's `planStateFromActivity`), so an idle thread's latest task list stays
+  // reachable at any age and a turn that ended in a clear never becomes that floor.
+  //
+  // INDEXED BY couples this query by name to migration 052_ProjectionThreadActivityKindIndex.ts.
+  // Without the hint the planner picks the (thread_id, sequence) or (thread_id, created_at)
+  // index and walks every activity of the thread rather than just its plan rows; there is no
+  // sqlite_stat1 to steer it, and a (thread_id, kind, created_at) index was tested and not
+  // chosen either. If that index is ever renamed this query fails with "no such index"
+  // instead of silently degrading.
+  const listThreadPlanHistoryRows = SqlSchema.findAll({
+    Request: Schema.Struct({ threadId: ThreadId, since: IsoDateTime }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, since }) =>
+      sql`
+        WITH plan_rows AS (
+          SELECT
+            activities.activity_id,
+            activities.thread_id,
+            activities.turn_id,
+            activities.tone,
+            activities.kind,
+            activities.summary,
+            activities.payload_json,
+            activities.sequence,
+            activities.created_at,
+            CASE
+              WHEN activities.turn_id IS NULL THEN 'activity:' || activities.activity_id
+              ELSE 'turn:' || activities.turn_id
+            END AS turn_key
+          FROM projection_thread_activities AS activities
+            INDEXED BY idx_projection_thread_activities_thread_kind
+          INNER JOIN projection_threads AS threads
+            ON threads.thread_id = activities.thread_id
+          WHERE activities.thread_id = ${threadId}
+            AND activities.kind = 'turn.plan.updated'
+            AND threads.deleted_at IS NULL
+        ),
+        ranked_rows AS (
+          SELECT
+            turn_key,
+            payload_json,
+            MAX(created_at) OVER (PARTITION BY turn_key) AS newest_created_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY turn_key
+              ORDER BY sequence DESC, created_at DESC, activity_id DESC
+            ) AS reverse_position
+          FROM plan_rows
+        ),
+        plan_turns AS (
+          SELECT
+            turn_key,
+            newest_created_at,
+            json_type(payload_json, '$.plan') = 'array'
+              AND EXISTS (
+                SELECT 1
+                FROM json_each(payload_json, '$.plan') AS step
+                WHERE json_type(step.value, '$.step') = 'text'
+              ) AS yields_group
+          FROM ranked_rows
+          WHERE reverse_position = 1
+        ),
+        selected_turns AS (
+          SELECT turn_key
+          FROM plan_turns
+          WHERE newest_created_at >= ${since}
+          UNION
+          SELECT turn_key
+          FROM (
+            SELECT turn_key
+            FROM plan_turns
+            WHERE yields_group
+            ORDER BY newest_created_at DESC, turn_key DESC
+            LIMIT 1
+          )
+        )
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM plan_rows
+        WHERE turn_key IN (SELECT turn_key FROM selected_turns)
+        ORDER BY
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
+  const listThreadPlanHistory: ProjectionSnapshotQueryShape["listThreadPlanHistory"] = ({
+    threadId,
+  }) =>
+    DateTime.now.pipe(
+      Effect.map((now) => DateTime.formatIso(DateTime.subtract(now, { hours: 3 }))),
+      Effect.flatMap((since) => listThreadPlanHistoryRows({ threadId, since })),
+      Effect.map(Arr.map(mapThreadActivityRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listThreadPlanHistory:query",
+          "ProjectionSnapshotQuery.listThreadPlanHistory:decodeRows",
         ),
       ),
     );
@@ -3743,6 +3858,7 @@ pending_approval_requests AS (
   return {
     getCommandReadModel,
     getUserInputActivity,
+    listThreadPlanHistory,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

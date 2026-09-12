@@ -169,6 +169,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.attachmentsUpload]: AuthOrchestrationOperateScope,
   [WS_METHODS.getResourceQueue]: AuthOrchestrationReadScope,
   [WS_METHODS.crewList]: AuthOrchestrationReadScope,
+  [WS_METHODS.threadPlanHistoryList]: AuthOrchestrationReadScope,
   // Operate scope: these mutate crew rows and dispatch orchestration commands,
   // the same authority `dispatchCommand` needs.
   [WS_METHODS.crewTeardown]: AuthOrchestrationOperateScope,

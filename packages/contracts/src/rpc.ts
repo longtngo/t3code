@@ -94,8 +94,10 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetSnapshotError,
+  OrchestrationListThreadPlanHistoryError,
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
+  OrchestrationThreadActivity,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetWorkflowScriptError,
@@ -413,6 +415,9 @@ export const WS_METHODS = {
   crewTeardown: "crew.teardown",
   crewAnswer: "crew.answer",
   crewForgetWorktree: "crew.forgetWorktree",
+
+  // Task list panel: a thread's recent plan history
+  threadPlanHistoryList: "thread.planHistory.list",
 
   // Subagent dispatch toggle — machine-level Cursor-vs-default switch read by ~/bin/subagent-dispatch
   subagentBackendGet: "subagentBackend.get",
@@ -788,6 +793,17 @@ export const WsCrewForgetWorktreeRpc = Rpc.make(WS_METHODS.crewForgetWorktree, {
   payload: Schema.Struct({ taskId: CrewTaskId }),
   success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: EnvironmentAuthorizationError,
+});
+
+/**
+ * The Task list panel's history read: the thread's `turn.plan.updated` activities for every
+ * turn active in the last 3 hours plus the newest turn that still holds a task list. The server
+ * owns the time bound, so the payload carries no time.
+ */
+export const WsThreadPlanHistoryListRpc = Rpc.make(WS_METHODS.threadPlanHistoryList, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Array(OrchestrationThreadActivity),
+  error: Schema.Union([OrchestrationListThreadPlanHistoryError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubagentBackendGetRpc = Rpc.make(WS_METHODS.subagentBackendGet, {
@@ -1745,6 +1761,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCrewTeardownRpc,
   WsCrewAnswerRpc,
   WsCrewForgetWorktreeRpc,
+  WsThreadPlanHistoryListRpc,
   WsSubagentBackendGetRpc,
   WsSubagentBackendSetRpc,
   WsSubagentBackendUsageRpc,

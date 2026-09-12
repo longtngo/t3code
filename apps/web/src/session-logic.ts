@@ -325,6 +325,231 @@ function addPlanStepDurations(
   };
 }
 
+/** The final task list a turn's plan activities describe, or null if the turn cleared it.
+ *  `withDurations: false` skips `addPlanStepDurations` for callers (collapsed history rows)
+ *  that don't render step timing and would rather not pay for it. */
+function planForTurn(
+  turnActivities: ReadonlyArray<OrchestrationThreadActivity>,
+  withDurations = true,
+): ActivePlanState | null {
+  const last = turnActivities.at(-1);
+  if (!last) return null;
+  const plan = planStateFromActivity(last);
+  if (!plan) return null;
+  if (!withDurations) return plan;
+  const latestClearIndex = turnActivities.findLastIndex(
+    (activity) => planStateFromActivity(activity) === null,
+  );
+  return addPlanStepDurations(plan, turnActivities.slice(latestClearIndex + 1));
+}
+
+/**
+ * Stabilizes each turn's plan-activity bucket across calls so the memo below can key on the
+ * bucket array's identity. `derivePlanGroups` rebuilds every bucket via `.filter`/push on every
+ * call, so without this a WeakMap keyed on the bucket array has a measured 0% hit rate. Keyed on
+ * the bucket's first activity (stable across an append at the tail) rather than its last (stable
+ * across an older-page merge at the head, which is exactly the case that must NOT reuse a stale
+ * bucket): a length/identity mismatch under either key forces a fresh array.
+ */
+const stablePlanBucketByFirstActivity = new WeakMap<
+  OrchestrationThreadActivity,
+  ReadonlyArray<OrchestrationThreadActivity>
+>();
+
+function stablePlanBucket(
+  freshBucket: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const first = freshBucket[0];
+  if (!first) return freshBucket;
+  const cached = stablePlanBucketByFirstActivity.get(first);
+  if (
+    cached &&
+    cached.length === freshBucket.length &&
+    cached.every((activity, index) => activity === freshBucket[index])
+  ) {
+    return cached;
+  }
+  stablePlanBucketByFirstActivity.set(first, freshBucket);
+  return freshBucket;
+}
+
+// Two slots, not one: durations are lazy, so a turn requested without durations (collapsed
+// history) and then with durations (expanded) must not share a cache entry — a single WeakMap
+// keyed only on the bucket array would return whichever variant was computed first forever.
+const planGroupCacheWithDurations = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ActivePlanState | null
+>();
+const planGroupCacheWithoutDurations = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ActivePlanState | null
+>();
+
+function memoizedPlanForTurn(
+  turnActivities: ReadonlyArray<OrchestrationThreadActivity>,
+  withDurations: boolean,
+): ActivePlanState | null {
+  const cache = withDurations ? planGroupCacheWithDurations : planGroupCacheWithoutDurations;
+  if (cache.has(turnActivities)) {
+    return cache.get(turnActivities) ?? null;
+  }
+  const plan = planForTurn(turnActivities, withDurations);
+  cache.set(turnActivities, plan);
+  return plan;
+}
+
+/**
+ * Every turn's final task list, oldest first. A turn that cleared its plan
+ * contributes none. Bucketed by turnId in activity order; a null turnId
+ * buckets by its own activity id so unrelated null-turn plans never merge.
+ * `withDurations: false` is for collapsed history groups that don't render step timing.
+ */
+export function derivePlanGroups(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  withDurations = true,
+): ReadonlyArray<ActivePlanState> {
+  const ordered = activitiesInOrder(activities);
+  const planActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
+  const buckets = new Map<string, Array<OrchestrationThreadActivity>>();
+  for (const activity of planActivities) {
+    const bucketKey = activity.turnId ?? `activity:${activity.id}`;
+    const bucket = buckets.get(bucketKey);
+    if (bucket) {
+      bucket.push(activity);
+    } else {
+      buckets.set(bucketKey, [activity]);
+    }
+  }
+  const groups: Array<ActivePlanState> = [];
+  for (const freshBucket of buckets.values()) {
+    const turnActivities = stablePlanBucket(freshBucket);
+    const plan = memoizedPlanForTurn(turnActivities, withDurations);
+    if (plan) groups.push(plan);
+  }
+  return groups;
+}
+
+/** History groups older than this are dropped from the Task list panel's history section. */
+export const TASK_LIST_HISTORY_RETENTION_MS = 3 * 60 * 60 * 1000;
+
+export interface TaskListView {
+  /** The group the panel renders expanded at the top, or null when no source holds one. */
+  readonly primary: ActivePlanState | null;
+  /** `latest`: the latest turn's own plan. `promoted`: the newest group at any age. */
+  readonly primaryKind: "latest" | "promoted" | null;
+  /** Every other group within the retention window, newest first. */
+  readonly history: ReadonlyArray<ActivePlanState>;
+}
+
+/**
+ * The Task list panel's selection. Primary is the latest turn's group, else the newest group at
+ * any age — promotion is deliberately not bound by retention, which would empty most panels.
+ * History excludes the primary actually chosen, never `latestTurnId`, which differs whenever
+ * the latest turn has no plan. `groups` is oldest-first, as `derivePlanGroups` returns it.
+ */
+export function selectTaskListView(
+  groups: ReadonlyArray<ActivePlanState>,
+  latestTurnId: TurnId | null,
+  nowMs: number,
+): TaskListView {
+  const latest =
+    latestTurnId === null ? undefined : groups.find((group) => group.turnId === latestTurnId);
+  const primary = latest ?? groups.at(-1) ?? null;
+  const primaryKind = primary === null ? null : latest ? "latest" : "promoted";
+  const history = groups
+    .filter(
+      (group) =>
+        group !== primary && nowMs - Date.parse(group.createdAt) <= TASK_LIST_HISTORY_RETENTION_MS,
+    )
+    .toReversed();
+  return { primary, primaryKind, history };
+}
+
+/**
+ * Counts for the launcher pill and the toggle badge — both fed by this one source so the two
+ * readings never disagree. Non-null only for the latest turn's own plan with at least one step:
+ * a promoted group or an empty plan would leave a stale badge lit on a thread whose turn is long
+ * over, the "stale label" this fork's AGENTS.md forbids.
+ */
+export function latestTurnTaskCounts(
+  primary: ActivePlanState | null,
+  primaryKind: TaskListView["primaryKind"],
+): { completed: number; total: number } | null {
+  if (primaryKind !== "latest" || primary === null || primary.steps.length === 0) return null;
+  return {
+    completed: primary.steps.filter((step) => step.status === "completed").length,
+    total: primary.steps.length,
+  };
+}
+
+/** A `thread.planHistory.list` response that landed, with the key it was read under. */
+export interface LandedPlanHistoryRead {
+  readonly threadId: ThreadId;
+  readonly latestTurnId: TurnId | null;
+  readonly rows: ReadonlyArray<OrchestrationThreadActivity>;
+}
+
+/**
+ * The read rows the panel unions with live activities: the current key's read once it lands,
+ * otherwise the last landed read for this thread. A new key starts its query empty, so reading
+ * only the current key would drop cut turns back to truncated durations on every turn change.
+ *
+ * A retained read can predate a revert. Its turns whose newest row is newer than the latest
+ * turn are turns the revert deleted, and are dropped. The bound is `completedAt`, falling back
+ * to `requestedAt` while the turn runs: the projector stamps a reverted-to turn with its
+ * checkpoint's completion time, and a running latest turn started after every earlier row.
+ */
+export function resolvePlanHistoryRows(
+  current: ReadonlyArray<OrchestrationThreadActivity> | null,
+  retained: LandedPlanHistoryRead | null,
+  threadId: ThreadId | null,
+  latestTurn: OrchestrationLatestTurn | null,
+): ReadonlyArray<OrchestrationThreadActivity> | null {
+  if (current !== null) return current;
+  if (retained === null || retained.threadId !== threadId) return null;
+  if (latestTurn === null) return [];
+  const bound = latestTurn.completedAt ?? latestTurn.requestedAt;
+  const newestByTurn = new Map<string, string>();
+  for (const row of retained.rows) {
+    const key = row.turnId ?? `activity:${row.id}`;
+    const newest = newestByTurn.get(key);
+    if (newest === undefined || row.createdAt > newest) newestByTurn.set(key, row.createdAt);
+  }
+  const kept = retained.rows.filter((row) => {
+    if (row.turnId === latestTurn.turnId) return true;
+    return (newestByTurn.get(row.turnId ?? `activity:${row.id}`) ?? "") <= bound;
+  });
+  return kept.length === retained.rows.length ? retained.rows : kept;
+}
+
+/**
+ * Read rows ∪ live `turn.plan.updated` rows, keyed by activity id; before any read, live alone.
+ * The live cap truncates a turn's rows and the read goes stale while the turn runs, so neither
+ * source is enough by itself. Returns `previous` when the union holds the same rows, so a
+ * non-plan append does not bust `derivePlanGroups`' per-turn memo downstream.
+ */
+export function unionPlanActivityRows(
+  readRows: ReadonlyArray<OrchestrationThreadActivity> | null,
+  live: ReadonlyArray<OrchestrationThreadActivity>,
+  previous: ReadonlyArray<OrchestrationThreadActivity> | null,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const union: Array<OrchestrationThreadActivity> = readRows ? [...readRows] : [];
+  const readIds = new Set(union.map((row) => row.id));
+  for (const activity of live) {
+    if (activity.kind === "turn.plan.updated" && !readIds.has(activity.id)) {
+      union.push(activity);
+    }
+  }
+  if (
+    previous !== null &&
+    previous.length === union.length &&
+    previous.every((row, index) => row === union[index])
+  ) {
+    return previous;
+  }
+  return union;
+}
+
 export function deriveActivePlanState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -342,15 +567,10 @@ export function deriveActivePlanState(
   if (!latest) {
     return null;
   }
-  const plan = planStateFromActivity(latest);
-  if (!plan) return null;
   const matchingActivities = allPlanActivities.filter(
     (activity) => activity.turnId === latest.turnId,
   );
-  const latestClearIndex = matchingActivities.findLastIndex(
-    (activity) => planStateFromActivity(activity) === null,
-  );
-  return addPlanStepDurations(plan, matchingActivities.slice(latestClearIndex + 1));
+  return planForTurn(matchingActivities);
 }
 
 export function findLatestProposedPlan(

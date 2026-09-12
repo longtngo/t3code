@@ -225,6 +225,18 @@ export function useEnvironmentSupportsCrew(environmentId: EnvironmentId | null):
   );
 }
 
+/** Whether the environment's server serves `thread.planHistory.list`. Absent on older
+    servers, where the method would fail as a generic request error. */
+export function useEnvironmentSupportsThreadPlanHistory(
+  environmentId: EnvironmentId | null,
+): boolean {
+  const serverConfigs = useServerConfigs();
+  return (
+    environmentId != null &&
+    serverConfigs.get(environmentId)?.environment.capabilities.threadPlanHistory === true
+  );
+}
+
 /** Whether the environment's server understands thread.pin/unpin.
     Same version-skew contract as settlement. */
 export function readEnvironmentSupportsPinning(environmentId: EnvironmentId): boolean {

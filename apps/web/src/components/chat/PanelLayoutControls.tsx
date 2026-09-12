@@ -1,8 +1,11 @@
 import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
 import { memo } from "react";
 
+import { cn } from "~/lib/utils";
+
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { panelToggleLabel } from "./PanelLayoutControls.logic";
 
 interface PanelLayoutControlsProps {
   showTerminalControl?: boolean;
@@ -15,6 +18,9 @@ interface PanelLayoutControlsProps {
   rightPanelUnavailableLabel?: string;
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
+  /** Latest turn's own task list only; a second, independent badge. Absent renders neither. */
+  taskCompletedCount?: number | undefined;
+  taskTotalCount?: number | undefined;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
 }
@@ -29,9 +35,14 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
   liveAgentCount,
+  taskCompletedCount,
+  taskTotalCount,
   onToggleTerminal,
   onToggleRightPanel,
 }: PanelLayoutControlsProps) {
+  const taskBadgeVisible = taskCompletedCount !== undefined && taskTotalCount !== undefined;
+  const taskComplete = taskBadgeVisible && taskCompletedCount === taskTotalCount;
+  const statusSuffix = panelToggleLabel({ liveAgentCount, taskCompletedCount, taskTotalCount });
   return (
     <div
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
@@ -65,11 +76,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             className="shrink-0 [-webkit-app-region:no-drag]"
             pressed={rightPanelOpen}
             onPressedChange={onToggleRightPanel}
-            aria-label={
-              liveAgentCount > 0
-                ? `Toggle right panel, ${liveAgentCount} ${liveAgentCount === 1 ? "agent" : "agents"} working`
-                : "Toggle right panel"
-            }
+            aria-label={statusSuffix ? `Toggle right panel, ${statusSuffix}` : "Toggle right panel"}
             variant="ghost"
             size="sm"
             disabled={!rightPanelAvailable}
@@ -78,9 +85,22 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             {liveAgentCount > 0 ? (
               <span
                 aria-hidden
+                data-panel-badge="agents"
                 className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
               >
                 {liveAgentCount}
+              </span>
+            ) : null}
+            {taskBadgeVisible ? (
+              <span
+                aria-hidden
+                data-panel-badge="tasks"
+                className={cn(
+                  "absolute -bottom-1 -left-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-success px-[3px] text-[8px] font-bold leading-none tabular-nums text-white",
+                  taskComplete && "w-3 px-0",
+                )}
+              >
+                {taskComplete ? "✓" : `${taskCompletedCount}/${taskTotalCount}`}
               </span>
             ) : null}
           </Toggle>
@@ -88,9 +108,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         <TooltipPopup side="bottom">
           {rightPanelAvailable
             ? `Toggle right panel${rightPanelShortcutLabel ? ` (${rightPanelShortcutLabel})` : ""}${
-                liveAgentCount > 0
-                  ? ` · ${liveAgentCount} ${liveAgentCount === 1 ? "agent" : "agents"} working`
-                  : ""
+                statusSuffix ? ` · ${statusSuffix}` : ""
               }`
             : rightPanelUnavailableLabel}
         </TooltipPopup>

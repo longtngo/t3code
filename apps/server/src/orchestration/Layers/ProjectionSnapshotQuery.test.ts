@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -2485,6 +2486,160 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [],
       );
     }),
+  );
+
+  it.effect(
+    "lists plan history as full row sets of recent turns plus the newest group-yielding turn",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at
+          )
+          VALUES (
+            'project-plans', 'Plans', '/tmp/project-plans', '[]',
+            '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+          )
+        `;
+        for (const [threadId, deletedAt] of [
+          ["thread-window", null],
+          ["thread-floor", null],
+          ["thread-deleted", "2026-09-12T11:00:00.000Z"],
+        ] as const) {
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode,
+              interaction_mode, created_at, updated_at, deleted_at
+            )
+            VALUES (
+              ${threadId}, 'project-plans', ${threadId},
+              '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+              '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', ${deletedAt}
+            )
+          `;
+        }
+
+        const steps = '{"plan":[{"step":"Inspect","status":"inProgress"}]}';
+        const clear = '{"plan":[]}';
+        let sequence = 0;
+        const insertActivity = (row: {
+          readonly id: string;
+          readonly threadId: string;
+          readonly turnId: string | null;
+          readonly kind?: string;
+          readonly payload?: string;
+          readonly at: string;
+        }) => {
+          sequence += 1;
+          return sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+              sequence, created_at
+            )
+            VALUES (
+              ${row.id}, ${row.threadId}, ${row.turnId}, 'info',
+              ${row.kind ?? "turn.plan.updated"}, 'Plan updated', ${row.payload ?? steps},
+              ${sequence}, ${`2026-09-12T${row.at}:00.000Z`}
+            )
+          `;
+        };
+
+        // Rows are inserted oldest first so `sequence` follows `created_at`.
+        for (const row of [
+          { id: "null-old", threadId: "thread-window", turnId: null, at: "00:30" },
+          { id: "a1-plan-1", threadId: "thread-window", turnId: "turn-a1", at: "01:00" },
+          {
+            id: "a1-note",
+            threadId: "thread-window",
+            turnId: "turn-a1",
+            kind: "runtime.note",
+            at: "01:30",
+          },
+          { id: "a1-plan-2", threadId: "thread-window", turnId: "turn-a1", at: "02:00" },
+          { id: "b1-plan-1", threadId: "thread-floor", turnId: "turn-b1", at: "03:00" },
+          { id: "b1-plan-2", threadId: "thread-floor", turnId: "turn-b1", at: "03:10" },
+          { id: "b2-plan-1", threadId: "thread-floor", turnId: "turn-b2", at: "04:00" },
+          { id: "b2-plan-2", threadId: "thread-floor", turnId: "turn-b2", at: "04:30" },
+          { id: "b3-plan-1", threadId: "thread-floor", turnId: "turn-b3", at: "05:00" },
+          {
+            id: "b3-clear",
+            threadId: "thread-floor",
+            turnId: "turn-b3",
+            payload: clear,
+            at: "06:00",
+          },
+          { id: "a2-plan-1", threadId: "thread-window", turnId: "turn-a2", at: "07:00" },
+          { id: "a2-plan-2", threadId: "thread-window", turnId: "turn-a2", at: "08:30" },
+          {
+            id: "a2-tool",
+            threadId: "thread-window",
+            turnId: "turn-a2",
+            kind: "tool.completed",
+            at: "09:30",
+          },
+          { id: "a2-plan-3", threadId: "thread-window", turnId: "turn-a2", at: "10:00" },
+          {
+            id: "deleted-plan",
+            threadId: "thread-deleted",
+            turnId: "turn-d1",
+            at: "10:30",
+          },
+          {
+            id: "null-recent-clear",
+            threadId: "thread-window",
+            turnId: null,
+            payload: clear,
+            at: "11:00",
+          },
+        ]) {
+          yield* insertActivity(row);
+        }
+
+        // The 3-hour bound starts at 09:00.
+        yield* TestClock.setTime(Date.parse("2026-09-12T12:00:00.000Z"));
+        const idsFor = (threadId: string) =>
+          snapshotQuery
+            .listThreadPlanHistory({ threadId: ThreadId.make(threadId) })
+            .pipe(Effect.map((activities) => activities.map((activity) => activity.id)));
+
+        // turn-a2 straddles the bound, so its 07:00 and 08:30 rows ride along. turn-a1 and the old
+        // NULL-turn row are old and not the floor (turn-a2 is newer and yields a group); the recent
+        // NULL-turn clear is its own turn inside the window. Other kinds never appear.
+        assert.deepStrictEqual(yield* idsFor("thread-window"), [
+          "a2-plan-1",
+          "a2-plan-2",
+          "a2-plan-3",
+          "null-recent-clear",
+        ]);
+
+        // Nothing is within 3 hours. turn-b3 is the newest plan-bearing turn but ended in a clear,
+        // so the floor is turn-b2, returned whole; turn-b1 is older than the floor.
+        const floor = yield* snapshotQuery.listThreadPlanHistory({
+          threadId: ThreadId.make("thread-floor"),
+        });
+        assert.deepStrictEqual(
+          floor.map((activity) => activity.id),
+          ["b2-plan-1", "b2-plan-2"],
+        );
+        assert.deepStrictEqual(floor[0], {
+          id: EventId.make("b2-plan-1"),
+          tone: "info",
+          kind: "turn.plan.updated",
+          summary: "Plan updated",
+          payload: { plan: [{ step: "Inspect", status: "inProgress" }] },
+          turnId: asTurnId("turn-b2"),
+          createdAt: "2026-09-12T04:00:00.000Z",
+          sequence: 7,
+        });
+
+        assert.deepStrictEqual(yield* idsFor("thread-deleted"), []);
+      }),
   );
 });
 

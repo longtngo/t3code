@@ -13,6 +13,7 @@ import {
   createMessageAttachmentPreviewProjector,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  derivePlanGroups,
   deriveTimelineEntries,
   deriveTimelineEntriesWithState,
   deriveWorkLogEntries,
@@ -302,6 +303,356 @@ describe("deriveActivePlanState", () => {
       }),
     ];
     expect(deriveActivePlanState(activities, TurnId.make("turn-1"))).toBeNull();
+  });
+
+  // Multi-turn: turn-1 writes a plan, turn-2 writes one then clears it. A
+  // single-turn fixture cannot pin this — both the shipped selection and the
+  // rejected "fall back to the newest group" behavior return null when there
+  // is only one turn. Shipped behavior must NOT fall back to turn-1's plan
+  // just because turn-2 ended in a clear.
+  it("does not fall back to an earlier turn's plan when the latest turn cleared its own", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "Inspect code", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Write tests", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-clear",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { plan: [] },
+      }),
+    ];
+    expect(deriveActivePlanState(activities, TurnId.make("turn-2"))).toBeNull();
+  });
+});
+
+describe("derivePlanGroups", () => {
+  it("returns one group per turn, at that turn's final plan state", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Initial plan",
+          plan: [{ step: "Inspect code", status: "pending" }],
+        },
+      }),
+      makeActivity({
+        id: "turn-1-plan-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Refined plan",
+          plan: [{ step: "Inspect code", status: "completed" }],
+        },
+      }),
+      makeActivity({
+        id: "turn-2-plan-1",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Write tests", status: "inProgress" }] },
+      }),
+    ];
+    expect(derivePlanGroups(activities)).toEqual([
+      {
+        createdAt: "2026-02-23T00:00:02.000Z",
+        turnId: "turn-1",
+        explanation: "Refined plan",
+        steps: [{ durationMs: 1_000, step: "Inspect code", status: "completed" }],
+      },
+      {
+        createdAt: "2026-02-23T00:00:03.000Z",
+        turnId: "turn-2",
+        steps: [{ step: "Write tests", status: "inProgress" }],
+      },
+    ]);
+  });
+
+  it("preserves explanation on each group — no narrower PlanGroup type", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Why we're doing this",
+          plan: [{ step: "Inspect code", status: "pending" }],
+        },
+      }),
+    ];
+    const [group] = derivePlanGroups(activities);
+    expect(group?.explanation).toBe("Why we're doing this");
+  });
+
+  it("drops a turn whose last plan activity is a clear", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "Inspect code", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Write tests", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-clear",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [] },
+      }),
+    ];
+    const groups = derivePlanGroups(activities);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.turnId).toBe("turn-1");
+  });
+
+  it("keeps the post-clear plan when a turn clears then writes a new one, with durations restarted", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "pending" }] },
+      }),
+      makeActivity({
+        id: "turn-1-clear",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [] },
+      }),
+      // An hour later: unsliced, this would become the fallback duration
+      // origin (planStartedAt) instead of the post-clear plan below it.
+      makeActivity({
+        id: "turn-1-replan",
+        createdAt: "2026-02-23T01:00:00.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "Second", status: "pending" }] },
+      }),
+      makeActivity({
+        id: "turn-1-replan-done",
+        createdAt: "2026-02-23T01:00:05.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "Second", status: "completed" }] },
+      }),
+    ];
+    const groups = derivePlanGroups(activities);
+    expect(groups).toHaveLength(1);
+    // Duration counts from the replan (01:00:00), not the original plan
+    // (00:00:01) that was cleared — 5s, not ~3,605s.
+    expect(groups[0]?.steps).toEqual([{ durationMs: 5_000, step: "Second", status: "completed" }]);
+  });
+
+  it("does not merge null-turnId plans into one group", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "null-turn-plan-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "null-turn-plan-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        payload: { plan: [{ step: "Second", status: "completed" }] },
+      }),
+    ];
+    const groups = derivePlanGroups(activities);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.steps[0]?.step)).toEqual(["First", "Second"]);
+  });
+
+  it("computes durations per turn, not across the whole thread", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-1-done",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:05:00.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-done",
+        createdAt: "2026-02-23T00:05:03.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+    ];
+    const groups = derivePlanGroups(activities);
+    expect(groups.map((group) => group.steps[0]?.durationMs)).toEqual([5_000, 3_000]);
+  });
+
+  it("reuses the same group objects across calls when only an unrelated non-plan activity is appended", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Second", status: "completed" }] },
+      }),
+    ];
+    const before = derivePlanGroups(activities);
+    const withUnrelatedAppend = [
+      ...activities,
+      makeActivity({
+        id: "turn-2-note",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "runtime.warning",
+        turnId: "turn-2",
+      }),
+    ];
+    const after = derivePlanGroups(withUnrelatedAppend);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("returns a new group only for the turn that got a new plan revision", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Second", status: "completed" }] },
+      }),
+    ];
+    const before = derivePlanGroups(activities);
+    const withRevision = [
+      ...activities,
+      makeActivity({
+        id: "turn-1-done",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+    ];
+    const after = derivePlanGroups(withRevision);
+    expect(after).toHaveLength(2);
+    // turn-1 got a new revision: a new object, with the new status.
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[0]?.steps[0]?.status).toBe("completed");
+    // turn-2 is untouched: the exact same object.
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("recomputes durations after an older page merges in earlier rows for an existing turn", () => {
+    const loaded: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-completed",
+        createdAt: "2026-02-23T00:00:10.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+    ];
+    const beforeMerge = derivePlanGroups(loaded);
+    // No earlier "inProgress" row is in view yet, so no duration can be computed.
+    expect(beforeMerge[0]?.steps[0]?.durationMs).toBeUndefined();
+
+    // mergeById (threads.ts) prepends older rows not already present, keeping the
+    // loaded rows' identities unchanged.
+    const olderPage: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-inprogress",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+    ];
+    const merged = [...olderPage, ...loaded];
+    const afterMerge = derivePlanGroups(merged);
+    // The older row is now in view: a real duration only it can produce.
+    expect(afterMerge[0]?.steps[0]?.durationMs).toBe(6_000);
+  });
+
+  it("does not share a cache slot between the durations and no-durations variants", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-1-done",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+    ];
+    const withoutDurations = derivePlanGroups(activities, false);
+    expect(withoutDurations[0]?.steps[0]?.durationMs).toBeUndefined();
+    const withDurations = derivePlanGroups(activities, true);
+    expect(withDurations[0]?.steps[0]?.durationMs).toBe(5_000);
   });
 });
 

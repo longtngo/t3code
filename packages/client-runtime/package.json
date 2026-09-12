@@ -187,6 +187,10 @@
       "types": "./src/state/crew.ts",
       "default": "./src/state/crew.ts"
     },
+    "./state/thread-plan-history": {
+      "types": "./src/state/threadPlanHistory.ts",
+      "default": "./src/state/threadPlanHistory.ts"
+    },
     "./state/subagent-backend": {
       "types": "./src/state/subagentBackend.ts",
       "default": "./src/state/subagentBackend.ts"

@@ -24,6 +24,7 @@ import {
   GitPullRequest,
   GitPullRequestArrow,
   Globe2,
+  ListTodo,
   Plus,
   TerminalSquare,
   Volume2,
@@ -118,6 +119,7 @@ interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddAgents: () => void;
+  onAddTasks: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -126,10 +128,14 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  tasksAvailable: boolean;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  /** The latest turn's task list progress; the launcher's Task list row shows it only when both are set. */
+  taskCompletedCount?: number | undefined;
+  taskTotalCount?: number | undefined;
   children: ReactNode;
 }
 
@@ -157,6 +163,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequest: "This thread's branch has no pull request yet.",
   pullRequests: "Linked pull requests are only available for server threads.",
   agents: "Agents are only available from a thread.",
+  tasks: "The task list is only available from a thread.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -181,6 +188,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequest: "No pull request on this branch yet.",
   pullRequests: "Available for server threads.",
   agents: "Available from a thread.",
+  tasks: "Available from a thread.",
   device: "Available from a thread.",
 } as const;
 
@@ -321,6 +329,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddAgents: () => void;
+  onAddTasks: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -329,8 +338,11 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  tasksAvailable: boolean;
   deviceAvailable: boolean;
   liveAgentCount: number;
+  taskCompletedCount?: number | undefined;
+  taskTotalCount?: number | undefined;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
@@ -398,6 +410,19 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
+    },
+    {
+      label: "Task list",
+      icon: ListTodo,
+      shortcut: "K",
+      available: props.tasksAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.tasks,
+      onClick: props.onAddTasks,
+      badgeCount: 0,
+      progress:
+        props.taskCompletedCount !== undefined && props.taskTotalCount !== undefined
+          ? `${props.taskCompletedCount}/${props.taskTotalCount}`
+          : null,
     },
     {
       label: "Device",
@@ -476,6 +501,13 @@ function RightPanelEmptyState(props: {
   const isHighlighted = (action: SurfaceAction) =>
     highlightIndex !== -1 && availableActions[highlightIndex] === action;
 
+  const actionProgress = (action: SurfaceAction) =>
+    "progress" in action && action.progress !== null ? (
+      <span className="shrink-0 rounded-full bg-success/15 px-1.5 text-[10px] font-medium leading-4 tabular-nums text-success">
+        {action.progress}
+      </span>
+    ) : null;
+
   const actionIcon = (action: SurfaceAction, iconClassName = "size-4") => {
     const Icon = action.icon;
     return (
@@ -543,6 +575,7 @@ function RightPanelEmptyState(props: {
                   >
                     {action.label}
                   </span>
+                  {actionProgress(action)}
                   <Kbd>{action.shortcut}</Kbd>
                 </button>
                 {/*
@@ -594,6 +627,7 @@ function RightPanelEmptyState(props: {
                   >
                     {actionIcon(action, "size-4")}
                     <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                    {actionProgress(action)}
                     <Kbd>{action.shortcut}</Kbd>
                   </div>
                 }
@@ -631,6 +665,8 @@ function surfaceTitle(
       return "Pull requests";
     case "agents":
       return "Agents";
+    case "tasks":
+      return "Task list";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -725,6 +761,8 @@ function SurfaceIcon({
       return <GitPullRequestArrow className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "tasks":
+      return <ListTodo className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -926,6 +964,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
+    },
+    {
+      label: "Task list",
+      icon: ListTodo,
+      shortcut: "K",
+      available: props.tasksAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.tasks,
+      onClick: props.onAddTasks,
     },
     {
       label: "Device",
@@ -1406,6 +1452,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
+            onAddTasks={props.onAddTasks}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1414,8 +1461,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
+            tasksAvailable={props.tasksAvailable}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
+            taskCompletedCount={props.taskCompletedCount}
+            taskTotalCount={props.taskTotalCount}
           />
         ) : (
           props.children

@@ -131,6 +131,7 @@ import {
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  latestTurnTaskCounts,
   selectHandoffImageResources,
   type TimelineEntriesProjection,
 } from "../session-logic";
@@ -213,6 +214,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
+import { TaskListPanel } from "./TaskListPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -275,6 +277,7 @@ import {
   useUpdateClientSettings,
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { useTaskList } from "../hooks/useTaskList";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -2846,6 +2849,30 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  // The only `derivePlanGroups` caller for this thread; fields stay separate so memoized
+  // consumers do not see a new object every render.
+  const {
+    primary: taskListPrimary,
+    primaryKind: taskListPrimaryKind,
+    history: taskListHistory,
+    historyStatus: taskListHistoryStatus,
+    retry: retryTaskListHistory,
+  } = useTaskList(
+    activeThreadRef?.environmentId ?? null,
+    activeThreadRef?.threadId ?? null,
+    activeLatestTurn,
+    threadActivities,
+    rightPanelOpen && activeRightPanelSurface?.kind === "tasks",
+    isServerThread,
+  );
+  // Shared by the launcher pill and the toggle badge so the two readings never disagree; reads
+  // the latest turn's list only, never a promoted older one.
+  const taskCounts = useMemo(
+    () => latestTurnTaskCounts(taskListPrimary, taskListPrimaryKind),
+    [taskListPrimary, taskListPrimaryKind],
+  );
+  const taskCompletedCount = taskCounts?.completed;
+  const taskTotalCount = taskCounts?.total;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
     const activityId = latestWorkspaceMutationId(threadActivities);
@@ -4615,6 +4642,10 @@ export default function ChatView(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const addTasksSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "tasks");
   }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
@@ -9006,6 +9037,13 @@ export default function ChatView(props: ChatViewProps) {
       liveAgentCount={
         rightPanelOpen && activeRightPanelSurface?.kind === "agents" ? 0 : agentPanelModel.liveCount
       }
+      // Suppressed while the Tasks surface is visible, for the same reason.
+      taskCompletedCount={
+        rightPanelOpen && activeRightPanelSurface?.kind === "tasks" ? undefined : taskCompletedCount
+      }
+      taskTotalCount={
+        rightPanelOpen && activeRightPanelSurface?.kind === "tasks" ? undefined : taskTotalCount
+      }
       onToggleTerminal={toggleTerminalVisibility}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -9156,6 +9194,17 @@ export default function ChatView(props: ChatViewProps) {
         threadId={activeThreadRef?.threadId ?? null}
         backgroundItems={visibleBackgroundItems}
         onOpenBackgroundItem={openBackgroundTerminal}
+      />
+    ) : renderedRightPanelSurface?.kind === "tasks" ? (
+      <TaskListPanel
+        primary={taskListPrimary}
+        primaryKind={taskListPrimaryKind}
+        history={taskListHistory}
+        historyStatus={taskListHistoryStatus}
+        onRetry={retryTaskListHistory}
+        latestTurnRunning={
+          activeLatestTurn !== null && activeRunningTurnId === activeLatestTurn.turnId
+        }
       />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
@@ -9808,6 +9857,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
+          onAddTasks={addTasksSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -9816,8 +9866,11 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
           agentsAvailable
+          tasksAvailable
           deviceAvailable={activeThreadRef !== null}
           liveAgentCount={agentPanelModel.liveCount}
+          taskCompletedCount={taskCompletedCount}
+          taskTotalCount={taskTotalCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -9866,6 +9919,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
+            onAddTasks={addTasksSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
@@ -9874,8 +9928,11 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
             agentsAvailable
+            tasksAvailable
             deviceAvailable={activeThreadRef !== null}
             liveAgentCount={agentPanelModel.liveCount}
+            taskCompletedCount={taskCompletedCount}
+            taskTotalCount={taskTotalCount}
           >
             {rightPanelContent}
           </RightPanelTabs>

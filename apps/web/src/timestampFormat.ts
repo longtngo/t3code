@@ -196,10 +196,13 @@ export type RelativeTimeState =
   | { status: "invalid" }
   | { status: "relative"; value: string; suffix: string | null };
 
-export function formatRelativeTime(isoDate: string): RelativeTimeParts | null {
+export function formatRelativeTime(
+  isoDate: string,
+  nowMs: number = Date.now(),
+): RelativeTimeParts | null {
   const date = parseTimestampDate(isoDate);
   if (!date) return null;
-  const diffMs = Date.now() - date.getTime();
+  const diffMs = nowMs - date.getTime();
   if (diffMs < 0) return { value: "just now", suffix: null };
   const seconds = Math.floor(diffMs / 1000);
   if (seconds < 60) return { value: "just now", suffix: null };
@@ -211,8 +214,8 @@ export function formatRelativeTime(isoDate: string): RelativeTimeParts | null {
   return { value: `${days}d`, suffix: "ago" };
 }
 
-export function formatRelativeTimeLabel(isoDate: string) {
-  const relative = formatRelativeTime(isoDate);
+export function formatRelativeTimeLabel(isoDate: string, nowMs: number = Date.now()) {
+  const relative = formatRelativeTime(isoDate, nowMs);
   if (!relative) return "";
   return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
 }

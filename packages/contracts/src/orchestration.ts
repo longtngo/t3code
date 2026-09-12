@@ -2586,3 +2586,11 @@ export class OrchestrationSearchThreadsError extends Schema.TaggedError<Orchestr
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+export class OrchestrationListThreadPlanHistoryError extends Schema.TaggedError<OrchestrationListThreadPlanHistoryError>()(
+  "OrchestrationListThreadPlanHistoryError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}

@@ -85,6 +85,17 @@ export interface ProjectionSnapshotQueryShape {
   }) => Effect.Effect<Option.Option<OrchestrationThreadActivity>, ProjectionRepositoryError>;
 
   /**
+   * The Task list panel's history read: `turn.plan.updated` rows only, oldest first.
+   * Returns every turn whose newest plan row is within the last 3 hours, plus the newest
+   * turn that still yields a task list at any age, each as its FULL row set (a row-level
+   * time bound truncates the step-duration window). The bound is computed here, never
+   * taken from a client. A deleted thread returns nothing.
+   */
+  readonly listThreadPlanHistory: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<OrchestrationThreadActivity>, ProjectionRepositoryError>;
+
+  /**
    * Read the lightweight command snapshot used to bootstrap the in-memory
    * orchestration engine without hydrating message/activity/checkpoint bodies.
    */

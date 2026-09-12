@@ -429,6 +429,62 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("opens the task list as a singleton surface beside the agents surface", () => {
+    useRightPanelStore.getState().open(refA, "tasks");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().open(refA, "tasks");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "tasks",
+      surfaces: [
+        { id: "tasks", kind: "tasks" },
+        { id: "agents", kind: "agents" },
+      ],
+    });
+  });
+
+  it("toggles the task list surface closed and back open without duplicating it", () => {
+    useRightPanelStore.getState().toggle(refA, "tasks");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("tasks");
+    useRightPanelStore.getState().toggle(refA, "tasks");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
+    useRightPanelStore.getState().toggle(refA, "tasks");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "tasks",
+      surfaces: [{ id: "tasks", kind: "tasks" }],
+    });
+  });
+
+  it("migrates state persisted at version 13 and then opens the task list", async () => {
+    const storage = useRightPanelStore.persist.getOptions().storage;
+    const name = useRightPanelStore.persist.getOptions().name;
+    if (!storage || !name) throw new Error("right panel store is not persisted");
+    const agentsState = {
+      isOpen: true,
+      activeSurfaceId: "agents",
+      surfaces: [{ id: "agents", kind: "agents" }],
+    };
+    await storage.setItem(name, {
+      state: { byThreadKey: { "env-1:thread-A": agentsState } },
+      version: 13,
+    });
+    await useRightPanelStore.persist.rehydrate();
+    useRightPanelStore.getState().open(refA, "tasks");
+
+    const persisted = await storage.getItem(name);
+    expect(persisted?.version).toBe(14);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "tasks",
+      surfaces: [
+        { id: "agents", kind: "agents" },
+        { id: "tasks", kind: "tasks" },
+      ],
+    });
+  });
+
   it("keeps files as a singleton surface", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().open(refA, "files");

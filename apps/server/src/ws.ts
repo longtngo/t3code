@@ -41,6 +41,7 @@ import {
   type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
+  OrchestrationListThreadPlanHistoryError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -2325,6 +2326,20 @@ const makeWsRpcLayer = (
             WS_METHODS.crewList,
             crewDirectory.list().pipe(Effect.map((tasks) => ({ tasks }))),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.threadPlanHistoryList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadPlanHistoryList,
+            projectionSnapshotQuery.listThreadPlanHistory({ threadId: input.threadId }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationListThreadPlanHistoryError({
+                    message: "Failed to load thread plan history",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.crewTeardown]: (input) =>
           observeRpcEffect(
