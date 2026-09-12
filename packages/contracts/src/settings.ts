@@ -1297,6 +1297,24 @@ export const NotificationCategorySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type NotificationCategorySettings = typeof NotificationCategorySettings.Type;
 
+/**
+ * Whether a finish is interim: any background work, agent or shell, was still
+ * live when the turn settled. Shared by the web notifier and the push relay so
+ * the two cannot classify the same settle differently.
+ *
+ * `"monitoring"` counts. Subagents offloaded to another CLI run as background
+ * shells, and nearly every background shell completes and wakes the agent again
+ * (8 of 9,557 never completed in a week of real data). The cost is a forgotten
+ * long-lived shell holding back the final alert until it exits. Absent liveness
+ * (an older server, or after a restart) reads as nothing running, so the alert
+ * still fires.
+ */
+export function isInterimBackgroundLiveness(
+  liveness: "working" | "monitoring" | null | undefined,
+): boolean {
+  return liveness != null;
+}
+
 /** Fails to compile if the table and the schema stop describing the same categories. */
 type ExactlySameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 export const _categoryParity: ExactlySameKeys<

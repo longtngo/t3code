@@ -134,7 +134,7 @@ describe("notifyThreadCompletions", () => {
     turnId: "turn-1",
     title: "My task",
     outcome: "completed" as const,
-    backgroundActive: false,
+    backgroundLiveness: null,
   };
 
   it("does nothing when the setting is disabled", () => {
@@ -272,7 +272,12 @@ describe("notifyThreadCompletions", () => {
     notifyThreadCompletions({
       environmentId: ENV,
       completions: [
-        { ...completion, turnId: "err-bg", outcome: "error" as const, backgroundActive: true },
+        {
+          ...completion,
+          turnId: "err-bg",
+          outcome: "error" as const,
+          backgroundLiveness: "working" as const,
+        },
       ],
       enabled: true,
       categories: { ...ALL_ON, finishedBackground: false },
@@ -285,7 +290,12 @@ describe("notifyThreadCompletions", () => {
     notifyThreadCompletions({
       environmentId: ENV,
       completions: [
-        { ...completion, turnId: "a", outcome: "completed" as const, backgroundActive: true },
+        {
+          ...completion,
+          turnId: "a",
+          outcome: "completed" as const,
+          backgroundLiveness: "working" as const,
+        },
       ],
       enabled: true,
       categories: { ...ALL_ON, finishedBackground: false },
@@ -296,10 +306,44 @@ describe("notifyThreadCompletions", () => {
     notifyThreadCompletions({
       environmentId: ENV,
       completions: [
-        { ...completion, turnId: "b", outcome: "completed" as const, backgroundActive: false },
+        { ...completion, turnId: "b", outcome: "completed" as const, backgroundLiveness: null },
       ],
       enabled: true,
       categories: { ...ALL_ON, finishedBackground: false },
+    });
+    expect(created).toHaveLength(1);
+  });
+
+  it("treats a finish with only background shells live as interim", () => {
+    // Subagents offloaded to another CLI run as background shells, which read as
+    // `monitoring`. Their settles are interim, or the toggle silences nothing.
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [
+        {
+          ...completion,
+          turnId: "monitor-only",
+          outcome: "completed" as const,
+          backgroundLiveness: "monitoring" as const,
+        },
+      ],
+      enabled: true,
+      categories: { ...ALL_ON, finishedBackground: false },
+    });
+    expect(created).toHaveLength(0);
+
+    notifyThreadCompletions({
+      environmentId: ENV,
+      completions: [
+        {
+          ...completion,
+          turnId: "monitor-on",
+          outcome: "completed" as const,
+          backgroundLiveness: "monitoring" as const,
+        },
+      ],
+      enabled: true,
+      categories: ALL_ON,
     });
     expect(created).toHaveLength(1);
   });

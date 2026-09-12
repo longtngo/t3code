@@ -11,11 +11,13 @@
  * active-thread lookup) via `registerThreadNotificationHost`.
  */
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type {
-  EnvironmentId,
-  NotificationCategorySettings,
-  ScopedThreadRef,
-  ThreadId,
+import {
+  isInterimBackgroundLiveness,
+  type EnvironmentId,
+  type NotificationCategorySettings,
+  type OrchestrationThreadShell,
+  type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 import { isElectron } from "../env";
@@ -28,11 +30,11 @@ export interface ThreadCompletion {
   readonly title: string;
   readonly outcome: TerminalTurnOutcome;
   /**
-   * Whether other work was still running when this turn settled. An agent that
+   * The thread's background liveness when this turn settled. An agent that
    * fans out to subagents settles its turn once per wake-up; those interim
    * finishes are a separate category from the one that means "it is all done".
    */
-  readonly backgroundActive: boolean;
+  readonly backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"];
 }
 
 /** Mirrors the server-side mapping in `WebPushRelay.filterEdgesByCategory`. */
@@ -40,7 +42,9 @@ function categoryForCompletion(completion: ThreadCompletion): keyof Notification
   if (completion.outcome === "error") {
     return "failed";
   }
-  return completion.backgroundActive ? "finishedBackground" : "finished";
+  return isInterimBackgroundLiveness(completion.backgroundLiveness)
+    ? "finishedBackground"
+    : "finished";
 }
 
 const TERMINAL_OUTCOMES = new Set<TerminalTurnOutcome>(["completed", "error", "interrupted"]);
@@ -75,9 +79,9 @@ export function classifyThreadCompletion(input: {
    * no server log line can witness it. It is asserted in a web unit test.
    */
   readonly crewRole?: string | null | undefined;
-  // `backgroundActive` is not decided here: this classifies the turn EDGE, while
+  // `backgroundLiveness` is not decided here: this classifies the turn EDGE, while
   // background liveness is thread state the caller reads from the same shell.
-}): Omit<ThreadCompletion, "backgroundActive"> | null {
+}): Omit<ThreadCompletion, "backgroundLiveness"> | null {
   if (input.crewRole != null) {
     return null;
   }

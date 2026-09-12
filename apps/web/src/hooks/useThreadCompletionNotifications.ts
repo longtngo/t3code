@@ -115,9 +115,7 @@ export function useThreadCompletionNotifications(): void {
       if (completion) {
         notifyThreadCompletions({
           environmentId: shell.environmentId,
-          completions: [
-            { ...completion, backgroundActive: shell.backgroundLiveness === "working" },
-          ],
+          completions: [{ ...completion, backgroundLiveness: shell.backgroundLiveness }],
           enabled: enabledBox.current,
           categories: categoriesBox.current,
         });

@@ -40,7 +40,9 @@ large majority of the alerts you receive, and none of them mean the work is done
 Turning them off is safe: the split is based on whether anything was still
 running at that moment, not on what woke the agent up. At the true end of a run
 nothing is left working, so the final alert lands in **Task finished** and still
-reaches you.
+reaches you. The one exception is a background command the agent leaves running,
+such as a dev server: until it stops, the thread still has work going, so its
+finishes stay interim.
 
 Leaving **Task failed** and **Agent asked a question** on is worth it. Both are
 rare, and both are the kind of thing you want to hear about immediately —

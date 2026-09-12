@@ -16,7 +16,7 @@
  *
  * @module WebPushRelay
  */
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, isInterimBackgroundLiveness } from "@t3tools/contracts";
 import type {
   NotificationCategorySettings,
   OrchestrationEvent,
@@ -180,7 +180,7 @@ export function classifyThreadNotifyEdges(
 }
 
 /**
- * Which category an edge belongs to, given whether other work was still running
+ * Which category an edge belongs to, given the thread's background liveness
  * when the turn settled.
  *
  * A finish splits on live background work rather than on what started the turn:
@@ -191,7 +191,7 @@ export function classifyThreadNotifyEdges(
  */
 function categoryForEdge(
   edge: ThreadNotifyEdge,
-  backgroundActive: boolean,
+  backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"],
 ): keyof NotificationCategorySettings {
   if (edge.kind === "asking") {
     return "needsInput";
@@ -199,23 +199,7 @@ function categoryForEdge(
   if (edge.outcome === "error") {
     return "failed";
   }
-  return backgroundActive ? "finishedBackground" : "finished";
-}
-
-/**
- * Whether a thread has background work running right now, for the purposes of
- * splitting a finish into "done" vs "interim".
- *
- * Only `"working"` counts. `"monitoring"` means watch loops are the only live
- * work, and treating that as active would permanently classify a thread with a
- * standing watcher as an interim finish — silencing it forever once the user
- * turns that category off. Absent (older server, or after a restart, since the
- * liveness map is in-memory) reads as "nothing running", so the alert still fires.
- */
-export function isBackgroundWorkActive(
-  liveness: OrchestrationThreadShell["backgroundLiveness"],
-): boolean {
-  return liveness === "working";
+  return isInterimBackgroundLiveness(backgroundLiveness) ? "finishedBackground" : "finished";
 }
 
 /**
@@ -226,9 +210,9 @@ export function isBackgroundWorkActive(
 export function filterEdgesByCategory(
   edges: ReadonlyArray<ThreadNotifyEdge>,
   categories: NotificationCategorySettings,
-  backgroundActive: boolean,
+  backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"],
 ): ReadonlyArray<ThreadNotifyEdge> {
-  return edges.filter((edge) => categories[categoryForEdge(edge, backgroundActive)]);
+  return edges.filter((edge) => categories[categoryForEdge(edge, backgroundLiveness)]);
 }
 
 /** Build the JSON push payload the service-worker `push` handler renders. */
@@ -485,11 +469,7 @@ const make = Effect.gen(function* () {
         // would let a settings hiccup abort before `advanceBaseline` — losing an
         // edge that never re-emits.
         const categories = yield* readNotificationCategories;
-        const allowed = filterEdgesByCategory(
-          edges,
-          categories,
-          isBackgroundWorkActive(shell.backgroundLiveness),
-        );
+        const allowed = filterEdgesByCategory(edges, categories, shell.backgroundLiveness);
         if (allowed.length < edges.length) {
           yield* Effect.logDebug("web push edges suppressed by notification categories", {
             threadId,
