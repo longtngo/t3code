@@ -345,6 +345,30 @@ describe("deriveActivePlanState", () => {
 });
 
 describe("derivePlanGroups", () => {
+  it("returns [] when no turn.plan.updated activities are present", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-tool",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        turnId: "turn-1",
+      }),
+      makeActivity({
+        id: "turn-2-warning",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        turnId: "turn-2",
+      }),
+      makeActivity({
+        id: "turn-1-note",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "runtime.note",
+        turnId: "turn-1",
+      }),
+    ];
+    expect(derivePlanGroups(activities)).toEqual([]);
+  });
+
   it("returns one group per turn, at that turn's final plan state", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -562,6 +586,49 @@ describe("derivePlanGroups", () => {
     expect(after).toHaveLength(2);
     expect(after[0]).toBe(before[0]);
     expect(after[1]).toBe(before[1]);
+  });
+
+  it("reuses the same group objects after a plan revision once a non-plan activity is appended", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-plan",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "turn-2-plan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-2",
+        payload: { plan: [{ step: "Second", status: "completed" }] },
+      }),
+    ];
+    const withRevision = [
+      ...activities,
+      makeActivity({
+        id: "turn-1-done",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "turn.plan.updated",
+        turnId: "turn-1",
+        payload: { plan: [{ step: "First", status: "completed" }] },
+      }),
+    ];
+    const afterRevision = derivePlanGroups(withRevision);
+    const withNonPlanAppend = [
+      ...withRevision,
+      makeActivity({
+        id: "turn-1-note",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "runtime.note",
+        turnId: "turn-1",
+      }),
+    ];
+    const afterAppend = derivePlanGroups(withNonPlanAppend);
+    expect(afterAppend).toHaveLength(2);
+    expect(afterAppend[0]).toBe(afterRevision[0]);
+    expect(afterAppend[1]).toBe(afterRevision[1]);
   });
 
   it("returns a new group only for the turn that got a new plan revision", () => {

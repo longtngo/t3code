@@ -346,10 +346,10 @@ function planForTurn(
 /**
  * Stabilizes each turn's plan-activity bucket across calls so the memo below can key on the
  * bucket array's identity. `derivePlanGroups` rebuilds every bucket via `.filter`/push on every
- * call, so without this a WeakMap keyed on the bucket array has a measured 0% hit rate. Keyed on
- * the bucket's first activity (stable across an append at the tail) rather than its last (stable
- * across an older-page merge at the head, which is exactly the case that must NOT reuse a stale
- * bucket): a length/identity mismatch under either key forces a fresh array.
+ * call, so without this a WeakMap keyed on the bucket array has a measured 0% hit rate. One slot
+ * per turn (keyed on the bucket's first activity) limits memory; correctness comes from the full
+ * length-and-identity check, not the key. Two callers passing different lists that share the same
+ * first activity will thrash the slot.
  */
 const stablePlanBucketByFirstActivity = new WeakMap<
   OrchestrationThreadActivity,

@@ -2510,6 +2510,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         for (const [threadId, deletedAt] of [
           ["thread-window", null],
           ["thread-floor", null],
+          ["thread-null-seq", null],
           ["thread-deleted", "2026-09-12T11:00:00.000Z"],
         ] as const) {
           yield* sql`
@@ -2549,6 +2550,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             )
           `;
         };
+        const insertActivityNullSequence = (row: {
+          readonly id: string;
+          readonly threadId: string;
+          readonly turnId: string | null;
+          readonly kind?: string;
+          readonly payload?: string;
+          readonly at: string;
+        }) =>
+          sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+              sequence, created_at
+            )
+            VALUES (
+              ${row.id}, ${row.threadId}, ${row.turnId}, 'info',
+              ${row.kind ?? "turn.plan.updated"}, 'Plan updated', ${row.payload ?? steps},
+              NULL, ${`2026-09-12T${row.at}:00.000Z`}
+            )
+          `;
 
         // Rows are inserted oldest first so `sequence` follows `created_at`.
         for (const row of [
@@ -2601,6 +2621,24 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           yield* insertActivity(row);
         }
 
+        // Live rows have NULL sequence; ordering and per-turn floor must fall through to created_at.
+        for (const row of [
+          { id: "ns-b1-plan-1", threadId: "thread-null-seq", turnId: "turn-ns-b1", at: "03:00" },
+          { id: "ns-b1-plan-2", threadId: "thread-null-seq", turnId: "turn-ns-b1", at: "03:10" },
+          { id: "ns-b2-plan-1", threadId: "thread-null-seq", turnId: "turn-ns-b2", at: "04:00" },
+          { id: "ns-b2-plan-2", threadId: "thread-null-seq", turnId: "turn-ns-b2", at: "04:30" },
+          { id: "ns-b3-plan-1", threadId: "thread-null-seq", turnId: "turn-ns-b3", at: "05:00" },
+          {
+            id: "ns-b3-clear",
+            threadId: "thread-null-seq",
+            turnId: "turn-ns-b3",
+            payload: clear,
+            at: "06:00",
+          },
+        ]) {
+          yield* insertActivityNullSequence(row);
+        }
+
         // The 3-hour bound starts at 09:00.
         yield* TestClock.setTime(Date.parse("2026-09-12T12:00:00.000Z"));
         const idsFor = (threadId: string) =>
@@ -2637,6 +2675,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           createdAt: "2026-09-12T04:00:00.000Z",
           sequence: 7,
         });
+
+        const nullSeqFloor = yield* snapshotQuery.listThreadPlanHistory({
+          threadId: ThreadId.make("thread-null-seq"),
+        });
+        assert.deepStrictEqual(
+          nullSeqFloor.map((activity) => activity.id),
+          [EventId.make("ns-b2-plan-1"), EventId.make("ns-b2-plan-2")],
+        );
+        assert.strictEqual(nullSeqFloor[0]?.createdAt, "2026-09-12T04:00:00.000Z");
+        assert.strictEqual(nullSeqFloor[1]?.createdAt, "2026-09-12T04:30:00.000Z");
+        assert.strictEqual(nullSeqFloor[0]?.sequence, undefined);
 
         assert.deepStrictEqual(yield* idsFor("thread-deleted"), []);
       }),

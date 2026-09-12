@@ -240,6 +240,15 @@ describe("plan row union", () => {
     expect(durations(result)).toEqual([600_000, 1_200_000]);
   });
 
+  it("returns [] when a retained read survives a revert to zero turns", () => {
+    const retained: LandedPlanHistoryRead = {
+      threadId: THREAD,
+      latestTurnId: null,
+      rows: longTurnRows("turn-1", 2),
+    };
+    expect(resolvePlanHistoryRows(null, retained, THREAD, null)).toEqual([]);
+  });
+
   it("does not carry a read over to a different thread", () => {
     const retained: LandedPlanHistoryRead = {
       threadId: ThreadId.make("thread-other"),
