@@ -23,6 +23,7 @@ import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-lo
 import {
   isToolLifecycleItemType,
   type AssetResource,
+  type EnvironmentId,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
@@ -484,14 +485,14 @@ export function latestTurnTaskCounts(
 
 /** A `thread.planHistory.list` response that landed, with the key it was read under. */
 export interface LandedPlanHistoryRead {
+  readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  readonly latestTurnId: TurnId | null;
   readonly rows: ReadonlyArray<OrchestrationThreadActivity>;
 }
 
 /**
  * The read rows the panel unions with live activities: the current key's read once it lands,
- * otherwise the last landed read for this thread. A new key starts its query empty, so reading
+ * otherwise the last landed read for this environment and thread. A new key starts its query empty, so reading
  * only the current key would drop cut turns back to truncated durations on every turn change.
  *
  * A retained read can predate a revert. Its turns whose newest row is newer than the latest
@@ -502,11 +503,18 @@ export interface LandedPlanHistoryRead {
 export function resolvePlanHistoryRows(
   current: ReadonlyArray<OrchestrationThreadActivity> | null,
   retained: LandedPlanHistoryRead | null,
+  environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
   latestTurn: OrchestrationLatestTurn | null,
 ): ReadonlyArray<OrchestrationThreadActivity> | null {
   if (current !== null) return current;
-  if (retained === null || retained.threadId !== threadId) return null;
+  if (
+    retained === null ||
+    retained.environmentId !== environmentId ||
+    retained.threadId !== threadId
+  ) {
+    return null;
+  }
   if (latestTurn === null) return [];
   const bound = latestTurn.completedAt ?? latestTurn.requestedAt;
   const newestByTurn = new Map<string, string>();

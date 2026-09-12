@@ -67,13 +67,18 @@ export function useTaskList(
   // The query starts every new key empty; keep the last landed read so a turn change does not
   // drop cut turns back to truncated durations while the new read is in flight.
   const [retained, setRetained] = useState<LandedPlanHistoryRead | null>(null);
-  if (current !== null && threadId !== null && retained?.rows !== current) {
-    setRetained({ threadId, latestTurnId, rows: current });
+  if (
+    current !== null &&
+    environmentId !== null &&
+    threadId !== null &&
+    retained?.rows !== current
+  ) {
+    setRetained({ environmentId, threadId, rows: current });
   }
 
   const readRows = useMemo(
-    () => resolvePlanHistoryRows(current, retained, threadId, latestTurn),
-    [current, retained, threadId, latestTurn],
+    () => resolvePlanHistoryRows(current, retained, environmentId, threadId, latestTurn),
+    [current, retained, environmentId, threadId, latestTurn],
   );
   // Held in state so the union can be compared with the previous one: a non-plan append makes a
   // new `activities` array over the same plan rows, and must not bust the group memo.

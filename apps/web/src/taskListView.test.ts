@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   EventId,
   ThreadId,
   TurnId,
@@ -67,6 +68,7 @@ function latestTurn(
   };
 }
 
+const ENVIRONMENT = EnvironmentId.make("environment-1");
 const THREAD = ThreadId.make("thread-1");
 const NOW = Date.parse("2026-09-12T12:00:00.000Z");
 const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
@@ -81,6 +83,7 @@ function view(input: {
   const readRows = resolvePlanHistoryRows(
     input.current,
     input.retained ?? null,
+    ENVIRONMENT,
     THREAD,
     input.latest,
   );
@@ -221,8 +224,8 @@ describe("plan row union", () => {
   it("keeps the last landed read across a key change while the new read is pending", () => {
     const full = longTurnRows("turn-1", 2);
     const retained: LandedPlanHistoryRead = {
+      environmentId: ENVIRONMENT,
       threadId: THREAD,
-      latestTurnId: TurnId.make("turn-2"),
       rows: full,
     };
     const live = [
@@ -242,20 +245,30 @@ describe("plan row union", () => {
 
   it("returns [] when a retained read survives a revert to zero turns", () => {
     const retained: LandedPlanHistoryRead = {
+      environmentId: ENVIRONMENT,
       threadId: THREAD,
-      latestTurnId: null,
       rows: longTurnRows("turn-1", 2),
     };
-    expect(resolvePlanHistoryRows(null, retained, THREAD, null)).toEqual([]);
+    expect(resolvePlanHistoryRows(null, retained, ENVIRONMENT, THREAD, null)).toEqual([]);
   });
 
   it("does not carry a read over to a different thread", () => {
     const retained: LandedPlanHistoryRead = {
+      environmentId: ENVIRONMENT,
       threadId: ThreadId.make("thread-other"),
-      latestTurnId: null,
       rows: longTurnRows("turn-1", 2),
     };
-    expect(resolvePlanHistoryRows(null, retained, THREAD, null)).toBeNull();
+    expect(resolvePlanHistoryRows(null, retained, ENVIRONMENT, THREAD, null)).toBeNull();
+  });
+
+  it("does not carry a read over to a different environment with the same thread id", () => {
+    const retained: LandedPlanHistoryRead = {
+      environmentId: EnvironmentId.make("environment-other"),
+      threadId: THREAD,
+      rows: longTurnRows("turn-1", 2),
+    };
+    const latest = latestTurn("turn-2", { requestedAt: hoursAgo(0.2), completedAt: null });
+    expect(resolvePlanHistoryRows(null, retained, ENVIRONMENT, THREAD, latest)).toBeNull();
   });
 
   it("includes a live plan row that arrived after the read landed, as the turn's final state", () => {
@@ -288,8 +301,8 @@ describe("plan row union", () => {
       planRow("t3-p", "turn-3", hoursAgo(0.5), [["Deleted too", "completed"]]),
     ];
     const retained: LandedPlanHistoryRead = {
+      environmentId: ENVIRONMENT,
       threadId: THREAD,
-      latestTurnId: TurnId.make("turn-3"),
       rows: read,
     };
     const turn1CompletedAt = hoursAgo(1.5);
@@ -448,8 +461,8 @@ describe("task list panel survives the composer badge's eviction gates", () => {
     // (thread, turn-2) has not landed (`current: null`). The hook retains turn-1's landed read
     // rather than starting the new key empty.
     const retained: LandedPlanHistoryRead = {
+      environmentId: ENVIRONMENT,
       threadId: THREAD,
-      latestTurnId: TurnId.make("turn-1"),
       rows: turn1Rows,
     };
     const after = view({
