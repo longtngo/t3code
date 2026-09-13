@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { closedTabFor, useClosedTabsStore } from "~/closedTabsStore";
+import { useClientSettings } from "~/hooks/useSettings";
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { Button } from "~/components/ui/button";
 import { DiscoveryList, DiscoveryListRow } from "~/components/ui/discovery-list";
@@ -60,6 +62,7 @@ export function DevicePanel(props: {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [axOverlay, setAxOverlay] = useState(false);
   const access = useDeviceHubAccess(environmentId);
+  const closedTabUndoLimit = useClientSettings((s) => s.closedTabUndoLimit);
 
   const hostDisabled = state.hostStatus === "disabled";
 
@@ -116,9 +119,15 @@ export function DevicePanel(props: {
     }
   };
 
+  const closeTab = () => {
+    useClosedTabsStore
+      .getState()
+      .push(props.threadRef, [closedTabFor(props.surface, null)], closedTabUndoLimit);
+    useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
+  };
   const closeActive = (powerOff: boolean) => {
     if (!powerOff) {
-      useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
+      closeTab();
       return;
     }
     if (!activeSession) return;
@@ -133,7 +142,7 @@ export function DevicePanel(props: {
       },
     }).then((result) => {
       if (result._tag === "Failure") setOperationError(formatEnvironmentQueryError(result.cause));
-      else useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
+      else closeTab();
     });
   };
 

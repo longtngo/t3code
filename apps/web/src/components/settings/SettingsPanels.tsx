@@ -39,6 +39,8 @@ import {
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_USAGE_PACE_TOLERANCE,
+  MIN_CLOSED_TAB_UNDO_LIMIT,
+  MAX_CLOSED_TAB_UNDO_LIMIT,
   MAX_USAGE_PACE_TOLERANCE,
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
@@ -524,6 +526,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance
         ? ["Pace tolerance"]
         : []),
+      ...(settings.closedTabUndoLimit !== DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit
+        ? ["Closed tabs to remember"]
+        : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -720,6 +725,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
+      closedTabUndoLimit: DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -1887,12 +1893,18 @@ function FontFamilySettingsRow({
   );
 }
 
-function PaceToleranceInput({
+function BoundedIntegerInput({
   value,
+  min,
+  max,
+  ariaLabel,
   onCommit,
 }: {
   value: number;
-  onCommit: (points: number) => void;
+  min: number;
+  max: number;
+  ariaLabel: string;
+  onCommit: (value: number) => void;
 }) {
   // Same draft pattern as AutoSettleDaysInput: commit only whole numbers in range, snap back on blur.
   const [draft, setDraft] = useState(String(value));
@@ -1904,8 +1916,8 @@ function PaceToleranceInput({
     <Input
       size="sm"
       type="number"
-      min={MIN_USAGE_PACE_TOLERANCE}
-      max={MAX_USAGE_PACE_TOLERANCE}
+      min={min}
+      max={max}
       className="w-full sm:w-24"
       value={draft}
       onChange={(event) => {
@@ -1914,14 +1926,14 @@ function PaceToleranceInput({
         if (
           event.target.value.trim() !== "" &&
           Number.isInteger(parsed) &&
-          parsed >= MIN_USAGE_PACE_TOLERANCE &&
-          parsed <= MAX_USAGE_PACE_TOLERANCE
+          parsed >= min &&
+          parsed <= max
         ) {
           onCommit(parsed);
         }
       }}
       onBlur={() => setDraft(String(value))}
-      aria-label="Pace tolerance in points"
+      aria-label={ariaLabel}
     />
   );
 }
@@ -2355,9 +2367,37 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <PaceToleranceInput
+            <BoundedIntegerInput
               value={settings.usagePaceTolerance}
+              min={MIN_USAGE_PACE_TOLERANCE}
+              max={MAX_USAGE_PACE_TOLERANCE}
+              ariaLabel="Pace tolerance in points"
               onCommit={(usagePaceTolerance) => updateSettings({ usagePaceTolerance })}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("closed-tab-undo-limit")}
+          description="How many closed right-panel tabs each thread remembers for Undo closed tab, on this device."
+          resetAction={
+            settings.closedTabUndoLimit !== DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit ? (
+              <SettingResetButton
+                label="closed tabs to remember"
+                onClick={() =>
+                  updateSettings({
+                    closedTabUndoLimit: DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <BoundedIntegerInput
+              value={settings.closedTabUndoLimit}
+              min={MIN_CLOSED_TAB_UNDO_LIMIT}
+              max={MAX_CLOSED_TAB_UNDO_LIMIT}
+              ariaLabel="Closed tabs to remember"
+              onCommit={(closedTabUndoLimit) => updateSettings({ closedTabUndoLimit })}
             />
           }
         />

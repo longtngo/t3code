@@ -1973,6 +1973,7 @@ function PullRequestsRouteView() {
             onAddAgents={() => undefined}
             onAddTasks={() => undefined}
             onAddBackground={() => undefined}
+            onUndoClosedTab={() => undefined}
             onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
@@ -1983,6 +1984,7 @@ function PullRequestsRouteView() {
             agentsAvailable={false}
             tasksAvailable={false}
             backgroundAvailable={false}
+            closedTabCount={0}
             deviceAvailable={false}
             liveAgentCount={0}
             liveBackgroundCount={0}

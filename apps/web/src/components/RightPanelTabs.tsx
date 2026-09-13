@@ -28,6 +28,7 @@ import {
   ListTodo,
   Plus,
   TerminalSquare,
+  Undo2,
   Volume2,
   VolumeOff,
 } from "lucide-react";
@@ -122,6 +123,7 @@ interface RightPanelTabsProps {
   onAddAgents: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
+  onUndoClosedTab: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -132,6 +134,8 @@ interface RightPanelTabsProps {
   agentsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
+  /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
+  closedTabCount: number;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
@@ -170,6 +174,7 @@ const SURFACE_DISABLED_REASONS = {
   agents: "Agents are only available from a thread.",
   tasks: "The task list is only available from a thread.",
   background: "Background tasks are only available from a thread.",
+  undoClosedTab: "No recently closed tabs.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -196,6 +201,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   agents: "Available from a thread.",
   tasks: "Available from a thread.",
   background: "Available from a thread.",
+  undoClosedTab: "No recently closed tabs.",
   device: "Available from a thread.",
 } as const;
 
@@ -338,6 +344,7 @@ function RightPanelEmptyState(props: {
   onAddAgents: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
+  onUndoClosedTab: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -348,6 +355,8 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
+  /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
+  closedTabCount: number;
   deviceAvailable: boolean;
   liveAgentCount: number;
   liveBackgroundCount: number;
@@ -442,6 +451,15 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.background,
       onClick: props.onAddBackground,
       badgeCount: props.liveBackgroundCount,
+    },
+    {
+      label: "Undo closed tab",
+      icon: Undo2,
+      shortcut: "U",
+      available: props.closedTabCount > 0,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.undoClosedTab,
+      onClick: props.onUndoClosedTab,
+      badgeCount: 0,
     },
     {
       label: "Device",
@@ -1005,6 +1023,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddBackground,
     },
     {
+      label: "Undo closed tab",
+      icon: Undo2,
+      shortcut: "U",
+      available: props.closedTabCount > 0,
+      disabledReason: SURFACE_DISABLED_REASONS.undoClosedTab,
+      onClick: props.onUndoClosedTab,
+    },
+    {
       label: "Device",
       icon: Smartphone,
       shortcut: "M",
@@ -1485,6 +1511,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddAgents={props.onAddAgents}
             onAddTasks={props.onAddTasks}
             onAddBackground={props.onAddBackground}
+            onUndoClosedTab={props.onUndoClosedTab}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1495,6 +1522,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             agentsAvailable={props.agentsAvailable}
             tasksAvailable={props.tasksAvailable}
             backgroundAvailable={props.backgroundAvailable}
+            closedTabCount={props.closedTabCount}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
             liveBackgroundCount={props.liveBackgroundCount}

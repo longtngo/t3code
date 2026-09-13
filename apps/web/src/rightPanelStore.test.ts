@@ -444,6 +444,24 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("restores a closed surface as the active tab without duplicating an open one", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.openPullRequest(refA, { projectId: "p1", repository: "acme/app", number: 7 });
+    const pullRequest = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    ).surfaces.find((surface) => surface.kind === "pull-request")!;
+    store.closeSurface(refA, pullRequest.id);
+
+    store.restoreSurface(refA, pullRequest);
+    store.restoreSurface(refA, { id: "files", kind: "files" });
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual(["files", pullRequest.id]);
+    expect(state.activeSurfaceId).toBe("files");
+    expect(state.isOpen).toBe(true);
+  });
+
   it("opens background as a singleton surface beside the task list", () => {
     useRightPanelStore.getState().open(refA, "background");
     useRightPanelStore.getState().open(refA, "tasks");

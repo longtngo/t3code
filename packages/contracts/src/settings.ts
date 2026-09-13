@@ -80,6 +80,14 @@ export const UsagePaceTolerance = Schema.Int.check(
 );
 export type UsagePaceTolerance = typeof UsagePaceTolerance.Type;
 export const DEFAULT_USAGE_PACE_TOLERANCE: UsagePaceTolerance = 15;
+export const MIN_CLOSED_TAB_UNDO_LIMIT = 1;
+export const MAX_CLOSED_TAB_UNDO_LIMIT = 50;
+/** How many closed right-panel tabs each thread can reopen with "Undo closed tab". */
+export const ClosedTabUndoLimit = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_CLOSED_TAB_UNDO_LIMIT, maximum: MAX_CLOSED_TAB_UNDO_LIMIT }),
+);
+export type ClosedTabUndoLimit = typeof ClosedTabUndoLimit.Type;
+export const DEFAULT_CLOSED_TAB_UNDO_LIMIT: ClosedTabUndoLimit = 10;
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -482,6 +490,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   usagePaceTolerance: UsagePaceTolerance.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_USAGE_PACE_TOLERANCE)),
+  ),
+  closedTabUndoLimit: ClosedTabUndoLimit.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CLOSED_TAB_UNDO_LIMIT)),
   ),
   snapShotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snapShotIncludeAccessibility: Schema.Boolean.pipe(
@@ -1919,6 +1930,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   usagePaceTolerance: Schema.optionalKey(UsagePaceTolerance),
+  closedTabUndoLimit: Schema.optionalKey(ClosedTabUndoLimit),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),

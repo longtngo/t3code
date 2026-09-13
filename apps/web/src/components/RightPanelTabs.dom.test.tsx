@@ -127,6 +127,7 @@ function renderTabs(
       onAddAgents={() => undefined}
       onAddTasks={() => undefined}
       onAddBackground={() => undefined}
+      onUndoClosedTab={() => undefined}
       onAddDevice={() => undefined}
       liveAgentCount={0}
       liveBackgroundCount={0}
@@ -139,6 +140,7 @@ function renderTabs(
       agentsAvailable={false}
       tasksAvailable={false}
       backgroundAvailable={false}
+      closedTabCount={0}
       deviceAvailable={false}
     >
       <div>content</div>

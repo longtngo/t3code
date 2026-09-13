@@ -213,6 +213,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["usage limit colour color yellow red pace threshold cursor claude codex"],
   },
   {
+    id: "closed-tab-undo-limit",
+    title: "Closed tabs to remember",
+    to: "/settings/general",
+    searchTerms: ["undo reopen closed tab right panel history stack"],
+  },
+  {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
     to: "/settings/general",

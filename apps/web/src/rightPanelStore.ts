@@ -187,6 +187,8 @@ interface RightPanelStoreState {
   activateTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   activateSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  /** Reopen a surface exactly as it was ("Undo closed tab"); an already open one is activated. */
+  restoreSurface: (ref: ScopedThreadRef, surface: RightPanelSurface) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
@@ -766,6 +768,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               ? { ...current, isOpen: true, activeSurfaceId: surfaceId }
               : current,
           ),
+        ),
+      restoreSurface: (ref, surface) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) => upsertSurface(current, surface)),
         ),
       closeSurface: (ref, surfaceId) =>
         set((state) =>

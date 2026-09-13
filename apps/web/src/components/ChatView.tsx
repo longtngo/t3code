@@ -219,6 +219,8 @@ import { TaskListPanel } from "./TaskListPanel";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { backgroundTasksRefreshKey } from "./BackgroundTasksPanel.logic";
 import { liveWorkBannerParts } from "./chat/PanelLayoutControls.logic";
+import { closedTabFor, useClosedTabCount, useClosedTabsStore } from "../closedTabsStore";
+import { openPreviewSession } from "./preview/openPreviewSession";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -5012,9 +5014,73 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeRightPanelSurface, activeThreadRef],
   );
+  const closedTabUndoLimit = useClientSettings((s) => s.closedTabUndoLimit);
+  const recordClosedTabs = useCallback(
+    (surfaces: readonly RightPanelSurface[]) => {
+      if (!activeThreadRef) return;
+      useClosedTabsStore.getState().push(
+        activeThreadRef,
+        surfaces.map((surface) => {
+          const snapshot =
+            surface.kind === "preview" && surface.resourceId
+              ? activePreviewState.sessions[surface.resourceId]
+              : undefined;
+          const url =
+            snapshot && snapshot.navStatus._tag !== "Idle" ? snapshot.navStatus.url : null;
+          return closedTabFor(surface, url);
+        }),
+        closedTabUndoLimit,
+      );
+    },
+    [activePreviewState.sessions, activeThreadRef, closedTabUndoLimit],
+  );
+  const closedTabCount = useClosedTabCount(activeThreadRef);
+  const undoClosedTab = useCallback(() => {
+    if (!activeThreadRef) return;
+    const tab = useClosedTabsStore.getState().pop(activeThreadRef);
+    if (tab === null) return;
+    if (tab.kind === "terminal") {
+      // A new shell needs the project's folder. Say so rather than no-op; the entry is spent so
+      // older tabs underneath stay reachable.
+      if (!activeProject) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Can't reopen the terminal",
+            description: "This thread has no project folder to start a shell in.",
+          }),
+        );
+        return;
+      }
+      addTerminalSurface();
+      return;
+    }
+    if (tab.kind === "browser") {
+      const threadRef = activeThreadRef;
+      void openPreviewSession({
+        openPreview,
+        threadRef,
+        ...(tab.url === null ? {} : { url: tab.url }),
+      }).then((result) => {
+        if (result._tag === "Failure") return;
+        useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+      });
+      return;
+    }
+    // openDevice, not a plain restore: it also lifts the dismissal closing the tab recorded.
+    if (tab.surface.kind === "device" && tab.surface.target) {
+      useRightPanelStore.getState().openDevice(activeThreadRef, tab.surface.target);
+      return;
+    }
+    useRightPanelStore.getState().restoreSurface(activeThreadRef, tab.surface);
+  }, [activeProject, activeThreadRef, addTerminalSurface, openPreview]);
   const closePanelTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
+      // Closing the last pane closes the tab itself, which "Undo closed tab" can reopen.
+      if (activeRightPanelSurface.terminalIds.length === 1) {
+        recordClosedTabs([activeRightPanelSurface]);
+      }
       void closeTerminalMutation({
         environmentId: activeThreadRef.environmentId,
         input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
@@ -5025,7 +5091,13 @@ export default function ChatView(props: ChatViewProps) {
         .closeTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeRightPanelSurface, activeThreadRef, closeTerminalMutation, storeCloseTerminal],
+    [
+      activeRightPanelSurface,
+      activeThreadRef,
+      closeTerminalMutation,
+      recordClosedTabs,
+      storeCloseTerminal,
+    ],
   );
   const requestCloseTerminal = useCallback(
     (terminalId: string) => {
@@ -5140,6 +5212,7 @@ export default function ChatView(props: ChatViewProps) {
   const finishRightPanelSurfaceClose = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
+      recordClosedTabs(surfaces);
       cleanupRightPanelSurfaces(surfaces);
       const store = useRightPanelStore.getState();
       for (const surface of surfaces) {
@@ -5147,7 +5220,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       syncActivePreviewSurface();
     },
-    [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface],
+    [activeThreadRef, cleanupRightPanelSurfaces, recordClosedTabs, syncActivePreviewSurface],
   );
   const closeRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
@@ -9921,6 +9994,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddAgents={addAgentsSurface}
           onAddTasks={addTasksSurface}
           onAddBackground={addBackgroundSurface}
+          onUndoClosedTab={undoClosedTab}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -9931,6 +10005,7 @@ export default function ChatView(props: ChatViewProps) {
           agentsAvailable
           tasksAvailable
           backgroundAvailable
+          closedTabCount={closedTabCount}
           deviceAvailable={activeThreadRef !== null}
           liveAgentCount={agentPanelModel.liveCount}
           liveBackgroundCount={liveBackgroundCount}
@@ -9986,6 +10061,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddAgents={addAgentsSurface}
             onAddTasks={addTasksSurface}
             onAddBackground={addBackgroundSurface}
+            onUndoClosedTab={undoClosedTab}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
@@ -9996,6 +10072,7 @@ export default function ChatView(props: ChatViewProps) {
             agentsAvailable
             tasksAvailable
             backgroundAvailable
+            closedTabCount={closedTabCount}
             deviceAvailable={activeThreadRef !== null}
             liveAgentCount={agentPanelModel.liveCount}
             liveBackgroundCount={liveBackgroundCount}
