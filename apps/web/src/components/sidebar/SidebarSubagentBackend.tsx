@@ -143,6 +143,7 @@ export function SidebarSubagentBackend() {
     open ? 1000 : state?.backend === SUBAGENT_BACKEND_CURSOR && usage ? 60_000 : null,
   );
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const routeTarget = useParams({
@@ -225,7 +226,9 @@ export function SidebarSubagentBackend() {
                     aria-label={`Cursor usage ${usagePace.usage}%${
                       usagePace.diff !== null ? `, ${paceDiffLabel(usagePace.diff)}` : ""
                     }`}
-                    className={sidebarFooterSeverityBadgeClass(windowSeverity(usagePace))}
+                    className={sidebarFooterSeverityBadgeClass(
+                      windowSeverity(usagePace, paceTolerance),
+                    )}
                   >
                     {usagePace.usage}%
                   </span>

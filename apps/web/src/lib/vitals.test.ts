@@ -51,16 +51,20 @@ describe("vitalsLevel", () => {
 });
 
 describe("paceLevel", () => {
-  it("keys on the signed diff: <20 / <30 / <40 / else", () => {
-    expect(paceLevel(-10)).toBe("ok");
-    expect(paceLevel(0)).toBe("ok");
-    expect(paceLevel(19)).toBe("ok");
-    expect(paceLevel(20)).toBe("warn");
-    expect(paceLevel(29)).toBe("warn");
-    expect(paceLevel(30)).toBe("high");
-    expect(paceLevel(39)).toBe("high");
-    expect(paceLevel(40)).toBe("crit");
-    expect(paceLevel(80)).toBe("crit");
+  it("is green at or under pace, yellow up to the tolerance over, red beyond", () => {
+    expect(paceLevel(-10, 15)).toBe("ok");
+    expect(paceLevel(0, 15)).toBe("ok");
+    expect(paceLevel(1, 15)).toBe("warn");
+    expect(paceLevel(15, 15)).toBe("warn");
+    expect(paceLevel(16, 15)).toBe("crit");
+    expect(paceLevel(80, 15)).toBe("crit");
+  });
+
+  it("moves the red boundary with the tolerance and never returns orange", () => {
+    expect(paceLevel(25, 30)).toBe("warn");
+    expect(paceLevel(31, 30)).toBe("crit");
+    expect(paceLevel(1, 0)).toBe("crit");
+    expect(paceLevel(0, 0)).toBe("ok");
   });
 });
 
@@ -335,13 +339,13 @@ describe("computeWindowPace", () => {
 
 describe("windowSeverity", () => {
   it("uses pace when a projection exists", () => {
-    expect(windowSeverity({ usage: 91, projection: 34, diff: 57 })).toBe("crit");
-    expect(windowSeverity({ usage: 40, projection: 44, diff: -4 })).toBe("ok");
+    expect(windowSeverity({ usage: 91, projection: 34, diff: 57 }, 15)).toBe("crit");
+    expect(windowSeverity({ usage: 40, projection: 44, diff: -4 }, 15)).toBe("ok");
   });
 
   it("falls back to absolute fullness when there is no projection", () => {
-    expect(windowSeverity({ usage: 95, projection: null, diff: null })).toBe("crit");
-    expect(windowSeverity({ usage: 30, projection: null, diff: null })).toBe("ok");
+    expect(windowSeverity({ usage: 95, projection: null, diff: null }, 15)).toBe("crit");
+    expect(windowSeverity({ usage: 30, projection: null, diff: null }, 15)).toBe("ok");
   });
 });
 

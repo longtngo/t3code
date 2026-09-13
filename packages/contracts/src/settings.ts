@@ -72,6 +72,14 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 );
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
+export const MIN_USAGE_PACE_TOLERANCE = 0;
+export const MAX_USAGE_PACE_TOLERANCE = 100;
+/** Points over pace a usage window may run before its colour turns from yellow to red. */
+export const UsagePaceTolerance = Schema.Int.check(
+  Schema.isBetween({ minimum: MIN_USAGE_PACE_TOLERANCE, maximum: MAX_USAGE_PACE_TOLERANCE }),
+);
+export type UsagePaceTolerance = typeof UsagePaceTolerance.Type;
+export const DEFAULT_USAGE_PACE_TOLERANCE: UsagePaceTolerance = 15;
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -471,6 +479,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
+  usagePaceTolerance: UsagePaceTolerance.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_USAGE_PACE_TOLERANCE)),
   ),
   snapShotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snapShotIncludeAccessibility: Schema.Boolean.pipe(
@@ -1907,6 +1918,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
+  usagePaceTolerance: Schema.optionalKey(UsagePaceTolerance),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),

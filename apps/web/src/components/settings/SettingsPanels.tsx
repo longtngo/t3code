@@ -38,6 +38,8 @@ import {
   MIN_PANEL_ANIMATION_DURATION_MS,
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  MIN_USAGE_PACE_TOLERANCE,
+  MAX_USAGE_PACE_TOLERANCE,
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
 } from "@t3tools/contracts/settings";
@@ -519,6 +521,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance
+        ? ["Pace tolerance"]
+        : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -714,6 +719,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -1881,6 +1887,45 @@ function FontFamilySettingsRow({
   );
 }
 
+function PaceToleranceInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (points: number) => void;
+}) {
+  // Same draft pattern as AutoSettleDaysInput: commit only whole numbers in range, snap back on blur.
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      size="sm"
+      type="number"
+      min={MIN_USAGE_PACE_TOLERANCE}
+      max={MAX_USAGE_PACE_TOLERANCE}
+      className="w-full sm:w-24"
+      value={draft}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const parsed = Number(event.target.value);
+        if (
+          event.target.value.trim() !== "" &&
+          Number.isInteger(parsed) &&
+          parsed >= MIN_USAGE_PACE_TOLERANCE &&
+          parsed <= MAX_USAGE_PACE_TOLERANCE
+        ) {
+          onCommit(parsed);
+        }
+      }}
+      onBlur={() => setDraft(String(value))}
+      aria-label="Pace tolerance in points"
+    />
+  );
+}
+
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 
 function AutoSettleDaysInput({
@@ -2292,6 +2337,28 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
               </SelectPopup>
             </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("pace-tolerance")}
+          description="How many points over pace a usage bar can run before it turns red. At or under pace is green; over pace, up to this many points, is yellow."
+          resetAction={
+            settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance ? (
+              <SettingResetButton
+                label="pace tolerance"
+                onClick={() =>
+                  updateSettings({
+                    usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <PaceToleranceInput
+              value={settings.usagePaceTolerance}
+              onCommit={(usagePaceTolerance) => updateSettings({ usagePaceTolerance })}
+            />
           }
         />
         <SettingsRow

@@ -27,12 +27,12 @@ export function vitalsLevel(pct: number): Severity {
 
 /**
  * Pace severity for a usage window, keyed on `diff = utilization − projection`:
- * <20 green (0–20 over is "basically on pace"), <30 yellow, <40 orange, else red.
+ * green at or under pace, yellow up to `tolerance` points over, red beyond. There
+ * is no orange step: `tolerance` is the user's "Pace tolerance" setting.
  */
-export function paceLevel(diff: number): Severity {
-  if (diff < 20) return "ok";
-  if (diff < 30) return "warn";
-  if (diff < 40) return "high";
+export function paceLevel(diff: number, tolerance: number): Severity {
+  if (diff <= 0) return "ok";
+  if (diff <= tolerance) return "warn";
   return "crit";
 }
 
@@ -450,8 +450,8 @@ export function computeWindowPace(
 }
 
 /** Severity for a window row: by pace when a projection exists, else by fullness. */
-export function windowSeverity(pace: WindowPace): Severity {
-  return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff);
+export function windowSeverity(pace: WindowPace, tolerance: number): Severity {
+  return pace.diff === null ? vitalsLevel(pace.usage) : paceLevel(pace.diff, tolerance);
 }
 
 /** Date half of a distant reset. System locale, matching `formatShortTimestamp`. */
@@ -617,10 +617,11 @@ export function windowArc(
   window: UsageWindowView | null | undefined,
   windowMs: number | null,
   nowMs: number,
+  tolerance: number,
 ): VitalsGaugeArc {
   if (!window) return { pct: null, level: null };
   const pace = computeWindowPace(window, windowMs, nowMs);
-  return { pct: pace.usage, level: windowSeverity(pace) };
+  return { pct: pace.usage, level: windowSeverity(pace, tolerance) };
 }
 
 /** Signed pace label, e.g. "on pace", "4% under pace", "+57% over pace". */

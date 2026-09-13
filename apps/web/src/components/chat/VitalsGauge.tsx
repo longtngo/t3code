@@ -234,8 +234,9 @@ export function WindowRow(props: {
   /** Trailing figure for rows whose headline is money rather than a percentage. */
   detail?: string | undefined;
 }) {
+  const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
-  const level = windowSeverity(pace);
+  const level = windowSeverity(pace, paceTolerance);
   const resetAt = formatWindowReset(props.window.resetsAt, props.now, props.timestampFormat);
   const segments =
     props.segmentCount === undefined ? undefined : segmentBoundariesBackground(props.segmentCount);
@@ -750,6 +751,7 @@ export function VitalsGauge(props: {
   const { context, accountUsage, host } = props;
   const [open, setOpen] = useState(false);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   // The pace clock has to run even while the detail is closed: the icon colours
   // its two window arcs by pace, and pace is a function of how much of the
   // window's clock has elapsed. Leaving it frozen would let the glyph keep
@@ -757,8 +759,8 @@ export function VitalsGauge(props: {
   const now = useNow(30_000);
   const inputs: VitalsGaugeInputs = {
     context: fullnessArc(context?.usedPercentage ?? null),
-    fiveHour: windowArc(accountUsage?.fiveHour, FIVE_HOUR_MS, now),
-    sevenDay: windowArc(accountUsage?.sevenDay, SEVEN_DAY_MS, now),
+    fiveHour: windowArc(accountUsage?.fiveHour, FIVE_HOUR_MS, now, paceTolerance),
+    sevenDay: windowArc(accountUsage?.sevenDay, SEVEN_DAY_MS, now, paceTolerance),
     cpu: fullnessArc(host.sample?.cpu.pct ?? null),
     gpu: fullnessArc(host.sample?.gpu?.pct ?? null),
     mem: fullnessArc(host.sample?.mem.pct ?? null),

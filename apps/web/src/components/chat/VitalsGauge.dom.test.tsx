@@ -156,7 +156,7 @@ describe("VitalsGaugeIcon", () => {
     const now = Date.UTC(2026, 0, 1, 12, 0, 0);
     // 4% of the window's clock left => projection 96%; 74 − 96 = −22 => "ok".
     const resetsAt = new Date(now + FIVE_HOUR_MS * 0.04).toISOString();
-    const arc = windowArc({ utilization: 74, resetsAt }, FIVE_HOUR_MS, now);
+    const arc = windowArc({ utilization: 74, resetsAt }, FIVE_HOUR_MS, now, 15);
 
     expect(arc).toEqual({ pct: 74, level: "ok" });
     expect(vitalsLevel(74)).toBe("warn");
@@ -189,7 +189,7 @@ describe("VitalsGaugeIcon", () => {
   it("still colours a window by fullness when there is no pace projection", async () => {
     // No `resetsAt` => no projection => windowSeverity falls back to fullness,
     // so this path must keep behaving exactly as it did before.
-    const arc = windowArc({ utilization: 74, resetsAt: null }, FIVE_HOUR_MS, Date.now());
+    const arc = windowArc({ utilization: 74, resetsAt: null }, FIVE_HOUR_MS, Date.now(), 15);
 
     expect(arc).toEqual({ pct: 74, level: "warn" });
 

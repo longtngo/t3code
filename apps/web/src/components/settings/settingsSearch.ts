@@ -207,6 +207,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
+    id: "pace-tolerance",
+    title: "Pace tolerance",
+    to: "/settings/general",
+    searchTerms: ["usage limit colour color yellow red pace threshold cursor claude codex"],
+  },
+  {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
     to: "/settings/general",
