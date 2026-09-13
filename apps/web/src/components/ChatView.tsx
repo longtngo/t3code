@@ -85,6 +85,7 @@ import {
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  Fragment,
   lazy,
   memo,
   Suspense,
@@ -217,6 +218,7 @@ import { AgentsPanel } from "./AgentsPanel";
 import { TaskListPanel } from "./TaskListPanel";
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { backgroundTasksRefreshKey } from "./BackgroundTasksPanel.logic";
+import { liveWorkBannerParts } from "./chat/PanelLayoutControls.logic";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -6431,7 +6433,11 @@ export default function ChatView(props: ChatViewProps) {
       return null;
     }
     const working = activeBackgroundLiveness === "working";
-    const liveCount = agentPanelModel.liveCount;
+    const parts = liveWorkBannerParts({
+      liveness: activeBackgroundLiveness,
+      liveAgentCount: agentPanelModel.liveCount,
+      liveBackgroundCount,
+    });
     return {
       id: `background-liveness:${activeThread.id}`,
       variant: "default",
@@ -6442,31 +6448,36 @@ export default function ChatView(props: ChatViewProps) {
           aria-hidden="true"
         />
       ),
-      title: working
-        ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working`
-          : "Background work"
-        : "Monitoring",
+      // Each part opens the tab that lists that work.
+      title: (
+        <span className="inline-flex min-w-0 items-center gap-1">
+          {parts.map((part, index) => (
+            <Fragment key={part.target}>
+              {index > 0 ? (
+                <span aria-hidden className="text-muted-foreground">
+                  ·
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="-mx-1 truncate rounded-sm px-1 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                onClick={part.target === "agents" ? addAgentsSurface : addBackgroundSurface}
+              >
+                {part.label}
+              </button>
+            </Fragment>
+          ))}
+        </span>
+      ),
       actions: (
-        <>
-          {/* Names what is running: agents (and workflow runs) while working, otherwise the
-              shells and monitors. */}
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={working ? addAgentsSurface : addBackgroundSurface}
-          >
-            View
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={isStoppingBackgroundWork}
-            onClick={() => void handleStopBackgroundWork()}
-          >
-            {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
-          </Button>
-        </>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={isStoppingBackgroundWork}
+          onClick={() => void handleStopBackgroundWork()}
+        >
+          {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
+        </Button>
       ),
     };
   }, [
@@ -6475,6 +6486,7 @@ export default function ChatView(props: ChatViewProps) {
     addAgentsSurface,
     addBackgroundSurface,
     agentPanelModel.liveCount,
+    liveBackgroundCount,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
   ]);
@@ -9077,6 +9089,9 @@ export default function ChatView(props: ChatViewProps) {
       // on screen, so the toggle badge would be pointing at nothing.
       liveAgentCount={
         rightPanelOpen && activeRightPanelSurface?.kind === "agents" ? 0 : agentPanelModel.liveCount
+      }
+      liveBackgroundCount={
+        rightPanelOpen && activeRightPanelSurface?.kind === "background" ? 0 : liveBackgroundCount
       }
       // Suppressed while the Tasks surface is visible, for the same reason.
       taskCompletedCount={

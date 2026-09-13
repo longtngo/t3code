@@ -18,6 +18,8 @@ interface PanelLayoutControlsProps {
   rightPanelUnavailableLabel?: string;
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
+  /** Running top-level background tasks; shares the agents corner as a split pill. */
+  liveBackgroundCount?: number | undefined;
   /** Latest turn's own task list only; a second, independent badge. Absent renders neither. */
   taskCompletedCount?: number | undefined;
   taskTotalCount?: number | undefined;
@@ -35,6 +37,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
   liveAgentCount,
+  liveBackgroundCount = 0,
   taskCompletedCount,
   taskTotalCount,
   onToggleTerminal,
@@ -42,7 +45,12 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 }: PanelLayoutControlsProps) {
   const taskBadgeVisible = taskCompletedCount !== undefined && taskTotalCount !== undefined;
   const taskComplete = taskBadgeVisible && taskCompletedCount === taskTotalCount;
-  const statusSuffix = panelToggleLabel({ liveAgentCount, taskCompletedCount, taskTotalCount });
+  const statusSuffix = panelToggleLabel({
+    liveAgentCount,
+    liveBackgroundCount,
+    taskCompletedCount,
+    taskTotalCount,
+  });
   return (
     <div
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
@@ -82,13 +90,29 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             disabled={!rightPanelAvailable}
           >
             <PanelRightIcon className="size-4" />
-            {liveAgentCount > 0 ? (
+            {liveAgentCount > 0 || liveBackgroundCount > 0 ? (
+              // Live work shares one corner: agents (blue) then background tasks (slate), so a
+              // third badge never appears. Grows rightward into the gutter.
               <span
                 aria-hidden
-                data-panel-badge="agents"
-                className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+                className="absolute -top-1 -right-1 flex h-3.5 overflow-hidden rounded-full text-[9px] font-semibold tabular-nums text-white"
               >
-                {liveAgentCount}
+                {liveAgentCount > 0 ? (
+                  <span
+                    data-panel-badge="agents"
+                    className="flex min-w-3.5 items-center justify-center bg-info px-1"
+                  >
+                    {liveAgentCount}
+                  </span>
+                ) : null}
+                {liveBackgroundCount > 0 ? (
+                  <span
+                    data-panel-badge="background"
+                    className="flex min-w-3.5 items-center justify-center bg-slate-500 px-1"
+                  >
+                    {liveBackgroundCount}
+                  </span>
+                ) : null}
               </span>
             ) : null}
             {taskBadgeVisible ? (

@@ -37,6 +37,7 @@ describe("PanelLayoutControls", () => {
         rightPanelOpen={false}
         rightPanelShortcutLabel={null}
         liveAgentCount={2}
+        liveBackgroundCount={1}
         taskCompletedCount={3}
         taskTotalCount={7}
         onToggleTerminal={() => undefined}
@@ -46,10 +47,15 @@ describe("PanelLayoutControls", () => {
 
     const button = view.find("button");
     expect(button?.getAttribute("aria-label")).toBe(
-      "Toggle right panel, 2 agents working, 3 of 7 tasks complete",
+      "Toggle right panel, 2 agents working, 1 background task, 3 of 7 tasks complete",
     );
     const badges = view.findAll("[data-panel-badge]");
-    expect(badges.map((badge) => badge.textContent)).toEqual(["2", "3/7"]);
+    expect(badges.map((badge) => badge.getAttribute("data-panel-badge"))).toEqual([
+      "agents",
+      "background",
+      "tasks",
+    ]);
+    expect(badges.map((badge) => badge.textContent)).toEqual(["2", "1", "3/7"]);
   });
 
   it("swaps the fraction for a checkmark once every step is complete", async () => {
