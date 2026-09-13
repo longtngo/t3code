@@ -5,6 +5,10 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
+import {
+  arrangeComposerBannerStack,
+  type ComposerBannerPriority,
+} from "./ComposerBannerStack.logic";
 
 // Match the duration-220 exit transition before removing a dismissed notice.
 const DISMISS_TRANSITION_MS = 220;
@@ -12,7 +16,7 @@ const DISMISS_TRANSITION_MS = 220;
 export interface ComposerBannerStackItem {
   readonly id: string;
   readonly variant: ComposerBannerVariant;
-  readonly priority?: "urgent" | "activity" | "notice";
+  readonly priority?: ComposerBannerPriority;
   readonly icon: ReactNode;
   readonly title: ReactNode;
   readonly description?: ReactNode;
@@ -28,16 +32,6 @@ export type ComposerBannerStackContent = Pick<
 > & { readonly content: ReactNode };
 
 type ComposerBannerStackEntry = ComposerBannerStackItem | ComposerBannerStackContent;
-
-function bannerPriority(item: ComposerBannerStackEntry) {
-  if (item.priority === "activity") {
-    return 0;
-  }
-  if (item.priority === "urgent" || item.variant === "error" || item.variant === "warning") {
-    return 1;
-  }
-  return 2;
-}
 
 interface ComposerBannerStackProps {
   readonly className?: string;
@@ -64,21 +58,19 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
     };
   }, []);
 
+  const {
+    front: frontItem,
+    status: statusItems,
+    folded: stackedItems,
+  } = arrangeComposerBannerStack(items);
+  const foldedCount = stackedItems.length;
   useEffect(() => {
-    if (items.length < 2) setStackExpanded(false);
-  }, [items.length]);
+    if (foldedCount === 0) setStackExpanded(false);
+  }, [foldedCount]);
 
-  if (items.length === 0) {
-    return null;
-  }
-
-  // Activity stays attached. Urgency and severity only order the notices behind it.
-  const orderedItems = items.toSorted((a, b) => bannerPriority(a) - bannerPriority(b));
-  const frontItem = orderedItems[0];
   if (!frontItem) {
     return null;
   }
-  const stackedItems = orderedItems.slice(1);
   const hasStack = stackedItems.length > 0;
   const showCollapsedStackCap = hasStack && exitingItemId !== frontItem.id;
   const firstStackedItem = stackedItems[0];
@@ -130,6 +122,17 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
             onDismissRequest={() => requestDismiss(frontItem)}
           />
         </div>
+        {/* Reversed for the column-reverse layout: the first status row sits on top. */}
+        {statusItems.toReversed().map((item) => (
+          <div key={item.id} className="relative z-10 pb-1.5" data-composer-banner-status="true">
+            <ComposerBannerStackAlert
+              item={item}
+              attached={false}
+              exiting={exitingItemId === item.id}
+              onDismissRequest={() => requestDismiss(item)}
+            />
+          </div>
+        ))}
         {hasStack ? (
           <div
             ref={noticesRef}

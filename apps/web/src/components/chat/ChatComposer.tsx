@@ -4377,26 +4377,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeTasksProgress !== null &&
     activeTaskSteps !== null &&
     activeTasksProgress.totalSteps > 0;
-  const activityStackContent = hasBannerItems ? (
-    props.threadSyncPhase ? (
-      <ComposerActivityRow phase={props.threadSyncPhase} />
-    ) : !hasBlockingComposerTopDrawer && activeTasksProgress && activeTaskSteps ? (
+  // With other banners present, message sync joins the stack as a status row, which
+  // never folds, instead of competing with background work for the front.
+  const syncStackItem: ComposerBannerStackContent | null =
+    hasBannerItems && props.threadSyncPhase
+      ? {
+          id: "composer-sync",
+          variant: "default",
+          priority: "status",
+          content: <ComposerActivityRow phase={props.threadSyncPhase} />,
+        }
+      : null;
+  const activityStackContent =
+    hasBannerItems &&
+    !props.threadSyncPhase &&
+    !hasBlockingComposerTopDrawer &&
+    activeTasksProgress &&
+    activeTaskSteps ? (
       <ComposerTasksContent
         expanded={isTasksDrawerOpen}
         onToggle={toggleTasksDrawer}
         progress={activeTasksProgress}
         steps={activeTaskSteps}
       />
-    ) : null
-  ) : null;
-  const activityStackItem: ComposerBannerStackContent | null = activityStackContent
-    ? {
-        id: "composer-activity",
-        variant: "default",
-        priority: "activity",
-        content: activityStackContent,
-      }
-    : null;
+    ) : null;
+  const activityStackItem: ComposerBannerStackContent | null =
+    syncStackItem ??
+    (activityStackContent
+      ? {
+          id: "composer-activity",
+          variant: "default",
+          priority: "activity",
+          content: activityStackContent,
+        }
+      : null);
   const bannerStackItems = activityStackItem
     ? [...props.bannerItems, activityStackItem]
     : props.bannerItems;

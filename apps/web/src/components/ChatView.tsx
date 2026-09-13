@@ -2634,8 +2634,8 @@ export default function ChatView(props: ChatViewProps) {
         items.push({
           id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
           variant: "default",
-          // Prioritize live connection progress among the notices.
-          priority: "urgent",
+          // Connection state never folds behind the peek (see arrangeComposerBannerStack).
+          priority: "status",
           icon: (
             <span
               className="size-1.5 animate-status-pulse rounded-full bg-foreground"
@@ -2649,6 +2649,7 @@ export default function ChatView(props: ChatViewProps) {
         items.push({
           id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
           variant: unavailableConnection.phase === "error" ? "error" : "warning",
+          priority: "status",
           icon: <WifiOffIcon />,
           title: `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
           description: environmentReconnecting ? "Trying again" : "Reconnect to continue",
@@ -6737,10 +6738,10 @@ export default function ChatView(props: ChatViewProps) {
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     // Ahead of the system banners, which is the one place in this stack that
-    // ordering is load-bearing: only `items[0]` is visible, and the rest are
-    // collapsed behind a hover target that a touch device cannot reach. A
-    // reconnect notice is transient and explains itself; this one says a turn
-    // is about to write into another thread's branch, and losing it behind a
+    // ordering is load-bearing: among urgent notices the first holds the front,
+    // and the rest fold behind a hover target that a touch device cannot reach.
+    // Connection status stays visible in its own rows; this one says a turn is
+    // about to write into another thread's branch, and folding it during a
     // two-second connection blip is the same silent-inertness this guard was
     // built to end.
     const contestedItems = contestedMembersBannerItem === null ? [] : [contestedMembersBannerItem];
