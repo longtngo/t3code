@@ -56,6 +56,8 @@ import {
   TerminalIcon,
   Undo2Icon,
   XIcon,
+  ListPlusIcon,
+  ListXIcon,
 } from "lucide-react";
 import {
   memo,
@@ -179,6 +181,18 @@ import {
   type SidebarListMarker,
   type SidebarSection,
 } from "./Sidebar.logic";
+import { sidebarRestingSection } from "./threadQueue.logic";
+import {
+  QUEUE_DROP_ID,
+  QUEUE_EXPANDED_KEY,
+  SidebarQueueBlock,
+  type QueueRowSortableBag,
+} from "./SidebarQueueBlock";
+import {
+  threadQueueEntryKey,
+  useThreadQueueStore,
+  type ThreadQueueEntry,
+} from "../threadQueueStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
@@ -700,8 +714,12 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   isActive: boolean;
   onNavigate: (draftId: DraftId) => void;
   onDiscard: (draftId: DraftId) => void;
+  /** In the sidebar Queue: the row offers removal instead of adding. */
+  queued: boolean;
+  onToggleQueue: (draftId: DraftId, session: DraftSessionState) => void;
+  sortable?: QueueRowSortableBag;
 }) {
-  const { composer, draftId, onDiscard, onNavigate, session } = props;
+  const { composer, draftId, onDiscard, onNavigate, onToggleQueue, session, sortable } = props;
   const promptPreview = composer.prompt.trim().split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
   // that only the persisted list is populated, hence max not sum.
@@ -738,8 +756,28 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     },
     [draftId, onDiscard],
   );
+  const handleToggleQueue = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleQueue(draftId, session);
+    },
+    [draftId, onToggleQueue, session],
+  );
   return (
-    <li className="list-none py-0.5">
+    <li
+      className="list-none py-0.5"
+      ref={sortable?.setNodeRef}
+      style={
+        sortable
+          ? {
+              transform: CSS.Translate.toString(sortable.transform),
+              transition: sortable.transition,
+            }
+          : undefined
+      }
+      {...sortable?.listeners}
+    >
       <div
         role="button"
         tabIndex={0}
@@ -761,6 +799,27 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               {props.projectDisplayName}
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={props.queued ? "Remove from queue" : "Add to queue"}
+                      onClick={handleToggleQueue}
+                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                    >
+                      {props.queued ? (
+                        <ListXIcon className="size-3" />
+                      ) : (
+                        <ListPlusIcon className="size-3" />
+                      )}
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">
+                  {props.queued ? "Remove from queue" : "Add to queue"}
+                </TooltipPopup>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -791,6 +850,46 @@ interface SidebarDraftRowData {
   composer: ComposerThreadDraftState;
 }
 
+// A draft waiting in the Queue. Subscribes to its own draft so typing in it
+// repaints only this row.
+const QueuedDraftRow = memo(function QueuedDraftRow(props: {
+  draftId: DraftId;
+  projectByKey: ReadonlyMap<string, EnvironmentProject>;
+  projectDisplayNameByKey: ReadonlyMap<string, string>;
+  isActive: boolean;
+  onNavigate: (draftId: DraftId) => void;
+  onToggleQueue: (draftId: DraftId, session: DraftSessionState) => void;
+  sortable: QueueRowSortableBag;
+}) {
+  const session = useComposerDraftStore((store) => store.getDraftSession(props.draftId));
+  const composer = useComposerDraftStore((store) => store.getComposerDraft(props.draftId));
+  const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
+  const handleDiscard = useCallback(
+    (draftId: DraftId) => {
+      releaseComposerDraftUploads(draftId);
+      clearDraftThread(draftId);
+    },
+    [clearDraftThread],
+  );
+  if (!session || !composer || session.promotedTo != null) return null;
+  const projectKey = `${session.environmentId}:${session.projectId}`;
+  return (
+    <SidebarDraftRow
+      draftId={props.draftId}
+      session={session}
+      composer={composer}
+      project={props.projectByKey.get(projectKey) ?? null}
+      projectDisplayName={props.projectDisplayNameByKey.get(projectKey) ?? null}
+      isActive={props.isActive}
+      onNavigate={props.onNavigate}
+      onDiscard={handleDiscard}
+      queued
+      onToggleQueue={props.onToggleQueue}
+      sortable={props.sortable}
+    />
+  );
+});
+
 // Draft sessions with user content, surfaced above the pinned block so an
 // interrupted "new thread" stays one click away. Self-contained (own store
 // subscription + closing divider) so per-keystroke composer updates
@@ -801,6 +900,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   scopedProjectKeys: ReadonlySet<string> | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
+  queuedDraftIds: ReadonlySet<string>;
+  onToggleDraftQueue: (draftId: DraftId, session: DraftSessionState) => void;
 }) {
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
@@ -838,6 +939,10 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       if (session.promotedTo != null) {
         continue;
       }
+      // Queued drafts render under Queue instead.
+      if (props.queuedDraftIds.has(draftKey)) {
+        continue;
+      }
       if (
         props.scopedProjectKeys !== null &&
         !props.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
@@ -865,6 +970,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     draftThreadsByThreadKey,
     draftsByThreadKey,
     frozenActive,
+    props.queuedDraftIds,
     props.routeDraftId,
     props.scopedProjectKeys,
   ]);
@@ -921,6 +1027,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
             isActive={draftId === props.routeDraftId}
             onNavigate={props.onNavigateToDraft}
             onDiscard={handleDiscard}
+            queued={false}
+            onToggleQueue={props.onToggleDraftQueue}
           />
         );
       })}
@@ -2494,6 +2602,33 @@ export default function Sidebar() {
     [openProjectSettings],
   );
 
+  // Queued threads and drafts render under Queue and nowhere else.
+  const queueEntries = useThreadQueueStore((state) => state.entries);
+  const queuedKeys = useMemo(() => new Set(queueEntries.map(threadQueueEntryKey)), [queueEntries]);
+  const queuedDraftIds = useMemo(
+    () => new Set(queueEntries.flatMap((entry) => (entry.draftId === null ? [] : [entry.draftId]))),
+    [queueEntries],
+  );
+  const [queueExpanded, setQueueExpanded] = useLocalStorage(
+    QUEUE_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const toggleQueueExpanded = useCallback(
+    () => setQueueExpanded((value) => !value),
+    [setQueueExpanded],
+  );
+  const toggleDraftQueue = useCallback((draftId: DraftId, session: DraftSessionState) => {
+    const store = useThreadQueueStore.getState();
+    const key = threadQueueEntryKey({
+      environmentId: session.environmentId,
+      threadId: session.threadId,
+    });
+    if (store.entries.some((entry) => threadQueueEntryKey(entry) === key)) store.remove(key);
+    else
+      store.enqueue({ environmentId: session.environmentId, threadId: session.threadId, draftId });
+  }, []);
+
   // Keep a dropped row at its destination while its server applies the
   // lifecycle command and any order-key writes. The next pickup waits for
   // this hold so a second drop cannot replace an unconfirmed placement.
@@ -2529,6 +2664,7 @@ export default function Sidebar() {
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
+        !queuedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))) &&
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
@@ -2540,12 +2676,6 @@ export default function Sidebar() {
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
       const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement = capabilities?.threadSettlement === true;
-      const supportsSnooze = capabilities?.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
       // Older servers retain their existing drag actions. Active placement
@@ -2570,15 +2700,16 @@ export default function Sidebar() {
             ? projected
             : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
         );
-      } else if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        // Snooze outranks settlement and pinning until the thread wakes.
-        snoozed.push(thread);
-      } else if (supportsSettlement && thread.settledOverride === "settled") {
-        settled.push(thread);
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
       } else {
-        active.push(thread);
+        const section = sidebarRestingSection(thread, capabilities, preciseNow);
+        (section === "snoozed"
+          ? snoozed
+          : section === "settled"
+            ? settled
+            : section === "pinned"
+              ? pinned
+              : active
+        ).push(thread);
       }
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
@@ -2616,15 +2747,43 @@ export default function Sidebar() {
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    nowMinute,
+    optimisticDrop,
+    queuedKeys,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+  ]);
+  const queuedThreads = useMemo(() => {
+    const byKey = new Map(
+      threads
+        .filter((thread) => thread.archivedAt === null)
+        .map((thread) => [
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          thread,
+        ]),
+    );
+    return queueEntries.flatMap((entry) => {
+      const thread = byKey.get(threadQueueEntryKey(entry));
+      return thread === undefined ? [] : [thread];
+    });
+  }, [queueEntries, threads]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...queuedThreads,
+      ...snoozedThreads,
+      ...settledThreads,
+    ],
+    [activeThreads, pinnedThreads, queuedThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreads(searchableThreads, threadSearchQuery),
@@ -2741,9 +2900,32 @@ export default function Sidebar() {
     return routeThread === undefined ? EMPTY_THREADS : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  // Collapsed, only the open queued thread keeps its row, as on the snoozed shelf.
+  const visibleQueuedThreads = useMemo(
+    () =>
+      queueExpanded
+        ? queuedThreads
+        : queuedThreads.filter(
+            (thread) =>
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+          ),
+    [queueExpanded, queuedThreads, routeThreadKey],
+  );
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...visibleQueuedThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [
+      pinnedThreads,
+      activeThreads,
+      visibleQueuedThreads,
+      visibleSnoozedThreads,
+      renderedSettledThreads,
+    ],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3466,6 +3648,7 @@ export default function Sidebar() {
     if (source === undefined) return createSidebarCollisionDetection(() => false);
     return createSidebarCollisionDetection(
       (id) => {
+        if (id === QUEUE_DROP_ID) return true;
         const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
         if (target === null) return false;
         return (
@@ -3490,6 +3673,7 @@ export default function Sidebar() {
       {
         items: sidebarListItems,
         activationY: dragActivationY ?? null,
+        pointerDropIds: [QUEUE_DROP_ID],
       },
     );
   }, [
@@ -3509,6 +3693,15 @@ export default function Sidebar() {
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
+      if (event.over !== null && String(event.over.id) === QUEUE_DROP_ID) {
+        const thread = threadByKey.get(activeKey);
+        if (thread !== undefined) {
+          useThreadQueueStore
+            .getState()
+            .enqueue({ environmentId: thread.environmentId, threadId: thread.id, draftId: null });
+        }
+        return;
+      }
       const activeSection = sectionByThreadKey.get(activeKey);
       const target =
         event.over === null
@@ -4011,6 +4204,9 @@ export default function Sidebar() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
+        const isQueued = useThreadQueueStore
+          .getState()
+          .entries.some((entry) => threadQueueEntryKey(entry) === threadKey);
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
         const clicked = await settlePromise(() =>
@@ -4020,6 +4216,7 @@ export default function Sidebar() {
               isPinned,
               isSettled,
               isSnoozed,
+              isQueued,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning:
@@ -4089,6 +4286,14 @@ export default function Sidebar() {
             return;
           case "pin":
             attemptPin(threadRef);
+            return;
+          case "queue":
+            useThreadQueueStore
+              .getState()
+              .enqueue({ environmentId: thread.environmentId, threadId: thread.id, draftId: null });
+            return;
+          case "unqueue":
+            useThreadQueueStore.getState().remove(threadKey);
             return;
           case "unpin":
             attemptUnpin(threadRef);
@@ -4804,12 +5009,52 @@ export default function Sidebar() {
                           scopedProjectKeys={scopedProjectKeys}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
+                          queuedDraftIds={queuedDraftIds}
+                          onToggleDraftQueue={toggleDraftQueue}
                         />,
                       ];
+                      // Queue sits between Active and the shelves below it.
+                      let queueRendered = false;
+                      const pushQueue = () => {
+                        if (queueRendered) return;
+                        queueRendered = true;
+                        items.push(
+                          <SidebarQueueBlock
+                            key="queue"
+                            entries={queueEntries}
+                            routeKey={routeThreadKey}
+                            routeDraftId={routeDraftIdForRows}
+                            expanded={queueExpanded}
+                            onToggleExpanded={toggleQueueExpanded}
+                            dragging={from !== null}
+                            renderEntry={(entry: ThreadQueueEntry, bag: QueueRowSortableBag) => {
+                              const thread = threadByKey.get(threadQueueEntryKey(entry));
+                              if (thread !== undefined) {
+                                return renderThreadRowInner(thread, "active", bag);
+                              }
+                              if (entry.draftId === null) return null;
+                              return (
+                                <QueuedDraftRow
+                                  draftId={entry.draftId}
+                                  projectByKey={projectByKey}
+                                  projectDisplayNameByKey={projectDisplayNameByKey}
+                                  isActive={entry.draftId === routeDraftIdForRows}
+                                  onNavigate={navigateToDraft}
+                                  onToggleQueue={toggleDraftQueue}
+                                  sortable={bag}
+                                />
+                              );
+                            }}
+                          />,
+                        );
+                      };
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
+                        }
+                        if (item.marker === "snoozed-header" || item.marker === "settled-header") {
+                          pushQueue();
                         }
                         switch (item.marker) {
                           case "pinned-header":
@@ -4908,6 +5153,7 @@ export default function Sidebar() {
                             break;
                         }
                       }
+                      pushQueue();
                       return items;
                     })()}
                     {settledShelfExpanded && hiddenSettledCount > 0 ? (
@@ -4929,6 +5175,7 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
+          queueEntries.length === 0 &&
           pinnedThreads.length +
             activeThreads.length +
             snoozedThreads.length +

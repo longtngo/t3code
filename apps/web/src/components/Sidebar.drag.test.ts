@@ -119,6 +119,30 @@ describe("sidebar collision detection", () => {
     },
   );
 
+  it("a pointer inside a queue drop zone picks it, and elsewhere the zone never competes", () => {
+    const args = collisionArgs();
+    const zone = { top: 1_000, left: 0, width: 200, height: 32, bottom: 1_032, right: 200 };
+    const withZone = {
+      ...args,
+      droppableRects: new Map([...args.droppableRects, ["queue", zone]]),
+      droppableContainers: [
+        ...args.droppableContainers,
+        {
+          id: "queue",
+          key: "queue",
+          disabled: false,
+          data: { current: {} },
+          node: { current: null },
+          rect: { current: zone },
+        },
+      ],
+    };
+    const detector = createSidebarCollisionDetection(() => true, { pointerDropIds: ["queue"] });
+    expect(detector({ ...withZone, pointerCoordinates: { x: 10, y: 1_010 } })[0]?.id).toBe("queue");
+    const outside = detector({ ...withZone, pointerCoordinates: { x: 10, y: 5_000 } });
+    expect(outside.map((collision) => collision.id)).not.toContain("queue");
+  });
+
   it("selects the nearest supported target", () => {
     const detector = createSidebarCollisionDetection(() => true);
     expect(detector(collisionArgs())[0]?.id).toBe("blocked");

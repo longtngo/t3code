@@ -26,6 +26,7 @@ import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAp
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
+import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useDefaultThemeAdoption } from "../hooks/useDefaultTheme";
@@ -195,6 +196,7 @@ function RootRouteView() {
             environment's auth, nor on first-run onboarding: another environment
             may be connected with work already queued. */}
         <OutboxFlushCoordinator />
+        <ThreadQueueCoordinator />
         <FirstRunGate
           enabled={primaryEnvironmentAuthenticated}
           hostedStatic={authGateState.status === "hosted-static"}

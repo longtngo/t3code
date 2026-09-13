@@ -1149,10 +1149,27 @@ export function deriveLockedProvider(input: {
   threadProvider: string | null;
   providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver">>;
 }): ProviderDriverKind | null {
-  if (!threadHasStarted(input.thread)) {
+  return deriveLockedProviderForThread({
+    started: threadHasStarted(input.thread),
+    sessionProviderName: input.thread?.session?.providerName ?? null,
+    selectedProvider: input.selectedProvider,
+    threadProvider: input.threadProvider,
+    providers: input.providers,
+  });
+}
+
+/** `deriveLockedProvider` for callers that only hold a shell (e.g. the thread queue). */
+export function deriveLockedProviderForThread(input: {
+  started: boolean;
+  sessionProviderName: string | null;
+  selectedProvider: string | null;
+  threadProvider: string | null;
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver">>;
+}): ProviderDriverKind | null {
+  if (!input.started) {
     return null;
   }
-  const sessionProvider = input.thread?.session?.providerName ?? null;
+  const sessionProvider = input.sessionProviderName;
   if (sessionProvider && isProviderDriverKind(sessionProvider)) {
     return sessionProvider;
   }

@@ -16,6 +16,8 @@ export type ThreadActionMenuId =
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
+  | "queue"
+  | "unqueue"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -31,6 +33,8 @@ export interface ThreadActionMenuState {
   readonly isPinned: boolean;
   readonly isSettled: boolean;
   readonly isSnoozed: boolean;
+  /** In this device's sidebar Queue. Optional so surfaces without a queue omit nothing. */
+  readonly isQueued?: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
@@ -95,6 +99,9 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
+    state.isQueued
+      ? { id: "unqueue" as const, label: "Remove from queue", icon: "list-x" }
+      : { id: "queue" as const, label: "Add to queue", icon: "list-plus" },
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [

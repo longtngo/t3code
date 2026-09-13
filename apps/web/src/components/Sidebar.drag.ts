@@ -32,6 +32,8 @@ export function createSidebarCollisionDetection(
   options: {
     items?: readonly SidebarListItem[];
     activationY?: number | null;
+    /** Drop zones outside the sortable list that win whenever the pointer is inside them. */
+    pointerDropIds?: readonly string[];
   } = {},
 ): CollisionDetection {
   const validity = new Map<string, boolean>();
@@ -39,8 +41,25 @@ export function createSidebarCollisionDetection(
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
   return (args) => {
-    let collisions = closestCenter(args);
     const pointer = args.pointerCoordinates;
+    if (pointer && options.pointerDropIds) {
+      for (const container of args.droppableContainers) {
+        if (!options.pointerDropIds.includes(String(container.id))) continue;
+        const rect = args.droppableRects.get(container.id);
+        if (
+          rect &&
+          pointer.x >= rect.left &&
+          pointer.x <= rect.left + rect.width &&
+          pointer.y >= rect.top &&
+          pointer.y <= rect.top + rect.height
+        ) {
+          return [{ id: container.id, data: { droppableContainer: container, value: 0 } }];
+        }
+      }
+    }
+    let collisions = closestCenter(args).filter(
+      (collision) => !options.pointerDropIds?.includes(String(collision.id)),
+    );
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);
     const boundary = args.droppableContainers

@@ -70,6 +70,23 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Queue work for later
+
+On web and desktop, the **Queue** section holds threads that should start once your
+active work is done. Add a thread with **Add to queue** from its menu, drag its row onto
+the **Queue** header, or use the queue button on a new-thread draft. Drag queued rows to
+change their order, and type in a queued thread's composer as usual.
+
+When no thread in **Pinned** or **Active** is working or watching background work, the
+top queued thread sends its composer message as if you had pressed Send, then returns to
+active work. A queued thread with an empty composer returns without sending. Sending it
+yourself also takes it out of the queue.
+
+The queue lives on this device and runs while T3 Code is open here. Use the pause button
+on the **Queue** header to hold it. If a queued send fails, or needs something only the
+open thread can do (attachments, a slash command, an answer to a question), the thread
+returns to active work with the reason and the queue pauses until you resume it.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

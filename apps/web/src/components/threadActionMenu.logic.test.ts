@@ -33,7 +33,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy", "project-settings", "archive", "delete"]);
+    ).toEqual(["queue", "rename", "mark-unread", "copy", "project-settings", "archive", "delete"]);
   });
 
   it("groups project settings with utility actions before archive", () => {
@@ -53,6 +53,12 @@ describe("buildThreadActionMenuItems", () => {
     expect(withBranch).toContain("copy-branch");
     expect(allIds(baseState)).not.toContain("new-thread-on-branch");
     expect(allIds(baseState)).not.toContain("copy-branch");
+  });
+
+  it("offers adding to the queue, or removing a queued thread", () => {
+    expect(ids(baseState)).toContain("queue");
+    expect(ids({ ...baseState, isQueued: true })).toEqual(expect.arrayContaining(["unqueue"]));
+    expect(ids({ ...baseState, isQueued: true })).not.toContain("queue");
   });
 
   it("flips lifecycle labels with thread state", () => {
