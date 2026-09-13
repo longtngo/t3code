@@ -225,6 +225,19 @@ export function useEnvironmentSupportsCrew(environmentId: EnvironmentId | null):
   );
 }
 
+/** Whether the environment's server serves `thread.backgroundTasks.list`: `null` until its
+    server config arrives, like the plan-history check below. */
+export function useEnvironmentSupportsThreadBackgroundTasks(
+  environmentId: EnvironmentId | null,
+): boolean | null {
+  const serverConfigs = useServerConfigs();
+  if (environmentId == null) return false;
+  const config = serverConfigs.get(environmentId);
+  return config === undefined
+    ? null
+    : config.environment.capabilities.threadBackgroundTasks === true;
+}
+
 /** Whether the environment's server serves `thread.planHistory.list`: `null` until its server
     config arrives, so the Task list can show loading rather than "unavailable". Absent on older
     servers, where the method would fail as a generic request error. */

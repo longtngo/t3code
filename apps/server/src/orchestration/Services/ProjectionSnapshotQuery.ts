@@ -7,6 +7,7 @@
  * @module ProjectionSnapshotQuery
  */
 import type {
+  OrchestrationBackgroundTask,
   AgentSessionImportSource,
   ApprovalRequestId,
   CheckpointRef,
@@ -94,6 +95,15 @@ export interface ProjectionSnapshotQueryShape {
   readonly listThreadPlanHistory: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<ReadonlyArray<OrchestrationThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * The Background panel's read: the thread's top-level background tasks started in the last
+   * 3 hours plus any the liveness registry still holds, folded by `foldBackgroundTasks`. The
+   * bound is computed here, never taken from a client. A deleted thread returns nothing.
+   */
+  readonly listThreadBackgroundTasks: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<OrchestrationBackgroundTask>, ProjectionRepositoryError>;
 
   /**
    * Read the lightweight command snapshot used to bootstrap the in-memory

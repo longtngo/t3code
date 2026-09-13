@@ -740,6 +740,22 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+/**
+ * One row of the Background panel: a top-level background task (shell or monitor) folded from
+ * its `task.*` activities. `running` only while the server's in-memory registry holds it, so a
+ * task whose session ended without a terminal row reads `stopped`, never running forever.
+ */
+export const OrchestrationBackgroundTask = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  taskType: Schema.NullOr(TrimmedNonEmptyString),
+  status: Schema.Literals(["running", "completed", "failed", "stopped"]),
+  startedAt: IsoDateTime,
+  endedAt: Schema.NullOr(IsoDateTime),
+  summary: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationBackgroundTask = typeof OrchestrationBackgroundTask.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -1014,6 +1030,12 @@ export const OrchestrationThreadShell = Schema.Struct({
    * intentionally disagree about orphaned work following a reboot.
    */
   backgroundLiveness: Schema.optional(Schema.NullOr(Schema.Literals(["working", "monitoring"]))),
+  /**
+   * How many top-level background tasks (shells, monitors) are running right now, from the same
+   * in-memory registry as `backgroundLiveness`. The producer spreads it only when above zero, so
+   * an idle shell is unchanged; absent = none.
+   */
+  backgroundTaskCount: Schema.optionalKey(NonNegativeInt),
   /**
    * Current plan step while a turn runs, for the Working indicators
    * (sidebar row, in-chat working line). Cleared when the turn settles —
@@ -2581,6 +2603,14 @@ export class OrchestrationGetFullThreadDiffError extends Schema.TaggedError<Orch
 
 export class OrchestrationSearchThreadsError extends Schema.TaggedError<OrchestrationSearchThreadsError>()(
   "OrchestrationSearchThreadsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationListThreadBackgroundTasksError extends Schema.TaggedError<OrchestrationListThreadBackgroundTasksError>()(
+  "OrchestrationListThreadBackgroundTasksError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

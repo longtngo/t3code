@@ -37,9 +37,9 @@ import { useSidebarViewStore } from "../sidebarViewStore";
 const EMPTY_BACKGROUND_ITEMS: ReadonlyArray<BackgroundSidebarItem> = [];
 
 /**
- * Background terminals started by this thread. They are live work like the
- * agents above, and this panel is the only surface that lists live work, so
- * they render here rather than in a second panel of their own.
+ * Terminal sessions started by this thread. They are live work like the
+ * agents above; the Background surface lists the agent's own shells and
+ * monitors (task events), which terminal sessions are not.
  */
 function BackgroundProcessesSection({
   items,

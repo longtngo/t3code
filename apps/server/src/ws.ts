@@ -42,6 +42,7 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationListThreadPlanHistoryError,
+  OrchestrationListThreadBackgroundTasksError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
@@ -2335,6 +2336,20 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new OrchestrationListThreadPlanHistoryError({
                     message: "Failed to load thread plan history",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.threadBackgroundTasksList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadBackgroundTasksList,
+            projectionSnapshotQuery.listThreadBackgroundTasks({ threadId: input.threadId }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationListThreadBackgroundTasksError({
+                    message: "Failed to load thread background tasks",
                     cause,
                   }),
               ),

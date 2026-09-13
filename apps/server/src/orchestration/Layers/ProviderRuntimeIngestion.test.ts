@@ -373,6 +373,12 @@ describe("ProviderRuntimeIngestion", () => {
     const pendingRepo = await testRuntime.runPromise(
       Effect.service(PendingBackgroundTaskRepository),
     );
+    const liveness = await testRuntime.runPromise(
+      Effect.service(ThreadBackgroundLiveness.ThreadBackgroundLivenessService),
+    );
+    const planProgress = await testRuntime.runPromise(
+      Effect.service(ThreadPlanProgress.ThreadPlanProgressService),
+    );
     scope = await Effect.runPromise(Scope.make("sequential"));
     await testRuntime.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => testRuntime.runPromise(ingestion.drain);
@@ -438,6 +444,9 @@ describe("ProviderRuntimeIngestion", () => {
 
     return {
       engine,
+      liveness,
+      planProgress,
+      runPromise: testRuntime.runPromise,
       dispatch,
       readModel: () => testRuntime.runPromise(snapshotQuery.getSnapshot()),
       readThreadShell: () =>
@@ -5278,6 +5287,100 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
 
     expect(completedPayload?.title).toBe("wait for codex review to finish");
+  });
+
+  it("clears background liveness before publishing the exited session", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const provider = ProviderDriverKind.make("claudeAgent");
+    await harness.emitAndDrain([
+      {
+        type: "task.started",
+        eventId: asEventId("evt-exit-order-task-started"),
+        provider,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        payload: { taskId: "exit-order-shell", taskType: "local_bash", description: "Tail logs" },
+      },
+    ]);
+    expect(harness.liveness.getThreadMonitorTaskIds(threadId).size).toBe(1);
+
+    // The session-set event is what refetches the thread shell; session.exited appends no
+    // activity that would refetch it again, so the registry must already be clear here.
+    const seenAtPublish = Deferred.makeUnsafe<number>();
+    const watcher = harness.runPromise(
+      harness.engine.streamDomainEvents.pipe(
+        Stream.filter((event) => event.type === "thread.session-set"),
+        Stream.take(1),
+        Stream.runForEach(() =>
+          Deferred.succeed(seenAtPublish, harness.liveness.getThreadMonitorTaskIds(threadId).size),
+        ),
+      ),
+    );
+    await harness.emitAndDrain([
+      {
+        type: "session.exited",
+        eventId: asEventId("evt-exit-order-session-exited"),
+        provider,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        payload: {},
+      },
+    ]);
+    await watcher;
+    expect(await Effect.runPromise(Deferred.await(seenAtPublish))).toBe(0);
+  });
+
+  it("clears the plan step before publishing a settled turn's session", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-settle-order");
+    const provider = ProviderDriverKind.make("codex");
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-settle-order-turn-started"),
+        provider,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId,
+        payload: {},
+      },
+      {
+        type: "turn.plan.updated",
+        eventId: asEventId("evt-settle-order-plan"),
+        provider,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId,
+        turnId,
+        payload: { plan: [{ step: "Inspect", status: "inProgress" }] },
+      },
+    ]);
+    expect(harness.planProgress.getThreadPlanProgress(threadId)).not.toBeNull();
+
+    const seenAtPublish = Deferred.makeUnsafe<unknown>();
+    const watcher = harness.runPromise(
+      harness.engine.streamDomainEvents.pipe(
+        Stream.filter((event) => event.type === "thread.session-set"),
+        Stream.take(1),
+        Stream.runForEach(() =>
+          Deferred.succeed(seenAtPublish, harness.planProgress.getThreadPlanProgress(threadId)),
+        ),
+      ),
+    );
+    await harness.emitAndDrain([
+      {
+        type: "turn.completed",
+        eventId: asEventId("evt-settle-order-turn-completed"),
+        provider,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId,
+        turnId,
+        payload: { state: "completed" },
+      },
+    ]);
+    await watcher;
+    expect(await Effect.runPromise(Deferred.await(seenAtPublish))).toBeNull();
   });
 
   it("recovers a task title past untitled progress after the cache is swept", async () => {

@@ -238,6 +238,7 @@ export const make = Effect.gen(function* () {
       subagentBackendThreadModes: true,
       crew: true,
       threadPlanHistory: true,
+      threadBackgroundTasks: true,
       environmentIcon: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate

@@ -14,6 +14,7 @@ import type {
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
+  Activity,
   Bot,
   Smartphone,
   ChevronDown,
@@ -120,6 +121,7 @@ interface RightPanelTabsProps {
   onAddPullRequests: () => void;
   onAddAgents: () => void;
   onAddTasks: () => void;
+  onAddBackground: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -129,10 +131,13 @@ interface RightPanelTabsProps {
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   tasksAvailable: boolean;
+  backgroundAvailable: boolean;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  /** Running top-level background tasks; badges the Background row in the empty state. */
+  liveBackgroundCount: number;
   /** The latest turn's task list progress; the launcher's Task list row shows it only when both are set. */
   taskCompletedCount?: number | undefined;
   taskTotalCount?: number | undefined;
@@ -164,6 +169,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequests: "Linked pull requests are only available for server threads.",
   agents: "Agents are only available from a thread.",
   tasks: "The task list is only available from a thread.",
+  background: "Background tasks are only available from a thread.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -189,6 +195,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: "Available for server threads.",
   agents: "Available from a thread.",
   tasks: "Available from a thread.",
+  background: "Available from a thread.",
   device: "Available from a thread.",
 } as const;
 
@@ -330,6 +337,7 @@ function RightPanelEmptyState(props: {
   onAddPullRequests: () => void;
   onAddAgents: () => void;
   onAddTasks: () => void;
+  onAddBackground: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -339,8 +347,10 @@ function RightPanelEmptyState(props: {
   pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
   tasksAvailable: boolean;
+  backgroundAvailable: boolean;
   deviceAvailable: boolean;
   liveAgentCount: number;
+  liveBackgroundCount: number;
   taskCompletedCount?: number | undefined;
   taskTotalCount?: number | undefined;
 }) {
@@ -423,6 +433,15 @@ function RightPanelEmptyState(props: {
         props.taskCompletedCount !== undefined && props.taskTotalCount !== undefined
           ? `${props.taskCompletedCount}/${props.taskTotalCount}`
           : null,
+    },
+    {
+      label: "Background",
+      icon: Activity,
+      shortcut: "G",
+      available: props.backgroundAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.background,
+      onClick: props.onAddBackground,
+      badgeCount: props.liveBackgroundCount,
     },
     {
       label: "Device",
@@ -667,6 +686,8 @@ function surfaceTitle(
       return "Agents";
     case "tasks":
       return "Task list";
+    case "background":
+      return "Background";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -763,6 +784,8 @@ function SurfaceIcon({
       return <Bot className="size-3 shrink-0" />;
     case "tasks":
       return <ListTodo className="size-3 shrink-0" />;
+    case "background":
+      return <Activity className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -972,6 +995,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.tasksAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.tasks,
       onClick: props.onAddTasks,
+    },
+    {
+      label: "Background",
+      icon: Activity,
+      shortcut: "G",
+      available: props.backgroundAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.background,
+      onClick: props.onAddBackground,
     },
     {
       label: "Device",
@@ -1453,6 +1484,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
             onAddTasks={props.onAddTasks}
+            onAddBackground={props.onAddBackground}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1462,8 +1494,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
             tasksAvailable={props.tasksAvailable}
+            backgroundAvailable={props.backgroundAvailable}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
+            liveBackgroundCount={props.liveBackgroundCount}
             taskCompletedCount={props.taskCompletedCount}
             taskTotalCount={props.taskTotalCount}
           />

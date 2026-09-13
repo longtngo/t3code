@@ -95,6 +95,8 @@ import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetSnapshotError,
   OrchestrationListThreadPlanHistoryError,
+  OrchestrationListThreadBackgroundTasksError,
+  OrchestrationBackgroundTask,
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
   OrchestrationThreadActivity,
@@ -418,6 +420,8 @@ export const WS_METHODS = {
 
   // Task list panel: a thread's recent plan history
   threadPlanHistoryList: "thread.planHistory.list",
+  // Background panel: a thread's recent and running background tasks
+  threadBackgroundTasksList: "thread.backgroundTasks.list",
 
   // Subagent dispatch toggle — machine-level Cursor-vs-default switch read by ~/bin/subagent-dispatch
   subagentBackendGet: "subagentBackend.get",
@@ -804,6 +808,16 @@ export const WsThreadPlanHistoryListRpc = Rpc.make(WS_METHODS.threadPlanHistoryL
   payload: Schema.Struct({ threadId: ThreadId }),
   success: Schema.Array(OrchestrationThreadActivity),
   error: Schema.Union([OrchestrationListThreadPlanHistoryError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * The Background panel's read: the thread's top-level background tasks started in the last
+ * 3 hours plus any still running, running first. The server owns the time bound.
+ */
+export const WsThreadBackgroundTasksListRpc = Rpc.make(WS_METHODS.threadBackgroundTasksList, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Array(OrchestrationBackgroundTask),
+  error: Schema.Union([OrchestrationListThreadBackgroundTasksError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubagentBackendGetRpc = Rpc.make(WS_METHODS.subagentBackendGet, {
@@ -1762,6 +1776,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCrewAnswerRpc,
   WsCrewForgetWorktreeRpc,
   WsThreadPlanHistoryListRpc,
+  WsThreadBackgroundTasksListRpc,
   WsSubagentBackendGetRpc,
   WsSubagentBackendSetRpc,
   WsSubagentBackendUsageRpc,

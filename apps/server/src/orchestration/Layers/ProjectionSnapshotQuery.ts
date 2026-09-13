@@ -55,6 +55,7 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
+import { foldBackgroundTasks } from "../BackgroundTasks.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
@@ -556,6 +557,11 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
+  // Spread into every shell: present only while a watch loop runs, so idle shells are unchanged.
+  const backgroundTaskCountField = (threadId: string) => {
+    const size = threadBackgroundLiveness.getThreadMonitorTaskIds(threadId).size;
+    return size > 0 ? { backgroundTaskCount: size } : {};
+  };
   const sql = yield* SqlClient.SqlClient;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const repositoryIdentityResolutionConcurrency = 4;
@@ -1638,6 +1644,78 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.listThreadPlanHistory:query",
           "ProjectionSnapshotQuery.listThreadPlanHistory:decodeRows",
+        ),
+      ),
+    );
+
+  // Background panel rows. Picks the task ids first (background `task.started` rows started at
+  // or after `since`, or still live in the registry), then returns every start and terminal row
+  // for those ids so a task started just inside the window keeps its end. Same index hint and
+  // coupling as the plan-history read above.
+  const listThreadBackgroundTaskRows = SqlSchema.findAll({
+    Request: Schema.Struct({
+      threadId: ThreadId,
+      since: IsoDateTime,
+      liveTaskIds: Schema.fromJsonString(Schema.Array(Schema.String)),
+    }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, since, liveTaskIds }) =>
+      sql`
+        SELECT
+          activities.activity_id AS "activityId",
+          activities.thread_id AS "threadId",
+          activities.turn_id AS "turnId",
+          activities.tone,
+          activities.kind,
+          activities.summary,
+          activities.payload_json AS "payload",
+          activities.sequence,
+          activities.created_at AS "createdAt"
+        FROM projection_thread_activities AS activities
+          INDEXED BY idx_projection_thread_activities_thread_kind
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = activities.thread_id
+        WHERE activities.thread_id = ${threadId}
+          AND threads.deleted_at IS NULL
+          AND activities.kind IN ('task.started', 'task.updated', 'task.completed')
+          AND json_extract(activities.payload_json, '$.taskId') IN (
+            SELECT json_extract(starts.payload_json, '$.taskId')
+            FROM projection_thread_activities AS starts
+              INDEXED BY idx_projection_thread_activities_thread_kind
+            WHERE starts.thread_id = ${threadId}
+              AND starts.kind = 'task.started'
+              AND json_extract(starts.payload_json, '$.agentKind') = 'background'
+              AND (
+                starts.created_at >= ${since}
+                OR json_extract(starts.payload_json, '$.taskId') IN (
+                  SELECT value FROM json_each(${liveTaskIds})
+                )
+              )
+          )
+        ORDER BY
+          activities.sequence ASC,
+          activities.created_at ASC,
+          activities.activity_id ASC
+      `,
+  });
+
+  const listThreadBackgroundTasks: ProjectionSnapshotQueryShape["listThreadBackgroundTasks"] = ({
+    threadId,
+  }) =>
+    Effect.gen(function* () {
+      const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 3 }));
+      const liveTaskIds = threadBackgroundLiveness.getThreadMonitorTaskIds(threadId);
+      const rows = yield* listThreadBackgroundTaskRows({
+        threadId,
+        since,
+        liveTaskIds: [...liveTaskIds],
+      });
+      return foldBackgroundTasks(rows.map(mapThreadActivityRow), liveTaskIds, since);
+    }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listThreadBackgroundTasks:query",
+          "ProjectionSnapshotQuery.listThreadBackgroundTasks:decodeRows",
         ),
       ),
     );
@@ -2867,6 +2945,7 @@ pending_approval_requests AS (
                           row.threadId,
                         ),
                         planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                        ...backgroundTaskCountField(row.threadId),
                       } satisfies OrchestrationThreadShell)
                     : Result.failVoid,
                 ),
@@ -3032,6 +3111,7 @@ pending_approval_requests AS (
                     row.threadId,
                   ),
                   planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                  ...backgroundTaskCountField(row.threadId),
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
@@ -3377,6 +3457,7 @@ pending_approval_requests AS (
           threadRow.value.threadId,
         ),
         planProgress: threadPlanProgress.getThreadPlanProgress(threadRow.value.threadId),
+        ...backgroundTaskCountField(threadRow.value.threadId),
       } satisfies OrchestrationThreadShell);
     });
 
@@ -3859,6 +3940,7 @@ pending_approval_requests AS (
     getCommandReadModel,
     getUserInputActivity,
     listThreadPlanHistory,
+    listThreadBackgroundTasks,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

@@ -126,8 +126,10 @@ function renderTabs(
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       onAddTasks={() => undefined}
+      onAddBackground={() => undefined}
       onAddDevice={() => undefined}
       liveAgentCount={0}
+      liveBackgroundCount={0}
       browserAvailable
       terminalAvailable={false}
       diffAvailable={false}
@@ -136,6 +138,7 @@ function renderTabs(
       pullRequestsAvailable={false}
       agentsAvailable={false}
       tasksAvailable={false}
+      backgroundAvailable={false}
       deviceAvailable={false}
     >
       <div>content</div>

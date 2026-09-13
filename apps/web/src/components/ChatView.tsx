@@ -215,6 +215,8 @@ import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavaila
 import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { TaskListPanel } from "./TaskListPanel";
+import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
+import { backgroundTasksRefreshKey } from "./BackgroundTasksPanel.logic";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -278,6 +280,7 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useTaskList } from "../hooks/useTaskList";
+import { useBackgroundTasks } from "../hooks/useBackgroundTasks";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -2873,6 +2876,27 @@ export default function ChatView(props: ChatViewProps) {
   );
   const taskCompletedCount = taskCounts?.completed;
   const taskTotalCount = taskCounts?.total;
+  const liveBackgroundCount = activeThreadShell?.backgroundTaskCount ?? 0;
+  const backgroundRefreshKey = useMemo(
+    () =>
+      backgroundTasksRefreshKey(
+        threadActivities,
+        liveBackgroundCount,
+        activeLatestTurn?.turnId ?? null,
+      ),
+    [threadActivities, liveBackgroundCount, activeLatestTurn?.turnId],
+  );
+  const {
+    tasks: backgroundTasks,
+    status: backgroundTasksStatus,
+    retry: retryBackgroundTasks,
+  } = useBackgroundTasks(
+    activeThreadRef?.environmentId ?? null,
+    activeThreadRef?.threadId ?? null,
+    backgroundRefreshKey,
+    rightPanelOpen && activeRightPanelSurface?.kind === "background",
+    isServerThread,
+  );
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
     const activityId = latestWorkspaceMutationId(threadActivities);
@@ -4647,6 +4671,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "tasks");
   }, [activeThreadRef]);
+  const addBackgroundSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "background");
+  }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const addPullRequestsSurface = useCallback(() => {
@@ -6420,19 +6448,32 @@ export default function ChatView(props: ChatViewProps) {
           : "Background work"
         : "Monitoring",
       actions: (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={isStoppingBackgroundWork}
-          onClick={() => void handleStopBackgroundWork()}
-        >
-          {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
-        </Button>
+        <>
+          {/* Names what is running: agents (and workflow runs) while working, otherwise the
+              shells and monitors. */}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={working ? addAgentsSurface : addBackgroundSurface}
+          >
+            View
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={isStoppingBackgroundWork}
+            onClick={() => void handleStopBackgroundWork()}
+          >
+            {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
+          </Button>
+        </>
       ),
     };
   }, [
     activeBackgroundLiveness,
     activeThread,
+    addAgentsSurface,
+    addBackgroundSurface,
     agentPanelModel.liveCount,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
@@ -9206,6 +9247,12 @@ export default function ChatView(props: ChatViewProps) {
           activeLatestTurn !== null && activeRunningTurnId === activeLatestTurn.turnId
         }
       />
+    ) : renderedRightPanelSurface?.kind === "background" ? (
+      <BackgroundTasksPanel
+        tasks={backgroundTasks}
+        status={backgroundTasksStatus}
+        onRetry={retryBackgroundTasks}
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -9858,6 +9905,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
           onAddTasks={addTasksSurface}
+          onAddBackground={addBackgroundSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -9867,8 +9915,10 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
           agentsAvailable
           tasksAvailable
+          backgroundAvailable
           deviceAvailable={activeThreadRef !== null}
           liveAgentCount={agentPanelModel.liveCount}
+          liveBackgroundCount={liveBackgroundCount}
           taskCompletedCount={taskCompletedCount}
           taskTotalCount={taskTotalCount}
         >
@@ -9920,6 +9970,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
             onAddTasks={addTasksSurface}
+            onAddBackground={addBackgroundSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
@@ -9929,8 +9980,10 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
             agentsAvailable
             tasksAvailable
+            backgroundAvailable
             deviceAvailable={activeThreadRef !== null}
             liveAgentCount={agentPanelModel.liveCount}
+            liveBackgroundCount={liveBackgroundCount}
             taskCompletedCount={taskCompletedCount}
             taskTotalCount={taskTotalCount}
           >

@@ -3996,3 +3996,165 @@ it.effect("omits foreign-host PRs from legacy snapshots while preserving native 
     }
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("lists recent and live background tasks and counts live ones on the thread shell", () => {
+  const layer = OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(ThreadBackgroundLiveness.layer),
+    Layer.provide(ThreadPlanProgress.layer),
+    Layer.provideMerge(RepositoryIdentityResolver.layer),
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return Effect.gen(function* () {
+    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const liveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        )
+        VALUES (
+          'project-bg', 'Background', '/tmp/project-bg', '[]',
+          '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+        )
+      `;
+    for (const [threadId, deletedAt] of [
+      ["thread-bg", null],
+      ["thread-bg-deleted", "2026-09-12T11:00:00.000Z"],
+    ] as const) {
+      yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            ${threadId}, 'project-bg', ${threadId},
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+            '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', ${deletedAt}
+          )
+        `;
+    }
+
+    let sequence = 0;
+    const insert = (
+      threadId: string,
+      kind: string,
+      at: string,
+      payload: Record<string, unknown>,
+    ) => {
+      sequence += 1;
+      return sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+            sequence, created_at
+          )
+          VALUES (
+            ${`act-${sequence}`}, ${threadId}, NULL, 'info', ${kind}, 'Task',
+            ${JSON.stringify(payload)}, ${sequence}, ${`2026-09-12T${at}:00.000Z`}
+          )
+        `;
+    };
+    const shell = (taskId: string, title: string) => ({
+      taskId,
+      taskType: "local_bash",
+      agentKind: "background",
+      title,
+    });
+
+    // Started before the 09:00 bound, still live: kept at any age.
+    yield* insert("thread-bg", "task.started", "02:00", shell("old-live", "Watch the gate"));
+    // Started and finished before the bound: dropped.
+    yield* insert("thread-bg", "task.started", "03:00", shell("old-done", "Old build"));
+    yield* insert("thread-bg", "task.completed", "03:05", {
+      taskId: "old-done",
+      status: "completed",
+    });
+    // Recent, failed via task.updated then a task.completed carrying the summary.
+    yield* insert("thread-bg", "task.started", "09:30", shell("recent-failed", "Run tests"));
+    yield* insert("thread-bg", "task.updated", "09:40", {
+      taskId: "recent-failed",
+      status: "failed",
+    });
+    yield* insert("thread-bg", "task.completed", "09:40", {
+      taskId: "recent-failed",
+      status: "failed",
+      summary: 'Background command "Run tests" failed with exit code 1',
+    });
+    // Recent, no terminal row, not live: its session ended.
+    yield* insert("thread-bg", "task.started", "10:00", shell("recent-orphan", "Tail logs"));
+    // Recent, completed.
+    yield* insert("thread-bg", "task.started", "10:30", shell("recent-done", "Format"));
+    yield* insert("thread-bg", "task.completed", "11:00", {
+      taskId: "recent-done",
+      status: "completed",
+    });
+    // Not panel rows: a real agent, a subagent's own shell, plan-mode bookkeeping.
+    yield* insert("thread-bg", "task.started", "10:40", {
+      taskId: "agent",
+      taskType: "local_agent",
+      agentKind: "agent",
+    });
+    yield* insert("thread-bg", "task.started", "10:45", {
+      ...shell("owned", "Inner"),
+      agentId: "agent",
+    });
+    yield* insert("thread-bg", "task.started", "10:50", {
+      ...shell("plan", "Plan"),
+      taskType: "plan",
+    });
+    yield* insert("thread-bg-deleted", "task.started", "10:00", shell("deleted", "Gone"));
+
+    liveness.recordTaskLiveness({
+      threadId: "thread-bg",
+      taskId: "old-live",
+      taskType: "local_bash",
+      status: undefined,
+      kind: "started",
+    });
+    yield* TestClock.setTime(Date.parse("2026-09-12T12:00:00.000Z"));
+
+    const tasks = yield* snapshotQuery.listThreadBackgroundTasks({
+      threadId: ThreadId.make("thread-bg"),
+    });
+    assert.deepStrictEqual(
+      tasks.map((task) => [task.taskId, task.status, task.endedAt]),
+      [
+        ["old-live", "running", null],
+        ["recent-done", "completed", "2026-09-12T11:00:00.000Z"],
+        ["recent-orphan", "stopped", null],
+        ["recent-failed", "failed", "2026-09-12T09:40:00.000Z"],
+      ],
+    );
+    assert.deepStrictEqual(tasks[3], {
+      taskId: "recent-failed",
+      title: "Run tests",
+      taskType: "local_bash",
+      status: "failed",
+      startedAt: "2026-09-12T09:30:00.000Z",
+      endedAt: "2026-09-12T09:40:00.000Z",
+      summary: 'Background command "Run tests" failed with exit code 1',
+    });
+    assert.deepStrictEqual(
+      yield* snapshotQuery.listThreadBackgroundTasks({
+        threadId: ThreadId.make("thread-bg-deleted"),
+      }),
+      [],
+    );
+
+    const liveShell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-bg"));
+    assert.strictEqual(Option.getOrThrow(liveShell).backgroundTaskCount, 1);
+    liveness.clearThreadLiveness("thread-bg");
+    const idleShell = Option.getOrThrow(
+      yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-bg")),
+    );
+    assert.isFalse("backgroundTaskCount" in idleShell);
+    // With the registry empty the old task is no longer running, and is too old to list.
+    assert.deepStrictEqual(
+      (yield* snapshotQuery.listThreadBackgroundTasks({
+        threadId: ThreadId.make("thread-bg"),
+      })).map((task) => task.taskId),
+      ["recent-done", "recent-orphan", "recent-failed"],
+    );
+  }).pipe(Effect.provide(layer));
+});

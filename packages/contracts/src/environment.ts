@@ -160,6 +160,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server serves `thread.planHistory.list`. Absent on servers from before it shipped; an
       unknown method fails as a generic request error, so clients skip the read instead. */
   threadPlanHistory: Schema.optionalKey(Schema.Boolean),
+  /** Server serves `thread.backgroundTasks.list` and sends `backgroundTaskCount` on thread
+      shells. Absent on older servers, so clients skip the read the same way. */
+  threadBackgroundTasks: Schema.optionalKey(Schema.Boolean),
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),

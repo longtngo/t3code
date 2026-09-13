@@ -191,6 +191,10 @@
       "types": "./src/state/threadPlanHistory.ts",
       "default": "./src/state/threadPlanHistory.ts"
     },
+    "./state/thread-background-tasks": {
+      "types": "./src/state/threadBackgroundTasks.ts",
+      "default": "./src/state/threadBackgroundTasks.ts"
+    },
     "./state/subagent-backend": {
       "types": "./src/state/subagentBackend.ts",
       "default": "./src/state/subagentBackend.ts"

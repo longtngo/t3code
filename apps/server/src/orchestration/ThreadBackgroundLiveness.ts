@@ -69,6 +69,12 @@ export class ThreadBackgroundLivenessService extends Context.Service<
      * "monitoring" only when watch loops are the ONLY live work.
      */
     readonly getThreadBackgroundLiveness: (threadId: string) => ThreadBackgroundLiveness;
+
+    /**
+     * The thread's live watch loops (top-level shells and monitors), whatever else runs. Feeds
+     * the shell's `backgroundTaskCount` and the Background panel's `running` status.
+     */
+    readonly getThreadMonitorTaskIds: (threadId: string) => ReadonlySet<string>;
   }
 >()("t3/orchestration/ThreadBackgroundLiveness/ThreadBackgroundLivenessService") {}
 
@@ -166,7 +172,11 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
       }
       return null;
     },
+
+    getThreadMonitorTaskIds: (threadId) => stateByThreadId.get(threadId)?.monitors ?? EMPTY_IDS,
   };
 }
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 export const layer = Layer.effect(ThreadBackgroundLivenessService, Effect.sync(make));

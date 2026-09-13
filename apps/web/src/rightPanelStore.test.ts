@@ -444,6 +444,21 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("opens background as a singleton surface beside the task list", () => {
+    useRightPanelStore.getState().open(refA, "background");
+    useRightPanelStore.getState().open(refA, "tasks");
+    useRightPanelStore.getState().open(refA, "background");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "background",
+      surfaces: [
+        { id: "background", kind: "background" },
+        { id: "tasks", kind: "tasks" },
+      ],
+    });
+  });
+
   it("toggles the task list surface closed and back open without duplicating it", () => {
     useRightPanelStore.getState().toggle(refA, "tasks");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("tasks");
@@ -474,7 +489,7 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().open(refA, "tasks");
 
     const persisted = await storage.getItem(name);
-    expect(persisted?.version).toBe(14);
+    expect(persisted?.version).toBe(15);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
       activeSurfaceId: "tasks",

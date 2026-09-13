@@ -2087,6 +2087,18 @@ const make = Effect.gen(function* () {
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
 
+      // In-memory shell state that a settle or session death clears must be cleared BEFORE the
+      // session-set dispatch below: that event is what refetches the thread shell, and neither
+      // event appends an activity that would refetch it again, so a later clear left the shell's
+      // liveness, background count and plan step stale. Session death orphans all background
+      // work; a stale-turn settle must not clear the active turn's plan step.
+      if (event.type === "session.exited") {
+        threadBackgroundLiveness.clearThreadLiveness(thread.id);
+        threadPlanProgress.clearThreadPlanProgress(thread.id);
+      } else if (isTerminalTurn && shouldApplyThreadLifecycle && !conflictsWithActiveTurn) {
+        threadPlanProgress.clearThreadPlanProgress(thread.id);
+      }
+
       if (
         event.type === "session.started" ||
         event.type === "session.state.changed" ||
@@ -2559,18 +2571,12 @@ const make = Effect.gen(function* () {
         }
       }
       // Working-indicator plan progress: current step while the turn runs,
-      // cleared on settle so a finished plan never lingers as stale UI.
-      // Events carrying a turn id that conflicts with the active turn are
-      // stale (superseded turn) and must neither overwrite nor clear the
-      // active turn's progress; session.exited always clears.
-      if (event.type === "session.exited") {
-        threadPlanProgress.clearThreadPlanProgress(thread.id);
-      } else if (!conflictsWithActiveTurn) {
-        if (event.type === "turn.plan.updated") {
-          threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
-        } else if (isTerminalTurn && shouldApplyThreadLifecycle) {
-          threadPlanProgress.clearThreadPlanProgress(thread.id);
-        }
+      // cleared on settle (above, before the session-set dispatch) so a
+      // finished plan never lingers as stale UI. Events carrying a turn id
+      // that conflicts with the active turn are stale and must not overwrite
+      // the active turn's progress.
+      if (event.type === "turn.plan.updated" && !conflictsWithActiveTurn) {
+        threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
       }
 
       // Sidebar background liveness: fed from the same lifecycle stream,
@@ -2603,9 +2609,6 @@ const make = Effect.gen(function* () {
           });
           break;
         }
-        case "session.exited":
-          threadBackgroundLiveness.clearThreadLiveness(thread.id);
-          break;
         default:
           break;
       }

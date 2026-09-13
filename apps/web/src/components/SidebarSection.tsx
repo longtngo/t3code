@@ -9,7 +9,7 @@ export type StatusGlyphTone = "completed" | "running" | "failed" | "idle";
 const STATUS_GLYPH_WRAPPER = "flex size-5 shrink-0 items-center justify-center rounded-full";
 
 /** The shared status-glyph markup for background/agent rows. */
-function statusGlyph(tone: StatusGlyphTone): ReactNode {
+export function statusGlyph(tone: StatusGlyphTone): ReactNode {
   if (tone === "completed") {
     return (
       <span className={cn(STATUS_GLYPH_WRAPPER, "bg-emerald-500/15 text-emerald-500")}>
