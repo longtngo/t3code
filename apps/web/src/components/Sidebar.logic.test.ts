@@ -49,6 +49,13 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  withQueuedRow,
+  isSidebarDragCandidate,
+  routeSidebarDragEnd,
+  sidebarDragListItems,
+  sidebarDragLostItsRow,
+  type SidebarDragOrigin,
+  type SidebarThreadDropPlan,
 } from "./Sidebar.logic";
 import {
   EnvironmentId,
@@ -1088,6 +1095,36 @@ describe("resolveSidebarDropTarget", () => {
   ];
   const resolve = (activeKey: string, overId: string) =>
     resolveSidebarDropTarget(items, activeKey, overId);
+
+  it("resolves a Queue row as if it sat above the shelves", () => {
+    const queued = withQueuedRow(items, "q", "active");
+    // Moving up lands before the row under the pointer; moving down lands after the header.
+    expect(resolveSidebarDropTarget(queued, "q", "a2")).toEqual({
+      section: "active",
+      pinnedOrder: ["p1", "p2"],
+      activeOrder: ["a1", "q", "a2"],
+    });
+    expect(resolveSidebarDropTarget(queued, "q", "p2")).toEqual({
+      section: "pinned",
+      pinnedOrder: ["p1", "q", "p2"],
+      activeOrder: ["a1", "a2"],
+    });
+    expect(resolveSidebarDropTarget(queued, "q", sidebarMarkerId("settled-header"))?.section).toBe(
+      "settled",
+    );
+    // Its own slot keeps it in Active: a drop there only unqueues.
+    expect(resolveSidebarDropTarget(queued, "q", "q")?.section).toBe("active");
+  });
+
+  it("puts a Queue row at the end of a list without shelves", () => {
+    const shelfless = items.slice(0, 6);
+    expect(withQueuedRow(shelfless, "q", "pinned").at(-1)).toEqual(thread("q", "pinned"));
+    expect(resolveSidebarDropTarget(withQueuedRow(shelfless, "q", "pinned"), "q", "a1")).toEqual({
+      section: "active",
+      pinnedOrder: ["p1", "p2"],
+      activeOrder: ["q", "a1", "a2"],
+    });
+  });
 
   it("keeps marker-like scoped thread keys draggable", () => {
     const key = "marker:pinned-header";
@@ -2534,5 +2571,103 @@ describe("resolveSidebarDropVerb", () => {
     expect(resolveSidebarDropVerb("pinned", "pinned")).toBeNull();
     expect(resolveSidebarDropVerb("active", null)).toBeNull();
     expect(resolveSidebarDropVerb("active", "snoozed")).toBeNull();
+  });
+
+  it("names unqueue when a Queue row drops back into its resting section", () => {
+    expect(resolveSidebarDropVerb("settled", "settled", true)).toBe("unqueue");
+    expect(resolveSidebarDropVerb("settled", "active", true)).toBe("unsettle");
+    expect(resolveSidebarDropVerb("active", null, true)).toBeNull();
+    expect(resolveSidebarDropVerb("active", "snoozed", true)).toBeNull();
+  });
+});
+
+describe("dragging a Queue row", () => {
+  const thread = (key: string, section: SidebarSection): SidebarListItem => ({
+    kind: "thread",
+    key,
+    section,
+  });
+  const marker = (marker: SidebarListMarker): SidebarListItem => ({ kind: "marker", marker });
+  const items: readonly SidebarListItem[] = [
+    marker("pinned-header"),
+    thread("p1", "pinned"),
+    marker("pinned-divider"),
+    thread("a1", "active"),
+    marker("settled-header"),
+    thread("s1", "settled"),
+  ];
+  const queuedKeys = new Set(["q", "q2", "d"]);
+  const QUEUE = "queue-header";
+  const origin = (overrides: Partial<SidebarDragOrigin>): SidebarDragOrigin => ({
+    activeKey: "q",
+    activeSection: "active",
+    fromQueue: true,
+    queuedDraft: false,
+    ...overrides,
+  });
+  const route = (drag: SidebarDragOrigin, overId: string | null) =>
+    routeSidebarDragEnd({
+      drag,
+      overId,
+      items: sidebarDragListItems(items, drag),
+      queuedKeys,
+      queueDropId: QUEUE,
+    });
+  const candidate = (
+    drag: SidebarDragOrigin,
+    id: string,
+    planKind: SidebarThreadDropPlan["kind"] = "none",
+  ) =>
+    isSidebarDragCandidate({
+      id,
+      drag,
+      items: sidebarDragListItems(items, drag),
+      queuedKeys,
+      queueDropId: QUEUE,
+      planKind: () => planKind,
+    });
+
+  it("keeps the drag alive while its row is only in the Queue", () => {
+    expect(sidebarDragLostItsRow("q", items, queuedKeys)).toBe(false);
+    expect(sidebarDragLostItsRow("a1", items, queuedKeys)).toBe(false);
+    expect(sidebarDragLostItsRow("gone", items, queuedKeys)).toBe(true);
+  });
+
+  it("reorders within the Queue, and dropping on itself does nothing", () => {
+    expect(route(origin({}), "q2")).toEqual({ kind: "reorder-queue", overKey: "q2" });
+    expect(route(origin({}), "q")).toEqual({ kind: "none" });
+    expect(route(origin({}), QUEUE)).toEqual({ kind: "none" });
+  });
+
+  it("places a queued thread in a section and unqueues it", () => {
+    expect(route(origin({}), "p1")).toMatchObject({
+      kind: "place",
+      unqueue: true,
+      target: { section: "pinned" },
+    });
+  });
+
+  it("never lets a queued draft leave the Queue", () => {
+    const draft = origin({ activeKey: "d", queuedDraft: true });
+    expect(route(draft, "a1")).toEqual({ kind: "none" });
+    expect(candidate(draft, "a1", "move-active")).toBe(false);
+    expect(candidate(draft, "q")).toBe(true);
+  });
+
+  it("allows dropping a queued thread back on its resting section even when nothing else changes", () => {
+    const settled = origin({ activeSection: "settled" });
+    expect(candidate(settled, sidebarMarkerId("settled-header"))).toBe(true);
+    expect(candidate(origin({ activeSection: "active" }), sidebarMarkerId("settled-header"))).toBe(
+      false,
+    );
+  });
+
+  it("keeps main-list drags on their existing rules", () => {
+    const main = origin({ activeKey: "a1", fromQueue: false });
+    expect(route(main, QUEUE)).toEqual({ kind: "enqueue" });
+    expect(route(main, "q")).toEqual({ kind: "none" });
+    expect(candidate(main, "q")).toBe(false);
+    expect(candidate(main, QUEUE)).toBe(true);
+    expect(route(main, "p1")).toMatchObject({ kind: "place", unqueue: false });
   });
 });

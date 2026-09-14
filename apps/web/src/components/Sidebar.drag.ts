@@ -34,6 +34,8 @@ export function createSidebarCollisionDetection(
     activationY?: number | null;
     /** Drop zones outside the sortable list that win whenever the pointer is inside them. */
     pointerDropIds?: readonly string[];
+    /** Sortable ids removed from collision candidates (e.g. queue rows during main-list drags). */
+    excludeIds?: readonly string[];
   } = {},
 ): CollisionDetection {
   const validity = new Map<string, boolean>();
@@ -58,7 +60,9 @@ export function createSidebarCollisionDetection(
       }
     }
     let collisions = closestCenter(args).filter(
-      (collision) => !options.pointerDropIds?.includes(String(collision.id)),
+      (collision) =>
+        !options.pointerDropIds?.includes(String(collision.id)) &&
+        !options.excludeIds?.includes(String(collision.id)),
     );
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);

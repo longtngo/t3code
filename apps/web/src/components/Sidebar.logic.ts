@@ -147,6 +147,104 @@ export type SidebarDropTarget = {
   readonly activeOrder: readonly string[];
 };
 
+/** A queued thread is not a list row. Drops resolve as if it sat where the
+    Queue renders, just above the shelves, so moving up or down lands on the
+    side of the target the pointer shows. `section` is its resting section. */
+export function withQueuedRow(
+  items: readonly SidebarListItem[],
+  key: string,
+  section: SidebarSection,
+): SidebarListItem[] {
+  const shelf = items.findIndex(
+    (item) =>
+      item.kind === "marker" &&
+      (item.marker === "snoozed-header" || item.marker === "settled-header"),
+  );
+  const slot = shelf === -1 ? items.length : shelf;
+  return [...items.slice(0, slot), { kind: "thread", key, section }, ...items.slice(slot)];
+}
+
+/** A drag in progress, as the drop rules need it. */
+export interface SidebarDragOrigin {
+  readonly activeKey: string;
+  /** For a Queue row, the section it rests in once unqueued. */
+  readonly activeSection: SidebarSection;
+  readonly fromQueue: boolean;
+  /** A queued draft: no thread yet, so it can only reorder inside the Queue. */
+  readonly queuedDraft: boolean;
+}
+
+/** The list a drag resolves against: a Queue row joins it at the Queue's slot. */
+export function sidebarDragListItems(
+  items: readonly SidebarListItem[],
+  drag: SidebarDragOrigin | null,
+): readonly SidebarListItem[] {
+  return drag?.fromQueue ? withQueuedRow(items, drag.activeKey, drag.activeSection) : items;
+}
+
+/** A drag ends itself when its row leaves both the list and the Queue. */
+export function sidebarDragLostItsRow(
+  activeKey: string,
+  items: readonly SidebarListItem[],
+  queuedKeys: ReadonlySet<string>,
+): boolean {
+  return (
+    !queuedKeys.has(activeKey) &&
+    !items.some((item) => item.kind === "thread" && item.key === activeKey)
+  );
+}
+
+/** Whether the collision detector may pick `id`. `planKind` plans the drop
+    into a resolved target; the main-list rule is "the drop changes something". */
+export function isSidebarDragCandidate(input: {
+  readonly id: string;
+  readonly drag: SidebarDragOrigin;
+  readonly items: readonly SidebarListItem[];
+  readonly queuedKeys: ReadonlySet<string>;
+  readonly queueDropId: string;
+  readonly planKind: (target: SidebarDropTarget) => SidebarThreadDropPlan["kind"];
+}): boolean {
+  const { id, drag } = input;
+  if (input.queuedKeys.has(id)) return drag.fromQueue;
+  if (drag.queuedDraft) return false;
+  if (id === input.queueDropId) return !drag.fromQueue;
+  const target = resolveSidebarDropTarget(input.items, drag.activeKey, id);
+  if (target === null) return false;
+  // Dropping a queued thread back on its resting section still unqueues it.
+  return (
+    input.planKind(target) !== "none" || (drag.fromQueue && target.section === drag.activeSection)
+  );
+}
+
+export type SidebarDragEndRoute =
+  | { readonly kind: "none" }
+  /** A Queue row dropped on another: move it to that entry's index. */
+  | { readonly kind: "reorder-queue"; readonly overKey: string }
+  /** A main-list row dropped on the Queue header. */
+  | { readonly kind: "enqueue" }
+  /** Into a section; `unqueue` first when the row came from the Queue. */
+  | { readonly kind: "place"; readonly target: SidebarDropTarget; readonly unqueue: boolean };
+
+export function routeSidebarDragEnd(input: {
+  readonly drag: SidebarDragOrigin;
+  readonly overId: string | null;
+  readonly items: readonly SidebarListItem[];
+  readonly queuedKeys: ReadonlySet<string>;
+  readonly queueDropId: string;
+}): SidebarDragEndRoute {
+  const { drag, overId } = input;
+  if (overId === null) return { kind: "none" };
+  if (drag.fromQueue && input.queuedKeys.has(overId)) {
+    return overId === drag.activeKey
+      ? { kind: "none" }
+      : { kind: "reorder-queue", overKey: overId };
+  }
+  if (overId === input.queueDropId) return drag.fromQueue ? { kind: "none" } : { kind: "enqueue" };
+  if (drag.queuedDraft) return { kind: "none" };
+  const target = resolveSidebarDropTarget(input.items, drag.activeKey, overId);
+  return target === null ? { kind: "none" } : { kind: "place", target, unqueue: drag.fromQueue };
+}
+
 export function resolveSidebarDropTarget(
   items: readonly SidebarListItem[],
   activeKey: string,
@@ -202,13 +300,16 @@ export type SidebarThreadDropPlan =
 /** What dropping in `to` does to a thread lifted from `from`, for the badge
     on the lifted row. Null while reordering inside one section and for the
     snoozed shelf, which cannot be a drop target. */
-export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
+export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake" | "unqueue";
 
 export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
+  /** Lifted from the Queue: a drop always unqueues, even into its resting section. */
+  fromQueue = false,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "snoozed") return null;
+  if (to === null || to === "snoozed") return null;
+  if (to === from) return fromQueue ? "unqueue" : null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";

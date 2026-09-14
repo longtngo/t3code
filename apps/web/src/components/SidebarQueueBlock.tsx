@@ -1,8 +1,7 @@
-import { DndContext, useDroppable, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { ChevronDownIcon, PauseIcon, PlayIcon } from "lucide-react";
-import { useCallback, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
 import {
@@ -10,7 +9,6 @@ import {
   useThreadQueueStore,
   type ThreadQueueEntry,
 } from "../threadQueueStore";
-import { SidebarPointerSensor } from "./Sidebar.pointer";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export const QUEUE_DROP_ID = "sidebar-queue-drop";
@@ -20,8 +18,6 @@ export type QueueRowSortableBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
 >;
-
-const noop = () => {};
 
 function SortableQueueRow(props: {
   id: string;
@@ -35,7 +31,7 @@ function SortableQueueRow(props: {
 
 /**
  * The Queue section: threads waiting to send once Active is done. Rows reorder
- * inside their own drag context; a row dragged from Active drops on the header.
+ * in the parent drag context; a row dragged from Active drops on the header.
  */
 export function SidebarQueueBlock(props: {
   /** Entries in queue order, already filtered to those this sidebar can show. */
@@ -51,23 +47,9 @@ export function SidebarQueueBlock(props: {
   const paused = useThreadQueueStore((state) => state.paused);
   const lastFailure = useThreadQueueStore((state) => state.lastFailure);
   const setPaused = useThreadQueueStore((state) => state.setPaused);
-  const enqueue = useThreadQueueStore((state) => state.enqueue);
   const { expanded, onToggleExpanded: toggleExpanded } = props;
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: QUEUE_DROP_ID });
-  const sensors = useSensors(
-    useSensor(SidebarPointerSensor, { distance: 6, onAttach: noop, onFinish: noop }),
-  );
   const keys = props.entries.map(threadQueueEntryKey);
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over === null || event.over.id === event.active.id) return;
-      const from = props.entries.find((entry) => threadQueueEntryKey(entry) === event.active.id);
-      const toIndex = keys.indexOf(String(event.over.id));
-      if (from === undefined || toIndex < 0) return;
-      enqueue(from, toIndex);
-    },
-    [enqueue, keys, props.entries],
-  );
 
   if (props.entries.length === 0 && !props.dragging) return null;
   const visibleEntries = expanded
@@ -139,22 +121,16 @@ export function SidebarQueueBlock(props: {
         </div>
       </li>
       {visibleEntries.length > 0 ? (
-        <DndContext
-          sensors={sensors}
-          modifiers={[restrictToVerticalAxis]}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext items={keys} strategy={verticalListSortingStrategy}>
-            {visibleEntries.map((entry) => {
-              const key = threadQueueEntryKey(entry);
-              return (
-                <SortableQueueRow key={key} id={key}>
-                  {(bag) => props.renderEntry(entry, bag)}
-                </SortableQueueRow>
-              );
-            })}
-          </SortableContext>
-        </DndContext>
+        <SortableContext items={keys} strategy={verticalListSortingStrategy}>
+          {visibleEntries.map((entry) => {
+            const key = threadQueueEntryKey(entry);
+            return (
+              <SortableQueueRow key={key} id={key}>
+                {(bag) => props.renderEntry(entry, bag)}
+              </SortableQueueRow>
+            );
+          })}
+        </SortableContext>
       ) : null}
     </>
   );

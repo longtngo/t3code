@@ -170,6 +170,11 @@ import {
   resolveAdjacentThreadId,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
+  isSidebarDragCandidate,
+  routeSidebarDragEnd,
+  sidebarDragListItems,
+  sidebarDragLostItsRow,
+  type SidebarDragOrigin,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
   searchSidebarThreads,
@@ -1160,6 +1165,12 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
     <>
       <AlarmClockOffIcon aria-hidden className="size-3" />
       Wake
+    </>
+  ),
+  unqueue: (
+    <>
+      <ListXIcon aria-hidden className="size-3" />
+      Unqueue
     </>
   ),
 };
@@ -3662,13 +3673,14 @@ export default function Sidebar() {
   // Hold the chosen section and order until every key write arrives. This
   // also covers first-time ordering, which assigns keys to keyless neighbors.
   // A failed write, concurrent reorder, or membership change releases the hold.
-  const [dragState, setDragState] = useState<{
-    readonly activeKey: string;
-    readonly activeSection: SidebarSection;
-    readonly occurredAt: string;
-    readonly activationY: number | null;
-    readonly targetSection: SidebarSection | null;
-  } | null>(null);
+  const [dragState, setDragState] = useState<
+    | (SidebarDragOrigin & {
+        readonly occurredAt: string;
+        readonly activationY: number | null;
+        readonly targetSection: SidebarSection | null;
+      })
+    | null
+  >(null);
   const dragTargetSection = dragState?.targetSection ?? null;
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const finishThreadDrag = useCallback((started: boolean) => {
@@ -3831,7 +3843,17 @@ export default function Sidebar() {
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
-      const activeSection = sectionByThreadKey.get(activeKey);
+      const fromQueue = queuedKeys.has(activeKey);
+      const queuedThread = fromQueue ? threadByKey.get(activeKey) : undefined;
+      const activeSection = !fromQueue
+        ? sectionByThreadKey.get(activeKey)
+        : queuedThread === undefined
+          ? "active"
+          : sidebarRestingSection(
+              queuedThread,
+              serverConfigs.get(queuedThread.environmentId)?.environment.capabilities,
+              new Date().toISOString(),
+            );
       if (activeSection === undefined) return;
       // Stop normal section motion before dnd-kit measures the picked-up row.
       listMotionRef.current?.suspend();
@@ -3848,13 +3870,15 @@ export default function Sidebar() {
       setDragState({
         activeKey,
         activeSection,
-        targetSection: activeSection,
+        fromQueue,
+        queuedDraft: fromQueue && queuedThread === undefined,
+        targetSection: fromQueue ? null : activeSection,
         occurredAt: new Date().toISOString(),
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
     },
-    [sectionByThreadKey],
+    [queuedKeys, sectionByThreadKey, serverConfigs, threadByKey],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -3905,11 +3929,11 @@ export default function Sidebar() {
   useEffect(() => {
     if (
       dragState !== null &&
-      !sidebarListItems.some((item) => item.kind === "thread" && item.key === dragState.activeKey)
+      sidebarDragLostItsRow(dragState.activeKey, sidebarListItems, queuedKeys)
     ) {
       cancelThreadDrag();
     }
-  }, [cancelThreadDrag, dragState, sidebarListItems]);
+  }, [cancelThreadDrag, dragState, queuedKeys, sidebarListItems]);
   const listMotionPaused = dragState !== null;
   // Every shell event rebuilds sidebarListItems, but rows only move when the
   // rendered order or a row's section changes. Keying the motion pass on that
@@ -3937,22 +3961,51 @@ export default function Sidebar() {
     sidebarListOrderKey,
     visibleDraftSessionCount,
   ]);
+  const draggedKey = dragState?.activeKey;
+  const draggedSection = dragState?.activeSection;
+  const draggedFromQueue = dragState?.fromQueue ?? false;
+  const draggedQueuedDraft = dragState?.queuedDraft ?? false;
+  const dragOrigin = useMemo(
+    (): SidebarDragOrigin | null =>
+      draggedKey === undefined || draggedSection === undefined
+        ? null
+        : {
+            activeKey: draggedKey,
+            activeSection: draggedSection,
+            fromQueue: draggedFromQueue,
+            queuedDraft: draggedQueuedDraft,
+          },
+    [draggedFromQueue, draggedKey, draggedQueuedDraft, draggedSection],
+  );
+  const dragListItems = useMemo(
+    () => sidebarDragListItems(sidebarListItems, dragOrigin),
+    [dragOrigin, sidebarListItems],
+  );
   const handleThreadDragOver = useCallback(
     (event: DragOverEvent) => {
-      const target = event.over
-        ? resolveSidebarDropTarget(sidebarListItems, String(event.active.id), String(event.over.id))
-        : null;
-      setDragState((current) =>
-        current === null || current.activeKey !== String(event.active.id)
-          ? current
-          : { ...current, targetSection: target?.section ?? null },
-      );
+      const overId = event.over ? String(event.over.id) : null;
+      // Resolve against the updater's state: the first move can arrive before
+      // the render that learned this drag started in the Queue.
+      setDragState((current) => {
+        if (current === null || current.activeKey !== String(event.active.id)) return current;
+        const target =
+          overId === null || queuedKeys.has(overId)
+            ? null
+            : resolveSidebarDropTarget(
+                sidebarDragListItems(sidebarListItems, current),
+                current.activeKey,
+                overId,
+              );
+        return { ...current, targetSection: target?.section ?? null };
+      });
     },
-    [sidebarListItems],
+    [queuedKeys, sidebarListItems],
   );
   const sortableIds = useMemo(() => sidebarListItems.map(sidebarListItemId), [sidebarListItems]);
   const draggedSettledOrder = useMemo(() => {
-    const thread = dragState === null ? undefined : threadByKey.get(dragState.activeKey);
+    // A Queue row never previews in the main list, so it needs no settled order.
+    const thread =
+      dragState === null || dragState.fromQueue ? undefined : threadByKey.get(dragState.activeKey);
     if (dragState === null || thread === undefined) return [];
     const key = (candidate: EnvironmentThreadShell) =>
       scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id));
@@ -3983,7 +4036,9 @@ export default function Sidebar() {
       snoozedThreads.length,
     ],
   );
-  const draggingCompactSnoozed = compact && dragState?.activeSection === "snoozed";
+  // Only a main-list snoozed row lives in the footer; a Queue row resting there does not.
+  const draggingCompactSnoozed =
+    compact && dragState?.activeSection === "snoozed" && !dragState.fromQueue;
   const compactSnoozedDragThread =
     draggingCompactSnoozed && dragState ? threadByKey.get(dragState.activeKey) : undefined;
   const compactSidebarSortingStrategy = useCallback<typeof sidebarSortingStrategy>(
@@ -4018,42 +4073,47 @@ export default function Sidebar() {
     }),
     [threads],
   );
-  const draggedThreadKey = dragState?.activeKey;
-  const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
   const dndCollisionDetection = useMemo(() => {
-    if (draggedThreadKey === undefined || draggedFromSection === undefined)
-      return createSidebarCollisionDetection(() => true);
-    const source = threadByKey.get(draggedThreadKey);
-    if (source === undefined) return createSidebarCollisionDetection(() => false);
+    if (dragOrigin === null) return createSidebarCollisionDetection(() => true);
+    const source = threadByKey.get(dragOrigin.activeKey);
+    if (source === undefined && !dragOrigin.queuedDraft) {
+      return createSidebarCollisionDetection(() => false);
+    }
     return createSidebarCollisionDetection(
-      (id) => {
-        if (id === QUEUE_DROP_ID) return true;
-        const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
-        if (target === null) return false;
-        return (
-          planSidebarThreadDrop({
-            activeKey: draggedThreadKey,
-            activeSection: draggedFromSection,
-            activePinned: source.pinnedAt != null,
-            activeSettled: source.settledOverride === "settled",
-            supportsSettlement:
-              serverConfigs.get(source.environmentId)?.environment.capabilities.threadSettlement ===
-              true,
-            target,
-            pinnedOrder: pinnedKeys,
-            pinnedKeysById,
-            reorderableKeys: draggableThreadKeys,
-            activeOrder: activeKeys,
-            activeKeysById,
-            activeReorderableKeys: activeReorderableThreadKeys,
-          }).kind !== "none"
-        );
-      },
+      (id) =>
+        isSidebarDragCandidate({
+          id,
+          drag: dragOrigin,
+          items: dragListItems,
+          queuedKeys,
+          queueDropId: QUEUE_DROP_ID,
+          planKind: (target) =>
+            source === undefined
+              ? "none"
+              : planSidebarThreadDrop({
+                  activeKey: dragOrigin.activeKey,
+                  activeSection: dragOrigin.activeSection,
+                  activePinned: source.pinnedAt != null,
+                  activeSettled: source.settledOverride === "settled",
+                  supportsSettlement:
+                    serverConfigs.get(source.environmentId)?.environment.capabilities
+                      .threadSettlement === true,
+                  target,
+                  pinnedOrder: pinnedKeys,
+                  pinnedKeysById,
+                  reorderableKeys: draggableThreadKeys,
+                  activeOrder: activeKeys,
+                  activeKeysById,
+                  activeReorderableKeys: activeReorderableThreadKeys,
+                }).kind,
+        }),
       {
-        items: sidebarListItems,
+        items: dragListItems,
         activationY: dragActivationY ?? null,
-        pointerDropIds: [QUEUE_DROP_ID],
+        ...(dragOrigin.queuedDraft ? {} : { pointerDropIds: [QUEUE_DROP_ID] }),
+        // Queue rows only take part in a drag that started in the Queue.
+        ...(dragOrigin.fromQueue ? {} : { excludeIds: [...queuedKeys] }),
       },
     );
   }, [
@@ -4062,33 +4122,55 @@ export default function Sidebar() {
     serverConfigs,
     activeKeys,
     activeReorderableThreadKeys,
-    draggedThreadKey,
-    draggedFromSection,
     dragActivationY,
+    dragListItems,
+    dragOrigin,
     draggableThreadKeys,
     pinnedKeys,
-    sidebarListItems,
+    queuedKeys,
     threadByKey,
   ]);
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
-      if (event.over !== null && String(event.over.id) === QUEUE_DROP_ID) {
-        const thread = threadByKey.get(activeKey);
-        if (thread !== undefined) {
-          useThreadQueueStore
-            .getState()
-            .enqueue({ environmentId: thread.environmentId, threadId: thread.id, draftId: null });
-        }
+      // Drag start recorded where the row came from; a drag it ignored has nothing to drop.
+      const drag = dragState?.activeKey === activeKey ? dragState : null;
+      if (drag === null) return;
+      const route = routeSidebarDragEnd({
+        drag,
+        overId: event.over === null ? null : String(event.over.id),
+        items: sidebarDragListItems(sidebarListItems, drag),
+        queuedKeys,
+        queueDropId: QUEUE_DROP_ID,
+      });
+      const queue = useThreadQueueStore.getState();
+      const entryIndex = (key: string) =>
+        queue.entries.findIndex((entry) => threadQueueEntryKey(entry) === key);
+      if (route.kind === "none") return;
+      if (route.kind === "reorder-queue") {
+        const entry = queue.entries[entryIndex(activeKey)];
+        const toIndex = entryIndex(route.overKey);
+        if (entry !== undefined && toIndex >= 0) queue.enqueue(entry, toIndex);
         return;
       }
-      const activeSection = sectionByThreadKey.get(activeKey);
-      const target =
-        event.over === null
-          ? null
-          : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
       const activeThread = threadByKey.get(activeKey);
-      if (activeSection === undefined || target === null || activeThread === undefined) return;
+      if (activeThread === undefined) return;
+      if (route.kind === "enqueue") {
+        queue.enqueue({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          draftId: null,
+        });
+        return;
+      }
+      const { target } = route;
+      // A main-list row re-reads its section: it may have moved while lifted.
+      const activeSection = drag.fromQueue
+        ? drag.activeSection
+        : (sectionByThreadKey.get(activeKey) ?? drag.activeSection);
+      // Unqueue first, synchronously: the thread is back in its resting section
+      // in the same render that projects the drop.
+      if (route.unqueue) queue.remove(activeKey);
       const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
       const plan = planSidebarThreadDrop({
         activeKey,
@@ -4223,6 +4305,8 @@ export default function Sidebar() {
       reorderActiveThread,
       sectionByThreadKey,
       settleThread,
+      dragState,
+      queuedKeys,
       sidebarListItems,
       threadByKey,
       unpinThread,
@@ -5249,7 +5333,11 @@ export default function Sidebar() {
                             sortable={sortable}
                             dropVerb={
                               dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
+                                ? resolveSidebarDropVerb(
+                                    dragState.activeSection,
+                                    dragTargetSection,
+                                    dragState.fromQueue,
+                                  )
                                 : null
                             }
                             dragOverPinned={
@@ -5340,6 +5428,8 @@ export default function Sidebar() {
                         );
                       };
                       const from = dragState?.activeSection ?? null;
+                      // A Queue row leaves no section behind, so emptiness hints ignore it.
+                      const leavingSection = dragState?.fromQueue ? null : from;
                       const showDragLabels =
                         from !== null &&
                         (!compact ||
@@ -5371,7 +5461,7 @@ export default function Sidebar() {
                             routeDraftId={routeDraftIdForRows}
                             expanded={queueExpanded}
                             onToggleExpanded={toggleQueueExpanded}
-                            dragging={from !== null}
+                            dragging={from !== null && !dragState?.fromQueue}
                             renderEntry={(entry: ThreadQueueEntry, bag: QueueRowSortableBag) => {
                               const thread = threadByKey.get(threadQueueEntryKey(entry));
                               if (thread !== undefined) {
@@ -5442,7 +5532,7 @@ export default function Sidebar() {
                                 showHint={
                                   from !== null &&
                                   (activeThreads.length === 0 ||
-                                    (from === "active" &&
+                                    (leavingSection === "active" &&
                                       activeThreads.length === 1 &&
                                       dragTargetSection !== null &&
                                       dragTargetSection !== "active"))
@@ -5498,7 +5588,7 @@ export default function Sidebar() {
                                 showHint={
                                   from !== null &&
                                   (renderedSettledThreads.length === 0 ||
-                                    (from === "settled" &&
+                                    (leavingSection === "settled" &&
                                       renderedSettledThreads.length === 1 &&
                                       dragTargetSection !== null &&
                                       dragTargetSection !== "settled"))

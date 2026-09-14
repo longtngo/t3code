@@ -143,6 +143,17 @@ describe("sidebar collision detection", () => {
     expect(outside.map((collision) => collision.id)).not.toContain("queue");
   });
 
+  it("drops excluded ids before choosing, so a nearer one never blocks a valid target", () => {
+    const args = collisionArgs();
+    const nearest = closestCenter(args)[0]!.id;
+    const detector = createSidebarCollisionDetection((id) => id !== nearest, {
+      excludeIds: [String(nearest)],
+    });
+    const ids = detector(args).map((collision) => collision.id);
+    expect(ids).not.toContain(nearest);
+    expect(ids[0]).not.toBe("source");
+  });
+
   it("selects the nearest supported target", () => {
     const detector = createSidebarCollisionDetection(() => true);
     expect(detector(collisionArgs())[0]?.id).toBe("blocked");
