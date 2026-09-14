@@ -391,6 +391,19 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
   return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
 }
 
+/**
+ * The windows this snapshot reports at or over their cap.
+ *
+ * Empty for a provider that reports no limits and for an `unavailable` snapshot: absence of
+ * a reading is not a reading of 100%, and most drivers never report limits at all.
+ */
+export function exhaustedUsageWindows(
+  limits: ServerProviderUsageLimits | undefined,
+): readonly ServerProviderUsageWindow[] {
+  if (!limits || limits.unavailable) return [];
+  return limits.windows.filter((window) => window.usedPercent >= 100);
+}
+
 /** The one-line status under a provider heading when there are no bars to draw. */
 export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
   if (limits.unavailable?.reason === "unsupported") {

@@ -90,6 +90,7 @@ describe("resolveThreadBackend", () => {
           settings: settings({ enabled: false, modes: { t1: "on" } }),
           threadId: t1,
           global: CURSOR,
+          creditsBlockedReason: null,
         });
         expect(r.backend).toBe("default");
         expect(r.degraded).toContain("switched off");
@@ -102,11 +103,13 @@ describe("resolveThreadBackend", () => {
           settings: settings({}),
           threadId: t1,
           global: CURSOR,
+          creditsBlockedReason: null,
         });
         const inherit = yield* resolveThreadBackend({
           settings: settings({ modes: { t1: "inherit" } }),
           threadId: t1,
           global: CURSOR,
+          creditsBlockedReason: null,
         });
         expect(absent).toBe(CURSOR);
         expect(inherit).toBe(CURSOR);
@@ -119,6 +122,7 @@ describe("resolveThreadBackend", () => {
           settings: settings({ modes: { t1: "off" } }),
           threadId: t1,
           global: CURSOR,
+          creditsBlockedReason: null,
         });
         expect(r).toEqual(OFF);
       }),
@@ -130,6 +134,7 @@ describe("resolveThreadBackend", () => {
           settings: settings({ modes: { t1: "on" } }),
           threadId: t1,
           global: CURSOR,
+          creditsBlockedReason: null,
         });
         expect(r).toBe(CURSOR);
       }),
@@ -141,6 +146,7 @@ describe("resolveThreadBackend", () => {
           settings: settings({ modes: { t1: "on" } }),
           threadId: t1,
           global: OFF,
+          creditsBlockedReason: null,
         });
         expect(r.backend).toBe("cursor");
         expect(r.instanceId).toBe("cursor");
@@ -159,6 +165,7 @@ describe("resolveThreadBackend", () => {
             settings: settings({}),
             threadId: ThreadId.make(id),
             global: OFF,
+            creditsBlockedReason: null,
           });
           expect(r).toBe(OFF);
         }
@@ -171,9 +178,60 @@ describe("resolveThreadBackend", () => {
           settings: settings({ modes: { t1: "on" }, cursor: false }),
           threadId: t1,
           global: OFF,
+          creditsBlockedReason: null,
         });
         expect(r.backend).toBe("default");
         expect(r.degraded).toContain("Cursor instance");
+      }),
+    );
+
+    it.effect("withholds offload while credits are blocked, whatever the thread mode says", () =>
+      Effect.gen(function* () {
+        // I6. An explicit per-thread "on" is the strongest possible request to offload, and
+        // it must still lose to the credit block — otherwise the switch does nothing for the
+        // threads most likely to be spending.
+        const threadId = ThreadId.make("t-credit-blocked");
+        const settings = {
+          subagentBackendEnabled: true,
+          subagentBackendThreadModes: { [threadId]: "on" },
+        } as unknown as ServerSettings;
+        const global = {
+          backend: "cursor",
+          instanceId: ProviderInstanceId.make("cursor-1"),
+          model: "auto",
+          degraded: null,
+        } as unknown as PersistedBackend;
+        const resolved = yield* resolveThreadBackend({
+          settings,
+          threadId,
+          global,
+          creditsBlockedReason: "Cursor has used 100% of its usage",
+        });
+        expect(resolved.backend).toBe("default");
+        expect(resolved.degraded).toContain("100%");
+      }),
+    );
+
+    it.effect("offloads normally when credits are not blocked", () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("t-credit-ok");
+        const settings = {
+          subagentBackendEnabled: true,
+          subagentBackendThreadModes: { [threadId]: "on" },
+        } as unknown as ServerSettings;
+        const global = {
+          backend: "cursor",
+          instanceId: ProviderInstanceId.make("cursor-1"),
+          model: "auto",
+          degraded: null,
+        } as unknown as PersistedBackend;
+        const resolved = yield* resolveThreadBackend({
+          settings,
+          threadId,
+          global,
+          creditsBlockedReason: null,
+        });
+        expect(resolved.backend).toBe("cursor");
       }),
     );
   });

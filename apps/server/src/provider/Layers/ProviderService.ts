@@ -52,6 +52,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import { appendUserInputAttachmentPaths } from "../userInputAttachments.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -511,6 +512,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     | Path.Path
     | ServerConfig.ServerConfig
     | ServerSettings.ServerSettingsService
+    | ChildProcessSpawner.ChildProcessSpawner
   >();
   const writeThreadBackend = (
     threadId: ThreadId,

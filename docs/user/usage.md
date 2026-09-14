@@ -70,6 +70,17 @@ anything. The command is offered only for providers that appear under **Usage �
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
+### Stop spending at the limit
+
+In **Settings → General**, turn off **Allow to spend credits** when you want the server to pause
+work once a provider's usage window reaches 100%. Running turns on that provider stop, and new ones
+are refused until you turn spending back on or the window resets. Threads waiting in the sidebar
+Queue pause rather than failing one by one. This only affects providers that report limits in
+**Usage → Limits**.
+
+If you downgrade to an older version of T3 Code, spending turns back on automatically: the older
+server cannot enforce this setting.
+
 ## Connect a CLIProxyAPI hub
 
 To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the

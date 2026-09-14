@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderUsageWindow,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,6 +18,7 @@ import {
   collectLimitNotices,
   collectLimitPools,
   elapsedShare,
+  exhaustedUsageWindows,
   formatResetsIn,
   limitsNotice,
   paceOf,
@@ -1006,5 +1008,54 @@ describe("isUsageLimitsCommand", () => {
     expect(isUsageLimitsCommand("/usage-limits explain")).toBe(false);
     expect(isUsageLimitsCommand("Explain /usage-limits")).toBe(false);
     expect(isUsageLimitsCommand("/usage")).toBe(false);
+  });
+});
+
+describe("exhaustedUsageWindows", () => {
+  const win = (id: string, usedPercent: number): ServerProviderUsageWindow => ({
+    id,
+    kind: "session",
+    label: id,
+    usedPercent,
+  });
+
+  it("reports nothing when there are no limits at all", () => {
+    expect(exhaustedUsageWindows(undefined)).toEqual([]);
+  });
+
+  it("reports nothing for an unavailable snapshot, whichever reason", () => {
+    // I2: "we could not read it" is not "it is at 100%". Four of six drivers never
+    // report limits (design P1), so blocking on absence disables most of the product.
+    for (const reason of ["unsupported", "probeFailed"] as const) {
+      expect(
+        exhaustedUsageWindows({
+          checkedAt: "2026-09-14T00:00:00.000Z",
+          windows: [win("five_hour", 100)],
+          unavailable: { reason },
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("reports nothing for an empty window list", () => {
+    expect(exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows: [] })).toEqual(
+      [],
+    );
+  });
+
+  it("does not report a window just below the cap", () => {
+    expect(
+      exhaustedUsageWindows({
+        checkedAt: "2026-09-14T00:00:00.000Z",
+        windows: [win("five_hour", 99.999)],
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports exactly the windows at or above the cap", () => {
+    const windows = [win("five_hour", 42), win("seven_day", 100), win("seven_day_fable", 100)];
+    expect(
+      exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows }).map((w) => w.id),
+    ).toEqual(["seven_day", "seven_day_fable"]);
   });
 });

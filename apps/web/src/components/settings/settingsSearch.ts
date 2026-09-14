@@ -60,6 +60,7 @@ export interface SettingsSearchItem {
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresSubagentBackendThreadModes?: boolean;
   readonly requiresCrew?: boolean;
+  readonly requiresAllowSpendingCredits?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -71,6 +72,7 @@ export interface SettingsSearchAvailability {
   readonly hasThreadAutoSettlement: boolean;
   readonly hasSubagentBackendThreadModes: boolean;
   readonly hasCrew: boolean;
+  readonly hasAllowSpendingCredits: boolean;
 }
 
 /**
@@ -345,6 +347,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["cursor subagents offload dispatch master switch thread"],
     requiresSubagentBackendThreadModes: true,
+  },
+  {
+    id: "allow-spending-credits",
+    title: "Allow to spend credits",
+    to: "/settings/general",
+    searchTerms: ["credits spend usage limit 100% stop pause provider budget"],
+    requiresAllowSpendingCredits: true,
   },
   {
     id: "continue-threads-after-server-update",
@@ -939,7 +948,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
-      (!item.requiresCrew || availability.hasCrew),
+      (!item.requiresCrew || availability.hasCrew) &&
+      (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits),
   );
 }
 

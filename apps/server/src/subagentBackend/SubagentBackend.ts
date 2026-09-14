@@ -45,9 +45,11 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
+import { cursorOffloadBlockedReason } from "../provider/creditSpendGuard.ts";
 import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
+import { readCursorUsage } from "./cursorUsageRead.ts";
 import {
   THREAD_BACKEND_MAX_FILE_NAME_LENGTH,
   threadBackendFileName,
@@ -327,6 +329,17 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
 
 export const MASTER_OFF_REASON = "Subagent offload is switched off in Settings.";
 
+/** Reads Cursor's usage (cached 60s, never fails) and asks whether offload is blocked. */
+const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(function* (
+  settings: ServerSettings,
+) {
+  const usage = yield* readCursorUsage().pipe(Effect.orElseSucceed(() => null));
+  return cursorOffloadBlockedReason({
+    allowSpendingCredits: settings.allowSpendingCredits,
+    cursorUsedPercent: usage?.usedPercent ?? null,
+  });
+});
+
 /**
  * The one truth table every per-thread writer uses. Master off beats everything;
  * `"inherit"` and an absent entry are the same thing; `"on"` reuses the global Cursor
@@ -340,10 +353,14 @@ export const resolveThreadBackend = Effect.fn("subagentBackend.resolveThread")(f
   readonly settings: ServerSettings;
   readonly threadId: ThreadId;
   readonly global: PersistedBackend;
+  readonly creditsBlockedReason: string | null;
 }) {
   const { settings, threadId, global } = input;
   if (settings.subagentBackendEnabled === false) {
     return { ...OFF, degraded: MASTER_OFF_REASON } satisfies PersistedBackend;
+  }
+  if (input.creditsBlockedReason !== null) {
+    return { ...OFF, degraded: input.creditsBlockedReason } satisfies PersistedBackend;
   }
   const mode = subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId);
   if (mode === "off") return OFF;
@@ -448,10 +465,11 @@ const reconcileThreadBackendsBody = Effect.fn("subagentBackend.reconcileThreads"
     for (const session of sessions) threadIds.add(session.threadId);
   }
   yield* ensureThreadsDir(subagentThreadsDir);
+  const creditsBlockedReason = yield* readCreditsBlockedReason(settings);
   yield* Effect.forEach(
     threadIds,
     (threadId) =>
-      resolveThreadBackend({ settings, threadId, global }).pipe(
+      resolveThreadBackend({ settings, threadId, global, creditsBlockedReason }).pipe(
         Effect.flatMap((next) => writeThreadBackendFile(subagentThreadsDir, threadId, next)),
         Effect.catchCause((cause) =>
           Effect.logWarning("subagentBackend.reconcileThreads: write failed", { threadId, cause }),
@@ -511,7 +529,13 @@ export const writeThreadBackendForSession = Effect.fn("subagentBackend.writeForS
     Effect.gen(function* () {
       const settings = yield* serverSettings.getRawSettings;
       const global = yield* readBackendFile();
-      const next = yield* resolveThreadBackend({ settings, threadId, global });
+      const creditsBlockedReason = yield* readCreditsBlockedReason(settings);
+      const next = yield* resolveThreadBackend({
+        settings,
+        threadId,
+        global,
+        creditsBlockedReason,
+      });
       yield* ensureThreadsDir(subagentThreadsDir);
       yield* writeThreadBackendFile(subagentThreadsDir, threadId, next);
     }).pipe(

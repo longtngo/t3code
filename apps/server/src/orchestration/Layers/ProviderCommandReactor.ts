@@ -8,9 +8,13 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  ProviderInstanceId,
   ThreadId,
   type ProviderSession,
+  type ServerProvider,
   type RuntimeMode,
+  ServerSettingsError,
+  type ServerSettings,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -42,6 +46,7 @@ import {
   ProviderWorkspaceMissingError,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
+import { creditSpendBlockedReason } from "../../provider/creditSpendGuard.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -266,6 +271,36 @@ export function providerErrorLabelFromInstanceHint(input: {
   return providerErrorLabel(
     input.instanceId ?? input.modelSelectionInstanceId ?? input.sessionProvider,
   );
+}
+
+export function allowSpendingCreditsForReactorCreditGate(
+  getSettings: Effect.Effect<ServerSettings, ServerSettingsError>,
+): Effect.Effect<boolean | undefined> {
+  return getSettings.pipe(
+    Effect.map((settings) => settings.allowSpendingCredits),
+    Effect.catch((cause) =>
+      Effect.logWarning("credit-spend-guard.gate-unavailable", {
+        gate: "reactor",
+        stage: "settings",
+        cause,
+      }).pipe(Effect.as(undefined)),
+    ),
+  );
+}
+
+export function creditSpendRefusalForSend(input: {
+  readonly allowSpendingCredits: boolean | undefined;
+  readonly providers: readonly ServerProvider[];
+  readonly activeSessionInstanceId: ProviderInstanceId | undefined;
+}): string | null {
+  if (input.allowSpendingCredits === undefined) {
+    return null;
+  }
+  return creditSpendBlockedReason({
+    allowSpendingCredits: input.allowSpendingCredits,
+    providers: input.providers,
+    instanceId: input.activeSessionInstanceId,
+  });
 }
 
 function findProviderAdapterRequestError(
@@ -1076,6 +1111,28 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
+    const activeSessionInstanceId =
+      activeSession?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const creditRefusal = creditSpendRefusalForSend({
+      allowSpendingCredits: yield* allowSpendingCreditsForReactorCreditGate(
+        serverSettingsService.getSettings,
+      ),
+      providers: yield* providerRegistry.getProviders,
+      activeSessionInstanceId,
+    });
+    if (creditRefusal !== null) {
+      yield* Effect.logInfo("credit-spend-guard.turn-refused", {
+        threadId: input.threadId,
+        instanceId: activeSessionInstanceId,
+        reason: creditRefusal,
+        gate: "reactor",
+      });
+      return yield* new ProviderAdapterRequestError({
+        provider: providerErrorLabel(activeSession?.provider),
+        method: "thread.turn.start",
+        detail: creditRefusal,
+      });
+    }
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"

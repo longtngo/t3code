@@ -49,6 +49,10 @@ export function useAvailableSettingsSearchItems() {
         hasCrew: environments.some(
           (environment) => environment.serverConfig?.environment.capabilities.crew === true,
         ),
+        hasAllowSpendingCredits: environments.some(
+          (environment) =>
+            environment.serverConfig?.environment.capabilities.allowSpendingCredits === true,
+        ),
       }),
     [canManageLocalBackend, desktopWsl.data, desktopWsl.error, environments],
   );

@@ -2231,6 +2231,11 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.subagentBackendThreadModes === true,
     );
+  const supportsAllowSpendingCredits =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) => target.serverConfig?.environment.capabilities.allowSpendingCredits === true,
+    );
   const supportsCrew =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
@@ -2809,6 +2814,35 @@ export function GeneralSettingsPanel() {
                   updateSettings({ subagentBackendEnabled: Boolean(checked) })
                 }
                 aria-label="Subagent offload"
+              />
+            }
+          />
+        ) : null}
+
+        {supportsAllowSpendingCredits ? (
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("allow-spending-credits")}
+            description="Let providers keep working after a usage window reaches 100%. Off stops running turns on that provider, refuses new ones, and withholds Cursor subagent offload until the window resets. Only affects providers that report usage limits in Usage → Limits."
+            resetAction={
+              settings.allowSpendingCredits !== DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits ? (
+                <SettingResetButton
+                  label="allow to spend credits"
+                  onClick={() =>
+                    updateSettings({
+                      allowSpendingCredits: DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.allowSpendingCredits}
+                onCheckedChange={(checked) =>
+                  updateSettings({ allowSpendingCredits: Boolean(checked) })
+                }
+                aria-label="Allow to spend credits"
               />
             }
           />

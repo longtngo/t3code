@@ -1668,6 +1668,16 @@ export const ServerSettings = Schema.Struct({
     // explicit `"on"` enables offload.
     Schema.catchDecoding(() => Effect.succeed(Option.some({}))),
   ),
+  // When false, a provider instance whose published usage windows report 100% is blocked:
+  // running turns on it are interrupted and new ones are refused. Default true, so an
+  // environment that never touches this setting behaves exactly as before.
+  allowSpendingCredits: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+    // Same containment as `subagentBackendEnabled` above. An undecodable value reads as
+    // `true`, the default — the direction that keeps working rather than the one that
+    // silently stops every provider.
+    Schema.catchDecoding(() => Effect.succeed(Option.some(true))),
+  ),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1945,6 +1955,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // A partial record: one thread's entry merges over the map (`deepMerge`), so a
   // client patches `{ [threadId]: mode }` without resending every other thread.
   subagentBackendThreadModes: Schema.optionalKey(SubagentBackendThreadModes),
+  allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
   // `disableAuthentication` is deliberately NOT patchable. It is a startup-only switch
   // (`--disable-auth` / `T3CODE_DISABLE_AUTH`), and boot falls back to the persisted value,
   // so accepting it here let any client holding the ordinary settings-write scope turn all

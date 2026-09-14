@@ -160,6 +160,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
+      hasAllowSpendingCredits: false,
     });
 
     const gatedIds = new Set<string>([
@@ -191,6 +192,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
       hasCrew: true,
+      hasAllowSpendingCredits: false,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -210,6 +212,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
+      hasAllowSpendingCredits: false,
     });
     const with_ = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
@@ -220,6 +223,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
       hasCrew: true,
+      hasAllowSpendingCredits: true,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
     expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
@@ -228,6 +232,11 @@ describe("searchSettings", () => {
     // the flip and silently snap back.
     expect(without.some((item) => item.id === "crew")).toBe(false);
     expect(with_.some((item) => item.id === "crew")).toBe(true);
+    // The same silent-snap-back gate: an older server strips the unknown
+    // `allowSpendingCredits` key from the patch, so an ungated row would accept the flip
+    // and revert with no error — and here the direction it reverts to is "keep spending".
+    expect(without.some((item) => item.id === "allow-spending-credits")).toBe(false);
+    expect(with_.some((item) => item.id === "allow-spending-credits")).toBe(true);
   });
 
   it("keeps catalog result ids unique", () => {
@@ -323,6 +332,7 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
+      hasAllowSpendingCredits: false,
     });
     expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
     expect(searchSettings("auto-settle", available)).toHaveLength(3);
@@ -419,6 +429,7 @@ describe("auto-settlement search availability", () => {
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
+      hasAllowSpendingCredits: false,
     });
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",

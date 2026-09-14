@@ -47,6 +47,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
+  ProviderInstanceId,
   type WorkspaceMember,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
@@ -113,6 +114,7 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import { creditSpendBlockedReason } from "./provider/creditSpendGuard.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
@@ -207,6 +209,34 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
 export const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
+
+/**
+ * Which provider instance a turn start is aimed at, best-effort.
+ *
+ * Requested selection, then the live session's instance, then the thread's default — the
+ * order the reactor's own kept-session path produces. This is deliberately not
+ * `desiredInstanceId` from `ProviderCommandReactor`, which skips the session fallback and
+ * so names the wrong account whenever a live session runs on a different instance than the
+ * thread default. The reactor gate is the authoritative one; this exists so a client gets a
+ * synchronous refusal and the sidebar Queue pauses instead of draining.
+ */
+export function resolveTurnStartInstanceId(input: {
+  readonly requested: ProviderInstanceId | undefined;
+  readonly bootstrapInstanceId: ProviderInstanceId | undefined;
+  readonly shell:
+    | {
+        readonly session: { readonly providerInstanceId?: ProviderInstanceId } | null;
+        readonly modelSelection: { readonly instanceId: ProviderInstanceId };
+      }
+    | undefined;
+}): ProviderInstanceId | undefined {
+  return (
+    input.requested ??
+    input.shell?.session?.providerInstanceId ??
+    input.shell?.modelSelection.instanceId ??
+    input.bootstrapInstanceId
+  );
+}
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1393,36 +1423,103 @@ const makeWsRpcLayer = (
           });
         });
 
+      const creditSpendRefusalFor = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+      ) =>
+        Effect.gen(function* () {
+          const settings = yield* serverSettings.getSettings.pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("credit-spend-guard.gate-unavailable", {
+                gate: "ws",
+                stage: "settings",
+                cause,
+              }).pipe(Effect.as(undefined)),
+            ),
+          );
+          if (settings === undefined) {
+            return null;
+          }
+
+          const providers = yield* providerRegistry.getProviders;
+
+          const shell = yield* projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+          );
+
+          const instanceId = resolveTurnStartInstanceId({
+            requested: command.modelSelection?.instanceId,
+            bootstrapInstanceId: command.bootstrap?.createThread?.modelSelection.instanceId,
+            shell:
+              shell === undefined
+                ? undefined
+                : {
+                    session:
+                      shell.session === null
+                        ? null
+                        : {
+                            ...(shell.session.providerInstanceId !== undefined
+                              ? { providerInstanceId: shell.session.providerInstanceId }
+                              : {}),
+                          },
+                    modelSelection: { instanceId: shell.modelSelection.instanceId },
+                  },
+          });
+
+          const reason = creditSpendBlockedReason({
+            allowSpendingCredits: settings.allowSpendingCredits,
+            providers,
+            instanceId,
+          });
+          if (reason !== null) {
+            yield* Effect.logInfo("credit-spend-guard.turn-refused", {
+              threadId: command.threadId,
+              instanceId,
+              reason,
+              gate: "ws",
+            });
+          }
+          return reason;
+        });
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
-      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : dispatchFromClient(normalizedCommand).pipe(
-                Effect.tap(({ sequence }) =>
-                  // Returning from thread.create is the handoff point at which
-                  // clients may start resources for the new incarnation. Use
-                  // its event sequence as the exact deletion-cleanup fence.
-                  normalizedCommand.type === "thread.create"
-                    ? threadDeletionReactor.drainThrough(sequence)
-                    : Effect.void,
-                ),
-                Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                ),
-              );
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          if (normalizedCommand.type === "thread.turn.start") {
+            const blocked = yield* creditSpendRefusalFor(normalizedCommand);
+            if (blocked !== null) {
+              return yield* new OrchestrationDispatchCommandError({ message: blocked });
+            }
+          }
 
-        return startup.enqueueCommand(dispatchEffect).pipe(
-          Effect.mapError((cause) =>
-            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-          ),
-          // Arm recovery only AFTER the stop is accepted: adopting a stop that
-          // never dispatched would leave the watchdog waiting for a session
-          // teardown that is not coming.
-          Effect.tap(() => adoptForceStopForRecovery(normalizedCommand)),
-        );
-      };
+          const dispatchEffect =
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : dispatchFromClient(normalizedCommand).pipe(
+                  Effect.tap(({ sequence }) =>
+                    // Returning from thread.create is the handoff point at which
+                    // clients may start resources for the new incarnation. Use
+                    // its event sequence as the exact deletion-cleanup fence.
+                    normalizedCommand.type === "thread.create"
+                      ? threadDeletionReactor.drainThrough(sequence)
+                      : Effect.void,
+                  ),
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                  ),
+                );
+
+          return yield* startup.enqueueCommand(dispatchEffect).pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+            ),
+            // Arm recovery only AFTER the stop is accepted: adopting a stop that
+            // never dispatched would leave the watchdog waiting for a session
+            // teardown that is not coming.
+            Effect.tap(() => adoptForceStopForRecovery(normalizedCommand)),
+          );
+        });
 
       // Only clients that answer /usage-limits themselves see it in the catalogs;
       // an older client would send the injected command to the provider.

@@ -163,6 +163,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       nothing reads — an ungated row accepts the flip, has the unknown key stripped from the
       patch, and silently snaps back with no error. */
   crew: Schema.optionalKey(Schema.Boolean),
+  /** Server honours `allowSpendingCredits` and refuses turns on a provider at 100%. Absent on
+      servers from before it shipped, so clients hide the master switch rather than write a
+      setting nothing reads — an ungated row accepts the flip, has the unknown key stripped
+      from the patch, and silently snaps back with no error. */
+  allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
   /** Server serves `thread.planHistory.list`. Absent on servers from before it shipped; an
       unknown method fails as a generic request error, so clients skip the read instead. */
   threadPlanHistory: Schema.optionalKey(Schema.Boolean),

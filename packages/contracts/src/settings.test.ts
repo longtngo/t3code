@@ -1296,3 +1296,37 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
+
+describe("allow spending credits setting", () => {
+  it("defaults to allowing spend", () => {
+    expect(DEFAULT_SERVER_SETTINGS.allowSpendingCredits).toBe(true);
+  });
+
+  it("decodes a settings file written before the field existed", () => {
+    const decoded = Schema.decodeUnknownSync(ServerSettings)({});
+    expect(decoded.allowSpendingCredits).toBe(true);
+  });
+
+  it("degrades an undecodable value to the default instead of failing the document", () => {
+    // Same containment as `subagentBackendEnabled` above: a failed `ServerSettings`
+    // decode makes `loadSettingsFromDisk` keep DEFAULT_SERVER_SETTINGS and write them
+    // back, losing every unrelated setting.
+    const decoded = Schema.decodeUnknownSync(ServerSettings)({
+      allowSpendingCredits: "false",
+      enableProviderUpdateChecks: false,
+    });
+    expect(decoded.allowSpendingCredits).toBe(true);
+    expect(decoded.enableProviderUpdateChecks).toBe(false);
+  });
+
+  it("still rejects a non-boolean at the RPC boundary", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatch)({ allowSpendingCredits: "false" }),
+    ).toThrow();
+  });
+
+  it("accepts a boolean patch", () => {
+    const patch = Schema.decodeUnknownSync(ServerSettingsPatch)({ allowSpendingCredits: false });
+    expect(patch.allowSpendingCredits).toBe(false);
+  });
+});
