@@ -122,34 +122,33 @@ async function mountPanel() {
   dispatched.length = 0;
   nextResult = { _tag: "Success", value: undefined };
   const { ProjectSettingsPanel } = await import("./ProjectSettingsPanel");
-  return renderDom(<ProjectSettingsPanel projectKey="group-1" />);
-}
-
-async function selectCheckout(dom: Awaited<ReturnType<typeof mountPanel>>, key: string) {
-  const choice = dom.find(`[aria-label="Choose ${key}"]`);
-  if (!choice) throw new Error(`checkout ${key} not offered`);
-  await dom.click(choice);
+  const { SettingsScopeProvider } = await import("./SettingsScopeContext");
+  // Upstream's per-project scoped settings put `ProjectActionsSettings` behind
+  // `useSettingsScope`, which throws outside the provider. The panel itself does
+  // not read the scope; its children do.
+  return renderDom(
+    <SettingsScopeProvider search={{ project: "group-1" }} onChange={() => {}}>
+      <ProjectSettingsPanel projectKey="group-1" />
+    </SettingsScopeProvider>,
+  );
 }
 
 describe("ProjectSettingsPanel workspace repositories", () => {
-  it("lists the selected checkout's repositories, not the group representative's", async () => {
+  it("gives each checkout its own repositories, not the group representative's", async () => {
     const dom = await mountPanel();
-    expect(dom.text()).toContain("api");
-    expect(dom.text()).not.toContain("docs");
 
-    await selectCheckout(dom, "remote:proj-remote");
-
-    expect(dom.text()).toContain("docs");
-    expect(dom.text()).not.toContain("api");
+    // One row per checkout, each listing its OWN members. Passing the group
+    // representative's list to every row shows "api" twice and "docs" never.
+    expect(dom.findAll('[aria-label="Edit api"]')).toHaveLength(1);
+    expect(dom.findAll('[aria-label="Edit docs"]')).toHaveLength(1);
   });
 
-  it("detaching writes the shortened list to the selected checkout", async () => {
+  it("detaching writes the shortened list to that checkout, not to the group", async () => {
     const dom = await mountPanel();
-    await selectCheckout(dom, "remote:proj-remote");
 
     await dom.click(dom.find('[aria-label="Detach docs"]'));
 
-    // The payload is the assertion: the checkout the user has selected, and the member actually
+    // The payload is the assertion: the checkout the member belongs to, and the member actually
     // removed. Scoping the row to the representative sends `proj-local`; fanning the write out
     // over the group sends two.
     expect(dispatched).toEqual([
@@ -157,20 +156,17 @@ describe("ProjectSettingsPanel workspace repositories", () => {
     ]);
   });
 
-  it("does not resurrect an abandoned edit when the checkout is switched back", async () => {
+  it("keeps each checkout's editor state to itself", async () => {
     const dom = await mountPanel();
+
     await dom.click(dom.find('[aria-label="Edit api"]'));
-    expect(dom.text()).toContain("Save changes");
 
-    await selectCheckout(dom, "remote:proj-remote");
-    await selectCheckout(dom, "local:proj-local");
-
-    // The round trip is the assertion, not the switch away. Without the remount key the control
-    // keeps `editingId` pointing at "api" the whole time, so coming back re-resolves it and the
-    // edit form the user walked away from reopens unasked. Asserting only on the switch away
-    // passes either way, because `editing` resolves to null against the other checkout's list.
-    expect(dom.text()).toContain("Attach");
-    expect(dom.text()).not.toContain("Save changes");
+    // Exactly one editor, in the checkout whose member was clicked. A shared
+    // `editingId` - or both rows fed the same member list - opens two.
+    expect(
+      dom.findAll("button").filter((button) => button.textContent?.trim() === "Save changes"),
+    ).toHaveLength(1);
+    expect(dom.find('[aria-label="Edit docs"]')).not.toBeNull();
   });
 
   it("keeps the editor open when a save fails, and closes it when one succeeds", async () => {

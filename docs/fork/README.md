@@ -83,6 +83,12 @@ asserts. Retargeted to 58/59 with a `sqlite_master` control asserting
 `projection_thread_pull_requests` is ABSENT at 58. The tell that this is due: any arriving
 migration whose test names an id below the fork's current maximum.
 
+The 36th reconcile made it three in a row: upstream's `051_ProjectionThreadMessageContext`
+(the composer context records) became applied id **60**, and its test ran
+`toMigrationInclusive: 50` then `51`. Retargeted to 59/60 with a `PRAGMA table_info` control
+asserting `projection_thread_messages.context_json` is ABSENT at 59. The manifest now holds 59
+entries, ids unique and monotonic, max 60.
+
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
 in a comment above its import in `Migrations.ts`; keep that up when adding one.
@@ -322,11 +328,20 @@ upstream's gear.
 commits on `origin/main` since it was created — and it now holds the fork's only multi-repo mount on the
 default sidebar. This is the FORK-LOSS direction: an upstream rewrite of that file drops the row
 silently, and nothing about the deletion shows up as a conflict. The tripwire is
-`ProjectSettingsPanel.dom.test.tsx`, whose four tests fail if the row goes, is scoped to the group
-instead of the selected checkout, loses its remount key, or stops honouring the write's result.
+`ProjectSettingsPanel.dom.test.tsx`, whose tests fail if the row goes, is fed the group
+representative's member list instead of each checkout's own, or stops honouring the write's result.
 Do not delete that file to resolve a merge.
 
-Scope of the row: `members` is a field on the **physical project**, so it writes to the selected
+**Changed at the 36th reconcile:** upstream's per-project scoped settings rewrite removed the
+checkout `Select` the fork's row used to hang off. The row is now rendered **once per checkout**,
+each labelled by its environment and workspace root, each with its own
+`WorkspaceMembersControl` keyed by `physicalProjectKey`. Same guarantee, no fork-only selector.
+Two consequences: the panel's children now read `useSettingsScope`, so any test mounting
+`ProjectSettingsPanel` must wrap it in `SettingsScopeProvider` or `ProjectActionsSettings` throws;
+and the old "does not resurrect an abandoned edit when the checkout is switched back" test is gone
+with the switching, replaced by one asserting a single open editor.
+
+Scope of the row: `members` is a field on the **physical project**, so each row writes to its own
 checkout and must never go through `updateAllMembers`. `LegacySidebar.tsx` keeps its own
 plainly-labelled "Workspace repositories" dialog; that surface is opt-in and unchanged.
 
@@ -404,6 +419,14 @@ fork's `realPathNearestAncestor` realpaths the nearest existing ancestor and re-
 tail. Not test-only: a symlinked project root hits the same branch in production. The adapter also
 carries the three fork-only `ProviderAdapterShape` members (`refreshAccountUsage`,
 `withdrawQueuedTurn`, `appendSessionNote`) as constant stubs, like the other ACP adapters.
+
+**Recurred at the 36th reconcile**, in a file byte-identical to upstream:
+`apps/server/src/usage/UsageService.test.ts` makes its home with `mkdtemp` and asserts against
+`source.fingerprint.resolvedHomePath`, which the service resolves. On macOS the fixture path is
+`/var/...` and the reported one `/private/var/...`, so the include fails — and the NEXT test in the
+file then hangs to its 120 s timeout waiting on a scan that never matches, which reads like a
+second, unrelated defect. Upstream's CI is Linux, so this lands green there and red here. Fix it at
+the source: `NodeFSP.realpath(await NodeFSP.mkdtemp(...))`.
 
 ### 10. `ContextWindowMeter.logic.ts` outlives its component, on purpose
 
@@ -532,6 +555,14 @@ a field missing from the mirror silently drops edits — that is how `localModel
 is deliberate here: `t3 theme set` (`apps/server/src/cli/theme.ts`) rewrites `settings.json`
 directly and removes both keys when cleared, and clients only ever read them. They are listed in
 `deliberatelyUnpatchable` rather than mirrored, so there is one writer, not two.
+
+The 36th reconcile added a third: upstream's `projectSettingsFolded`, the one-time marker for the
+legacy per-project settings fold in `apps/server/src/serverSettings.ts`. The server writes it once
+and reads it on every load; a client patch would re-run or skip the migration. **The guard is
+fork-only — upstream has no patch-parity test — so every `ServerSettings` field upstream adds
+without a `ServerSettingsPatch` counterpart arrives as a red test in `packages/contracts`, with
+nothing in the conflict markers to warn you.** Decide writer-ownership, then either mirror it or
+list it here.
 
 ### 11. One `environmentId` for markdown rendered without a thread
 
@@ -1111,6 +1142,13 @@ outside the markers and you keep them. #11014/#11017 left behind
   git's rename detection merged into the fork's `MessagesTimeline.dom.test.tsx`. It asserts a
   `select-text` class the fork never renders, so it is a guaranteed red.
 
+The 36th reconcile hit the same shape from a new direction: #11433 turned the subagent spawn
+entry into an expandable row (`AgentSpawnRow`, `AgentSpawnMemberRow`, `AGENT_MEMBER_STATUS_LABEL`,
+`expandedSpawnEntryIds`, an `onToggleSpawnRow` handler). The fork's spawn entry is a
+call-to-action row (`AgentSpawnCtaRow`) that opens the Agents panel, so the whole thing was
+rejected — 112 lines on the sweep's DROPPED list, all deliberate. `AgentSpawnCtaRow`'s body had to
+be restored from `personal` afterwards: git had spliced upstream's component in over it.
+
 After rejecting these hunks, grep `MessagesTimeline.tsx` **and** `MessagesTimeline.dom.test.tsx`
 for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePreview`, `canExpand`,
 `expandedBody`, `stopRowToggle*`, `select-text`. General rule and its measured detection coverage:
@@ -1124,6 +1162,132 @@ that names them is the **repo-wide** typecheck — five such fixtures arrived in
 (`linkCreatedPullRequest`, `pullRequests/handlers`, `PullRequestSyncReactor`,
 `decider.pullRequests`, `projector`), all in files that merged without a single conflict marker.
 `packages/client-runtime` has the same shape for `OrchestrationThreadShell.pullRequests`.
+
+### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
+
+Until the 36th reconcile the fork carried its own revert affordance: `onArmRevertPromptRestore`,
+a `pendingRevertRestoreRef` latched before the await, and an effect that put the removed message's
+text back in the composer once it left the thread. Upstream's rewind (#11338/#11358) does the same
+job store-side — `isRevertingCheckpoint`, a `pendingRevert` confirm dialog, `waitForRevertedMessage`
+and `prepareRevertedMessageAttachments` — and it also restores **attachments**, which the fork's
+ref never did. **Upstream's was adopted whole and the fork's machinery deleted.**
+
+Two fork pieces were grafted onto it and must survive future merges:
+
+- the discarded-message count in the confirm dialog, computed from `resolveRevertRetention` and
+  rendered as "N messages and their turn diffs are discarded.";
+- `MessagesTimeline`'s control keeps the fork's "Edit from here" label and passes the message id
+  alongside the turn count (`onRevertToTurnCount(turnCount, messageId)`).
+
+`noopHeldRevert` is now `(_targetTurnCount: number, _messageId: MessageId) => {}` — a reworded
+signature, which is why the sweep lists it as BOTH-KEPT. Do not "restore" the deleted ref: an
+upstream commit touching the rewind will look like it is reverting a fork feature, and is not.
+
+### 44. Composer contexts travel as RECORDS, not as prose appended to the prompt
+
+The fork used to append terminal output, review comments, preview annotations and element
+contexts into the prompt text (`appendTerminalContextsToPrompt` and friends in
+`apps/web/src/lib/threadSend/composeTurnStart.ts`). Upstream #11265/#11442 replaced that with
+context **records** carried beside the message (`buildOutgoingMessageContext` /
+`buildMessageContext`, rendered as inline references). Upstream's model was adopted; the fork's
+prose-append helpers and `elementContexts` are gone from both send paths.
+
+**Both send paths, not one.** The composer path (`ChatView`) and the queued path
+(`queuedSend.ts` / `executeQueuedSend.ts`) each build their own context, and only the composer one
+is reachable from the UI in a normal test. A merge that updates one and not the other loses
+contexts on whichever path it missed, silently — nothing typechecks the pairing.
+
+What stayed fork-side: `composeTurnStart` still owns the title seed, now derived from the
+terminal/review/preview labels rather than the appended prose, and the trimmed prompt is still
+`assistantCitationsToPlainText(stripInlineContextReferences(trimmed)).trim()`.
+
+Legacy prose-appended messages are upgraded on read by upstream's
+`packages/shared/src/composerContextLegacy.ts`, which the fork does not touch.
+
+The change reaches the TIMELINE, not just the composer. A legacy `<review_comment>` block now
+renders as a reference chip naming the file and range (`contextWindow.test.ts L47 to L58`, a
+`lucide-message-circle`), not as a card with the comment body and its diff; a `@terminal-…`
+mention is substituted in place, inside the prompt's own paragraph, instead of being appended
+after it with a spacing span. Several fork assertions in `MessagesTimeline.dom.test.tsx` described
+the old layouts and had to be rewritten — upstream rewrote its own copies of the same two tests in
+the same commit, which is the confirmation that the new rendering is intended and not a merge
+defect. The whole render path (`reviewCommentContext.ts`, `lib/composerContextRecords.ts`,
+`composerContextPresentation.tsx`, `packages/shared/src/composerContextLegacy.ts`) is
+byte-identical to upstream; keep it that way.
+
+Two fork DOM test files went with the components upstream deleted:
+`ComposerPendingReviewComments.dom.test.tsx` and `ComposerPreviewAnnotationCards.dom.test.tsx`.
+They are the fork's own `renderDom` conversions, so they show on the sweep as 113 lines of
+FORK-LOSS. That is correct: the components they drove no longer exist.
+
+### 47. Thread notifications: the fork's stack and upstream's both ship
+
+Upstream #11481/#11569/#11570 added its own thread-completion notifications, sounds and unread
+badges. The fork already had a notification stack (web push, desktop badge, completion hooks) and
+the two are not the same feature: upstream's is in-app and per-thread, the fork's survives a
+closed tab and a screen-off phone. **Both were kept**, deliberately, rather than picking a winner.
+
+Consequence for a future merge: an upstream commit that "fixes duplicate notifications" is
+reasoning about one stack. Read which one before taking it, and check the fork's settings surface
+still exposes both toggles.
+
+### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
+
+`t3code/no-manual-effect-runtime-in-tests` permits no NET-NEW manual runners per file, via a
+per-file `maxOccurrences` ledger in `vite.config.ts`. When a merge keeps both sides' tests in one
+file, the count is the SUM and the ceiling has to be raised — the lint error names the file and
+the line, but nothing points at the ledger. The 36th reconcile: `CheckpointReactor.test.ts` went
+to 45 (fork 43 + upstream's two-arm cwd-fallback test), against upstream's ceiling of 42.
+
+**This is the fork's cheapest false-red and its most expensive one to diagnose late**, because
+lint runs before tests in `pnpm verify`: a two-error lint failure cancels the entire test step, so
+the run tells you nothing about the other 10k tests. Front-load `pnpm run lint` after the last
+merge edit.
+
+### 46. Run the gate on the PINNED Node (`^24.13.1`), not whatever `node` resolves to
+
+Every `pnpm` line in a gate log opens with `[WARN] Unsupported engine: wanted {"node":"^24.13.1"}`
+when it is not. That warning is the only tell, and it is easy to read past.
+
+Measured at the 36th reconcile on Node v26.2.0: `/[\p{L}]$/u.test("\u{10400}")` returns **false**,
+while `/\p{L}$/u` on the same string returns true — a V8 regression on a unicode property escape
+inside a character class matched against a non-BMP code point at an end anchor. It reds exactly one
+test, upstream's `composerContextLegacy.test.ts` "does not replace terminal labels embedded in
+𐐀@build:7", in a file byte-identical to `origin/main`. Node 22 and 24 both return true.
+
+A red test in a file with a **zero-line diff against upstream** is the signature: baseline it
+against the pinned runtime before believing the merge caused it.
+
+### 48. `activitiesInOrder` memoizes by ARRAY IDENTITY; upstream's tests mutate one array
+
+`apps/web/src/session-logic.ts` caches the sorted activity list in a `WeakMap` keyed by the input
+array. Its own comment states the contract: _"a caller that mutated an array and re-derived would
+see the previous order."_ Production always hands it a fresh list.
+
+Upstream's tests do not. #11433's new
+`deriveWorkLogEntries` test pushes into one array and re-derives after every push; under the fork's
+memo, every call after the first reads the FIRST snapshot, so the whole test sees one activity and
+returns zero rows. The failure reads like a broken derivation — `expected [] to have a length of
+1` — and points at fork code that is correct.
+
+When an arriving test re-derives from a mutated array, give each call its own copy
+(`deriveWorkLogEntries([...activities])`). Do not weaken the memo: it is what keeps a long
+thread's timeline from re-sorting on every render.
+
+The same shape will recur for any fork-added identity cache. The tell: a red assertion whose
+"received" value corresponds to an EARLIER state of the fixture.
+
+### 49. The General-panel catalog coverage check reads source, so a child mount looks missing
+
+`settingsSearch.test.ts` asserts every `/settings/general` catalog entry has a mounted anchor by
+grepping `SettingsPanels.tsx` for `searchableSetting("<id>")`. Upstream mounts some anchors from a
+CHILD component with a computed `SettingsSection id` — `project-defaults` in
+`ProjectDefaultsSettings.tsx`, `thread-notifications` in `NotificationSettings.tsx`. Both render in
+the General panel and both read as missing.
+
+The check now also scans the sibling components the panel imports, one level deep, and carries a
+negative control (`not-a-real-settings-anchor`) so a substring search over several whole files
+cannot silently start matching everything.
 
 ### 18. The event hub is unbounded; every consumer of it must not be
 
@@ -1384,6 +1548,22 @@ common reported all-green having checked nothing.
 any of twelve formula variants (they give 147/149/186/188); it was a mid-merge number quoted in a
 post-merge document. The same reconcile's `fork-loss` was recorded as 16 and is **18**. Re-measure
 before quoting a sweep number — the tool is one command.
+
+## Sweep numbers from the 36th reconcile
+
+93 upstream commits, 61 conflicted files, merge-base `211618fd9`. Sweep totals: **resurrected 13,
+dropped 331, fork-loss 320, both-kept 2**, every file accounted for in
+`~/reports/t3code/2026-09/2026-09-13/`. The numbers are the largest yet and almost entirely
+explained by three deliberate adoptions and one rejection: upstream's rewind replacing the fork's
+revert prompt-restore (§43), context records replacing the prose-append path (§44), the scoped
+project-settings rewrite (§6), and the rejected spawn-row expansion (§41, 112 dropped lines on its
+own). One real miss surfaced: `git apply -3` of `b1e223e2b` had errored during a reset-and-replay
+and the sweep caught 27 dropped lines in `ProjectionSnapshotQuery.test.ts`.
+
+The lesson this reconcile added: **a big DROPPED number is not the signal; an unexplained one is.**
+Triage cost here was per-file, and 36 of 37 flagged files were rewordings, rename pairs or decisions
+already made. The single real finding came from a step that had reported an error hours earlier and
+been read past.
 
 ## Sweep numbers from the 28th reconcile
 

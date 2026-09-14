@@ -841,6 +841,7 @@ export function projectEvent(
             role: payload.role,
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+            ...(payload.context !== undefined ? { context: payload.context } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             ...(payload.providerMessageId !== undefined
@@ -873,6 +874,7 @@ export function projectEvent(
                     ...(message.providerMessageId !== undefined
                       ? { providerMessageId: message.providerMessageId }
                       : {}),
+                    ...(message.context !== undefined ? { context: message.context } : {}),
                   }
                 : entry,
             )

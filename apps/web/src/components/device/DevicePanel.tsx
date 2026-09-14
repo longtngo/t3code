@@ -7,6 +7,7 @@ import type {
 import {
   ChevronLeft,
   Home,
+  PictureInPicture2,
   Power,
   RotateCcw,
   SlidersHorizontal,
@@ -18,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { closedTabFor, useClosedTabsStore } from "~/closedTabsStore";
 import { useClientSettings } from "~/hooks/useSettings";
+import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { Button } from "~/components/ui/button";
 import { DiscoveryList, DiscoveryListRow } from "~/components/ui/discovery-list";
@@ -125,6 +127,19 @@ export function DevicePanel(props: {
       .push(props.threadRef, [closedTabFor(props.surface, null)], closedTabUndoLimit);
     useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
   };
+  // Floating the device closes the panel, like the browser's floating preview.
+  const floatActive = () => {
+    if (!activeDevice) return;
+    usePreviewMiniPlayerStore.getState().open(props.threadRef, {
+      kind: "device",
+      hostId: activeDevice.hostId,
+      deviceId: activeDevice.id,
+      platform: activeDevice.platform,
+      name: activeDevice.name,
+    });
+    useRightPanelStore.getState().close(props.threadRef);
+  };
+
   const closeActive = (powerOff: boolean) => {
     if (!powerOff) {
       closeTab();
@@ -227,6 +242,9 @@ export function DevicePanel(props: {
             >
               <SlidersHorizontal />
             </Toggle>
+            <DeviceButton label="Float device over chat" onClick={floatActive}>
+              <PictureInPicture2 />
+            </DeviceButton>
             <DeviceButton label="Power off" onClick={() => closeActive(true)}>
               <Power />
             </DeviceButton>

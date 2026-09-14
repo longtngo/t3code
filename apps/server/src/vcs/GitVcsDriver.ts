@@ -1070,11 +1070,32 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         return false;
       }
 
-      yield* execute({
+      const tracked = yield* execute({
         operation,
         cwd: input.cwd,
-        args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
+        args: ["ls-files", "--cached", `--with-tree=${commitOid}`, "-z", "--", "."],
       });
+      // An empty index and checkpoint have nothing for git restore's pathspec to match.
+      if (tracked.stdout.length > 0) {
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
+        });
+      }
+      // Restoring away the last tracked file can remove a nested workspace directory.
+      yield* fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new VcsProcessExitError({
+              operation,
+              command: "git restore",
+              cwd: input.cwd,
+              exitCode: 0,
+              detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
+            }),
+        ),
+      );
       // Symmetric to capture: oversized untracked artifacts were never captured, so they must not
       // be deleted here. `git restore --worktree` leaves untracked files on disk, so recompute the
       // set and pass each as a `git clean -e` exclude — this preserves the heavy file while still
@@ -1085,11 +1106,30 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "-e",
         checkpointCleanExcludePattern(entry.path),
       ]);
-      yield* execute({
+      const cleaned = yield* execute({
         operation,
         cwd: input.cwd,
         args: ["clean", "-fd", ...cleanExcludes, "--", "."],
+        allowNonZeroExit: true,
       });
+      if (cleaned.exitCode !== 0) {
+        // Git can remove every child, then fail trying to remove './' itself.
+        const emptiedWorkspace =
+          cleaned.exitCode === 1 &&
+          /^warning: failed to remove \.\/: [^\n]+$/.test(cleaned.stderr.trim()) &&
+          (yield* fileSystem.readDirectory(input.cwd).pipe(
+            Effect.map((entries) => entries.length === 0),
+            Effect.catch(() => Effect.succeed(false)),
+          ));
+        if (!emptiedWorkspace)
+          return yield* new VcsProcessExitError({
+            operation,
+            command: "git clean",
+            cwd: input.cwd,
+            exitCode: cleaned.exitCode,
+            detail: cleaned.stderr.trim() || "Could not clean the checkpoint workspace.",
+          });
+      }
 
       const headExists = yield* hasHeadCommit(input.cwd);
       if (headExists) {

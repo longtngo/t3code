@@ -24,6 +24,9 @@ function environmentEntry(environmentId: EnvironmentId, label: string) {
       wsBaseUrl: `wss://${environmentId}.example.test`,
     }),
     profile: Option.none(),
+    // Upstream #11478 added `enabled` to the catalog entry: a saved environment
+    // can now be switched off rather than removed.
+    enabled: true,
   };
 }
 

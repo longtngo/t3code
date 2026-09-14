@@ -55,6 +55,7 @@ const decodeCursorListAvailableModelsResponse = Schema.decodeUnknownEffect(
 );
 const CURSOR_PRESENTATION = {
   displayName: "Cursor",
+  supportsConversationRollback: false,
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
   // Its adapter has no queue to take a turn back out of.

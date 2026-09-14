@@ -13,6 +13,7 @@ import {
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
+import type { OrchestrationMessageContext } from "@t3tools/contracts";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import { parseCodexFeedbackCommand } from "@t3tools/client-runtime/state/threads";
@@ -52,6 +53,7 @@ import {
 } from "../../providerInstances";
 import { isLatestTurnSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
+import { buildMessageContext } from "../composerContextRecords";
 import { composeTurnStart, type TurnStartBootstrap } from "./composeTurnStart";
 
 /** Everything a queued send reads, gathered from stores by the caller. */
@@ -88,6 +90,7 @@ export type QueuedSendPlan =
       readonly isFirstMessage: boolean;
       readonly title: string;
       readonly outgoingMessageText: string;
+      readonly messageContext?: OrchestrationMessageContext;
       readonly bootstrap: TurnStartBootstrap | undefined;
       readonly modelSelection: ModelSelection;
       readonly persistModelSelection: boolean;
@@ -118,14 +121,13 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   const prompt = draft?.prompt ?? "";
   const images = draft?.images ?? [];
   const files = draft?.files ?? [];
-  const elementContexts = draft?.elementContexts ?? [];
   const previewAnnotations = draft?.previewAnnotations ?? [];
   const reviewComments = draft?.reviewComments ?? [];
   const sendState = deriveComposerSendState({
     prompt,
     imageCount: images.length + files.length,
     terminalContexts: draft?.terminalContexts ?? [],
-    elementContextCount: elementContexts.length + previewAnnotations.length + reviewComments.length,
+    elementContextCount: previewAnnotations.length + reviewComments.length,
   });
   if (!sendState.hasSendableContent) return { kind: "empty" };
 
@@ -282,7 +284,6 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     images: [],
     files: [],
     terminalContexts: sendState.sendableTerminalContexts,
-    elementContexts,
     previewAnnotations,
     reviewComments,
     provider: selectedProvider,
@@ -302,6 +303,13 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     interactionMode,
     randomHex: snapshot.randomHex,
   });
+  // Contexts travel as records, the same shape the composer's own send builds.
+  const messageContext = buildMessageContext({
+    terminalContexts: sendState.sendableTerminalContexts,
+    reviewComments,
+    previewAnnotations,
+    attachments: [],
+  });
   if (composed.missingWorktreeBaseBranch) {
     return { kind: "refused", reason: "Select a base branch before sending in New worktree mode." };
   }
@@ -318,6 +326,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     isFirstMessage: isLocalDraftThread,
     title: composed.title,
     outgoingMessageText: composed.outgoingMessageText,
+    ...(messageContext !== undefined ? { messageContext } : {}),
     bootstrap: composed.bootstrap,
     modelSelection,
     persistModelSelection: Boolean(selectedModel),

@@ -14,7 +14,6 @@ function input(overrides: Partial<ComposeTurnStartInput> = {}): ComposeTurnStart
     images: [],
     files: [],
     terminalContexts: [],
-    elementContexts: [],
     previewAnnotations: [],
     reviewComments: [],
     provider: ProviderDriverKind.make("codex"),
@@ -134,7 +133,7 @@ describe("composeTurnStart", () => {
     expect(result.outgoingMessageText.length).toBeGreaterThan(0);
   });
 
-  it("terminal context is appended to the text and titles a text-less send", () => {
+  it("terminal context stays out of the text and titles a text-less send", () => {
     const context = {
       id: "ctx-1",
       threadId: ThreadId.make("thread-1"),
@@ -145,9 +144,12 @@ describe("composeTurnStart", () => {
       lineEnd: 4,
       text: "npm ERR! boom",
     };
+    // Upstream #11265 moved contexts out of the prompt and onto the message as
+    // records, so the terminal output must NOT be appended to the text any more;
+    // the title seed is the only thing composeTurnStart still derives from it.
     const withText = composeTurnStart(input({ terminalContexts: [context] }));
-    expect(withText.outgoingMessageText.startsWith("fix the build\n\n")).toBe(true);
-    expect(withText.outgoingMessageText).toContain("npm ERR! boom");
+    expect(withText.outgoingMessageText).toBe("fix the build");
+    expect(withText.outgoingMessageText).not.toContain("npm ERR! boom");
     const textless = composeTurnStart(
       input({ prompt: "", trimmedPrompt: "", terminalContexts: [context] }),
     );

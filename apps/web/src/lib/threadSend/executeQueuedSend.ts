@@ -77,6 +77,7 @@ export async function executeQueuedSend(
           role: "user",
           text: plan.outgoingMessageText,
           attachments: [],
+          ...(plan.messageContext !== undefined ? { context: plan.messageContext } : {}),
         },
         modelSelection: plan.modelSelection,
         titleSeed: plan.title,
@@ -101,13 +102,11 @@ export async function executeQueuedSend(
   const untouched =
     (current?.prompt ?? "").length === 0 &&
     (current?.terminalContexts.length ?? 0) === 0 &&
-    (current?.elementContexts.length ?? 0) === 0 &&
     (current?.previewAnnotations.length ?? 0) === 0 &&
     (current?.reviewComments.length ?? 0) === 0;
   if (draft && untouched) {
     store.setPrompt(target, draft.prompt);
     store.setTerminalContexts(target, draft.terminalContexts);
-    store.setElementContexts(target, draft.elementContexts);
     store.setPreviewAnnotations(target, draft.previewAnnotations);
     store.setReviewComments(target, draft.reviewComments);
   }

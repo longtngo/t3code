@@ -24,21 +24,12 @@ import type {
   DraftThreadEnvMode,
 } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
+import { type ReviewCommentContext } from "../../reviewCommentContext";
+import { formatTerminalContextLabel, type TerminalContextDraft } from "../terminalContext";
 import {
-  appendReviewCommentsToPrompt,
-  type ReviewCommentContext,
-} from "../../reviewCommentContext";
-import {
-  appendElementContextsToPrompt,
-  type ElementContextDraft,
-  formatElementContextLabel,
-} from "../elementContext";
-import { appendPreviewAnnotationPrompt } from "../previewAnnotation";
-import {
-  appendTerminalContextsToPrompt,
-  formatTerminalContextLabel,
-  type TerminalContextDraft,
-} from "../terminalContext";
+  previewAnnotationContextLabel,
+  reviewCommentContextLabel,
+} from "../composerContextRecords";
 
 /** The model-facing text: Claude effort prefixes ride in the prompt itself. */
 export function formatOutgoingPrompt(params: {
@@ -61,7 +52,6 @@ export interface ComposeTurnStartInput {
   readonly files: ReadonlyArray<ComposerFileAttachment>;
   /** Only the terminal contexts that are still sendable. */
   readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
-  readonly elementContexts: ReadonlyArray<ElementContextDraft>;
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly provider: ProviderDriverKind;
@@ -121,17 +111,10 @@ export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStar
     input.isFirstMessage && input.sendEnvMode === "worktree" && !input.thread.worktreePath;
   const baseBranchForWorktree = shouldCreateWorktree ? input.branch : null;
 
-  const messageTextWithContexts = appendElementContextsToPrompt(
-    appendTerminalContextsToPrompt(input.prompt, [...input.terminalContexts]),
-    [...input.elementContexts],
-  );
-  const messageTextWithPreviewAnnotations = input.previewAnnotations.reduce(
-    (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
-    messageTextWithContexts,
-  );
-  const messageTextForSend = appendReviewCommentsToPrompt(messageTextWithPreviewAnnotations, [
-    ...input.reviewComments,
-  ]);
+  // Contexts no longer ride in the prompt text: upstream #11265 carries them as
+  // structured context records on the message, and each caller builds those. They
+  // still seed the title below.
+  const messageTextForSend = input.prompt;
   const outgoingMessageText = formatOutgoingPrompt({
     provider: input.provider,
     model: input.model,
@@ -145,15 +128,18 @@ export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStar
     const firstImage = input.images[0];
     const firstFile = input.files[0];
     const firstTerminalContext = input.terminalContexts[0];
-    const firstElementContext = input.elementContexts[0];
+    const firstReviewComment = input.reviewComments[0];
+    const firstPreviewAnnotation = input.previewAnnotations[0];
     if (firstImage) {
       titleSeed = `Image: ${firstImage.name}`;
     } else if (firstFile) {
       titleSeed = `File: ${firstFile.name}`;
     } else if (firstTerminalContext) {
       titleSeed = formatTerminalContextLabel(firstTerminalContext);
-    } else if (firstElementContext) {
-      titleSeed = formatElementContextLabel(firstElementContext);
+    } else if (firstReviewComment) {
+      titleSeed = `Review: ${reviewCommentContextLabel(firstReviewComment)}`;
+    } else if (firstPreviewAnnotation) {
+      titleSeed = previewAnnotationContextLabel(firstPreviewAnnotation);
     } else {
       titleSeed = "New thread";
     }

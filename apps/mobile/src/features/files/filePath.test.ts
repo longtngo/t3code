@@ -8,6 +8,7 @@ import {
   isVideoPreviewFile,
   rendersFromAssetUrl,
   resolveWorkspaceRelativeFilePath,
+  fileHeaderSubtitle,
 } from "./filePath";
 
 describe("fileRoutePathSegments", () => {
@@ -69,10 +70,28 @@ describe("rendersFromAssetUrl", () => {
     expect(rendersFromAssetUrl("media/demo.mp4")).toBe(true);
     expect(rendersFromAssetUrl("assets/icon.png")).toBe(true);
     expect(rendersFromAssetUrl("reports/summary.html")).toBe(true);
+    expect(rendersFromAssetUrl("media/voice.mp3")).toBe(true);
   });
 
   it("leaves text and markdown on the source path", () => {
     expect(rendersFromAssetUrl("src/main.ts")).toBe(false);
     expect(rendersFromAssetUrl("README.md")).toBe(false);
+  });
+});
+
+describe("fileHeaderSubtitle", () => {
+  it("places a workspace file under its project", () => {
+    expect(
+      fileHeaderSubtitle("t3code", "apps/mobile/src/features/threads/fileChipMenu.test.ts"),
+    ).toBe("t3code · apps/mobile/src/features/threads");
+  });
+
+  it("shows only the directory for a host file outside the workspace", () => {
+    // It is not under the project, so naming the project there would be a lie.
+    expect(fileHeaderSubtitle("t3code", "/tmp/report.md")).toBe("/tmp");
+  });
+
+  it("shows only the project for a file at the workspace root", () => {
+    expect(fileHeaderSubtitle("t3code", "README.md")).toBe("t3code");
   });
 });

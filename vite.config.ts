@@ -137,12 +137,26 @@ export default defineConfig({
         rules: { "t3code/no-mobile-uniwind-theme-escape-hatches": "error" },
       },
       {
+        // Code that runs on Hermes. It has no ES2023 change-array-by-copy methods, and
+        // tsconfig targets ESNext, so only lint stands between a call and a fatal launch.
+        // Tests run on Node and are exempt.
+        files: [
+          "apps/mobile/src/**",
+          "packages/client-runtime/src/**",
+          "packages/contracts/src/**",
+          "packages/shared/src/**",
+        ],
+        excludeFiles: ["**/*.test.ts", "**/*.test.tsx"],
+        rules: { "t3code/no-hermes-unsupported-array-methods": "error" },
+      },
+      {
         // Reviewed native and third-party interop boundaries that cannot consume a className.
         files: [
           "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
           "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
           "apps/mobile/src/features/files/FileMarkdownPreview.tsx",
           "apps/mobile/src/features/files/SourceFileSurface.tsx",
+          "apps/mobile/src/features/files/AttachmentFileScreen.tsx",
           "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
           "apps/mobile/src/features/files/thread-file-navigator-pane.tsx",
           "apps/mobile/src/features/home/HomeHeader.tsx",
@@ -154,6 +168,7 @@ export default defineConfig({
           "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
           "apps/mobile/src/features/threads/ThreadComposer.tsx",
           "apps/mobile/src/features/threads/ThreadFeed.tsx",
+          "apps/mobile/src/features/review/ReviewCommentCard.tsx",
           "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
           "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
           "apps/mobile/src/features/threads/thread-list-items.tsx",
@@ -169,7 +184,7 @@ export default defineConfig({
       // Legacy manual Effect runners tracked as debt: no net-new occurrences.
       // Lower a ceiling when you migrate a file, and delete its entry at zero.
       ...Object.entries({
-        "apps/server/src/orchestration/Layers/CheckpointReactor.test.ts": 43, // FORK: +1
+        "apps/server/src/orchestration/Layers/CheckpointReactor.test.ts": 45, // FORK: fork + upstream tests both kept (upstream's ceiling is 42)
         "apps/server/src/orchestration/Layers/OrchestrationEngine.test.ts": 5,
         "apps/server/src/orchestration/Layers/OrchestrationReactor.test.ts": 4,
         "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts": 67, // FORK: +1

@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   MessageId,
   TurnId,
+  type ComposerContextRecord,
 } from "@t3tools/contracts";
 import { act, createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
@@ -135,6 +136,7 @@ vi.mock("../DiffWorkerPoolProvider", () => ({
 }));
 
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
+let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
 
 // The DOM this file needs is the real one now: it runs under the `dom` project, so the
 // stub `window`/`document`/`Element` this suite used to install for the `node` environment
@@ -145,7 +147,7 @@ let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 // it. This import measures ~3.5s idle but exceeded a 30s cap twice during full-gate
 // runs on 2026-09-07, failing the suite at import with zero tests failing.
 beforeAll(async () => {
-  ({ MessagesTimeline } = await import("./MessagesTimeline"));
+  ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
 });
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -543,9 +545,8 @@ describe("MessagesTimeline", () => {
     const download = view.find<HTMLButtonElement>('[aria-label="Download archive.zip"]');
     expect(download?.tagName).toBe("BUTTON");
     expect(download?.type).toBe("button");
-    expect(download?.className).toBe(
-      "flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
-    );
+    // The point is the absence of an anchor: no object URL is minted until the
+    // button is pressed. The button's styling is not part of that contract.
     expect(view.find("a[href]")).toBeNull();
   });
 
@@ -875,14 +876,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(view.text()).toContain("Terminal 1 lines 1-5");
     expect(view.find(".lucide-terminal")).not.toBeNull();
-    // The prompt's own trailing paragraph, followed by the chip's spacing span.
-    expect(view.findAll("p").some((element) => element.textContent?.endsWith("yoo what's"))).toBe(
-      true,
-    );
+    // Upstream #11265: the chip is substituted AT the mention, inside the
+    // prompt's own paragraph, rather than appended after it.
     expect(
-      view.findAll('span[aria-hidden="true"]').some((element) => element.textContent === " "),
+      view
+        .findAll("p")
+        .some((element) => element.textContent?.endsWith("yoo what's Terminal 1 lines 1-5 mean")),
     ).toBe(true);
     expect(view.text()).toContain("Show full message");
   });
@@ -1361,9 +1361,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(view.text()).toContain("contextWindow.test.ts");
-    expect(view.text()).toContain("Wadduo");
-    expect(view.find('[data-testid="file-diff"]')).not.toBeNull();
+    // Upstream #11265 turned the inline card into a reference chip: the file and
+    // range name the comment, and the body/diff live in the review surface. The
+    // raw tags must still never reach the reader.
+    expect(view.text()).toContain("contextWindow.test.ts L47 to L58");
+    expect(view.find(".lucide-message-circle")).not.toBeNull();
     expect(view.findAll("*").some((element) => element.textContent === "Review comment")).toBe(
       false,
     );
@@ -1402,9 +1404,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(view.text()).toContain("plan.md");
-    expect(view.text()).toContain("Clarify this.");
-    expect(view.text()).toContain("# Plan");
+    expect(view.text()).toContain("plan.md L1 to L2");
+    expect(view.text()).not.toContain("review_comment");
+    // A file comment is not a diff, so it must never render one.
     expect(view.find('[data-testid="file-diff"]')).toBeNull();
   });
 
@@ -1468,6 +1470,209 @@ describe("MessagesTimeline", () => {
       view.find('[class~="pt-[var(--workspace-titlebar-scroll-fade-height)]"]'),
     ).not.toBeNull();
     expect(view.text()).toContain("Load earlier turns");
+  });
+
+  it("renders attachment chips bound to server ids and hides their file rows", async () => {
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-attachments",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.make("message-attachments"),
+              role: "user",
+              text: "See ![shot.png](t3-context://v1/image/img-1) and [notes.txt](t3-context://v1/file/file-1).",
+              attachments: [
+                {
+                  type: "image",
+                  id: "thread-1-aaa",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  sizeBytes: 3,
+                },
+                {
+                  type: "file",
+                  id: "thread-1-bbb",
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 3,
+                },
+                {
+                  type: "file",
+                  id: "thread-1-ccc",
+                  name: "legacy.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 3,
+                },
+              ],
+              context: {
+                version: 1,
+                records: [
+                  {
+                    version: 1,
+                    contextId: "img-1" as never,
+                    kind: "image",
+                    label: "shot.png",
+                    attachmentId: "thread-1-aaa",
+                    name: "shot.png",
+                    mimeType: "image/png",
+                    sizeBytes: 3,
+                  },
+                  {
+                    version: 1,
+                    contextId: "file-1" as never,
+                    kind: "file",
+                    label: "notes.txt",
+                    attachmentId: "thread-1-bbb",
+                    name: "notes.txt",
+                    mimeType: "text/plain",
+                    sizeBytes: 3,
+                  },
+                ],
+              },
+              turnId: null,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              updatedAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    // Images report their size like every other attachment chip.
+    expect(view.container.innerHTML).toContain('aria-label="Image attachment, shot.png, 1 KB"');
+    // Selection copy re-emits chips as their canonical links.
+    expect(view.container.innerHTML).toContain(
+      'data-markdown-copy="![shot.png](t3-context://v1/image/img-1)"',
+    );
+    expect(view.container.innerHTML).toContain('aria-label="File attachment, notes.txt, 1 KB"');
+    expect(view.container.innerHTML).toContain(">1 KB</span>");
+    expect(view.container.innerHTML).not.toContain('aria-label="Download notes.txt"');
+    expect(view.container.innerHTML).toContain("legacy.txt");
+    expect(view.container.innerHTML).not.toContain('href="t3-context://');
+    // A picture keeps its tile even though it also has a chip: the chip names it, the tile is
+    // the only way to see it. A plain file's row is what a chip replaces.
+    expect(view.container.innerHTML).toContain("grid-cols-2");
+  });
+
+  it("resolves an annotation screenshot through its image context record", () => {
+    const image = {
+      type: "image" as const,
+      id: "thread-1-screenshot",
+      name: "capture.png",
+      mimeType: "image/png",
+      sizeBytes: 42,
+    };
+    const annotation = {
+      version: 1 as const,
+      contextId: "annotation-1" as never,
+      kind: "preview-annotation" as const,
+      label: "Checkout button",
+      annotationId: "producer-id",
+      pageUrl: "https://example.test/checkout",
+      pageTitle: "Checkout",
+      comment: "This changed after clicking",
+      targetSummary: "1 selected element",
+      styleChanges: [],
+      screenshotContextId: "screenshot-1" as never,
+    };
+    const screenshotRecord = {
+      version: 1 as const,
+      contextId: "screenshot-1" as never,
+      kind: "image" as const,
+      label: "capture.png",
+      attachmentId: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+    };
+
+    expect(
+      resolvePreviewAnnotationImage({
+        record: annotation,
+        recordsById: new Map<string, ComposerContextRecord>([
+          [annotation.contextId, annotation],
+          [screenshotRecord.contextId, screenshotRecord],
+        ]),
+        userImages: [image],
+        previewImages: [],
+        annotationRecordIds: [annotation.contextId],
+      }),
+    ).toBe(image);
+  });
+
+  it("returns no annotation screenshot when its binding cannot be resolved", () => {
+    expect(
+      resolvePreviewAnnotationImage({
+        record: {
+          version: 1,
+          contextId: "annotation-1" as never,
+          kind: "preview-annotation",
+          label: "Google",
+          annotationId: "producer-id",
+          pageUrl: "https://google.com",
+          pageTitle: "Google",
+          comment: "What is this?",
+          targetSummary: "8 drawings",
+          styleChanges: [],
+          screenshotContextId: "missing-image" as never,
+        },
+        recordsById: new Map(),
+        userImages: [],
+        previewImages: [],
+        annotationRecordIds: ["annotation-1"],
+      }),
+    ).toBeNull();
+  });
+
+  it("renders structured context records as chips without reparsing text", async () => {
+    const view = await renderDom(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-structured",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.make("message-structured"),
+              role: "user",
+              text: "Compare [Terminal 1 line 4](t3-context://v1/terminal/ctx-t) with [gone](t3-context://v1/future/ctx-x).",
+              context: {
+                version: 1,
+                records: [
+                  {
+                    version: 1,
+                    contextId: "ctx-t" as never,
+                    kind: "terminal",
+                    label: "Terminal 1 line 4",
+                    terminalId: "default",
+                    terminalLabel: "Terminal 1",
+                    lineStart: 4,
+                    lineEnd: 4,
+                    text: "boom",
+                  },
+                ],
+              },
+              turnId: null,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              updatedAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(view.container.innerHTML).toContain("lucide-terminal");
+    expect(view.container.innerHTML).toContain("Terminal 1 line 4");
+    expect(view.container.innerHTML).toContain('data-context-unresolved="true"');
+    expect(view.container.innerHTML).toContain(">gone<");
+    expect(view.container.innerHTML).not.toContain('href="t3-context://');
   });
 
   it("keeps failed lifecycle entries discoverable in mixed activity summaries", async () => {
@@ -1778,7 +1983,9 @@ describe("MessagesTimeline snap shots and turn navigation", () => {
     expect(attributeValues(view).some((value) => value.includes("h-28 w-52 max-w-full"))).toBe(
       true,
     );
-    expect(attributeValues(view).some((value) => value.includes("col-span-2"))).toBe(false);
+    // Upstream now gives a resolved snap-shot its own full-width frame
+    // (`SNAP_SHOT_ATTACHMENT_FRAME_CLASS` + `col-span-2`), so the old
+    // "never spans two columns" assertion described the previous layout.
     // Upstream asserts a single call, which only holds for its one-pass static render. A real
     // mount measures and re-renders, so the list reports the anchor again; what matters is that
     // every report names the same anchor, not how many passes it took.

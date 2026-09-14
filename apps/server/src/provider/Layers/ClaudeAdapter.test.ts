@@ -226,8 +226,11 @@ function makeHarness(config?: {
   readonly modelCatalog?: ClaudeAdapterLiveOptions["modelCatalog"];
   readonly scopedLimitNames?: ClaudeAdapterLiveOptions["scopedLimitNames"];
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
+  readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
+  readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
 }) {
   const query = new FakeClaudeQuery();
+  const queries = [query];
   let createInput:
     | {
         readonly prompt: AsyncIterable<SDKUserMessage>;
@@ -241,9 +244,12 @@ function makeHarness(config?: {
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
     // FORK: the synthetic catalog is the DEFAULT, not the only choice (registry 22).
     modelCatalog: config?.modelCatalog ?? Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+    ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
+    ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
     createQuery: (input) => {
+      if (createInput && config?.getSessionMessages) queries.push(new FakeClaudeQuery());
       createInput = input;
-      return query;
+      return queries.at(-1)!;
     },
     ...(config?.nativeEventLogger
       ? {
@@ -280,6 +286,7 @@ function makeHarness(config?: {
       Layer.provideMerge(NodeServices.layer),
     ),
     query,
+    queries,
     getLastCreateQueryInput: () => createInput,
   };
 }
@@ -8638,7 +8645,56 @@ describe("ClaudeAdapterLive", () => {
   it.effect(
     "supports rollbackThread by trimming in-memory turns and preserving earlier turns",
     () => {
-      const harness = makeHarness();
+      // Upstream's rewind reads the Claude transcript before it trims anything, so
+      // this fork test - which is about the IN-MEMORY turn list - has to supply a
+      // history whose boundaries resolve. `turnStartMessageIds` carries the turn
+      // ids as message uuids (registry 5), so the two prompts key the boundaries.
+      let firstTurnId = "";
+      let secondTurnId = "";
+      const harness = makeHarness({
+        forkSession: async () => ({ sessionId: "550e8400-e29b-41d4-a716-446655440030" }),
+        getSessionMessages: async (sessionId) => {
+          const history = [
+            {
+              type: "user" as const,
+              uuid: firstTurnId,
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              parent_agent_id: null,
+              message: { content: "first" },
+            },
+            {
+              type: "assistant" as const,
+              uuid: "assistant-1",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              parent_agent_id: null,
+              message: { content: [] },
+            },
+            {
+              type: "user" as const,
+              uuid: secondTurnId,
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              parent_agent_id: null,
+              message: { content: "second" },
+            },
+            {
+              type: "assistant" as const,
+              uuid: "assistant-2",
+              session_id: sessionId,
+              parent_tool_use_id: null,
+              parent_agent_id: null,
+              message: { content: [] },
+            },
+          ];
+          // The fork keeps everything before the removed turn and rewrites every
+          // uuid; the adapter matches the retained boundary by POSITION.
+          return sessionId.endsWith("0030")
+            ? history.slice(0, 2).map((message) => ({ ...message, uuid: `fork-${message.uuid}` }))
+            : history;
+        },
+      });
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
 
@@ -8653,6 +8709,7 @@ describe("ClaudeAdapterLive", () => {
           input: "first",
           attachments: [],
         });
+        firstTurnId = String(firstTurn.turnId);
 
         const firstCompletedFiber = yield* Stream.filter(
           adapter.streamEvents,
@@ -8679,6 +8736,7 @@ describe("ClaudeAdapterLive", () => {
           input: "second",
           attachments: [],
         });
+        secondTurnId = String(secondTurn.turnId);
 
         const secondCompletedFiber = yield* Stream.filter(
           adapter.streamEvents,
@@ -9315,6 +9373,226 @@ describe("ClaudeAdapterLive", () => {
         behavior: "completed",
         result: "compact",
       });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("rewinds a Claude turn after recovery and preserves fork boundaries", () => {
+    const forkCalls: Array<Parameters<NonNullable<ClaudeAdapterLiveOptions["forkSession"]>>> = [];
+    let firstTurnId = "";
+    let secondTurnId = "";
+    let missingBoundary = false;
+    let legacyHistory = false;
+    const harness = makeHarness({
+      forkSession: async (...args) => {
+        forkCalls.push(args);
+        return { sessionId: "550e8400-e29b-41d4-a716-446655440020" };
+      },
+      getSessionMessages: async (sessionId) => {
+        const history: Awaited<
+          ReturnType<NonNullable<ClaudeAdapterLiveOptions["getSessionMessages"]>>
+        > = [
+          {
+            type: "user",
+            uuid: firstTurnId,
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: "first" },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: [] },
+          },
+          {
+            type: "user",
+            uuid: "tool-result-1",
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: [{ type: "tool_result" }] },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1-final",
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: [] },
+          },
+          {
+            type: "user",
+            uuid: secondTurnId,
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: "second" },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-2",
+            session_id: "550e8400-e29b-41d4-a716-446655440010",
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: [] },
+          },
+          {
+            type: "user",
+            uuid: "steer",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: "steer the second turn" },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-steer",
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            message: { content: [] },
+          },
+        ];
+        return sessionId.endsWith("0020")
+          ? history.slice(0, 4).map((message) => ({ ...message, uuid: `fork-${message.uuid}` }))
+          : legacyHistory
+            ? history.slice(0, 6)
+            : missingBoundary
+              ? history.filter((message) => message.uuid !== secondTurnId)
+              : history;
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const firstTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+      firstTurnId = firstTurn.turnId;
+
+      const firstCompletedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "550e8400-e29b-41d4-a716-446655440010",
+        uuid: "result-first",
+      } as unknown as SDKMessage);
+
+      const firstCompleted = yield* Fiber.join(firstCompletedFiber);
+      assert.equal(firstCompleted._tag, "Some");
+      if (firstCompleted._tag === "Some" && firstCompleted.value.type === "turn.completed") {
+        assert.equal(String(firstCompleted.value.turnId), String(firstTurn.turnId));
+      }
+
+      const secondTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "second",
+        attachments: [],
+      });
+      secondTurnId = secondTurn.turnId;
+      // FORK: upstream sends a third message here and asserts it STEERS the running
+      // second turn. A mid-turn send queues in this adapter and opens its own turn
+      // (registry 5), so the send is dropped: the canned history still carries the
+      // steer messages as trailing non-boundary entries, which is what the boundary
+      // lookup under test has to skip.
+
+      const secondCompletedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "550e8400-e29b-41d4-a716-446655440010",
+        uuid: "result-second",
+      } as unknown as SDKMessage);
+
+      const secondCompleted = yield* Fiber.join(secondCompletedFiber);
+      assert.equal(secondCompleted._tag, "Some");
+      if (secondCompleted._tag === "Some" && secondCompleted.value.type === "turn.completed") {
+        assert.equal(String(secondCompleted.value.turnId), String(secondTurn.turnId));
+      }
+
+      const threadBeforeRollback = yield* adapter.readThread(session.threadId);
+      assert.equal(threadBeforeRollback.turns.length, 2);
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor;
+      yield* adapter.stopSession(session.threadId);
+      legacyHistory = true;
+      yield* adapter.startSession({
+        threadId: session.threadId,
+        runtimeMode: "full-access",
+        resumeCursor: {
+          threadId: session.threadId,
+          resume: "550e8400-e29b-41d4-a716-446655440010",
+          turnCount: 1,
+        },
+      });
+      const legacyOptions = harness.getLastCreateQueryInput();
+      const ambiguousLegacy = yield* adapter.rollbackThread(session.threadId, 1).pipe(Effect.flip);
+      assert.match(ambiguousLegacy.message, /exact Claude turn boundary is unavailable/);
+      assert.equal(forkCalls.length, 0);
+      assert.equal(harness.getLastCreateQueryInput(), legacyOptions);
+      assert.equal((yield* adapter.listSessions()).length, 1);
+      yield* adapter.stopSession(session.threadId);
+      legacyHistory = false;
+      yield* adapter.startSession({
+        threadId: session.threadId,
+        runtimeMode: "full-access",
+        resumeCursor: cursor,
+      });
+      missingBoundary = true;
+      const unavailable = yield* adapter.rollbackThread(session.threadId, 1).pipe(Effect.flip);
+      assert.match(unavailable.message, /exact Claude turn boundary is unavailable/);
+      assert.equal(forkCalls.length, 0);
+      missingBoundary = false;
+
+      const recoveredQuery = harness.queries.at(-1)!;
+      assert.equal(recoveredQuery.closeCalls, 0);
+      yield* adapter.rollbackThread(session.threadId, 1);
+      assert.equal(recoveredQuery.closeCalls, 1);
+      const forkOptions = harness.getLastCreateQueryInput()?.options;
+      assert.deepEqual(forkCalls, [
+        ["550e8400-e29b-41d4-a716-446655440010", { upToMessageId: "assistant-1-final" }],
+      ]);
+      assert.equal(forkOptions?.resume, "550e8400-e29b-41d4-a716-446655440020");
+      assert.equal(forkOptions?.resumeSessionAt, undefined);
+      assert.equal(forkOptions?.forkSession, undefined);
+      assert.deepEqual((yield* adapter.listSessions())[0]?.resumeCursor, {
+        threadId: session.threadId,
+        resume: "550e8400-e29b-41d4-a716-446655440020",
+        turnCount: 1,
+        turnStartMessageIds: [`fork-${firstTurnId}`],
+      });
+
+      yield* adapter.rollbackThread(session.threadId, 2);
+      const resetOptions = harness.getLastCreateQueryInput()?.options;
+      assert.equal(resetOptions?.resume, undefined);
+      assert.equal(resetOptions?.resumeSessionAt, undefined);
+      assert.equal(resetOptions?.forkSession, undefined);
+      assert.ok(resetOptions?.sessionId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

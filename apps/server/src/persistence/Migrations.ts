@@ -139,6 +139,10 @@ import Migration0058 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 // the fork already deployed ids 33-58, so it takes the next free id (59) rather
 // than its filename number.
 import Migration0059 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+// Upstream's 051 (projection_thread_messages.context_json, composer context records)
+// arrives after the fork already deployed ids 33-59, so it takes the next free id (60)
+// rather than its filename number.
+import Migration0060 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -209,6 +213,7 @@ export const migrationEntries = [
   [57, "ProjectionThreadActivityKindIndex", Migration0057],
   [58, "ProjectionThreadsActiveOrderKey", Migration0058],
   [59, "ProjectionThreadPullRequests", Migration0059],
+  [60, "ProjectionThreadMessageContext", Migration0060],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

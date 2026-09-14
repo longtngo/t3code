@@ -853,17 +853,11 @@ const make = Effect.gen(function* () {
       thread,
       projects: revertProjects,
       preferSessionRuntime: true,
-    });
-    if (!checkpointCwd) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail:
-          "No git workspace is available for this thread. Reverting needs its project directory to be a git repository.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
+    }).pipe(
+      Effect.catch((error) =>
+        event.payload.restoreFiles === false ? Effect.succeed(undefined) : Effect.fail(error),
+      ),
+    );
 
     const currentTurnCount = thread.checkpoints.reduce(
       (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
@@ -883,93 +877,109 @@ const make = Effect.gen(function* () {
     const targetCheckpoint = thread.checkpoints.find(
       (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
     );
-    const targetCheckpointRef =
-      event.payload.turnCount === 0
-        ? checkpointRefForThreadTurn(event.payload.threadId, 0)
-        : targetCheckpoint?.checkpointRef;
-
-    // Ordered before the member guard deliberately. A checkpoint missing from
-    // the read model gives the guard nothing to compare against, and its
-    // "nothing recorded" answer is *permission* — so the guard must only ever
-    // run on a checkpoint that was actually found.
-    if (!targetCheckpointRef) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
 
     yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
 
-    // Checkpoints snapshot the staging repository only. Restoring it while a
-    // member repository has moved leaves an inconsistent tree behind a UI that
-    // implies a clean undo, so the revert is refused and the repositories are
-    // named — the user has to know which checkouts to deal with by hand.
-    const revertMembers = revertProjects[0]?.members ?? [];
-    const isTurnZero = event.payload.turnCount === 0;
-    // Keyed on both sides. The live list alone made detaching every repository
-    // the one way to skip this check, while detaching just one refused the
-    // revert - see `shouldCheckMemberDrift`.
-    if (
-      shouldCheckMemberDrift({
-        isTurnZero,
-        liveMemberCount: revertMembers.length,
-        recordedMemberCount: targetCheckpoint?.memberStates?.length ?? 0,
-      })
-    ) {
-      // Turn 0 has no recorded baseline to compare against, so it asks a
-      // different question — see `resolveTurnZeroDrift`.
-      const drift = isTurnZero
-        ? resolveTurnZeroDrift(
-            yield* Effect.forEach(revertMembers, (member) =>
-              memberBranches
-                .inspect({
-                  cwd: member.path,
-                  integrationBranch: member.integrationBranch,
-                  threadId: event.payload.threadId,
-                })
-                .pipe(Effect.map((report) => ({ memberId: member.id, state: report.state }))),
-            ),
-          )
-        : resolveCheckpointDrift(
-            targetCheckpoint?.memberStates,
-            yield* memberBranches.readCheckpointStates(revertMembers),
-          );
-      if (!isCheckpointComplete(drift)) {
+    if (event.payload.restoreFiles !== false) {
+      if (!checkpointCwd) {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
-          detail: describeCheckpointDrift(
-            drift,
-            (memberId) => revertMembers.find((m) => m.id === memberId)?.title ?? memberId,
-          ),
+          detail:
+            "No git workspace is available for this thread. Reverting needs its project directory to be a git repository.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
         return;
       }
-    }
 
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: checkpointCwd,
-      checkpointRef: targetCheckpointRef,
-      fallbackToHead: event.payload.turnCount === 0,
-    });
-    if (!restored) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
+      const targetCheckpointRef =
+        event.payload.turnCount === 0
+          ? checkpointRefForThreadTurn(event.payload.threadId, 0)
+          : thread.checkpoints.find(
+              (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
+            )?.checkpointRef;
 
-    // Refresh the workspace entry index so the @-mention file picker
-    // reflects the reverted filesystem state.
-    yield* workspaceEntries.refresh(checkpointCwd);
+      // Ordered before the member guard deliberately. A checkpoint missing from
+      // the read model gives the guard nothing to compare against, and its
+      // "nothing recorded" answer is *permission* — so the guard must only ever
+      // run on a checkpoint that was actually found.
+      if (!targetCheckpointRef) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      // Checkpoints snapshot the staging repository only. Restoring it while a
+      // member repository has moved leaves an inconsistent tree behind a UI that
+      // implies a clean undo, so the revert is refused and the repositories are
+      // named — the user has to know which checkouts to deal with by hand.
+      const revertMembers = revertProjects[0]?.members ?? [];
+      const isTurnZero = event.payload.turnCount === 0;
+      // Keyed on both sides. The live list alone made detaching every repository
+      // the one way to skip this check, while detaching just one refused the
+      // revert - see `shouldCheckMemberDrift`.
+      if (
+        shouldCheckMemberDrift({
+          isTurnZero,
+          liveMemberCount: revertMembers.length,
+          recordedMemberCount: targetCheckpoint?.memberStates?.length ?? 0,
+        })
+      ) {
+        // Turn 0 has no recorded baseline to compare against, so it asks a
+        // different question — see `resolveTurnZeroDrift`.
+        const drift = isTurnZero
+          ? resolveTurnZeroDrift(
+              yield* Effect.forEach(revertMembers, (member) =>
+                memberBranches
+                  .inspect({
+                    cwd: member.path,
+                    integrationBranch: member.integrationBranch,
+                    threadId: event.payload.threadId,
+                  })
+                  .pipe(Effect.map((report) => ({ memberId: member.id, state: report.state }))),
+              ),
+            )
+          : resolveCheckpointDrift(
+              targetCheckpoint?.memberStates,
+              yield* memberBranches.readCheckpointStates(revertMembers),
+            );
+        if (!isCheckpointComplete(drift)) {
+          yield* appendRevertFailureActivity({
+            threadId: event.payload.threadId,
+            turnCount: event.payload.turnCount,
+            detail: describeCheckpointDrift(
+              drift,
+              (memberId) => revertMembers.find((m) => m.id === memberId)?.title ?? memberId,
+            ),
+            createdAt: now,
+          }).pipe(Effect.catch(() => Effect.void));
+          return;
+        }
+      }
+
+      const restored = yield* checkpointStore.restoreCheckpoint({
+        cwd: checkpointCwd,
+        checkpointRef: targetCheckpointRef,
+        fallbackToHead: event.payload.turnCount === 0,
+      });
+      if (!restored) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      // Refresh the workspace entry index so the @-mention file picker
+      // reflects the reverted filesystem state.
+      yield* workspaceEntries.refresh(checkpointCwd);
+    }
 
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     if (rolledBackTurns > 0) {
@@ -986,7 +996,7 @@ const make = Effect.gen(function* () {
       }
     }
 
-    if (staleCheckpointRefs.length > 0) {
+    if (checkpointCwd && staleCheckpointRefs.length > 0) {
       yield* checkpointStore.deleteCheckpointRefs({
         cwd: checkpointCwd,
         checkpointRefs: staleCheckpointRefs,

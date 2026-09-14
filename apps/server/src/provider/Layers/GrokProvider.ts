@@ -44,6 +44,7 @@ import { discoverGrokSkills } from "../Drivers/GrokSkills.ts";
 
 const GROK_PRESENTATION = {
   displayName: "Grok",
+  supportsConversationRollback: false,
   badgeLabel: "Early Access",
   showInteractionModeToggle: false,
   // Its adapter has no queue to take a turn back out of.
