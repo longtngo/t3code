@@ -1406,6 +1406,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                                 props.onRenameDevice?.(surface.id, event.currentTarget.value);
                                 setRenamingDevice(null);
                               }}
+                              // Keep text selection from starting a tab drag.
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onTouchStart={(event) => event.stopPropagation()}
                               onKeyDown={(event) => {
                                 event.stopPropagation();
                                 if (event.key === "Enter") event.currentTarget.blur();

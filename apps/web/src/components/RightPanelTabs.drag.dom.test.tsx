@@ -24,6 +24,7 @@ const session = (tabId: string, title: string): PreviewSessionSnapshot => ({
 const surfaces = [
   { id: "browser:tab-1" as const, kind: "preview" as const, resourceId: "tab-1" },
   { id: "browser:tab-2" as const, kind: "preview" as const, resourceId: "tab-2" },
+  { id: "device" as const, kind: "device" as const, title: "Phone" },
 ];
 
 function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () => undefined) {
@@ -56,6 +57,7 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       onAddBackground={() => undefined}
       onUndoClosedTab={() => undefined}
       onAddDevice={() => undefined}
+      onRenameDevice={() => undefined}
       liveAgentCount={0}
       liveBackgroundCount={0}
       browserAvailable
@@ -153,6 +155,35 @@ describe("RightPanelTabs drag to reorder", () => {
     await dispatch(
       document,
       new MouseEvent("mouseup", { bubbles: true, clientX: 152, clientY: 12 }),
+    );
+
+    expect(onMoveSurface).not.toHaveBeenCalled();
+  });
+
+  it("selecting text in the rename input does not move the tab", async () => {
+    const onMoveSurface = vi.fn();
+    const view = await renderTabs(onMoveSurface);
+    const tabs = tabElements(view);
+    layOutTabs(tabs);
+    const title = [...tabs[2]!.querySelectorAll("button")].find(
+      (button) => button.textContent === "Phone",
+    )!;
+    await dispatch(title, new MouseEvent("dblclick", { bubbles: true }));
+    const input = tabs[2]!.querySelector("input")!;
+
+    await dispatch(
+      input,
+      new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 250, clientY: 12 }),
+    );
+    for (const clientX of [240, 200, 160, 120, 60]) {
+      await dispatch(
+        document,
+        new MouseEvent("mousemove", { bubbles: true, clientX, clientY: 12 }),
+      );
+    }
+    await dispatch(
+      document,
+      new MouseEvent("mouseup", { bubbles: true, clientX: 60, clientY: 12 }),
     );
 
     expect(onMoveSurface).not.toHaveBeenCalled();
