@@ -29,8 +29,8 @@
 import {
   CommandId,
   DEFAULT_RUNTIME_MODE,
+  LIVE_SESSION_STATUSES,
   type OrchestrationCommand,
-  type OrchestrationSessionStatus,
   type OrchestrationThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -48,13 +48,6 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 // Session statuses meaning "a process is/was actively driving this thread".
 // Anything else (stopped/error/interrupted/null) is already a clean resting
 // state and needs no reconciliation.
-const LIVE_SESSION_STATUSES = new Set<OrchestrationSessionStatus>([
-  "idle",
-  "starting",
-  "running",
-  "ready",
-]);
-
 /** The two command variants this reconciler emits (both carry threadId + createdAt). */
 type BootReconcileCommand = Extract<
   OrchestrationCommand,

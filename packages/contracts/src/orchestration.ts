@@ -656,6 +656,14 @@ export const OrchestrationSessionStatus = Schema.Literals([
 ]);
 export type OrchestrationSessionStatus = typeof OrchestrationSessionStatus.Type;
 
+/**
+ * Statuses meaning a provider process is still driving the thread. The remaining three -
+ * `interrupted`, `stopped`, `error` - are all terminal, so anything sweeping live work (boot
+ * reconciliation, the recovery watchdog, the credit-spend guard) filters on this set.
+ */
+export const LIVE_SESSION_STATUSES: ReadonlySet<OrchestrationSessionStatus> =
+  new Set<OrchestrationSessionStatus>(["idle", "starting", "running", "ready"]);
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,

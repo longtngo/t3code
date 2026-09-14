@@ -23,8 +23,8 @@
  */
 import {
   CommandId,
+  LIVE_SESSION_STATUSES,
   MessageId,
-  type OrchestrationSessionStatus,
   type ProviderInteractionMode,
   type RuntimeMode,
   type RuntimeTaskId,
@@ -57,13 +57,6 @@ const DISPATCH_TIMEOUT = Duration.seconds(30);
 // Session statuses that mean "the SDK session is alive and could still be
 // driving the task". Anything else (stopped/error/interrupted/null) means the
 // owning session is gone, so a pending task under it is orphaned.
-const LIVE_SESSION_STATUSES = new Set<OrchestrationSessionStatus>([
-  "idle",
-  "starting",
-  "running",
-  "ready",
-]);
-
 type RecoveryReason = "prior-boot" | "dead-session" | "stale";
 
 const reasonText: Record<RecoveryReason, string> = {

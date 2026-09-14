@@ -12,6 +12,7 @@
 import {
   CommandId,
   EventId,
+  LIVE_SESSION_STATUSES,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
   type ProviderInstanceId,
@@ -50,9 +51,6 @@ type CreditSpendGuardRuntime =
   | ProviderAdapterRegistry
   | ServerConfig.ServerConfig
   | ServerSettingsService;
-
-/** Session statuses meaning a process is actively driving this thread, so its turn can spend. */
-const LIVE_SESSION_STATUSES = new Set(["idle", "starting", "running", "ready"]);
 
 const DISPATCH_TIMEOUT = Duration.seconds(30);
 
