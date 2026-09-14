@@ -91,6 +91,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { readThreadBackendFile } from "../../subagentBackend/SubagentBackend.ts";
 import { threadBackendFilePath } from "../../subagentBackend/ThreadBackendPath.ts";
@@ -2414,6 +2415,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  // FORK: read by the resume compaction dialog.
+  const serverSettings = yield* ServerSettingsService;
   // Captured optionally so the adapter's hard requirements stay unchanged: the
   // account usage poller degrades to a no-op when these aren't provided (e.g. tests).
   const httpClientOption = yield* Effect.serviceOption(HttpClient.HttpClient);
@@ -5153,6 +5156,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ) {
         if (request.dialogKind !== "resume_return") {
           return { behavior: "cancelled" as const };
+        }
+
+        // FORK: "Offer to compact threads" off answers as "Keep full history" without asking.
+        // `"continue"` rather than `"never"` so turning the setting back on restores the offer.
+        // Read per dialog so a toggle reaches live sessions; a failed read keeps the offer.
+        const offerThreadCompaction = yield* serverSettings.getRawSettings.pipe(
+          Effect.map((settings) => settings.offerThreadCompaction),
+          Effect.orElseSucceed(() => true),
+        );
+        if (!offerThreadCompaction) {
+          return { behavior: "completed" as const, result: "continue" };
         }
 
         const context = yield* Ref.get(contextRef);

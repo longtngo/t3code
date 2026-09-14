@@ -53,6 +53,10 @@ export function useAvailableSettingsSearchItems() {
           (environment) =>
             environment.serverConfig?.environment.capabilities.allowSpendingCredits === true,
         ),
+        hasOfferThreadCompaction: environments.some(
+          (environment) =>
+            environment.serverConfig?.environment.capabilities.offerThreadCompaction === true,
+        ),
       }),
     [canManageLocalBackend, desktopWsl.data, desktopWsl.error, environments],
   );

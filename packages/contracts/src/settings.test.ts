@@ -1330,3 +1330,27 @@ describe("allow spending credits setting", () => {
     expect(patch.allowSpendingCredits).toBe(false);
   });
 });
+
+describe("offer thread compaction setting", () => {
+  it("defaults on and reads a missing or undecodable value as on", () => {
+    expect(DEFAULT_SERVER_SETTINGS.offerThreadCompaction).toBe(true);
+    expect(Schema.decodeUnknownSync(ServerSettings)({}).offerThreadCompaction).toBe(true);
+    const decoded = Schema.decodeUnknownSync(ServerSettings)({
+      offerThreadCompaction: "false",
+      enableProviderUpdateChecks: false,
+    });
+    expect(decoded.offerThreadCompaction).toBe(true);
+    expect(decoded.enableProviderUpdateChecks).toBe(false);
+    expect(
+      Schema.decodeUnknownSync(ServerSettings)({ offerThreadCompaction: false })
+        .offerThreadCompaction,
+    ).toBe(false);
+  });
+
+  it("accepts a boolean patch", () => {
+    expect(
+      Schema.decodeUnknownSync(ServerSettingsPatch)({ offerThreadCompaction: false })
+        .offerThreadCompaction,
+    ).toBe(false);
+  });
+});

@@ -182,6 +182,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       // capabilities, so adding the schema field without advertising it here would
       // otherwise pass, and the Settings row would be hidden on every client.
       expect(second.capabilities.allowSpendingCredits).toBe(true);
+      expect(second.capabilities.offerThreadCompaction).toBe(true);
       expect(second.capabilities.threadPlanHistory).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),

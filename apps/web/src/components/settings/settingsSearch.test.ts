@@ -161,6 +161,7 @@ describe("searchSettings", () => {
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
       hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
     });
 
     const gatedIds = new Set<string>([
@@ -193,6 +194,7 @@ describe("searchSettings", () => {
       hasSubagentBackendThreadModes: true,
       hasCrew: true,
       hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -213,6 +215,7 @@ describe("searchSettings", () => {
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
       hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
     });
     const with_ = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
@@ -224,6 +227,7 @@ describe("searchSettings", () => {
       hasSubagentBackendThreadModes: true,
       hasCrew: true,
       hasAllowSpendingCredits: true,
+      hasOfferThreadCompaction: true,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
     expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
@@ -237,6 +241,8 @@ describe("searchSettings", () => {
     // and revert with no error — and here the direction it reverts to is "keep spending".
     expect(without.some((item) => item.id === "allow-spending-credits")).toBe(false);
     expect(with_.some((item) => item.id === "allow-spending-credits")).toBe(true);
+    expect(without.some((item) => item.id === "offer-thread-compaction")).toBe(false);
+    expect(with_.some((item) => item.id === "offer-thread-compaction")).toBe(true);
   });
 
   it("keeps catalog result ids unique", () => {
@@ -333,6 +339,7 @@ describe("searchSettings", () => {
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
       hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
     });
     expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
     expect(searchSettings("auto-settle", available)).toHaveLength(3);
@@ -430,6 +437,7 @@ describe("auto-settlement search availability", () => {
       hasSubagentBackendThreadModes: false,
       hasCrew: false,
       hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
     });
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",

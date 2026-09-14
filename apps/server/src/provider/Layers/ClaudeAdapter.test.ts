@@ -9379,6 +9379,68 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("skips the resume compaction question while the switch is off, live", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({ offerThreadCompaction: false });
+      yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        resumeCursor: { resume: "550e8400-e29b-41d4-a716-446655440000" },
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const onUserDialog = harness.getLastCreateQueryInput()?.options.onUserDialog;
+      if (!onUserDialog) return assert.fail("no onUserDialog");
+
+      // Race the answer against the event stream so a broken guard fails on the emitted
+      // question instead of hanging on a dialog nobody answers.
+      const off = yield* Effect.raceFirst(
+        Effect.promise(() =>
+          onUserDialog(
+            {
+              dialogKind: "resume_return",
+              payload: { sessionAgeMinutes: 71, estimatedTokens: 100000 },
+            },
+            { signal: new AbortController().signal, requestId: "d1" },
+          ),
+        ),
+        Stream.runHead(adapter.streamEvents),
+      );
+      assert.deepEqual(off, { behavior: "completed", result: "continue" });
+
+      yield* settings.updateSettings({ offerThreadCompaction: true });
+      // Raced too: a guard that stopped reading the setting live answers this dialog
+      // instead of asking, and must fail here rather than hang on the stream.
+      const requested = yield* Effect.raceFirst(
+        Stream.runHead(adapter.streamEvents),
+        Effect.promise(() =>
+          onUserDialog(
+            {
+              dialogKind: "resume_return",
+              payload: { sessionAgeMinutes: 145, estimatedTokens: 275123 },
+            },
+            { signal: new AbortController().signal, requestId: "d2" },
+          ),
+        ),
+      );
+      if (requested === null || "behavior" in requested) {
+        return assert.fail("dialog answered without asking");
+      }
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "user-input.requested") {
+        return assert.fail("expected user-input.requested");
+      }
+      // The head is the SECOND dialog's question: the first emitted nothing.
+      assert.match(requested.value.payload.questions[0]?.question ?? "", /2h 25m/);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("rewinds a Claude turn after recovery and preserves fork boundaries", () => {
     const forkCalls: Array<Parameters<NonNullable<ClaudeAdapterLiveOptions["forkSession"]>>> = [];
     let firstTurnId = "";

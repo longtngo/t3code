@@ -84,6 +84,7 @@ describe("shouldOfferResumeCompaction", () => {
   it("matches Claude's old-session age and context thresholds", () => {
     expect(
       shouldOfferResumeCompaction({
+        offerEnabled: true,
         provider: "claudeAgent",
         usedTokens: 100_000,
         updatedAt: "2026-08-24T10:50:00.000Z",
@@ -95,6 +96,7 @@ describe("shouldOfferResumeCompaction", () => {
   it("does not prompt for recent or smaller sessions", () => {
     expect(
       shouldOfferResumeCompaction({
+        offerEnabled: true,
         provider: "claudeAgent",
         usedTokens: 99_999,
         updatedAt: "2026-08-24T10:00:00.000Z",
@@ -103,6 +105,7 @@ describe("shouldOfferResumeCompaction", () => {
     ).toBe(false);
     expect(
       shouldOfferResumeCompaction({
+        offerEnabled: true,
         provider: "claudeAgent",
         usedTokens: 200_000,
         updatedAt: "2026-08-24T10:51:00.000Z",
@@ -111,9 +114,22 @@ describe("shouldOfferResumeCompaction", () => {
     ).toBe(false);
   });
 
+  it("does not offer when the Offer to compact threads setting is off", () => {
+    expect(
+      shouldOfferResumeCompaction({
+        offerEnabled: false,
+        provider: "claudeAgent",
+        usedTokens: 300_000,
+        updatedAt: "2026-08-24T09:00:00.000Z",
+        now,
+      }),
+    ).toBe(false);
+  });
+
   it("does not show Claude's resume prompt for another provider", () => {
     expect(
       shouldOfferResumeCompaction({
+        offerEnabled: true,
         provider: "codex",
         usedTokens: 300_000,
         updatedAt: "2026-08-24T09:00:00.000Z",

@@ -6593,6 +6593,8 @@ export default function ChatView(props: ChatViewProps) {
       pendingUserInputs.length > 0 ||
       phase === "running" ||
       !shouldOfferResumeCompaction({
+        // FORK: server-scoped "Offer to compact threads".
+        offerEnabled: settings.offerThreadCompaction,
         provider: selectedProvider,
         usedTokens: activeContextWindow.usedTokens,
         updatedAt: activeContextWindow.updatedAt,
@@ -6648,6 +6650,7 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionKey,
     resumeCompactionPermanentlyDismissed,
     selectedProvider,
+    settings.offerThreadCompaction,
   ]);
   const handleRestoreThreadBranch = useCallback(() => {
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {

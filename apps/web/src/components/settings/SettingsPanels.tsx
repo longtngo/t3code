@@ -617,6 +617,12 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Agent browser access"]
         : []),
       ...(settings.enableCrew !== DEFAULT_UNIFIED_SETTINGS.enableCrew ? ["Crew"] : []),
+      ...(settings.allowSpendingCredits !== DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits
+        ? ["Allow to spend credits"]
+        : []),
+      ...(settings.offerThreadCompaction !== DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction
+        ? ["Offer to compact threads"]
+        : []),
     ],
     [
       isTextGenerationModelDirty,
@@ -632,6 +638,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.diffColorScheme,
       settings.enableAgentBrowserAccess,
       settings.enableCrew,
+      settings.allowSpendingCredits,
+      settings.offerThreadCompaction,
       settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -800,6 +808,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       // Restored off, like every other default. Crewmates already dispatched
       // keep running; the switch only bounds new dispatches.
       enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew,
+      allowSpendingCredits: DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits,
+      offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
     });
     onRestored?.();
   }, [
@@ -2236,6 +2246,11 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.allowSpendingCredits === true,
     );
+  const supportsOfferThreadCompaction =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) => target.serverConfig?.environment.capabilities.offerThreadCompaction === true,
+    );
   const supportsCrew =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
@@ -2843,6 +2858,35 @@ export function GeneralSettingsPanel() {
                   updateSettings({ allowSpendingCredits: Boolean(checked) })
                 }
                 aria-label="Allow to spend credits"
+              />
+            }
+          />
+        ) : null}
+
+        {supportsOfferThreadCompaction ? (
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("offer-thread-compaction")}
+            description="Offer to compact a long Claude thread when you come back to it. Off keeps the full history without asking. /compact still works."
+            resetAction={
+              settings.offerThreadCompaction !== DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction ? (
+                <SettingResetButton
+                  label="offer to compact threads"
+                  onClick={() =>
+                    updateSettings({
+                      offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.offerThreadCompaction}
+                onCheckedChange={(checked) =>
+                  updateSettings({ offerThreadCompaction: Boolean(checked) })
+                }
+                aria-label="Offer to compact threads"
               />
             }
           />

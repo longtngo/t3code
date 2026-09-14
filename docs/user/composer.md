@@ -143,7 +143,8 @@ Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
 Send `/compact` in an existing conversation to reduce context usage when the
-provider supports it. Web and desktop also offer compaction from the context meter.
+provider supports it. When you return to a long, idle Claude thread, T3 Code offers to compact it
+first. Turn that off in **Settings → General → Offer to compact threads**; `/compact` still works.
 
 ## Context in your message
 

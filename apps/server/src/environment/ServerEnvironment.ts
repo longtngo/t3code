@@ -240,6 +240,7 @@ export const make = Effect.gen(function* () {
       subagentBackendThreadModes: true,
       crew: true,
       allowSpendingCredits: true,
+      offerThreadCompaction: true,
       threadPlanHistory: true,
       threadBackgroundTasks: true,
       environmentIcon: true,

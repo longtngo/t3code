@@ -61,6 +61,7 @@ export interface SettingsSearchItem {
   readonly requiresSubagentBackendThreadModes?: boolean;
   readonly requiresCrew?: boolean;
   readonly requiresAllowSpendingCredits?: boolean;
+  readonly requiresOfferThreadCompaction?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -73,6 +74,7 @@ export interface SettingsSearchAvailability {
   readonly hasSubagentBackendThreadModes: boolean;
   readonly hasCrew: boolean;
   readonly hasAllowSpendingCredits: boolean;
+  readonly hasOfferThreadCompaction: boolean;
 }
 
 /**
@@ -354,6 +356,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["credits spend usage limit 100% stop pause provider budget"],
     requiresAllowSpendingCredits: true,
+  },
+  {
+    id: "offer-thread-compaction",
+    title: "Offer to compact threads",
+    to: "/settings/general",
+    searchTerms: ["compact compaction resume context old thread prompt banner summary"],
+    requiresOfferThreadCompaction: true,
   },
   {
     id: "continue-threads-after-server-update",
@@ -949,7 +958,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
       (!item.requiresCrew || availability.hasCrew) &&
-      (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits),
+      (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
+      (!item.requiresOfferThreadCompaction || availability.hasOfferThreadCompaction),
   );
 }
 
