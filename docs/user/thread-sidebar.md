@@ -77,10 +77,11 @@ their default order until the server is updated.
 
 On web and desktop, the **Queue** section holds threads that should start once your
 active work is done. Add a thread with **Add to queue** from its menu, drag its row onto
-the **Queue** header, or use the queue button on a new-thread draft. Drag queued rows to
-change their order, and type in a queued thread's composer as usual. Drag a queued
-thread into **Pinned**, **Active**, or **Settled** to take it out of the queue there; the
-dragged row shows **Unqueue** when the drop only returns it to where it was.
+the **Queue** header, or use the queue button or the right-click (long-press on a phone)
+menu on a new-thread draft. Drag queued rows to change their order, and type in a queued
+thread's composer as usual. Drag a queued thread into **Pinned**, **Active**, or **Settled**
+to take it out of the queue there; the dragged row shows **Unqueue** when the drop only
+returns it to where it was.
 
 When no thread in **Pinned** or **Active** is working or watching background work, the
 top queued thread sends its composer message as if you had pressed Send, then returns to

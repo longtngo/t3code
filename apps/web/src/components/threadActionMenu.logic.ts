@@ -48,6 +48,12 @@ export interface ThreadActionMenuState {
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
 
+function queueMenuItem(isQueued: boolean) {
+  return isQueued
+    ? { id: "unqueue" as const, label: "Remove from queue", icon: "list-x" }
+    : { id: "queue" as const, label: "Add to queue", icon: "list-plus" };
+}
+
 /**
  * Single source for the per-thread action menu: the sidebar row's right-click
  * menu and the chat header menu both render exactly this list, so labels,
@@ -99,9 +105,7 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    state.isQueued
-      ? { id: "unqueue" as const, label: "Remove from queue", icon: "list-x" }
-      : { id: "queue" as const, label: "Add to queue", icon: "list-plus" },
+    queueMenuItem(state.isQueued === true),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
@@ -145,6 +149,22 @@ export function buildThreadActionMenuItems(
       label: "Delete",
       destructive: true,
       icon: "trash",
+    },
+  ];
+}
+
+/** Context menu for a draft row (Not started, or a queued draft): the hover buttons' actions, reachable by long-press on touch. */
+export function buildDraftActionMenuItems(input: {
+  readonly isQueued: boolean;
+}): ReadonlyArray<ContextMenuItem<"queue" | "unqueue" | "discard">> {
+  return [
+    queueMenuItem(input.isQueued),
+    {
+      id: "discard",
+      label: "Discard draft",
+      icon: "trash",
+      destructive: true,
+      separatorBefore: true,
     },
   ];
 }

@@ -151,7 +151,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
-import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
+import { buildDraftActionMenuItems, buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
@@ -828,6 +828,23 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     },
     [draftId, onToggleQueue, session],
   );
+  const handleContextMenu = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      const api = readLocalApi();
+      if (!api) return;
+      void api.contextMenu
+        .show(buildDraftActionMenuItems({ isQueued: props.queued }), {
+          x: event.clientX,
+          y: event.clientY,
+        })
+        .then((clicked) => {
+          if (clicked === "discard") onDiscard(draftId);
+          else if (clicked !== null) onToggleQueue(draftId, session);
+        });
+    },
+    [draftId, onDiscard, onToggleQueue, props.queued, session],
+  );
   if (compact) {
     return (
       <li className="list-none">
@@ -839,6 +856,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                 data-testid="sidebar-draft-row"
                 aria-label={`Draft: ${preview}`}
                 onClick={handleActivate}
+                onContextMenu={handleContextMenu}
                 className={cn(
                   "relative flex h-7 w-full cursor-pointer items-center justify-center rounded-md outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring",
                   props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
@@ -879,6 +897,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
           props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
         )}
         onClick={handleActivate}
+        onContextMenu={handleContextMenu}
         onKeyDown={handleKeyDown}
       >
         <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">

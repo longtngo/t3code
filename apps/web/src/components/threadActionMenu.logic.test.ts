@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadActionMenuItems, type ThreadActionMenuState } from "./threadActionMenu.logic";
+import {
+  buildDraftActionMenuItems,
+  buildThreadActionMenuItems,
+  type ThreadActionMenuState,
+} from "./threadActionMenu.logic";
 
 const baseState: ThreadActionMenuState = {
   branch: null,
@@ -111,5 +115,26 @@ describe("buildThreadActionMenuItems", () => {
       (item) => item.id === "archive",
     );
     expect(archiveItem?.disabled).toBe(true);
+  });
+});
+
+describe("buildDraftActionMenuItems", () => {
+  it("offers removal only for a queued draft", () => {
+    expect(buildDraftActionMenuItems({ isQueued: false }).map((item) => item.id)).toEqual([
+      "queue",
+      "discard",
+    ]);
+    expect(buildDraftActionMenuItems({ isQueued: true }).map((item) => item.id)).toEqual([
+      "unqueue",
+      "discard",
+    ]);
+  });
+
+  it("styles discard as the destructive action, set apart", () => {
+    expect(buildDraftActionMenuItems({ isQueued: false })[1]).toMatchObject({
+      label: "Discard draft",
+      destructive: true,
+      separatorBefore: true,
+    });
   });
 });
