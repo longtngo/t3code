@@ -116,6 +116,7 @@ function renderTabs(
       onCloseOtherSurfaces={() => undefined}
       onCloseSurfacesToRight={() => undefined}
       onCloseAllSurfaces={() => undefined}
+      onMoveSurface={() => undefined}
       onCopyFilePath={() => undefined}
       onAddBrowser={() => undefined}
       onAddBrowserInProfile={() => undefined}

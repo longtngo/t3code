@@ -5268,6 +5268,13 @@ export default function ChatView(props: ChatViewProps) {
       rightPanelState.surfaces,
     ],
   );
+  const moveRightPanelSurface = useCallback(
+    (surfaceId: string, toIndex: number) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().moveSurface(activeThreadRef, surfaceId, toIndex);
+    },
+    [activeThreadRef],
+  );
   const closeAllRightPanelSurfaces = useCallback(() => {
     if (!activeThreadRef) return;
     const finishClose = () => finishRightPanelSurfaceClose(rightPanelState.surfaces);
@@ -10018,6 +10025,7 @@ export default function ChatView(props: ChatViewProps) {
           onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
           onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
           onCloseAllSurfaces={closeAllRightPanelSurfaces}
+          onMoveSurface={moveRightPanelSurface}
           onCopyFilePath={copyRightPanelFilePath}
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurface}
@@ -10085,6 +10093,7 @@ export default function ChatView(props: ChatViewProps) {
             onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
             onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
+            onMoveSurface={moveRightPanelSurface}
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={() => createBrowserSurface()}
             onAddBrowserInProfile={createBrowserSurface}

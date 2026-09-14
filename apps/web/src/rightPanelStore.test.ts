@@ -1018,6 +1018,42 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("moving a surface reorders tabs and keeps the active tab", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-a");
+    store.openFile(refA, "src/index.ts");
+    store.openTerminal(refA, "term-1");
+    const ids = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
+        (surface) => surface.id,
+      );
+    const [browser, file, terminal] = ids();
+    const active = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    ).activeSurfaceId;
+
+    store.moveSurface(refA, terminal!, 0);
+    expect(ids()).toEqual([terminal, browser, file]);
+    store.moveSurface(refA, terminal!, 99);
+    expect(ids()).toEqual([browser, file, terminal]);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).activeSurfaceId,
+    ).toBe(active);
+  });
+
+  it("moving a missing surface or to its own index writes nothing", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-a");
+    store.openFile(refA, "src/index.ts");
+    const before = useRightPanelStore.getState();
+
+    store.moveSurface(refA, "browser:tab-a", 0);
+    store.moveSurface(refA, "missing", 1);
+
+    expect(useRightPanelStore.getState()).toBe(before);
+  });
+
   it("closing all surfaces closes the panel", () => {
     useRightPanelStore.getState().openBrowser(refA, "tab-a");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

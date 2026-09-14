@@ -193,6 +193,8 @@ interface RightPanelStoreState {
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeAllSurfaces: (ref: ScopedThreadRef) => void;
+  /** Moves a tab to `toIndex` in the tab strip; a missing id or unchanged index is a no-op. */
+  moveSurface: (ref: ScopedThreadRef, surfaceId: string, toIndex: number) => void;
   reconcileBrowserSurfaces: (
     ref: ScopedThreadRef,
     tabIds: readonly string[],
@@ -820,6 +822,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             };
           }),
         ),
+      moveSurface: (ref, surfaceId, toIndex) =>
+        set((state) => {
+          const current = selectThreadRightPanelState(state.byThreadKey, ref);
+          const from = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+          const to = Math.max(0, Math.min(toIndex, current.surfaces.length - 1));
+          if (from < 0 || from === to) return state;
+          return userAction(state, scopedThreadKey(ref), (thread) => {
+            const surfaces = thread.surfaces.filter((surface) => surface.id !== surfaceId);
+            surfaces.splice(to, 0, thread.surfaces[from]!);
+            return { ...thread, surfaces };
+          });
+        }),
       closeAllSurfaces: (ref) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) =>
