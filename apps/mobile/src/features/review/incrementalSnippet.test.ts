@@ -2,7 +2,7 @@ import { createHighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import typescript from "@shikijs/langs/typescript";
 import dark from "@shikijs/themes/github-dark-default";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createIncrementalSnippet } from "./incrementalSnippet";
 import { highlightCodeSnippet } from "./shikiReviewHighlighter";
@@ -17,6 +17,15 @@ const rendered = (lines: ReturnType<typeof highlighter.codeToTokensBase>) =>
 const options = { lang: "typescript", theme: "github-dark-default" };
 
 describe("incremental snippet highlighting", () => {
+  // Shiki gives up on a line after 500 ms of wall clock (`tokenizeTimeLimit`). These tests compare
+  // token boundaries, so a CPU-starved full gate must not be able to trip that limit.
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("matches full highlighting through partial lines, multiline syntax, edits and truncation", async () => {
     const highlight = createIncrementalSnippet(highlighter, options.lang, options.theme);
     const source = "/* comment\nstill comment */\nconst text = `first\nsecond ${42}`;\n";

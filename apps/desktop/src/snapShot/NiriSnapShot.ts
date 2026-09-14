@@ -67,17 +67,24 @@ class NiriConnection {
     this.socket = NodeNet.createConnection(path);
     this.socket.setEncoding("utf8");
     let pending = "";
+    let pendingBytes = 0;
     this.socket.on("data", (chunk: string) => {
+      // Count and scan only what arrived: re-measuring and re-searching the whole
+      // buffer on every chunk made a large unterminated reply quadratic.
+      let searchFrom = pending.length;
       pending += chunk;
+      pendingBytes += Buffer.byteLength(chunk);
       // Bound even an unterminated or malicious reply; ignore unrelated events without retaining them.
-      if (Buffer.byteLength(pending) > MAX_MESSAGE_BYTES) {
+      if (pendingBytes > MAX_MESSAGE_BYTES) {
         this.close(new Error("Niri returned an oversized message."));
         return;
       }
       let end: number;
-      while ((end = pending.indexOf("\n")) !== -1) {
+      while ((end = pending.indexOf("\n", searchFrom)) !== -1) {
         const line = pending.slice(0, end);
         pending = pending.slice(end + 1);
+        pendingBytes = Buffer.byteLength(pending);
+        searchFrom = 0;
         try {
           const value = decodeJson(line);
           for (const listener of this.listeners) listener(value);

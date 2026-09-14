@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { NativeReviewDiffRow } from "./nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "./nativeReviewDiffTypes";
@@ -32,6 +32,13 @@ vi.mock("@shikijs/core", async (importOriginal) => {
 vi.mock("react-native-shiki-engine", async () => {
   const { createJavaScriptRegexEngine } = await import("@shikijs/engine-javascript");
   return { isNativeEngineAvailable: () => true, createNativeEngine: createJavaScriptRegexEngine };
+});
+
+// Shiki gives up on a line after 500 ms of wall clock (`tokenizeTimeLimit`) and hands back the
+// pre-line grammar stack, so a CPU-starved full gate tokenized identical inputs differently.
+// These tests compare token boundaries: freeze the clock the limit reads.
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(0);
 });
 
 afterEach(() => {
@@ -84,24 +91,6 @@ function highlight(
 }
 
 describe("highlightNativeReviewDiffVisibleRows", () => {
-  // Shiki stops tokenizing a line after 500 ms (`tokenizeTimeLimit`) and hands back the
-  // pre-line grammar stack, so a template literal opened on that line never closes on the
-  // next. The JavaScript regex engine compiles each grammar rule on first use, and the
-  // template-literal rules are first hit here — under a CPU-starved full gate that compile
-  // alone crossed the limit and made two identical inputs tokenize differently. Pay it once,
-  // before any assertion.
-  beforeAll(async () => {
-    await highlight([
-      makeLine({
-        id: "warm-up",
-        content: "const warm = `${1}`;",
-        change: "add",
-        oldLineNumber: null,
-        newLineNumber: 1,
-      }),
-    ]);
-  });
-
   it("does not carry grammar state across hunk boundaries", async () => {
     const exportRow = makeLine({
       id: "export-row",
