@@ -78,6 +78,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getUserInputActivity: () => Effect.die("unused"),
             listThreadPlanHistory: () => Effect.die("unused"),
             listThreadBackgroundTasks: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
@@ -196,6 +197,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getUserInputActivity: () => Effect.die("unused"),
             listThreadPlanHistory: () => Effect.die("unused"),
             listThreadBackgroundTasks: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
@@ -289,6 +291,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getUserInputActivity: () => Effect.die("unused"),
             listThreadPlanHistory: () => Effect.die("unused"),
             listThreadBackgroundTasks: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
@@ -367,6 +370,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getUserInputActivity: () => Effect.die("unused"),
             listThreadPlanHistory: () => Effect.die("unused"),
             listThreadBackgroundTasks: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
@@ -430,6 +434,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getUserInputActivity: () => Effect.die("unused"),
             listThreadPlanHistory: () => Effect.die("unused"),
             listThreadBackgroundTasks: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>

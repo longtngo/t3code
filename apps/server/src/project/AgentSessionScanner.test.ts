@@ -41,6 +41,7 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
     getUserInputActivity: () => Effect.die("unused"),
     listThreadPlanHistory: () => Effect.die("unused"),
     listThreadBackgroundTasks: () => Effect.die("unused"),
+    listActivitiesByKind: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () =>
       Effect.succeed({

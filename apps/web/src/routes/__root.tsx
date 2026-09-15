@@ -18,6 +18,7 @@ import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from ".
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
+import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
@@ -27,6 +28,7 @@ import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
+import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
@@ -59,6 +61,7 @@ import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -88,7 +91,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (isHostedStaticApp(new URL(window.location.href))) {
+    if (isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-static",
@@ -154,7 +157,7 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
+  if (pathname === "/pair" || pathname === "/connect") {
     return (
       <>
         <DocumentTitleSync />
@@ -174,6 +177,7 @@ function RootRouteView() {
           <EnvironmentThemeSync />
           <GlassAppearanceSync />
           <FontAppearanceSync />
+          <CustomSnoozeDialogHost />
           <CommandPalette>
             <AppSidebarLayout>
               <Outlet />
@@ -230,8 +234,10 @@ function RootRouteView() {
           <SnapShotCoordinator />
           <ThreadNotificationCoordinator />
           <ConfirmDialogHost />
+          <CustomSnoozeDialogHost />
           <SlowRpcRequestToastCoordinator />
           <WsReconnectTimelineLog />
+          <ProjectCloneToastCoordinator />
           <HostedStaticEnvironmentBootstrap />
           {primaryEnvironmentAuthenticated ? (
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />

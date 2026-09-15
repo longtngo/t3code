@@ -89,6 +89,9 @@ The 36th reconcile made it three in a row: upstream's `051_ProjectionThreadMessa
 asserting `projection_thread_messages.context_json` is ABSENT at 59. The manifest now holds 59
 entries, ids unique and monotonic, max 60.
 
+The 37th reconcile added upstream's `052_ProjectionThreadTitleState` (#10720) as applied id **61**.
+It arrived with no migration test, so nothing needed retargeting. Manifest: 60 entries, max 61.
+
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
 in a comment above its import in `Migrations.ts`; keep that up when adding one.
@@ -1230,6 +1233,32 @@ closed tab and a screen-off phone. **Both were kept**, deliberately, rather than
 Consequence for a future merge: an upstream commit that "fixes duplicate notifications" is
 reasoning about one stack. Read which one before taking it, and check the fork's settings surface
 still exposes both toggles.
+
+### 50. Upstream's client-side message queue is rejected; the server queue owns mid-turn sends
+
+Upstream #11673 added `apps/web/src/queuedMessageStore.ts`: a mid-turn send is held in an
+in-memory per-tab store, shown as a dashed bubble, and dispatched at the next tool boundary or
+when the turn ends. On this fork a mid-turn send already queues **server-side** (invariant 5):
+durable, visible on every client, withdrawable, and opening its own turn. Keeping both would
+hold a message in the tab and then queue it again on the server, and the client intercept in
+`onSend` (`phase === "running"` -> `enqueue`) would bypass the fork's queue for every new send.
+
+Rejected whole at the 37th reconcile by reverse-applying `cc839c42b` to `ChatView.tsx`,
+`MessagesTimeline.tsx`, `MessagesTimeline.logic(.test).ts` and `docs/user/composer.md`, and
+deleting the store and its test. Most of it had merged OUTSIDE the conflict markers. The sweep
+shows ~500 DROPPED lines for this; all of them are the rejection. After a future upstream commit
+touching this queue, grep `apps/web` for `queuedMessageStore`, `QueuedComposerMessage`,
+`onSteerQueuedMessage`, `isQueuedMessageDue`: expect 0.
+
+### 51. The compact sidebar is gone upstream, and the fork's copies of its code went with it
+
+Upstream #11685 reverted its own compact (icon-collapsed) sidebar. The fork had built on it in
+`Sidebar.tsx` (a compact draft row, a snoozed-footer portal and its drag overlay, a compact
+sorting strategy), `SidebarChrome.tsx`, `SettingsSidebarNav.tsx` and `useSettings.ts`. None of
+that is a fork feature; it is removed with upstream's. What survives from the fork in those
+places is unrelated and kept: the Queue drag-out (`fromQueue`, `leavingSection`, `pushQueue`),
+the footer panels' `items-end` row (5b), and `formatRelativeTime`'s `nowMs` parameter, which the
+fork's task panels pass.
 
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 

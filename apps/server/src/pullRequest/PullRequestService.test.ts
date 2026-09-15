@@ -193,6 +193,7 @@ function makeService(input: {
       Layer.mergeAll(
         Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+          resolveLink: () => undefined,
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
         }),

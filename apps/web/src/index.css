@@ -1917,6 +1917,22 @@ code {
   color: var(--foreground);
 }
 
+/* Paragraphs and code blocks arrive in chunks while a response streams. Fade
+   each new block in so the chunk does not pop. @starting-style only applies
+   when an element is first inserted, and the rule is gated on data-streaming,
+   so opening a finished thread never replays the fade. Opacity only, one
+   shot, no layout change. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-markdown[data-streaming] > *,
+  .chat-markdown[data-streaming] .chat-markdown-shiki {
+    transition: opacity 600ms ease-out;
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+}
+
 /* Tables wrap their cell text to fit the chat column by default, so wide tables
    stay readable without truncation. word-break: normal keeps the longest word
    intact, so genuinely unbreakable content (long URLs/IDs) overflows and the

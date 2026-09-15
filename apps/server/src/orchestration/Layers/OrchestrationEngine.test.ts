@@ -443,6 +443,7 @@ describe("OrchestrationEngine", () => {
           getUserInputActivity: () => Effect.die("unused"),
           listThreadPlanHistory: () => Effect.die("unused"),
           listThreadBackgroundTasks: () => Effect.die("unused"),
+          listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),
           getSnapshot: () =>
             Effect.sync(() => {

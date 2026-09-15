@@ -256,6 +256,9 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+          ...(event.payload.titleState !== undefined
+            ? { titleState: event.payload.titleState }
+            : {}),
           // Mirrors the projector: the failure marker settles with the
           // regeneration state it belongs to, so it never outlives its attempt.
           ...(event.payload.titleRegeneration !== undefined

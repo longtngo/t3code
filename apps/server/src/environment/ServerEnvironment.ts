@@ -244,6 +244,7 @@ export const make = Effect.gen(function* () {
       threadPlanHistory: true,
       threadBackgroundTasks: true,
       environmentIcon: true,
+      projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? {

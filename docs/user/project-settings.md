@@ -47,6 +47,10 @@ Select the project and open Project to choose an icon, emoji, or image. The choi
 every checkout in the project group and appears on connected clients. Choose **Automatic** to let
 T3 Code detect an icon again.
 
+When no image is found, web and desktop show a two-character monogram with colors
+derived from the saved project name. For example, `Nebula` becomes `NA`,
+`Silver Orchard` becomes `SO`, and `M7 Forge` becomes `M7`.
+
 ## Workspace repositories
 
 A project is rooted at one checkout, but work often spans more than one repository. Attach the

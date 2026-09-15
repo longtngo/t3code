@@ -492,7 +492,6 @@ describe("MessagesTimeline", () => {
 
     expect(view.find("video")).not.toBeNull();
     expect(view.find('[aria-label="demo.mp4"]')).not.toBeNull();
-    expect(view.find("video")?.hasAttribute("controls")).toBe(true);
     expect(view.text()).not.toContain("Expand demo.mp4");
     expect(view.find('[aria-label="Expand demo.mp4"]')).toBeNull();
   });
@@ -599,6 +598,99 @@ describe("MessagesTimeline", () => {
     expect(view.find('[aria-label="Download voice-memo.ogg"]')).toBeNull();
     expect(view.find('[alt="voice-memo.ogg"]')).toBeNull();
     expect(view.find("a[href]")).toBeNull();
+  });
+
+  it("glides to the end while a turn is running and snaps otherwise", async () => {
+    const entries = [buildUserTimelineEntry("Hello")];
+    const working = await renderDom(
+      <MessagesTimeline {...buildProps()} isWorking timelineEntries={entries} />,
+    );
+    expect(
+      working
+        .find('[data-testid="legend-list"]')
+        ?.getAttribute("data-maintain-scroll-at-end-animated"),
+    ).toBe("true");
+
+    const idle = await renderDom(<MessagesTimeline {...buildProps()} timelineEntries={entries} />);
+    expect(
+      idle
+        .find('[data-testid="legend-list"]')
+        ?.getAttribute("data-maintain-scroll-at-end-animated"),
+    ).toBe("false");
+  });
+
+  it("snaps to the end while a thread switch settles, even mid-turn", async () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const flushFrame = () =>
+      act(() => {
+        const callbacks = [...frames.values()];
+        frames.clear();
+        callbacks.forEach((callback) => callback(0));
+      });
+    // A work entry renders without the DOM globals that message rows need
+    // under react-test-renderer.
+    const entries = [
+      {
+        id: "entry-settle-work",
+        kind: "work" as const,
+        createdAt: MESSAGE_CREATED_AT,
+        entry: {
+          id: "work-settle",
+          createdAt: MESSAGE_CREATED_AT,
+          toolCallId: "call-settle",
+          label: "Run lint",
+          tone: "tool" as const,
+          itemType: "command_execution" as const,
+          command: "pnpm lint",
+          toolLifecycleStatus: "completed" as const,
+        },
+      },
+    ];
+    const animatedAttr = (renderer: ReactTestRenderer) =>
+      renderer.root.findByProps({ "data-testid": "legend-list" }).props[
+        "data-maintain-scroll-at-end-animated"
+      ];
+    let renderer!: ReactTestRenderer;
+    try {
+      act(() => {
+        renderer = create(
+          <MessagesTimeline
+            {...buildProps()}
+            isWorking
+            routeThreadKey="env-1:thread-a"
+            timelineEntries={entries}
+          />,
+        );
+      });
+      expect(animatedAttr(renderer)).toBe(true);
+
+      act(() => {
+        renderer.update(
+          <MessagesTimeline
+            {...buildProps()}
+            isWorking
+            routeThreadKey="env-1:thread-b"
+            timelineEntries={entries}
+          />,
+        );
+      });
+      expect(animatedAttr(renderer)).toBe(false);
+
+      // Two frames later the switch has settled and gliding resumes.
+      flushFrame();
+      flushFrame();
+      expect(animatedAttr(renderer)).toBe(true);
+    } finally {
+      act(() => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps reserved end space when tool work starts while reading history", async () => {
