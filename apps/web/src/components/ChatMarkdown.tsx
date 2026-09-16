@@ -88,6 +88,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
+import { resolveJiraTicketLinks } from "@t3tools/shared/jiraTicketLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
@@ -168,6 +169,7 @@ import {
 import { splitFilePathPosition } from "@t3tools/client-runtime/markdown-links";
 import { languageForPath } from "../lib/codeFileTypes";
 import { rehypeChatFilePathLinks } from "../rehypeChatFilePathLinks";
+import { rehypeJiraTicketLinks } from "../rehypeJiraTicketLinks";
 import { readLocalApi } from "../localApi";
 import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "../lib/utils";
@@ -2573,6 +2575,12 @@ function useChatMarkdownState({
     }
     return metaByText;
   }, [cwd, imageBaseDir, text]);
+  const jiraBaseUrl = serverConfig?.settings.jiraBaseUrl ?? "";
+  const jiraProjectKeys = serverConfig?.settings.jiraProjectKeys ?? "";
+  const jiraTicketLinks = useMemo(
+    () => resolveJiraTicketLinks(jiraBaseUrl, jiraProjectKeys),
+    [jiraBaseUrl, jiraProjectKeys],
+  );
   // Inline code is handled by the `code` renderer above (it swaps a path-only
   // span for a chip), so this plugin only linkifies paths written in PROSE.
   const rehypePlugins = useMemo(
@@ -2582,8 +2590,11 @@ function useChatMarkdownState({
       // The fork's file-path plugin is not about raw HTML and always runs.
       ...(parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : []),
       [rehypeChatFilePathLinks, chatFilePathResolution],
+      // After file-path links as defense in depth: anchors they create are skipped. The
+      // matcher already rejects keys inside paths.
+      ...(jiraTicketLinks ? [[rehypeJiraTicketLinks, jiraTicketLinks]] : []),
     ],
-    [chatFilePathResolution, parseRawHtml],
+    [chatFilePathResolution, jiraTicketLinks, parseRawHtml],
   );
   const fileLinkParentSuffixByPath = useMemo(() => {
     const filePaths = [
@@ -3078,6 +3089,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             ? plainHastText(node)
             : undefined;
       const isPullRequestAutolink = pullRequestCopy !== undefined;
+      const jiraTicket = (props as Record<string, unknown>)["data-jira-ticket"];
       const confirmBeforeOpen = pullRequestAutolink === "reference";
       const pullRequestCandidateUrl =
         confirmBeforeOpen && href ? pullRequestCandidateUrlFromReferenceAutolink(href) : href;
@@ -3114,7 +3126,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
         <a
           {...props}
           className={cn(props.className, pullRequestAutolink === "commit" && "font-mono")}
-          data-markdown-copy={pullRequestCopy}
+          data-markdown-copy={
+            pullRequestCopy ?? (typeof jiraTicket === "string" ? jiraTicket : undefined)
+          }
           href={href}
           target={isSameDocumentLink ? undefined : "_blank"}
           rel={isSameDocumentLink ? undefined : "noopener noreferrer"}

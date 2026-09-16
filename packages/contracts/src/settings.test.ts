@@ -984,6 +984,28 @@ describe("ServerSettingsPatch string normalization", () => {
   });
 });
 
+describe("ServerSettings Jira link settings", () => {
+  it("defaults the Jira link settings to empty and keeps what was typed", () => {
+    expect(decodeServerSettings({}).jiraBaseUrl).toBe("");
+    expect(decodeServerSettings({}).jiraProjectKeys).toBe("");
+    const decoded = decodeServerSettings({
+      jiraBaseUrl: " https://acme.atlassian.net ",
+      jiraProjectKeys: "ops, DRST",
+    });
+    expect(decoded.jiraBaseUrl).toBe("https://acme.atlassian.net");
+    expect(decoded.jiraProjectKeys).toBe("ops, DRST");
+  });
+
+  it("accepts Jira link settings in a patch", () => {
+    expect(
+      Schema.decodeUnknownSync(ServerSettingsPatch)({
+        jiraBaseUrl: "https://x",
+        jiraProjectKeys: "OPS",
+      }),
+    ).toEqual({ jiraBaseUrl: "https://x", jiraProjectKeys: "OPS" });
+  });
+});
+
 describe("ServerSettings notification categories", () => {
   it("defaults every category on, so behavior is unchanged until the user opts out", () => {
     expect(decodeServerSettings({}).notificationCategories).toEqual({

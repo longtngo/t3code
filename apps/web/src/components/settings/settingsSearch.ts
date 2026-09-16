@@ -63,6 +63,7 @@ export interface SettingsSearchItem {
   readonly requiresCrew?: boolean;
   readonly requiresAllowSpendingCredits?: boolean;
   readonly requiresOfferThreadCompaction?: boolean;
+  readonly requiresJiraTicketLinks?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -77,6 +78,7 @@ export interface SettingsSearchAvailability {
   readonly hasCrew: boolean;
   readonly hasAllowSpendingCredits: boolean;
   readonly hasOfferThreadCompaction: boolean;
+  readonly hasJiraTicketLinks: boolean;
 }
 
 /**
@@ -646,6 +648,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["agent opens browser device simulator pop into view hide"],
   },
   {
+    id: "jira-ticket-links",
+    title: "Jira ticket links",
+    to: "/settings/integrations",
+    searchTerms: ["jira atlassian ticket issue key link browse project OPS"],
+    requiresJiraTicketLinks: true,
+  },
+  {
     id: "automatic-pull",
     title: "Automatically pull",
     to: "/settings/source-control",
@@ -964,7 +973,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
       (!item.requiresCrew || availability.hasCrew) &&
       (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
-      (!item.requiresOfferThreadCompaction || availability.hasOfferThreadCompaction),
+      (!item.requiresOfferThreadCompaction || availability.hasOfferThreadCompaction) &&
+      (!item.requiresJiraTicketLinks || availability.hasJiraTicketLinks),
   );
 }
 

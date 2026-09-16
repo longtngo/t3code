@@ -41,6 +41,10 @@ on each selected environment, and reset returns to the environment's shared list
 For workspace mode, a project's `t3.json` preference applies when the project has no override.
 Browser access changes apply when an agent session next starts.
 
+The **Jira ticket links** section in Integrations turns ticket keys such as OPS-1234 in chats and
+documents into links. Enter your site URL and comma-separated project keys. Keys only link
+when written in capitals in a chat or file. These settings apply to the whole environment.
+
 ## Project icons
 
 Select the project and open Project to choose an icon, emoji, or image. The choice applies to

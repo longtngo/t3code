@@ -241,6 +241,7 @@ export const make = Effect.gen(function* () {
       crew: true,
       allowSpendingCredits: true,
       offerThreadCompaction: true,
+      jiraTicketLinks: true,
       threadPlanHistory: true,
       threadBackgroundTasks: true,
       environmentIcon: true,

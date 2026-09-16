@@ -170,6 +170,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
   /** Server honours `offerThreadCompaction`. Same gate as `allowSpendingCredits` above. */
   offerThreadCompaction: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `jiraBaseUrl` and `jiraProjectKeys`. Same gate as `allowSpendingCredits` above. */
+  jiraTicketLinks: Schema.optionalKey(Schema.Boolean),
   /** Server serves `thread.planHistory.list`. Absent on servers from before it shipped; an
       unknown method fails as a generic request error, so clients skip the read instead. */
   threadPlanHistory: Schema.optionalKey(Schema.Boolean),

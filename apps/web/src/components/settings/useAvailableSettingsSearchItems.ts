@@ -63,6 +63,10 @@ export function useAvailableSettingsSearchItems() {
           (environment) =>
             environment.serverConfig?.environment.capabilities.offerThreadCompaction === true,
         ),
+        hasJiraTicketLinks: environments.some(
+          (environment) =>
+            environment.serverConfig?.environment.capabilities.jiraTicketLinks === true,
+        ),
       }),
     [
       canManageLocalBackend,

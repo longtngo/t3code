@@ -1,6 +1,11 @@
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import { imageMimeType } from "@t3tools/shared/image";
+import {
+  findJiraTicketMatches,
+  jiraTicketUrl,
+  type JiraTicketLinks,
+} from "@t3tools/shared/jiraTicketLinks";
 import { videoMimeType } from "@t3tools/shared/video";
 /**
  * Every accent shares a lightness so no kind reads heavier than another; only hue carries
@@ -380,6 +385,32 @@ function decorateSkillRuns(
   }
 
   return decorated;
+}
+
+function decorateJiraRuns(
+  runs: ReadonlyArray<NativeMarkdownTextRun>,
+  jiraLinks: JiraTicketLinks | null,
+): ReadonlyArray<NativeMarkdownTextRun> {
+  if (jiraLinks === null) return runs;
+  return runs.flatMap((run) => {
+    if (run.code || run.href || run.fileIcon || run.skillName || run.role === "code-block") {
+      return [run];
+    }
+    const matches = findJiraTicketMatches(run.text, jiraLinks);
+    if (matches.length === 0) return [run];
+    const decorated: NativeMarkdownTextRun[] = [];
+    let cursor = 0;
+    for (const match of matches) {
+      if (match.start > cursor) {
+        decorated.push({ ...run, text: run.text.slice(cursor, match.start) });
+      }
+      // No externalHost: that run renders and copies a "◉ " prefix, and a key reads as itself.
+      decorated.push({ ...run, text: match.key, href: jiraTicketUrl(jiraLinks, match.key) });
+      cursor = match.end;
+    }
+    if (cursor < run.text.length) decorated.push({ ...run, text: run.text.slice(cursor) });
+    return decorated;
+  });
 }
 
 function decorateMentionRuns(runs: ReadonlyArray<NativeMarkdownTextRun>) {
@@ -945,6 +976,7 @@ export function nativeMarkdownChunkSpacing(
 export function nativeMarkdownDocumentRuns(
   node: MarkdownNode,
   skills: ReadonlyArray<SelectableMarkdownSkill> = [],
+  jiraLinks: JiraTicketLinks | null = null,
 ): ReadonlyArray<NativeMarkdownTextRun> {
   const runs = appendDocumentBlock([], node);
   while (runs.length > 0) {
@@ -960,5 +992,6 @@ export function nativeMarkdownDocumentRuns(
       runs[lastIndex] = { ...last, text };
     }
   }
-  return decorateMentionRuns(decorateSkillRuns(runs, skills));
+  // Mentions first: a file mention may contain a key, and its run then carries an href Jira skips.
+  return decorateJiraRuns(decorateMentionRuns(decorateSkillRuns(runs, skills)), jiraLinks);
 }

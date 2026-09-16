@@ -3,6 +3,7 @@ import { Image, Platform, ScrollView, Text, useColorScheme, View } from "react-n
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import { CopyTextButton } from "./CopyTextButton";
+import { JiraTicketLinksContext } from "./jiraTicketLinksContext";
 import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
 import {
   nativeMarkdownDocumentRuns,
@@ -58,9 +59,10 @@ function SelectableNode(props: {
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
+  const jiraLinks = useContext(JiraTicketLinksContext);
   return (
     <NativeMarkdownSelectableText
-      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills)}
+      runs={nativeMarkdownDocumentRuns(documentFor(props.node), props.skills, jiraLinks)}
       textStyle={props.textStyle}
       onLinkPress={props.onLinkPress}
     />
@@ -234,6 +236,7 @@ function NativeTable(props: {
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
+  const jiraLinks = useContext(JiraTicketLinksContext);
   const rows = collectTableRows(props.node);
   return (
     <ScrollView
@@ -273,8 +276,8 @@ function NativeTable(props: {
                 }}
               >
                 <NativeMarkdownSelectableText
-                  runs={nativeMarkdownDocumentRuns(documentFor(cell), props.skills).map((run) =>
-                    rowIndex === 0 || cell.isHeader ? { ...run, bold: true } : run,
+                  runs={nativeMarkdownDocumentRuns(documentFor(cell), props.skills, jiraLinks).map(
+                    (run) => (rowIndex === 0 || cell.isHeader ? { ...run, bold: true } : run),
                   )}
                   textStyle={props.textStyle}
                   onLinkPress={props.onLinkPress}

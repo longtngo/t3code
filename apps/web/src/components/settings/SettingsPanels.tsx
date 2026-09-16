@@ -639,6 +639,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.offerThreadCompaction !== DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction
         ? ["Offer to compact threads"]
         : []),
+      ...(settings.jiraBaseUrl !== DEFAULT_UNIFIED_SETTINGS.jiraBaseUrl ||
+      settings.jiraProjectKeys !== DEFAULT_UNIFIED_SETTINGS.jiraProjectKeys
+        ? ["Jira ticket links"]
+        : []),
     ],
     [
       isTextGenerationModelDirty,
@@ -655,6 +659,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableCrew,
       settings.allowSpendingCredits,
       settings.offerThreadCompaction,
+      settings.jiraBaseUrl,
+      settings.jiraProjectKeys,
       settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -822,6 +828,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew,
       allowSpendingCredits: DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits,
       offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
+      jiraBaseUrl: DEFAULT_UNIFIED_SETTINGS.jiraBaseUrl,
+      jiraProjectKeys: DEFAULT_UNIFIED_SETTINGS.jiraProjectKeys,
     });
     onRestored?.();
   }, [

@@ -162,6 +162,7 @@ describe("searchSettings", () => {
       hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     });
 
     const gatedIds = new Set<string>([
@@ -195,6 +196,7 @@ describe("searchSettings", () => {
       hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     };
     const remoteOnly = filterAvailableSettingsSearchItems({
       ...availability,
@@ -221,6 +223,7 @@ describe("searchSettings", () => {
       hasCrew: true,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     });
 
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
@@ -242,6 +245,7 @@ describe("searchSettings", () => {
       hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     });
     const with_ = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
@@ -254,6 +258,7 @@ describe("searchSettings", () => {
       hasCrew: true,
       hasAllowSpendingCredits: true,
       hasOfferThreadCompaction: true,
+      hasJiraTicketLinks: false,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
     expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
@@ -269,6 +274,31 @@ describe("searchSettings", () => {
     expect(with_.some((item) => item.id === "allow-spending-credits")).toBe(true);
     expect(without.some((item) => item.id === "offer-thread-compaction")).toBe(false);
     expect(with_.some((item) => item.id === "offer-thread-compaction")).toBe(true);
+  });
+
+  it("shows Jira ticket links only when an environment supports them", () => {
+    const base = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+      hasSubagentBackendThreadModes: false,
+      hasCrew: false,
+      hasAllowSpendingCredits: false,
+      hasOfferThreadCompaction: false,
+    };
+    expect(
+      filterAvailableSettingsSearchItems({ ...base, hasJiraTicketLinks: false }).some(
+        (item) => item.id === "jira-ticket-links",
+      ),
+    ).toBe(false);
+    expect(
+      filterAvailableSettingsSearchItems({ ...base, hasJiraTicketLinks: true }).some(
+        (item) => item.id === "jira-ticket-links",
+      ),
+    ).toBe(true);
   });
 
   it("keeps catalog result ids unique", () => {
@@ -366,6 +396,7 @@ describe("searchSettings", () => {
       hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     });
     expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
     expect(searchSettings("auto-settle", available)).toHaveLength(3);
@@ -464,6 +495,7 @@ describe("auto-settlement search availability", () => {
       hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
+      hasJiraTicketLinks: false,
     });
     expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",

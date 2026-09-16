@@ -11,6 +11,7 @@ import {
   nativeMarkdownContextCopyRanges,
   contextChipPresentation,
 } from "@t3tools/mobile-markdown-text/markdown";
+import { resolveJiraTicketLinks } from "@t3tools/shared/jiraTicketLinks";
 
 describe("nativeMarkdownTextRuns", () => {
   it("distinguishes video and pull-request context from generic file and review chips", () => {
@@ -594,6 +595,140 @@ describe("nativeMarkdownDocumentRuns", () => {
       { text: "First", role: "body", href, fileIcon: "bash" },
       { text: "Second", role: "body", href, fileIcon: "bash" },
     ]);
+  });
+});
+
+describe("nativeMarkdownDocumentRuns Jira ticket links", () => {
+  const jiraLinks = resolveJiraTicketLinks("https://acme.atlassian.net", "OPS");
+
+  /** Runs with and without Jira links; linking must never change the rendered text. */
+  function jiraRuns(node: MarkdownNode) {
+    const linked = nativeMarkdownDocumentRuns(node, [], jiraLinks);
+    const plain = nativeMarkdownDocumentRuns(node, [], null);
+    expect(linked.map((run) => run.text).join("")).toBe(plain.map((run) => run.text).join(""));
+    return { linked, plain };
+  }
+
+  it("links a ticket key in prose but not inside inline code", () => {
+    const { linked, plain } = jiraRuns({
+      type: "paragraph",
+      children: [
+        { type: "text", content: "fix OPS-12 and " },
+        { type: "code_inline", content: "OPS-13" },
+      ],
+    });
+
+    expect(plain).toEqual([
+      { text: "fix OPS-12 and ", role: "body" },
+      { text: "OPS-13", role: "body", code: true },
+    ]);
+    expect(linked.filter((run) => run.href)).toEqual([
+      {
+        text: "OPS-12",
+        role: "body",
+        href: "https://acme.atlassian.net/browse/OPS-12",
+      },
+    ]);
+    // An external-host run renders and copies a "◉ " prefix; a key reads as the plain key.
+    expect(linked.some((run) => "externalHost" in run)).toBe(false);
+    expect(linked).toContainEqual({ text: "OPS-13", role: "body", code: true });
+  });
+
+  it("keeps an existing link's destination", () => {
+    const { linked, plain } = jiraRuns({
+      type: "paragraph",
+      children: [
+        {
+          type: "link",
+          href: "https://example.com/docs",
+          children: [{ type: "text", content: "OPS-14" }],
+        },
+      ],
+    });
+
+    const expected = [
+      {
+        text: "OPS-14",
+        role: "body",
+        href: "https://example.com/docs",
+        externalHost: "example.com",
+      },
+    ];
+    expect(plain).toEqual(expected);
+    expect(linked).toEqual(expected);
+  });
+
+  it("links ticket keys in table cells and blockquotes", () => {
+    const table = jiraRuns({
+      type: "table",
+      children: [
+        {
+          type: "table_row",
+          children: [{ type: "table_cell", children: [{ type: "text", content: "OPS-15" }] }],
+        },
+      ],
+    });
+    const cell = jiraRuns({
+      type: "document",
+      children: [{ type: "table_cell", children: [{ type: "text", content: "OPS-15" }] }],
+    });
+    const quote = jiraRuns({
+      type: "blockquote",
+      children: [{ type: "paragraph", children: [{ type: "text", content: "see OPS-15" }] }],
+    });
+
+    expect(table.plain).toEqual([{ text: "OPS-15", role: "body" }]);
+    expect(cell.plain).toEqual([{ text: "OPS-15", role: "body" }]);
+    expect(quote.plain).toEqual([
+      { text: "│\u00a0", role: "quote-marker" },
+      { text: "see OPS-15", role: "body" },
+    ]);
+    for (const { linked } of [table, cell, quote]) {
+      expect(linked).toContainEqual(
+        expect.objectContaining({
+          text: "OPS-15",
+          href: "https://acme.atlassian.net/browse/OPS-15",
+        }),
+      );
+    }
+  });
+
+  it("keeps a quoted file mention containing a key as one file chip", () => {
+    const { linked, plain } = jiraRuns({
+      type: "paragraph",
+      children: [{ type: "text", content: 'open @"docs/my OPS-12 file.md" now' }],
+    });
+
+    const expected = [
+      { text: "open ", role: "body" },
+      {
+        text: "my OPS-12 file.md",
+        role: "body",
+        href: "docs/my OPS-12 file.md",
+        fileIcon: "markdown",
+        sourceText: '@"docs/my OPS-12 file.md"',
+      },
+      { text: " now", role: "body" },
+    ];
+    expect(plain).toEqual(expected);
+    expect(linked).toEqual(expected);
+  });
+
+  it("does not link a key inside a skill reference", () => {
+    const node: MarkdownNode = {
+      type: "paragraph",
+      children: [{ type: "text", content: "run $team:OPS-12 now" }],
+    };
+    const skills = [{ name: "team:OPS-12", displayName: "Ops" }];
+    const plain = nativeMarkdownDocumentRuns(node, skills, null);
+
+    expect(plain).toContainEqual({
+      text: "$team:OPS-12",
+      role: "body",
+      skillName: "team:OPS-12",
+      skillLabel: "Ops",
+    });
+    expect(nativeMarkdownDocumentRuns(node, skills, jiraLinks)).toEqual(plain);
   });
 });
 

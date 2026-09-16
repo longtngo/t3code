@@ -215,6 +215,10 @@
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
     },
+    "./jiraTicketLinks": {
+      "types": "./src/jiraTicketLinks.ts",
+      "import": "./src/jiraTicketLinks.ts"
+    },
     "./assistantCitations": {
       "types": "./src/assistantCitations.ts",
       "import": "./src/assistantCitations.ts"

@@ -185,6 +185,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       // otherwise pass, and the Settings row would be hidden on every client.
       expect(second.capabilities.allowSpendingCredits).toBe(true);
       expect(second.capabilities.offerThreadCompaction).toBe(true);
+      expect(second.capabilities.jiraTicketLinks).toBe(true);
       expect(second.capabilities.threadPlanHistory).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),

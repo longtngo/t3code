@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { View } from "react-native";
 import { parseMarkdownWithOptions } from "react-native-nitro-markdown/headless";
 
@@ -8,6 +8,7 @@ import {
   nativeMarkdownDocumentRuns,
   nativeMarkdownWithPreservedSoftBreaks,
 } from "./nativeMarkdownText";
+import { JiraTicketLinksContext } from "./jiraTicketLinksContext";
 import { MarkdownImageRendererContext, NativeMarkdownBlock } from "./NativeMarkdownBlock";
 import {
   MarkdownContextClipboardContext,
@@ -50,6 +51,7 @@ export function SelectableMarkdownText({
   marginTop = 0,
   marginBottom = 0,
 }: SelectableMarkdownTextProps) {
+  const jiraLinks = useContext(JiraTicketLinksContext);
   const chunks = useMemo(() => {
     const parsedDocument = parseMarkdownWithOptions(markdown, {
       gfm: true,
@@ -63,11 +65,11 @@ export function SelectableMarkdownText({
       chunk.kind === "selectable"
         ? {
             ...chunk,
-            runs: nativeMarkdownDocumentRuns(chunk.node, skills),
+            runs: nativeMarkdownDocumentRuns(chunk.node, skills, jiraLinks),
           }
         : chunk,
     );
-  }, [markdown, preserveSoftBreaks, skills]);
+  }, [markdown, preserveSoftBreaks, skills, jiraLinks]);
 
   const fileContextMenuHandlers = useMemo<MarkdownFileContextMenuHandlers | null>(
     () =>

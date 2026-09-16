@@ -21,6 +21,7 @@
   "exports": {
     ".": "./index.ts",
     "./file-icons": "./src/markdownFileIcons.ts",
+    "./jira-links": "./src/jiraTicketLinksContext.ts",
     "./link-icons": "./src/markdownLinkIcons.ts",
     "./links": "./src/markdownLinks.ts",
     "./markdown": "./src/nativeMarkdownText.ts",

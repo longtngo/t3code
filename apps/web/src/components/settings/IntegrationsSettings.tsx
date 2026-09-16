@@ -1,4 +1,8 @@
-import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import {
+  useScopedSettings,
+  useScopedSettingsMixed,
+  useUpdateScopedSettings,
+} from "./useScopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
 /**
@@ -24,6 +28,7 @@ import {
   DEFAULT_BROWSER_VIEWPORT,
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
+  DEFAULT_SERVER_SETTINGS,
   FILL_PREVIEW_VIEWPORT,
   PREVIEW_VIEWPORT_MAX_AREA,
   PREVIEW_VIEWPORT_MAX_DIMENSION,
@@ -37,6 +42,7 @@ import {
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
+import { invalidJiraProjectKeys, resolveJiraTicketLinks } from "@t3tools/shared/jiraTicketLinks";
 import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
@@ -1316,6 +1322,149 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
   );
 }
 
+/** How many invalid entries to name before collapsing the rest into a count. */
+const JIRA_PROJECT_KEYS_STATUS_MAX_SHOWN = 3;
+
+/** Names the entries a Jira project-keys field would drop, so a partial typo is not silent. */
+export function jiraProjectKeysStatus(invalidKeys: ReadonlyArray<string>): string | undefined {
+  if (invalidKeys.length === 0) return undefined;
+  const shown = invalidKeys.slice(0, JIRA_PROJECT_KEYS_STATUS_MAX_SHOWN);
+  const remaining = invalidKeys.length - shown.length;
+  const list = remaining > 0 ? `${shown.join(", ")}, and ${remaining} more` : shown.join(", ");
+  const label = invalidKeys.length === 1 ? "Not a project key" : "Not project keys";
+  return `${label}: ${list}. Use keys like OPS, DRST.`;
+}
+
+export interface JiraSettingsRowStatuses {
+  readonly baseUrlStatus: string | undefined;
+  readonly projectKeysStatus: string | undefined;
+}
+
+/**
+ * Status text for the Jira site URL and project keys rows. An invalid value
+ * takes priority on its own row. Otherwise, when only one of the two is
+ * filled in - links stay off until both are - the empty row gets a nudge to
+ * finish setup. Suppressed while either value is mixed across environments,
+ * since a mixed field's real value isn't known here.
+ */
+export function jiraSettingsRowStatuses(input: {
+  readonly baseUrl: string;
+  readonly projectKeys: string;
+  readonly mixed: boolean;
+  readonly invalidBaseUrl: boolean;
+  readonly invalidProjectKeys: ReadonlyArray<string>;
+}): JiraSettingsRowStatuses {
+  const { baseUrl, projectKeys, mixed, invalidBaseUrl, invalidProjectKeys } = input;
+  const baseUrlEmpty = baseUrl === "";
+  const projectKeysInvalidStatus = jiraProjectKeysStatus(invalidProjectKeys);
+  // A placeholder valid URL isolates "does this string resolve to at least
+  // one usable key" from whether the URL field itself is filled in or valid.
+  // `projectKeys !== ""` isn't enough: "," is non-empty but resolves to zero
+  // keys, and a fully invalid entry like "123" resolves to zero keys too, in
+  // which case filling in the URL would not turn links on.
+  const hasValidProjectKey = resolveJiraTicketLinks("https://example.com", projectKeys) !== null;
+  return {
+    baseUrlStatus: invalidBaseUrl
+      ? "Enter an http(s) URL."
+      : !mixed && baseUrlEmpty && hasValidProjectKey
+        ? "Add your Jira site URL to turn on links."
+        : undefined,
+    projectKeysStatus:
+      projectKeysInvalidStatus ??
+      (!mixed && !baseUrlEmpty && !invalidBaseUrl && !hasValidProjectKey
+        ? "Add project keys to turn on links."
+        : undefined),
+  };
+}
+
+/** Jira site and project keys that ticket keys in chat and documents link to. */
+function JiraTicketLinksSettings() {
+  const { connectedEnvironments } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const mixedBaseUrl = useScopedSettingsMixed(["jiraBaseUrl"]);
+  const mixedProjectKeys = useScopedSettingsMixed(["jiraProjectKeys"]);
+  // Every target, not some: an older server drops the write without an error.
+  const supported =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) => target.serverConfig?.environment.capabilities.jiraTicketLinks === true,
+    );
+  if (!supported) return null;
+  const invalidBaseUrl =
+    !mixedBaseUrl &&
+    settings.jiraBaseUrl !== "" &&
+    resolveJiraTicketLinks(settings.jiraBaseUrl, "X") === null;
+  const invalidProjectKeys =
+    !mixedProjectKeys && settings.jiraProjectKeys !== ""
+      ? invalidJiraProjectKeys(settings.jiraProjectKeys)
+      : [];
+  const rowStatuses = jiraSettingsRowStatuses({
+    baseUrl: settings.jiraBaseUrl,
+    projectKeys: settings.jiraProjectKeys,
+    mixed: mixedBaseUrl || mixedProjectKeys,
+    invalidBaseUrl,
+    invalidProjectKeys,
+  });
+
+  return (
+    <SettingsSection {...searchableSetting("jira-ticket-links")}>
+      <SettingsRow
+        serverScoped
+        settingKeys={["jiraBaseUrl"]}
+        title="Site URL"
+        description="Ticket keys in chats and documents link to this Jira site."
+        status={rowStatuses.baseUrlStatus}
+        resetAction={
+          settings.jiraBaseUrl !== DEFAULT_SERVER_SETTINGS.jiraBaseUrl ? (
+            <SettingResetButton
+              label="Jira site URL"
+              onClick={() => updateSettings({ jiraBaseUrl: "" })}
+            />
+          ) : null
+        }
+        control={
+          <DraftInput
+            size="sm"
+            className="w-full sm:w-72"
+            value={mixedBaseUrl ? "" : settings.jiraBaseUrl}
+            onCommit={(next) => updateSettings({ jiraBaseUrl: next })}
+            placeholder={mixedBaseUrl ? "Mixed" : "https://example.atlassian.net"}
+            spellCheck={false}
+            aria-label="Jira site URL"
+          />
+        }
+      />
+      <SettingsRow
+        serverScoped
+        settingKeys={["jiraProjectKeys"]}
+        title="Project keys"
+        description="Comma-separated. OPS links OPS-1234."
+        status={rowStatuses.projectKeysStatus}
+        resetAction={
+          settings.jiraProjectKeys !== DEFAULT_SERVER_SETTINGS.jiraProjectKeys ? (
+            <SettingResetButton
+              label="Jira project keys"
+              onClick={() => updateSettings({ jiraProjectKeys: "" })}
+            />
+          ) : null
+        }
+        control={
+          <DraftInput
+            size="sm"
+            className="w-full sm:w-72"
+            value={mixedProjectKeys ? "" : settings.jiraProjectKeys}
+            onCommit={(next) => updateSettings({ jiraProjectKeys: next })}
+            placeholder={mixedProjectKeys ? "Mixed" : "OPS, DRST"}
+            spellCheck={false}
+            aria-label="Jira project keys"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function IntegrationsSettingsPanel() {
   // Client-local preview defaults are editable only where the preview exists.
   const previewDefaultsDisabled = !isElectron;
@@ -1345,6 +1494,7 @@ export function IntegrationsSettingsPanel() {
           previewDefaults
         )}
       </SettingsSection>
+      <JiraTicketLinksSettings />
       <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );

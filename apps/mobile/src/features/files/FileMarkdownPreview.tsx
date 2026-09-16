@@ -12,6 +12,7 @@ import { RefreshControl, ScrollView, Text as NativeText, View } from "react-nati
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useFontFamily } from "../../lib/useFontFamily";
+import { useJiraTicketLinks } from "../../lib/useJiraTicketLinks";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
@@ -28,6 +29,7 @@ import {
   type MarkdownImageRenderer,
   type NativeMarkdownTextStyle,
 } from "../../native/SelectableMarkdownText";
+import { JiraTicketLinksContext } from "@t3tools/mobile-markdown-text/jira-links";
 import { resolveWorkspaceFilePath } from "./filePath";
 
 interface MarkdownPreviewStyles {
@@ -249,39 +251,42 @@ export function FileMarkdownPreview(props: {
   const onLinkPress = useCallback((href: string) => {
     void tryOpenExternalUrl(href, "markdown-link");
   }, []);
+  const jiraTicketLinks = useJiraTicketLinks(props.environmentId);
 
   return (
-    <ScrollView
-      className="flex-1 bg-sheet"
-      contentContainerStyle={{ padding: 18 }}
-      refreshControl={
-        props.onRefresh ? (
-          <RefreshControl
-            refreshing={isPullRefreshing}
-            onRefresh={() => void handlePullToRefresh()}
-          />
-        ) : undefined
-      }
-    >
-      <View className="mx-auto w-full max-w-[760px]">
-        {hasNativeSelectableMarkdownText() ? (
-          <SelectableMarkdownText
-            markdown={props.markdown}
-            onLinkPress={onLinkPress}
-            renderImage={renderImage}
-            textStyle={styles.nativeTextStyle}
-          />
-        ) : (
-          <Markdown
-            options={{ gfm: true }}
-            renderers={styles.renderers}
-            styles={styles.styles}
-            theme={styles.theme}
-          >
-            {props.markdown}
-          </Markdown>
-        )}
-      </View>
-    </ScrollView>
+    <JiraTicketLinksContext value={jiraTicketLinks}>
+      <ScrollView
+        className="flex-1 bg-sheet"
+        contentContainerStyle={{ padding: 18 }}
+        refreshControl={
+          props.onRefresh ? (
+            <RefreshControl
+              refreshing={isPullRefreshing}
+              onRefresh={() => void handlePullToRefresh()}
+            />
+          ) : undefined
+        }
+      >
+        <View className="mx-auto w-full max-w-[760px]">
+          {hasNativeSelectableMarkdownText() ? (
+            <SelectableMarkdownText
+              markdown={props.markdown}
+              onLinkPress={onLinkPress}
+              renderImage={renderImage}
+              textStyle={styles.nativeTextStyle}
+            />
+          ) : (
+            <Markdown
+              options={{ gfm: true }}
+              renderers={styles.renderers}
+              styles={styles.styles}
+              theme={styles.theme}
+            >
+              {props.markdown}
+            </Markdown>
+          )}
+        </View>
+      </ScrollView>
+    </JiraTicketLinksContext>
   );
 }
