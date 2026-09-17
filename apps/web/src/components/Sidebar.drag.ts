@@ -36,6 +36,9 @@ export function createSidebarCollisionDetection(
     pointerDropIds?: readonly string[];
     /** Sortable ids removed from collision candidates (e.g. queue rows during main-list drags). */
     excludeIds?: readonly string[];
+    /** Queue row ids during a Queue drag. While one is nearest, the Pinned/Active switch keeps
+     * distance order; a drag from one starts in Active, whatever section it rests in. */
+    freeIds?: readonly string[];
   } = {},
 ): CollisionDetection {
   const validity = new Map<string, boolean>();
@@ -70,8 +73,11 @@ export function createSidebarCollisionDetection(
       .find((container) => container.id === sidebarMarkerId("pinned-divider"))
       ?.node.current?.querySelector(".sidebar-drag-boundary-label")
       ?.getBoundingClientRect();
+    const overFreeRow =
+      collisions[0] !== undefined && options.freeIds?.includes(String(collisions[0].id)) === true;
     if (items && boundary && source?.kind === "thread" && pointer) {
-      boundarySection ??= source.section === "pinned" ? "pinned" : "active";
+      boundarySection ??=
+        source.section === "pinned" && !options.freeIds?.includes(source.key) ? "pinned" : "active";
       // Use the visible divider row, including its sortable translation.
       // Only pointer movement can change sections: opening the destination
       // moves this row, but must not toggle a stationary gesture back.
@@ -88,7 +94,10 @@ export function createSidebarCollisionDetection(
             (container) => container.id === sidebarMarkerId("settled-header"),
           );
         const activeBottom = nextHeader?.node.current?.getBoundingClientRect().top;
-        if (boundarySection === "pinned" || (activeBottom != null && pointer.y < activeBottom)) {
+        if (
+          !overFreeRow &&
+          (boundarySection === "pinned" || (activeBottom != null && pointer.y < activeBottom))
+        ) {
           const target = collisions.find((collision) => {
             const id = String(collision.id);
             if (!sections.has(id)) {

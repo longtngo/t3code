@@ -13,6 +13,7 @@ import {
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
+  withQueuedRow,
 } from "./Sidebar.logic";
 
 const thread = (key: string, section: SidebarSection): SidebarListItem => ({
@@ -245,6 +246,116 @@ describe("sidebar collision detection", () => {
       expect(at(316)).toBe("pinned");
     },
   );
+
+  describe("a drag that starts in the Queue", () => {
+    // Pins, the divider, one Active row, three queue rows, then Settled. Only
+    // the dragged queue row is in `items`, at the Queue's slot.
+    const geometry = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      marker("active-placeholder"),
+      thread("a", "active"),
+      thread("q1", "active"),
+      thread("q2", "active"),
+      thread("q3", "active"),
+      settledHeader,
+    ];
+    const { rects } = layout(geometry, "q1", "q1");
+    const rectOf = (id: string) =>
+      rects[geometry.findIndex((item) => sidebarListItemId(item) === id)]!;
+    const nodes: Record<string, HTMLElement> = {
+      [sidebarListItemId(divider)]: {
+        querySelector: () => ({
+          getBoundingClientRect: () => ({ ...rectOf(sidebarListItemId(divider)), bottom: 200 }),
+        }),
+      } as unknown as HTMLElement,
+      [sidebarListItemId(settledHeader)]: {
+        getBoundingClientRect: () => rectOf(sidebarListItemId(settledHeader)),
+      } as unknown as HTMLElement,
+    };
+    /** `grab` offsets the card's centre below the pointer, as when a row is held off-centre. */
+    function drag(restingSection: SidebarSection, freeIds?: readonly string[], grab = 0) {
+      const items = withQueuedRow(
+        [
+          pinnedHeader,
+          thread("p", "pinned"),
+          divider,
+          marker("active-placeholder"),
+          thread("a", "active"),
+          settledHeader,
+        ],
+        "q1",
+        restingSection,
+      );
+      const detector = createSidebarCollisionDetection(() => true, {
+        items,
+        activationY: 310,
+        ...(freeIds ? { freeIds } : {}),
+      });
+      const initial = rectOf("q1");
+      return (pointerY: number) => {
+        const top = pointerY - initial.height / 2 + grab;
+        const collisionRect = { ...initial, top, bottom: top + initial.height };
+        const over = detector({
+          active: {
+            id: "q1",
+            data: { current: {} },
+            rect: { current: { initial, translated: collisionRect } },
+          },
+          collisionRect,
+          pointerCoordinates: { x: 130, y: pointerY },
+          droppableRects: new Map(
+            geometry.map((item, index) => [sidebarListItemId(item), rects[index]!]),
+          ),
+          droppableContainers: geometry.map((item, index) => ({
+            id: sidebarListItemId(item),
+            key: sidebarListItemId(item),
+            disabled: false,
+            data: { current: {} },
+            node: { current: nodes[sidebarListItemId(item)] ?? null },
+            rect: { current: rects[index]! },
+          })),
+        })[0];
+        return over === undefined ? null : String(over.id);
+      };
+    }
+    const queueIds = ["q1", "q2", "q3"];
+
+    it.each(["active", "pinned", "snoozed", "settled"] as const)(
+      "picks the nearest queue row inside the divider label's width (rests in %s)",
+      (restingSection) => {
+        const at = drag(restingSection, queueIds);
+        expect(at(400)).toBe("q2");
+        expect(at(475)).toBe("q3");
+        expect(at(392)).toBe("q2");
+      },
+    );
+
+    it("without free ids, the Pinned/Active switch holds the row on itself", () => {
+      expect(drag("active")(475)).toBe("q1");
+    });
+
+    it("starts in Active even when the thread rests in Pinned", () => {
+      expect(drag("pinned", queueIds)(226)).toBe("a");
+    });
+
+    it("still switches to Pinned when the pointer crosses the divider", () => {
+      // Held 30px below centre, nearest-centre alone would pick the Active row.
+      const at = drag("active", queueIds, 30);
+      expect(at(226)).toBe("a");
+      expect(at(196)).toBe(sidebarListItemId(divider));
+    });
+
+    it("keeps tracking the pointer while a queue row is nearest", () => {
+      const at = drag("active", queueIds);
+      expect(at(226)).toBe("a");
+      expect(at(150)).toBe("p");
+      expect(at(400)).toBe("q2");
+      expect(at(230)).toBe("a");
+      expect(at(195)).toBe(sidebarListItemId(divider));
+    });
+  });
 
   it("returns no collision if an unsupported target has no source fallback", () => {
     const args = collisionArgs();

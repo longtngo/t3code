@@ -3785,7 +3785,7 @@ export default function Sidebar() {
         activationY: dragActivationY ?? null,
         ...(dragOrigin.queuedDraft ? {} : { pointerDropIds: [QUEUE_DROP_ID] }),
         // Queue rows only take part in a drag that started in the Queue.
-        ...(dragOrigin.fromQueue ? {} : { excludeIds: [...queuedKeys] }),
+        ...(dragOrigin.fromQueue ? { freeIds: [...queuedKeys] } : { excludeIds: [...queuedKeys] }),
       },
     );
   }, [
