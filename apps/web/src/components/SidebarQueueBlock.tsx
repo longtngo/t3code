@@ -42,6 +42,8 @@ export function SidebarQueueBlock(props: {
   onToggleExpanded: () => void;
   /** True while a thread from the main list is being dragged. */
   dragging: boolean;
+  /** Show the header alone: the drag preview needs the room the rows occupy. */
+  collapse: boolean;
   renderEntry: (entry: ThreadQueueEntry, sortable: QueueRowSortableBag) => ReactNode;
 }) {
   const paused = useThreadQueueStore((state) => state.paused);
@@ -52,15 +54,20 @@ export function SidebarQueueBlock(props: {
   const keys = props.entries.map(threadQueueEntryKey);
 
   if (props.entries.length === 0 && !props.dragging) return null;
-  const visibleEntries = expanded
-    ? props.entries
-    : props.entries.filter(
-        (entry) =>
-          threadQueueEntryKey(entry) === props.routeKey ||
-          (entry.draftId !== null && entry.draftId === props.routeDraftId),
-      );
+  const routeEntry = (entry: ThreadQueueEntry) =>
+    threadQueueEntryKey(entry) === props.routeKey ||
+    (entry.draftId !== null && entry.draftId === props.routeDraftId);
+  // A main-list drag collapses the Queue to its header: the rows would otherwise sit under the
+  // space the drag preview opens above them, and the freed height keeps the header clear. The open
+  // thread keeps its row, as it does in a collapsed Queue.
+  const visibleEntries =
+    props.collapse || !expanded ? props.entries.filter(routeEntry) : props.entries;
+  // The count stands in for the rows whenever they are not all on screen — collapsed by the user,
+  // or collapsed for the drag.
   const label =
-    expanded || props.entries.length === 0 ? "Queue" : `Queue (${props.entries.length})`;
+    (expanded && !props.collapse) || props.entries.length === 0
+      ? "Queue"
+      : `Queue (${props.entries.length})`;
 
   return (
     <>
@@ -68,7 +75,11 @@ export function SidebarQueueBlock(props: {
         ref={setDropRef}
         className={cn(
           "mx-0.5 h-8 list-none rounded-md",
+          // Pushed into the empty space below the rows while a main-list drag runs: the preview
+          // opens space where the Queue sits, and a zone that moves with it is a target the
+          // pointer chases. It shares the free space with the shelves' own auto margin.
           props.dragging && "border border-dashed border-sidebar-foreground/25",
+          props.collapse && "mt-auto",
           isOver && "border-primary/40 bg-primary/5",
         )}
         data-testid="sidebar-queue-header"

@@ -630,6 +630,14 @@ function SidebarSectionPlaceholder(props: {
 // sorting strategy opens 24px for a 16px label with 4px clearance on each side.
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
 
+/** The thread list's scrollport, whichever ancestor actually scrolls. */
+function sidebarScroller(node: HTMLElement | null): HTMLElement | null {
+  for (let el = node?.parentElement ?? null; el !== null; el = el.parentElement) {
+    if (el.scrollHeight > el.clientHeight + 1) return el;
+  }
+  return null;
+}
+
 function SidebarDragBoundary(props: {
   marker: "pinned-header" | "pinned-divider";
   label: string;
@@ -3351,6 +3359,9 @@ export default function Sidebar() {
     [unsnoozeThread],
   );
   const threadListRef = useRef<HTMLUListElement | null>(null);
+  /** A scrolling list has no slack to collapse into: shortening it would clamp the scroll offset
+   * and slide every row, the picked-up one included, out from under the pointer. */
+  const [listScrolls, setListScrolls] = useState(false);
   const dragLabelOffsetRef = useRef(0);
   const restrictBelowPins = useCallback<Modifier>(
     (args) => restrictBelowSidebarLabel(args, dragLabelOffsetRef.current),
@@ -3551,6 +3562,7 @@ export default function Sidebar() {
       if (activeSection === undefined) return;
       // Stop normal section motion before dnd-kit measures the picked-up row.
       listMotionRef.current?.suspend();
+      setListScrolls(sidebarScroller(threadListRef.current) !== null);
       const list = threadListRef.current;
       const header = list?.querySelector<HTMLElement>('[data-testid="sidebar-pinned-header"]');
       if (list && header) {
@@ -5088,6 +5100,9 @@ export default function Sidebar() {
                         );
                       };
                       const from = dragState?.activeSection ?? null;
+                      // A main-list drag: the Queue collapses to its docked header.
+                      const queueDropShown = from !== null && dragState?.fromQueue !== true;
+                      const collapseQueue = queueDropShown && !listScrolls;
                       // A Queue row leaves no section behind, so emptiness hints ignore it.
                       const leavingSection = dragState?.fromQueue ? null : from;
                       const items: ReactNode[] = [
@@ -5115,7 +5130,8 @@ export default function Sidebar() {
                             routeDraftId={routeDraftIdForRows}
                             expanded={queueExpanded}
                             onToggleExpanded={toggleQueueExpanded}
-                            dragging={from !== null && !dragState?.fromQueue}
+                            dragging={queueDropShown}
+                            collapse={collapseQueue}
                             renderEntry={(entry: ThreadQueueEntry, bag: QueueRowSortableBag) => {
                               const thread = threadByKey.get(threadQueueEntryKey(entry));
                               if (thread !== undefined) {
@@ -5152,7 +5168,7 @@ export default function Sidebar() {
                                 key="pinned-header"
                                 marker="pinned-header"
                                 label="Pinned"
-                                visible={from !== null}
+                                visible={from !== null && !dragState?.fromQueue}
                                 isDropTarget={dragTargetSection === "pinned"}
                               />,
                             );
@@ -5163,7 +5179,7 @@ export default function Sidebar() {
                                 key="pinned-divider"
                                 marker="pinned-divider"
                                 label="Active"
-                                visible={from !== null}
+                                visible={from !== null && !dragState?.fromQueue}
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
