@@ -50,7 +50,14 @@ export function createSidebarCollisionDetection(
     if (pointer && options.pointerDropIds) {
       for (const container of args.droppableContainers) {
         if (!options.pointerDropIds.includes(String(container.id))) continue;
-        const rect = args.droppableRects.get(container.id);
+        // Hit-test what is DRAWN, not what was measured. dnd-kit measures droppable rects once per
+        // drag, and this test has no tolerance, so any movement afterwards makes the two disagree
+        // and the drop lands somewhere the pointer visibly was not. The sidebar list sits within a
+        // pixel of its scroll threshold, and rows flipping between their content-visibility
+        // intrinsic size and their real height carry it across, which lets the list scroll a couple
+        // of pixels mid-drag. The boundary label below is read live for the same reason.
+        const rect =
+          container.node.current?.getBoundingClientRect() ?? args.droppableRects.get(container.id);
         if (
           rect &&
           pointer.x >= rect.left &&

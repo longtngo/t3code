@@ -98,6 +98,7 @@ healthy drags. The chosen approach reaches the same number without touching the 
 | J7  | The copy opens no tooltip, nests no `li`, is inert, and carries the verb | `check.sh` overlay-hygiene                                                   |
 | J8  | The drag presentation is on the copy ALONE; the parked source recedes    | `check.sh` overlay-hygiene                                                   |
 | J9  | A queued DRAFT gets the same split: copy lifts, parked row recedes       | `check.sh` queued-draft-split                                                |
+| J10 | A release anywhere inside the Queue header enqueues, both edges included | `check.sh` header-edges                                                      |
 
 ## 8. Shared resources
 
@@ -135,17 +136,32 @@ three.
 
 ## 13. Open questions and follow-ups
 
-**A drop in the last ~2px of the Queue header is unreliable.** Measured 2026-09-17, empty Queue, 5
-runs per tree: targets 2-26px into the 32px header enqueued 20/20 on both this branch and
-`614ef106c`, while a target 30px in missed 3/5 here and 1/5 on the baseline. The header's own
-release-time position varies by 3px (655 vs 658), and the `over` flag read at release contradicts
-the outcome in both directions, so what dnd-kit resolved against is not the rect that was drawn. It
-is pre-existing and not caused by this change, which moves the dragged row and never the drop zone.
-The n=5 difference between the two trees is not established (Fisher p about 0.5); deciding whether
-this branch makes it worse needs a larger sample than a review round justifies here.
+**A drop in the last ~2px of the Queue header was unreliable, and it was two defects.** Filed from
+n=5 and explicitly inconclusive; re-measured properly it split in half.
 
-Follow-up: measure the header droppable's registered rect against its drawn rect during a collapse,
-and either re-measure the droppable after the dock or stop the header moving mid-drag.
+With entries in the Queue there is no defect at all: 510/510 across the header's full 32px. It
+reproduces only with an EMPTY Queue, where the header mounts mid-drag - 19% at the worst pixel
+against 100% non-empty, p = 9.4e-09. So the original n=5 was right to be called inconclusive, and
+the "both trees" comparison in it was measuring nothing.
+
+The first defect was geometry: as a flex item the header's `h-8` is a basis the column may
+compress, and dnd-kit measures a droppable's rect once per drag, so a moment of compression froze a
+hit box 2px shorter than the header is drawn (stored 658-688 against a drawn 658-690). `shrink-0`
+makes them match exactly. This fixed a real discrepancy and did NOT move the drop rate.
+
+The second was a feedback loop, and it was what actually caused the misses. Every pointer event
+toggles the list between two content heights one row apart - rows flip between their
+`content-visibility` intrinsic size and their real height - and the list sits within a pixel of its
+scroll threshold, so the taller phase scrolls and carries the header up to 2px. dnd-kit decides
+`over` on the last pointermove and reuses it at release, so the stored decision describes a layout
+the user never released over. The cure is to resolve a Queue drop from the real pointer at release;
+`over` is still wrong at release in 8-12 of 20 trials per arm, it is simply no longer what decides.
+
+**The measurement trap worth keeping.** A single synthesized pointer move reads 60/60 even with the
+defect live: it teleports the pointer and computes collision once, against a cache taken before the
+oscillation starts. Every arm that used one move was an artifact. Multi-event gestures: 55/80
+before, 140/140 after. `check.sh` header-edges uses two events for exactly this reason, and covers
+the top edge too, which no round had measured.
 
 **The queued-draft row's split is now in place** (it previously never read `isDragging`, so its
 copy and its parked row looked identical). A draft's surface is a 4%-opacity tint, so the copy takes
@@ -177,3 +193,13 @@ discriminator, re-run on a restored fixture, then reported the pickup normally (
 Two consequences, both applied: `check.sh` opens with a `fixture-shape` pre-flight arm that must
 print `FIXTURE OK`, and a measurement taken either side of a `FIXTURE STALE` is void rather than
 reportable.
+
+**Open: the header's hit test has no clipping check.** At short viewport heights the drag-time
+`mt-auto` can put the Queue header's box outside the scroller's clip - measured at vh 320 and 400,
+header 428..460 against a clip of 96..244 and 96..324 - so a point that is geometrically inside it
+is one the user can neither see nor reach. It predates this work and is unchanged by it: both the
+collision detector and the release-time resolve test the same rect, so neither adds exposure. Not
+fixed here, and a non-vacuous probe for the partially-occluded case defeated two review rounds -
+the drag row itself falls outside the clip, and dnd-kit's auto-scroll pulls the header back into
+view as the pointer nears the clip edge. Whoever takes it should budget for building the harness
+before the fix.

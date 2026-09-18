@@ -3581,6 +3581,35 @@ export default function Sidebar() {
     [confirmAndUnpinThread],
   );
 
+  // dnd-kit decides `over` on the last pointermove and reuses it at release. The sidebar list sits
+  // within a pixel of its scroll threshold, so a row flipping between its content-visibility
+  // intrinsic size and its real height can scroll the list a couple of pixels between that event
+  // and the mouseup - and the stored `over` then describes a layout the user never released over.
+  // Keep the real pointer so the drop can be resolved against what is on screen at release.
+  const dragPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const dragPointerIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (dragState === null) {
+      dragPointerRef.current = null;
+      return;
+    }
+    const track = (event: PointerEvent) => {
+      // Only the pointer that started this drag may steer it. A second finger resting on a
+      // touchscreen, or a hovering pen, also emits pointermove over the sidebar, and without this
+      // it would decide where the drag lands: measured 8/8 drops hijacked into the Queue by a
+      // foreign pointer merely crossing the header, against 0/8 for the same gesture alone. The
+      // sensor filters on pointerId for the same reason.
+      // Fail CLOSED: with no id captured there is no own pointer to trust, so record nothing and
+      // let `over` decide, rather than accepting whichever pointer moved last. Unreachable while
+      // the only sensor is pointer-driven; adding a keyboard sensor would otherwise re-open the
+      // hijack silently.
+      if (dragPointerIdRef.current === null || event.pointerId !== dragPointerIdRef.current) return;
+      dragPointerRef.current = { x: event.clientX, y: event.clientY };
+    };
+    window.addEventListener("pointermove", track, { capture: true });
+    return () => window.removeEventListener("pointermove", track, { capture: true });
+  }, [dragState]);
+
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
@@ -3609,6 +3638,8 @@ export default function Sidebar() {
       } else {
         dragLabelOffsetRef.current = 0;
       }
+      dragPointerIdRef.current =
+        event.activatorEvent instanceof PointerEvent ? event.activatorEvent.pointerId : null;
       setDragState({
         activeKey,
         activeSection,
@@ -3856,9 +3887,30 @@ export default function Sidebar() {
       // Drag start recorded where the row came from; a drag it ignored has nothing to drop.
       const drag = dragState?.activeKey === activeKey ? dragState : null;
       if (drag === null) return;
+      // A release inside the Queue header enqueues, whatever `over` was left holding. Additive on
+      // purpose: it rescues a drop the pointer was visibly inside and never redirects one away.
+      const pointer = dragPointerRef.current;
+      const headerNode =
+        drag.fromQueue || drag.queuedDraft
+          ? null
+          : threadListRef.current?.querySelector<HTMLElement>(
+              '[data-testid="sidebar-queue-header"]',
+            );
+      const headerRect = headerNode?.getBoundingClientRect() ?? null;
+      const releasedOverQueue =
+        pointer !== null &&
+        headerRect !== null &&
+        pointer.x >= headerRect.left &&
+        pointer.x <= headerRect.right &&
+        pointer.y >= headerRect.top &&
+        pointer.y <= headerRect.bottom;
       const route = routeSidebarDragEnd({
         drag,
-        overId: event.over === null ? null : String(event.over.id),
+        overId: releasedOverQueue
+          ? QUEUE_DROP_ID
+          : event.over === null
+            ? null
+            : String(event.over.id),
         items: sidebarDragListItems(sidebarListItems, drag),
         queuedKeys,
         queueDropId: QUEUE_DROP_ID,

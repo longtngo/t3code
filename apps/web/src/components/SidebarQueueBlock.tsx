@@ -74,6 +74,12 @@ export function SidebarQueueBlock(props: {
       <li
         ref={setDropRef}
         className={cn(
+          // The header is the drop target for a drag from the main list, matched by a strict
+          // pointer-inside-its-rect test with no tolerance. That test resolves against the LIVE
+          // rect (see Sidebar.drag.ts), so a stale or short measurement cannot decide it, and a
+          // shrink-0 guard tried here measured inert: the column's height is content-driven and the
+          // scroller absorbs the overflow, so the header holds 32px at every viewport height
+          // sampled, at rest and mid-drag.
           "mx-0.5 h-8 list-none rounded-md",
           // Pushed into the empty space below the rows while a main-list drag runs: the preview
           // opens space where the Queue sits, and a zone that moves with it is a target the
