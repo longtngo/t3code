@@ -152,10 +152,17 @@ copy and its parked row looked identical). A draft's surface is a 4%-opacity tin
 a solid sidebar backdrop on its wrapper instead of the thread row's stacked gradient. Measured by
 `check.sh` queued-draft-split.
 
-**The overlay's child of `<ul>` is a `<div>`.** The wrapper that carries `aria-hidden`/`inert` sits
-between the overlay and the row's own `<li>`, which is invalid HTML. React logs nothing and no
-assistive-technology or layout effect was measurable, since the overlay is hidden from the
-accessibility tree anyway. Follow-up: render the wrapper's attributes on the `li` itself.
+**The overlay now mounts outside the sidebar list** (it previously sat inside the `<ul>` with a
+`<div>` wrapper, which is invalid markup). The first fix made both wrappers list elements, which was
+valid but worse: dnd-kit's wrapper became a real `<li>` child of `role="list"` and Chrome announced
+it as an extra empty unnamed item for the length of every drag. `aria-hidden` cannot be passed to
+that wrapper - `DragOverlay` destructures a closed prop set - so the overlay moved out of the list
+instead. It is `position:fixed` and no ancestor establishes a containing block for it, so the move
+costs nothing visually. Measured by `check.sh` overlay-markup, which asserts both rules.
+
+That relocation also retired a false measurement: the scrolling arm had pinned "1 row overlaps the
+queue header", which was the floating copy - it shares the dragged row's title and sits under the
+pointer by design, and was only ever in the list dump because the overlay was mounted there.
 
 ## 14. A withdrawn finding, and why it is recorded
 

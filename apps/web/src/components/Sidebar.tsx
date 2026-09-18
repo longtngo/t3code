@@ -4748,6 +4748,10 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  // Assigned while the sidebar list's children are built, and rendered as the list's SIBLING - see
+  // the comment at the <ul>. The overlay is position:fixed, so where it mounts costs nothing
+  // visually, but mounting it inside role="list" adds a phantom item for the length of a drag.
+  let dragOverlayNode: ReactNode = null;
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -4995,6 +4999,11 @@ export default function Sidebar() {
               >
                 <SidebarDragLifecycle onUnmount={cancelThreadDrag} />
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
+                  {/* The drag overlay is position:fixed and must NOT live inside the list: as a
+                      child of role="list" its wrapper is announced as an extra empty item for the
+                      length of every drag. It is built while the list's children are, and read
+                      below as the list's sibling - both are elements of one array literal, so the
+                      order is ECMAScript's, not React's. */}
                   <ul
                     ref={attachListMotionRef}
                     role="list"
@@ -5327,10 +5336,18 @@ export default function Sidebar() {
                       // cannot follow the pointer across a crossing. With an overlay mounted dnd-kit
                       // stops displacing the source and drives the copy instead, which is the only
                       // path that carries the scroll delta as well as the pointer delta.
-                      items.push(
-                        <DragOverlay key="drag-overlay" dropAnimation={null}>
+                      // The row the overlay carries is an <li>, so our wrapper is the <ul> that
+                      // gives it a legal list parent. dnd-kit's own wrapper stays a plain div,
+                      // which is fine now that the overlay sits outside the sidebar's list.
+                      dragOverlayNode = (
+                        <DragOverlay dropAnimation={null}>
                           {overlayRow === null && overlayDraftId === null ? null : (
-                            <div data-testid="sidebar-drag-overlay" aria-hidden inert>
+                            <ul
+                              className="list-none"
+                              data-testid="sidebar-drag-overlay"
+                              aria-hidden
+                              inert
+                            >
                               {overlayRow !== null ? (
                                 renderThreadRowInner(
                                   overlayRow.thread,
@@ -5350,9 +5367,9 @@ export default function Sidebar() {
                                   isOverlayCopy
                                 />
                               )}
-                            </div>
+                            </ul>
                           )}
-                        </DragOverlay>,
+                        </DragOverlay>
                       );
                       return items;
                     })()}
@@ -5369,6 +5386,7 @@ export default function Sidebar() {
                       </li>
                     ) : null}
                   </ul>
+                  {dragOverlayNode}
                 </SortableContext>
               </DndContext>
             </TooltipProvider>
