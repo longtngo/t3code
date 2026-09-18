@@ -209,6 +209,7 @@ import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
+  pointerOverVisibleRect,
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
@@ -3897,13 +3898,13 @@ export default function Sidebar() {
               '[data-testid="sidebar-queue-header"]',
             );
       const headerRect = headerNode?.getBoundingClientRect() ?? null;
+      // Same visibility rule as the collision detector: a release only counts where the header is
+      // actually painted, never where it is merely laid out beyond its scroller's clip.
       const releasedOverQueue =
         pointer !== null &&
         headerRect !== null &&
-        pointer.x >= headerRect.left &&
-        pointer.x <= headerRect.right &&
-        pointer.y >= headerRect.top &&
-        pointer.y <= headerRect.bottom;
+        headerNode != null &&
+        pointerOverVisibleRect(headerNode, headerRect, pointer);
       const route = routeSidebarDragEnd({
         drag,
         overId: releasedOverQueue

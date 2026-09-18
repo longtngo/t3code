@@ -25,6 +25,50 @@ export function restrictBelowSidebarLabel(
   return transform.y < minimumY ? { ...transform, y: minimumY } : transform;
 }
 
+/**
+ * A drop zone is only real where it is painted. A zone docked at the end of a scrolling list can be
+ * laid out beyond its scroller's clip - measured at a 500px viewport, the Queue header sits at
+ * 428..460 against a clip ending at 424 for a whole drag, invisible but geometrically live - and a
+ * hit test reading only the element's own rect would accept a release the user aimed at whatever is
+ * painted there instead.
+ */
+export function pointerOverVisibleRect(
+  node: HTMLElement,
+  rect: { left: number; top: number; width: number; height: number },
+  pointer: { x: number; y: number },
+): boolean {
+  if (
+    pointer.x < rect.left ||
+    pointer.x > rect.left + rect.width ||
+    pointer.y < rect.top ||
+    pointer.y > rect.top + rect.height
+  )
+    return false;
+  // Only the nearest real clip matters, and only when it has a box to clip with. Walking every
+  // non-visible ancestor rejects a legitimate point whenever one of them measures 0x0 - which is
+  // what a detached or not-yet-laid-out ancestor reports.
+  for (let el = node.parentElement; el !== null; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    const scrolls = style.overflowY === "auto" || style.overflowY === "scroll";
+    if (!scrolls) continue;
+    const box = el.getBoundingClientRect();
+    // A 0x0 box is a detached or not-yet-laid-out ancestor, not a clip anyone can see through. It
+    // is unsound in principle - a 0x0 overflow:auto element does genuinely clip its child - but the
+    // walk stops at the sidebar's scroll viewport, which always has a box: swept across seven
+    // viewport sizes and the collapsed sidebar, and counted over two live drags (112 and 64 calls),
+    // this skip never fired. A collapse on ONE axis is still a real clip and is still checked -
+    // narrowing this to either operand alone reddens a test.
+    if (box.width === 0 && box.height === 0) continue;
+    return (
+      pointer.x >= box.left &&
+      pointer.x <= box.right &&
+      pointer.y >= box.top &&
+      pointer.y <= box.bottom
+    );
+  }
+  return true;
+}
+
 /** Reject the nearest unsupported target without selecting another section.
  * Recreate this detector when drop eligibility changes. */
 export function createSidebarCollisionDetection(
@@ -56,15 +100,20 @@ export function createSidebarCollisionDetection(
         // pixel of its scroll threshold, and rows flipping between their content-visibility
         // intrinsic size and their real height carry it across, which lets the list scroll a couple
         // of pixels mid-drag. The boundary label below is read live for the same reason.
-        const rect =
-          container.node.current?.getBoundingClientRect() ?? args.droppableRects.get(container.id);
-        if (
-          rect &&
-          pointer.x >= rect.left &&
-          pointer.x <= rect.left + rect.width &&
-          pointer.y >= rect.top &&
-          pointer.y <= rect.top + rect.height
-        ) {
+        const node = container.node.current;
+        const rect = node?.getBoundingClientRect() ?? args.droppableRects.get(container.id);
+        // With no node there is nothing to ask about clipping, so fall back to plain containment
+        // rather than making the zone unreachable.
+        const inside =
+          rect === undefined
+            ? false
+            : node
+              ? pointerOverVisibleRect(node, rect, pointer)
+              : pointer.x >= rect.left &&
+                pointer.x <= rect.left + rect.width &&
+                pointer.y >= rect.top &&
+                pointer.y <= rect.top + rect.height;
+        if (inside) {
           return [{ id: container.id, data: { droppableContainer: container, value: 0 } }];
         }
       }

@@ -99,6 +99,7 @@ healthy drags. The chosen approach reaches the same number without touching the 
 | J8  | The drag presentation is on the copy ALONE; the parked source recedes    | `check.sh` overlay-hygiene                                                   |
 | J9  | A queued DRAFT gets the same split: copy lifts, parked row recedes       | `check.sh` queued-draft-split                                                |
 | J10 | A release anywhere inside the Queue header enqueues, both edges included | `check.sh` header-edges                                                      |
+| J11 | A drop zone only accepts a release where it is actually painted          | `check.sh` clipped-drop-zone                                                 |
 
 ## 8. Shared resources
 
@@ -194,12 +195,62 @@ Two consequences, both applied: `check.sh` opens with a `fixture-shape` pre-flig
 print `FIXTURE OK`, and a measurement taken either side of a `FIXTURE STALE` is void rather than
 reportable.
 
-**Open: the header's hit test has no clipping check.** At short viewport heights the drag-time
-`mt-auto` can put the Queue header's box outside the scroller's clip - measured at vh 320 and 400,
-header 428..460 against a clip of 96..244 and 96..324 - so a point that is geometrically inside it
-is one the user can neither see nor reach. It predates this work and is unchanged by it: both the
-collision detector and the release-time resolve test the same rect, so neither adds exposure. Not
-fixed here, and a non-vacuous probe for the partially-occluded case defeated two review rounds -
-the drag row itself falls outside the clip, and dnd-kit's auto-scroll pulls the header back into
-view as the pointer nears the clip edge. Whoever takes it should budget for building the harness
-before the fix.
+**The header's hit test now checks that the zone is painted, not just laid out.** A drop zone docked
+at the end of a scrolling list can sit beyond its scroller's clip: at a 500px viewport the Queue
+header is laid out at 428..460 against a clip ending at 424, for the whole drag, invisible but
+geometrically live. A rect-only test accepted a release there - measured 2/2 - so a release aimed at
+whatever IS painted at that point silently enqueued instead.
+
+Two review rounds called this unreachable and were right to refuse to report from vacuous arms, but
+the conclusion was wrong: the variable was the GESTURE. Approaching the point gradually makes the
+header move and become visible, which erased the condition every time. Parking the pointer and
+jumping once keeps it - for a VARYING number of the eight trials. Three independent measurements of
+the same arm on the same source gave 2, 4 and 8; the header sometimes holds still at 428..460 for the
+whole run and sometimes climbs to ~345, because the seeded fixture ages while the run executes (rows
+auto-settle, shelves resize) and a landed drop changes the queue's height. **Do not quote a count
+here** - this doc has now carried three, two of them wrong. The arm prints its own n, and reads
+VACUOUS rather than PASS when the condition never holds, which is the property that matters. On the
+trials that hold, across every run: with the guard 0 enqueue, without it all of them, and the
+painted-header control is 3/3 either way.
+
+The rule is deliberately narrow - the nearest ancestor that actually scrolls, and only when it has a
+box to clip with. A first version walked every non-visible ancestor and rejected legitimate points
+whenever one measured 0x0. This doc, the source comment, and the body of commit `eefe48d93` all said
+an existing detector test caught that - the claim is WITHDRAWN, and the commit message cannot be
+edited, so this paragraph is the correction of record. It was never committed, so it can only be rebuilt from its
+description, and three reconstructions redden between one and six of this rule's own unit tests and,
+every time, zero of the 19 pre-existing detector tests. The reconstructions disagree on the count,
+which is itself the reason not to quote one.
+
+`pointerOverVisibleRect` has two consumers. The collision detector is covered twice - by the
+`Sidebar.drag.dom` tests, each shown red under a mutation of the line it pins, and by the
+`clipped-drop-zone` arm. The release resolve in `handleThreadDragEnd` is covered by that arm ALONE:
+mutating it to plain containment leaves the whole web suite green - which proves nothing on its own,
+because NO test loads `Sidebar.tsx` at all (replacing its first line with a syntax error also leaves
+451 files and every test green). The arm is the only thing watching that consumer. The arm reports the same
+`CLIP GUARD BAD` whichever consumer is broken, so it cannot say WHICH one regressed - only the unit
+tests can, and only for the detector.
+
+A fifth review round mutated every operand of the guard in turn - 29 mutations - and found three that
+the suite could not see, all of them live-reachable:
+
+- The clip box's TOP edge. Dragging a row downward auto-scrolls the list until the header sits at
+  73..105 under a viewport starting at 96, so its top 23px are unpainted; dropping `pointer.y >=
+box.top` enqueued wrongly 5 times out of 5 with 6032 tests and all 20 arms green. Every existing
+  check sampled the BOTTOM edge only.
+- The zone rect's RIGHT edge. No arm can discriminate a horizontal operand - every probe fixes x at
+  the dragged row's centre and varies only y - so releasing 5px right of the header enqueued 3/3.
+- The ancestor WALK. Three non-scrolling elements sit between the header and the scroll viewport
+  live, but every fixture made the scroller the node's direct parent, so `continue` -> `break` left
+  the guard inert in production with the whole suite green.
+
+The lesson generalizes past this guard: a fixture can be wrong in the value it supplies (round four
+found a test pinning `auto` when production computes `scroll`) or in the SHAPE it builds, and both
+read as full coverage. The fixtures now carry the live depth, and each edge has its own assertion.
+
+"Nearest scrolling ancestor" is the right clipper here, not a convenient one. Measured live across
+seven viewport sizes: between the Queue header and the sidebar's scroll viewport every ancestor is
+`overflow-y: visible`; the nearest `overflow: hidden` element sits ABOVE the viewport with an
+identical box, and the one conditional hidden below it is unreachable because the sidebar is
+`collapsible="offcanvas"`. Honouring `hidden` too would therefore change nothing today and could
+only ever reject legitimate points, so the rule stays `auto|scroll` and a test pins it.
