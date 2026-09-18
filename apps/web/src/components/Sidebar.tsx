@@ -6,6 +6,7 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import * as Schema from "effect/Schema";
 import {
   DndContext,
+  DragOverlay,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -630,6 +631,19 @@ function SidebarSectionPlaceholder(props: {
 // sorting strategy opens 24px for a 16px label with 4px clearance on each side.
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
 
+/**
+ * The bag the overlay copy renders with: the row's dragging state, none of its wiring. `isDragging`
+ * is what suppresses the row's hover tooltip and puts the drop verb and the lifted card on the copy
+ * the pointer is carrying rather than on the row parked in the list.
+ */
+const overlaySortableBag = {
+  listeners: undefined,
+  setNodeRef: () => {},
+  transform: null,
+  transition: undefined,
+  isDragging: true,
+} satisfies QueueRowSortableBag;
+
 /** The thread list's scrollport, whichever ancestor actually scrolls. */
 function sidebarScroller(node: HTMLElement | null): HTMLElement | null {
   for (let el = node?.parentElement ?? null; el !== null; el = el.parentElement) {
@@ -751,6 +765,8 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   queued: boolean;
   onToggleQueue: (draftId: DraftId, session: DraftSessionState) => void;
   sortable?: QueueRowSortableBag;
+  /** See SidebarThreadRow: the drag presentation belongs to the copy, not the row left behind. */
+  isOverlayCopy?: boolean | undefined;
 }) {
   const { composer, draftId, onDiscard, onNavigate, onToggleQueue, session, sortable } = props;
   const promptPreview =
@@ -818,7 +834,12 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   );
   return (
     <li
-      className="list-none py-0.5"
+      className={cn(
+        "list-none py-0.5",
+        // The draft's own surface is a 4%-opacity tint, so the carried copy needs a solid sidebar
+        // backdrop beneath it or the page shows through while it floats.
+        props.isOverlayCopy === true && "relative z-20 rounded-md bg-sidebar shadow-lg",
+      )}
       ref={sortable?.setNodeRef}
       style={
         sortable
@@ -837,6 +858,8 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         className={cn(
           "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none",
           props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
+          // The row the pointer left behind: still in place, visibly not the one being carried.
+          sortable?.isDragging === true && props.isOverlayCopy !== true && "opacity-40",
         )}
         onClick={handleActivate}
         onContextMenu={handleContextMenu}
@@ -913,6 +936,7 @@ const QueuedDraftRow = memo(function QueuedDraftRow(props: {
   onNavigate: (draftId: DraftId) => void;
   onToggleQueue: (draftId: DraftId, session: DraftSessionState) => void;
   sortable: QueueRowSortableBag;
+  isOverlayCopy?: boolean | undefined;
 }) {
   const session = useComposerDraftStore((store) => store.getDraftSession(props.draftId));
   const composer = useComposerDraftStore((store) => store.getComposerDraft(props.draftId));
@@ -939,6 +963,7 @@ const QueuedDraftRow = memo(function QueuedDraftRow(props: {
       queued
       onToggleQueue={props.onToggleQueue}
       sortable={props.sortable}
+      isOverlayCopy={props.isOverlayCopy}
     />
   );
 });
@@ -1155,6 +1180,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // sortable bag applied to the row root so the whole row drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
   sortable?: SortableThreadRowBag | undefined;
+  /**
+   * True on the copy the DragOverlay carries. The drag presentation - the lifted card, the drop
+   * verb, the raised stacking - belongs to whatever the pointer is holding; the row left behind in
+   * the list recedes instead, so the two are never mistaken for each other.
+   */
+  isOverlayCopy?: boolean | undefined;
   dropVerb: SidebarDropVerb | null;
   // While dragging, the pin marker stays only for a pinned thread still over
   // the pinned section. Any other position shows the verb badge instead, and
@@ -1589,8 +1620,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     // through. The row tint is translucent in dark themes and the pointer
     // keeps the hover color applied, so both the tint and the solid sidebar
     // color are stacked as background images.
-    props.sortable?.isDragging &&
+    props.isOverlayCopy === true &&
       "bg-[linear-gradient(var(--sidebar-row-active),var(--sidebar-row-active)),linear-gradient(var(--sidebar),var(--sidebar))] text-sidebar-foreground opacity-100 shadow-lg",
+    // The row the pointer left behind: still in place, visibly not the one being carried.
+    props.sortable?.isDragging === true && props.isOverlayCopy !== true && "opacity-40",
   );
   // dnd-kit props for the row root. Same bag on both variants: every row in
   // the list translates around the gap as the drag passes it.
@@ -1612,7 +1645,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
     : {};
   const dragDestination =
-    sortable?.isDragging && props.dropVerb !== null ? (
+    props.isOverlayCopy === true && props.dropVerb !== null ? (
       <span
         role="status"
         className="pointer-events-none ml-auto inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 text-[11px] font-medium text-primary"
@@ -1754,7 +1787,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         className={cn(
           // Matches the h-9 row so unrendered rows never shift the list when they paint.
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
-          sortable?.isDragging && "relative z-20",
+          props.isOverlayCopy === true && "relative z-20",
         )}
       >
         <Tooltip disabled={sortable?.isDragging}>
@@ -1800,7 +1833,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
-            {sortable?.isDragging ? (
+            {/* The verb replaces the status slot only while there is a verb to show. A drag that
+                stays in its own section has none, and the carried copy would otherwise draw an
+                empty gap where the row's own status was. */}
+            {dragDestination !== null ? (
               dragDestination
             ) : (
               <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
@@ -1909,7 +1945,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       className={cn(
         // Matches the h-[4.875rem] content box; the py-0.5 padding is added on top.
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        sortable?.isDragging && "relative z-20",
+        props.isOverlayCopy === true && "relative z-20",
       )}
     >
       <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
@@ -1956,7 +1992,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
                   space without either state overlapping it. */}
-              {sortable?.isDragging ? (
+              {dragDestination !== null ? (
                 dragDestination
               ) : (
                 <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
@@ -4972,6 +5008,7 @@ export default function Sidebar() {
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
                         sortable?: SortableThreadRowBag,
+                        isOverlayCopy?: boolean,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -4987,6 +5024,7 @@ export default function Sidebar() {
                             // Fade between card and compact rows while the outer
                             // sortable wrapper keeps its identity during a drag.
                             key={`${threadKey}:${rowVariant}`}
+                            isOverlayCopy={isOverlayCopy}
                             thread={thread}
                             variant={rowVariant}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
@@ -5100,6 +5138,28 @@ export default function Sidebar() {
                         );
                       };
                       const from = dragState?.activeSection ?? null;
+                      // The row the overlay copy draws, resolved from the drag's own key so a
+                      // queued row and a main-list row are handled the same way.
+                      const overlayThread =
+                        dragState === null ? undefined : threadByKey.get(dragState.activeKey);
+                      const overlayRow =
+                        overlayThread === undefined
+                          ? null
+                          : {
+                              thread: overlayThread,
+                              section:
+                                dragState?.fromQueue === true
+                                  ? ("active" as SidebarSection)
+                                  : (dragState?.activeSection ?? ("active" as SidebarSection)),
+                            };
+                      // A queued draft has no thread behind it, so it needs its own overlay copy
+                      // or the user would drag nothing at all.
+                      const overlayDraftId =
+                        overlayRow !== null || dragState?.queuedDraft !== true
+                          ? null
+                          : (queueEntries.find(
+                              (entry) => threadQueueEntryKey(entry) === dragState.activeKey,
+                            )?.draftId ?? null);
                       // A main-list drag: the Queue collapses to its docked header.
                       const queueDropShown = from !== null && dragState?.fromQueue !== true;
                       const collapseQueue = queueDropShown && !listScrolls;
@@ -5261,6 +5321,39 @@ export default function Sidebar() {
                         }
                       }
                       pushQueue();
+                      // The dragged row travels as an overlay copy. dnd-kit only hands a row its
+                      // own pointer offset while `over` is a sibling in that row's SortableContext,
+                      // and the sidebar has two of them plus plain droppables, so the source itself
+                      // cannot follow the pointer across a crossing. With an overlay mounted dnd-kit
+                      // stops displacing the source and drives the copy instead, which is the only
+                      // path that carries the scroll delta as well as the pointer delta.
+                      items.push(
+                        <DragOverlay key="drag-overlay" dropAnimation={null}>
+                          {overlayRow === null && overlayDraftId === null ? null : (
+                            <div data-testid="sidebar-drag-overlay" aria-hidden inert>
+                              {overlayRow !== null ? (
+                                renderThreadRowInner(
+                                  overlayRow.thread,
+                                  overlayRow.section,
+                                  overlaySortableBag,
+                                  true,
+                                )
+                              ) : (
+                                <QueuedDraftRow
+                                  draftId={overlayDraftId!}
+                                  projectByKey={projectByKey}
+                                  projectDisplayNameByKey={projectDisplayNameByKey}
+                                  isActive={overlayDraftId === routeDraftIdForRows}
+                                  onNavigate={navigateToDraft}
+                                  onToggleQueue={toggleDraftQueue}
+                                  sortable={overlaySortableBag}
+                                  isOverlayCopy
+                                />
+                              )}
+                            </div>
+                          )}
+                        </DragOverlay>,
+                      );
                       return items;
                     })()}
                     {settledShelfExpanded && hiddenSettledCount > 0 ? (

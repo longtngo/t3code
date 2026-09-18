@@ -1,0 +1,172 @@
+# A dragged sidebar row keeps following the pointer - design
+
+## 1. Goal and baseline
+
+A row picked up in the sidebar follows the pointer for the whole drag, whatever it is currently over.
+
+Baseline (`baseline.sh record queue-row-pointer-drift`, `personal` at `614ef106c`, live dev server):
+`max drift vs pointer: 382`. The dragged Queue row does not move at all once the pointer leaves the
+Queue, so the drift equals the pointer's travel, 1:1.
+
+The shipped arms sweep at 4px per pointer event, which is what a real mouse emits; a coarse sweep
+reads one event of lag as a fraction of its own step size and says nothing about what a user sees.
+On that sweep the baseline reads 298px (case 1) and 470px (case 2), and the fix reads 0px on both.
+
+Harness: `~/reports/t3code/2026-09/2026-09-17/queue-drag-layout/review1/w/qlag.mjs` (case 1, the
+shipped arm), `qdrift.mjs` (case 1, coarse, kept for the recorded baseline) and `mdrift.mjs` (case 2).
+
+## 2. Scope
+
+- **Must have:** a Queue row dragged over the main list follows the pointer; a main-list row dragged
+  onto the Queue header follows the pointer.
+- **Not in scope:** the modifier clamps, which hold a healthy drag back the same way on either
+  path - `restrictBelowSidebarLabel` near the top of the list and
+  `restrictToFirstScrollableAncestor` near the bottom of the scrollport. The offset they impose
+  scales with the row: 11-41px measured on a slim row, 57-65px on an 82px card.
+- **Consumers:** every sidebar drag, because the overlay is mounted once for the whole list. That
+  is deliberate: the cause is shared (section 3, P1/P4), so the fix sits where every crossing picks
+  it up rather than at the one that was reported.
+
+## 3. Premises
+
+| #   | Premise                                                                                                                                                         | Source                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| P1  | dnd-kit gives a drag source a transform only while `over.id` is a member of that row's own `SortableContext.items`: `displaceItem` requires a valid `overIndex` | `@dnd-kit/sortable@10.0.0` `sortable.esm.js`; independent RCA, confirmed by two manipulations |
+| P2  | With no `DragOverlay` in the tree, the source element is the only thing that can move, and the raw pointer delta reaches it only through that same gate         | grep: zero `DragOverlay` hits; instrumented `useDragOverlay: false`                           |
+| P3  | The sidebar has two sortable contexts (main list, Queue) plus plain droppables, and their item sets are disjoint (10 ids vs 3)                                  | `Sidebar.tsx` outer `SortableContext`; `SidebarQueueBlock.tsx` nested one                     |
+| P4  | The same gate parks a main-list row over the Queue header, a plain droppable                                                                                    | RCA prediction test: `overId: "sidebar-queue-drop"`, `overIndex -1`, drift 214                |
+| P5  | `active.rect.current` carries the same offset with modifiers already applied, and is public and typed                                                           | `@dnd-kit/core@6.3.1` `PublicContextDescriptor`; measured drift 382 -> 1px                    |
+
+## 4. Approach
+
+A `DragOverlay` renders a copy of the picked-up row, and dnd-kit drives that copy. Mounting an
+overlay flips `usesDragOverlay` inside the library, which stops it displacing the drag source at all
+and hands the overlay `modifiedTranslate` directly - the one path that carries the pointer delta,
+the modifiers and the scroll delta together, in every `over` state.
+
+- The copy is `renderThreadRowInner(thread, section, overlaySortableBag)`, i.e. the same row the
+  list draws, rendered in its dragging state. `isDragging` is what suppresses the row's hover
+  tooltip and puts the drop verb and the lifted card on the copy the pointer carries; without it
+  the tooltip stayed open beside the pointer for the whole drag and the verb sat on the parked row.
+- The copy is `aria-hidden` and `inert`, the way the sidebar's own fade clone in `Sidebar.motion.ts`
+  is: it is a second rendering of a row that is still in the list, so it must not be reachable or
+  announced twice.
+- The overlay wrapper is a `div`, not an `li`. An `li` wrapper sat inside the row's own `li` and
+  React reported a DOM-nesting error on every page's first drag.
+- A queued **draft** has no thread behind it, so it gets its own branch drawing `QueuedDraftRow`.
+  Without it the overlay renders nothing and the user drags an invisible row - measured, and the
+  arm reports `NO OVERLAY` when the branch is removed.
+- Peers keep their sorting preview: the strategy is untouched.
+- The source row stays in its slot and keeps its lifted styling, as it already did while parked.
+
+**The subscription sits in the row WRAPPERS, not the rows.** `useDndContext()` rerenders its
+consumer on every pointer move, and the row components are memoized precisely to stay out of that.
+Reading the offset inside the memoized row cost 16.1 row renders per pointer move against 1.7
+without the fix; reading it in the wrapper and folding it into the already-memoized bag costs 3.2,
+and 1.7 is itself an undercount because the parked row was not rerendering at all - the drag source
+has to rerender per move for the fix to do anything. Both wrappers memoize the bag for this reason;
+the Queue's previously did not, which was worth 1 render per queued row per move.
+
+One fallback covers both cases in section 2, because both arrive through the same gate.
+
+## 5. Alternatives
+
+| Alternative                                                     | Why rejected                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Do nothing                                                      | 382px drift on case 1; 214px on case 2                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Carry the offset from `active.rect` (built, measured, rejected) | reached 4px on the headline gesture but is structurally wrong: `active.rect.current.translated` is `draggingNodeRect + modifiedTranslate`, with no scroll term and one render stale. A scroll mid-drag displaced the row by the scroll distance (211px once dnd-kit's own auto-scroll fired at the scrollport edge) and the row never settled when the pointer stopped (residual = last event size, up to 32px). The correct value, `appliedTranslate`, is not public |
+| Put the queue keys into the main list's `SortableContext`       | this is the abandoned queue-marker approach from the previous item; measured three regressions and is recorded at `refs/build-task/abandoned/queue-marker-base-c`                                                                                                                                                                                                                                                                                                     |
+| Merge both item sets into each context                          | makes `overIndex` valid, but the peers' strategy then runs over a bogus index space and they displace wrongly                                                                                                                                                                                                                                                                                                                                                         |
+| Patch the library                                               | proves the mechanism (the RCA used it) but is not shippable                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+## 6. Experiments
+
+The RCA's bidirectional manipulation is the experiment: removing the gate in the served module took
+drift 382 -> 0, and forcing `overIndex = -1` everywhere reproduced the parking in both previously
+healthy drags. The chosen approach reaches the same number without touching the library.
+
+## 7. Invariants
+
+| #   | Property                                                                 | Check that fails if it breaks                                                |
+| --- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| J1  | A Queue row dragged over the main list follows the pointer               | `check.sh` queue-row-follows-pointer                                         |
+| J2  | A main-list row dragged onto the Queue header follows the pointer        | `check.sh` main-row-follows-on-header                                        |
+| J3  | What follows the pointer settles under it when the pointer stops         | unit test on the hook's guard                                                |
+| J4  | Every layout and drop behaviour from the previous item still holds       | the 12 existing arms                                                         |
+| J5  | The memoized rows stay out of the per-move render                        | row renders per pointer move: 3.2, against 16.1 with the hook inside the row |
+| J6  | A queued draft draws an overlay too                                      | `check.sh` queued-draft-has-an-overlay                                       |
+| J7  | The copy opens no tooltip, nests no `li`, is inert, and carries the verb | `check.sh` overlay-hygiene                                                   |
+| J8  | The drag presentation is on the copy ALONE; the parked source recedes    | `check.sh` overlay-hygiene                                                   |
+| J9  | A queued DRAFT gets the same split: copy lifts, parked row recedes       | `check.sh` queued-draft-split                                                |
+
+## 8. Shared resources
+
+N/A: rendering only.
+
+## 9. Failure behaviour
+
+| Failure                        | Behaviour                       | Operator sees       | Overriding intent |
+| ------------------------------ | ------------------------------- | ------------------- | ----------------- |
+| `active.rect` not yet measured | fallback returns null, as today | row parks, no crash | -                 |
+| Drag cancelled (Escape, blur)  | unchanged                       | row returns         | Escape            |
+
+## 10. Irreversible steps and rollback
+
+None. Revert the commit.
+
+## 11. Surface changes
+
+Web and desktop sidebar. Mobile app has no Queue.
+
+## 12. Tradeoffs and limitations
+
+**A drag now moves a copy of the row, not the row itself.** The source stays in its slot until the
+drop lands, and the drop feedback - the verb badge, the lifted card, the raised stacking - travels
+with the copy, while the source recedes to 40% opacity so the two are never mistaken for each
+other. That split is not automatic: both rows see dnd-kit's `isDragging`, so the presentation is
+gated on an explicit `isOverlayCopy` prop instead, and every site that previously keyed off
+`isDragging` for appearance had to move to it. That is the visible cost of this approach and it
+applies to every sidebar drag, not just the crossings this item is about.
+
+Measured with the overlay: 0px drift in continuous motion, 0px residual after the pointer stops at
+final-event sizes of 4, 16 and 32px, and 0px displacement across a 60px scroll mid-drag. The
+rejected alternative in section 5 read 4px, 4-32px and "displaced by the scroll" on those same
+three.
+
+## 13. Open questions and follow-ups
+
+**A drop in the last ~2px of the Queue header is unreliable.** Measured 2026-09-17, empty Queue, 5
+runs per tree: targets 2-26px into the 32px header enqueued 20/20 on both this branch and
+`614ef106c`, while a target 30px in missed 3/5 here and 1/5 on the baseline. The header's own
+release-time position varies by 3px (655 vs 658), and the `over` flag read at release contradicts
+the outcome in both directions, so what dnd-kit resolved against is not the rect that was drawn. It
+is pre-existing and not caused by this change, which moves the dragged row and never the drop zone.
+The n=5 difference between the two trees is not established (Fisher p about 0.5); deciding whether
+this branch makes it worse needs a larger sample than a review round justifies here.
+
+Follow-up: measure the header droppable's registered rect against its drawn rect during a collapse,
+and either re-measure the droppable after the dock or stop the header moving mid-drag.
+
+**The queued-draft row's split is now in place** (it previously never read `isDragging`, so its
+copy and its parked row looked identical). A draft's surface is a 4%-opacity tint, so the copy takes
+a solid sidebar backdrop on its wrapper instead of the thread row's stacked gradient. Measured by
+`check.sh` queued-draft-split.
+
+**The overlay's child of `<ul>` is a `<div>`.** The wrapper that carries `aria-hidden`/`inert` sits
+between the overlay and the row's own `<li>`, which is invalid HTML. React logs nothing and no
+assistive-technology or layout effect was measurable, since the overlay is hidden from the
+accessibility tree anyway. Follow-up: render the wrapper's attributes on the `li` itself.
+
+## 14. A withdrawn finding, and why it is recorded
+
+A review round filed a MEDIUM that queued draft rows never start a drag at all, which would have
+made the whole draft overlay branch dead code. It was false, and the cause is worth keeping: the
+shared fixture's seeded snooze expires on a timer. When it lapsed, the snoozed shelf disappeared and
+a thread that round had settled stayed settled, so the layout shifted and the draft row moved from
+y=751 to y=834 - out of reach of a probe that pressed at a computed row centre. The reviewer's own
+discriminator, re-run on a restored fixture, then reported the pickup normally (`Draggable item
+...:draft-r5-fixture was moved over droppable area ...`, `overlay:true`, `moved:4`).
+
+Two consequences, both applied: `check.sh` opens with a `fixture-shape` pre-flight arm that must
+print `FIXTURE OK`, and a measurement taken either side of a `FIXTURE STALE` is void rather than
+reportable.
