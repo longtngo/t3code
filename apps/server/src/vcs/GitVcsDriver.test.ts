@@ -370,6 +370,47 @@ it.effect("checkpoint capture refuses a truncated nested repository listing", ()
   }).pipe(Effect.scoped, Effect.provide(GitContractLayer)),
 );
 
+// FORK: restore sizes untracked files to spare the heavy ones capture skipped. A listing too
+// large to size must not become "none are heavy", or `git clean` deletes them.
+it.effect("checkpoint restore keeps untracked files when their listing is truncated", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const liveProcess = yield* VcsProcess.VcsProcess;
+    const driver = yield* GitVcsDriver.makeVcsDriverShape();
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-checkpoint-restore-truncated-" });
+    const { checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
+    const heavy = path.join(cwd, "data", "big.bin");
+    yield* fs.makeDirectory(path.dirname(heavy), { recursive: true });
+    yield* fs.writeFile(heavy, new Uint8Array(GitVcsDriver.MAX_UNTRACKED_CHECKPOINT_FILE_BYTES));
+    yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+    const scratch = path.join(cwd, "data", "scratch.txt");
+    yield* fs.writeFileString(scratch, "after capture\n");
+    yield* fs.writeFileString(path.join(cwd, "file.txt"), "edited after capture\n");
+    let truncatedListings = 0;
+    const restoreDriver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+      Effect.provideService(VcsProcess.VcsProcess, {
+        run: (input) =>
+          liveProcess.run(input).pipe(
+            Effect.map((result) => {
+              if (!input.args.includes("--others") || input.env?.GIT_INDEX_FILE !== undefined)
+                return result;
+              truncatedListings += 1;
+              return { ...result, stdoutTruncated: true };
+            }),
+          ),
+      }),
+    );
+
+    assert.isTrue(yield* restoreDriver.checkpoints.restoreCheckpoint({ cwd, checkpointRef }));
+
+    assert.strictEqual(truncatedListings, 1);
+    assert.isTrue(yield* fs.exists(heavy), "uncaptured heavy file must survive");
+    assert.isTrue(yield* fs.exists(scratch), "clean is skipped, not narrowed");
+    assert.strictEqual(yield* fs.readFileString(path.join(cwd, "file.txt")), "unstaged\n");
+  }).pipe(Effect.scoped, Effect.provide(GitContractLayer)),
+);
+
 it.effect("checkpoint recovery refuses excessive candidates before probing", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

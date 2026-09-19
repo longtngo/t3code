@@ -1341,6 +1341,8 @@ as the index` pins it. Any new `copyFile` of an index needs the same stamp.
 Also from the 38th: capture's oversized-untracked scan (invariant 55) runs on the REAL index, so a
 corrupt user index fails it. Capture now logs and captures without the bound on a git exit;
 restore must keep failing there, since an empty set would let `git clean` delete the large files.
+For the same reason a listing too large to size (truncated at 16 MiB) comes back `null`, not
+empty: capture adds everything, and restore skips `git clean` entirely with a warning.
 
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 

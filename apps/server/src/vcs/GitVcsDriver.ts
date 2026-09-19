@@ -859,13 +859,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation: "GitVcsDriver.checkpoints.enumerateUntracked",
         cwd,
         args: ["ls-files", "--others", "--exclude-standard", "-z"],
-        // A pathologically huge untracked listing is truncated → skip the bound and fall back to
-        // plain add/clean (old behavior) rather than acting on a partial set.
+        // A pathologically huge untracked listing is truncated → `null`, never a partial set.
+        // Capture then adds everything; restore must skip its clean, because an empty set there
+        // would delete the heavy files capture never kept.
         maxOutputBytes: 16 * 1024 * 1024,
       });
-      if (listing.stdoutTruncated) {
-        return [] as ReadonlyArray<{ readonly path: string; readonly size: number }>;
-      }
+      if (listing.stdoutTruncated) return null;
       const relPaths = listing.stdout.split("\0").filter((value) => value.length > 0);
       const entries = yield* Effect.forEach(
         relPaths,
@@ -947,14 +946,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         // A real Git exit here (an unreadable user index) must not fail the capture: the
         // body below already recovers from an invalid index, so capture without the bound.
         // Restore does NOT do this - an empty set there would let `git clean` delete them.
-        const oversizedUntracked = yield* enumerateOversizedUntracked(input.cwd).pipe(
-          Effect.catchTag("VcsProcessExitError", (error) =>
-            Effect.logWarning("checkpoint: could not size untracked files; capturing all").pipe(
-              Effect.annotateLogs({ cwd: input.cwd, detail: error.detail }),
-              Effect.as([] as ReadonlyArray<{ readonly path: string; readonly size: number }>),
+        const oversizedUntracked =
+          (yield* enumerateOversizedUntracked(input.cwd).pipe(
+            Effect.catchTag("VcsProcessExitError", (error) =>
+              Effect.logWarning("checkpoint: could not size untracked files; capturing all").pipe(
+                Effect.annotateLogs({ cwd: input.cwd, detail: error.detail }),
+                Effect.as(null),
+              ),
             ),
-          ),
-        );
+          )) ?? [];
         const headExists = yield* hasHeadCommit(input.cwd);
         const sparseConfig = yield* execute({
           operation,
@@ -1270,16 +1270,25 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       // cleaning its small untracked siblings (a file-level pathspec exclude would fail, because
       // `git clean -fd` removes a fully-untracked directory wholesale). Empty set → plain clean.
       const oversizedUntracked = yield* enumerateOversizedUntracked(input.cwd);
-      const cleanExcludes = oversizedUntracked.flatMap((entry) => [
+      // Too many untracked files to size: keep them all rather than risk deleting one.
+      if (oversizedUntracked === null) {
+        yield* Effect.logWarning(
+          "checkpoint restore: untracked listing too large to size; skipped git clean",
+        ).pipe(Effect.annotateLogs({ cwd: input.cwd }));
+      }
+      const cleanExcludes = (oversizedUntracked ?? []).flatMap((entry) => [
         "-e",
         checkpointCleanExcludePattern(entry.path),
       ]);
-      const cleaned = yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: ["clean", "-fd", ...cleanExcludes, "--", "."],
-        allowNonZeroExit: true,
-      });
+      const cleaned =
+        oversizedUntracked === null
+          ? { exitCode: 0, stderr: "" }
+          : yield* execute({
+              operation,
+              cwd: input.cwd,
+              args: ["clean", "-fd", ...cleanExcludes, "--", "."],
+              allowNonZeroExit: true,
+            });
       if (cleaned.exitCode !== 0) {
         // Git can remove every child, then fail trying to remove './' itself.
         const emptiedWorkspace =
