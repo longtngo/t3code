@@ -10,7 +10,7 @@ const labelsOf = (buttons: ReadonlyArray<Element>) =>
   buttons.map((button) => button.textContent?.trim() ?? "");
 
 describe("ComposerPendingApprovalActions", () => {
-  it("states that the persistent approval lasts for this session", async () => {
+  it("keeps the main decisions visible and secondary decisions in the menu", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
@@ -19,21 +19,16 @@ describe("ComposerPendingApprovalActions", () => {
       />,
     );
 
-    const buttons = view.findAll("button");
-    const labels = labelsOf(buttons);
+    const labels = labelsOf(view.findAll("button"));
 
-    expect(labels).toContain("Cancel");
-    expect(labels).toContain("Always allow this session");
-    expect(labels).not.toContain("Always allow");
-
-    // `size="micro"`: a 20px row that keeps its type size on wide viewports.
-    expect([...(buttons[0]?.classList ?? [])]).toEqual(
-      expect.arrayContaining(["h-5", "sm:text-[11px]"]),
-    );
-    expect(buttons[0]?.classList.contains("sm:h-6")).toBe(false);
+    expect(labels).toContain("Decline");
+    expect(labels).toContain("Approve");
+    expect(labels).not.toContain("Cancel");
+    expect(labels).not.toContain("Always allow this session");
+    expect(view.find('[aria-label="More approval options"]')).not.toBeNull();
   });
 
-  it("shows only the approval choices advertised by an MCP server", async () => {
+  it("keeps secondary provider labels out of the compact action row", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-safari")}
@@ -49,53 +44,30 @@ describe("ComposerPendingApprovalActions", () => {
 
     const labels = labelsOf(view.findAll("button"));
 
-    expect(labels).toContain("Always allow Safari");
+    expect(labels).not.toContain("Always allow Safari");
     expect(labels).toContain("Approve");
     expect(labels).not.toContain("Always allow this session");
   });
 
-  it("marks an option that carries a provider warning", async () => {
+  it("preserves provider labels for the main decisions", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
         isResponding={false}
         options={[
           { decision: "accept", label: "Allow once" },
-          {
-            decision: "acceptForSession",
-            label: "Allow for this thread",
-            warning: "Untrusted files could re-run this action without asking.",
-          },
           { decision: "decline", label: "Deny" },
         ]}
         onRespondToApproval={async () => undefined}
       />,
     );
 
-    const warned = view.find(
-      '[aria-description="Untrusted files could re-run this action without asking."]',
-    );
+    const labels = labelsOf(view.findAll("button"));
 
-    expect(warned).not.toBeNull();
-    expect(warned?.classList.contains("text-warning")).toBe(true);
-    expect(warned?.textContent).toContain("Allow for this thread");
-  });
-
-  it("limits provider-supplied approval labels so narrow rows can wrap", async () => {
-    const label = "Allow ".repeat(40).trim();
-    const view = await renderDom(
-      <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-long-label")}
-        isResponding={false}
-        options={[{ decision: "acceptAlways", label }]}
-        onRespondToApproval={async () => undefined}
-      />,
-    );
-
-    const labelSlot = view.find("span.max-w-40.truncate");
-
-    expect(labelSlot).not.toBeNull();
-    expect(labelSlot?.textContent).toBe(label);
+    expect(labels).toContain("Allow once");
+    expect(labels).toContain("Deny");
+    expect(labels).not.toContain("Approve");
+    expect(labels).not.toContain("Decline");
   });
 
   it("responds with the decision of the button that was pressed", async () => {

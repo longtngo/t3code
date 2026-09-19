@@ -48,13 +48,20 @@ import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
 describe("ProjectIconPickerDialog", () => {
   it("shows icons first and selects them for an automatic project", async () => {
     const view = await renderDom(
-      <ProjectIconPickerDialog current={null} open onOpenChange={() => {}} onSelect={() => {}} />,
+      <ProjectIconPickerDialog
+        current={null}
+        projectName="Test"
+        open
+        onOpenChange={() => {}}
+        onSelect={() => {}}
+      />,
     );
 
     expect(view.find('[data-current="lucide"]')).not.toBeNull();
     expect(view.findAll("[data-value]").map((toggle) => toggle.textContent)).toEqual([
       "Icons",
       "Emoji",
+      "Monogram",
     ]);
     expect(view.find('[aria-label="Icon color"]')).not.toBeNull();
   });
@@ -64,6 +71,7 @@ describe("ProjectIconPickerDialog", () => {
     const onOpenChange = vi.fn();
     const view = await renderDom(
       <ProjectIconPickerDialog
+        projectName="Test"
         current={null}
         open
         onOpenChange={onOpenChange}
@@ -87,6 +95,7 @@ describe("ProjectIconPickerDialog", () => {
     const onSelect = vi.fn();
     const view = await renderDom(
       <ProjectIconPickerDialog
+        projectName="Test"
         current={{ kind: "emoji", emoji: "🚀" }}
         open
         onOpenChange={() => {}}
@@ -108,6 +117,7 @@ describe("ProjectIconPickerDialog", () => {
     const onOpenChange = vi.fn();
     const view = await renderDom(
       <ProjectIconPickerDialog
+        projectName="Test"
         current={null}
         open
         onOpenChange={onOpenChange}

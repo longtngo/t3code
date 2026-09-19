@@ -147,7 +147,7 @@ const harness = (options: HarnessOptions = {}) => {
         getRawSettings: Effect.succeed({ enableCrew: crewEnabled }),
       } as never),
     ),
-    Layer.provideMerge(NodeSqliteClient.layerMemory()),
+    Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
     Layer.provideMerge(NodeServices.layer),
   );
 

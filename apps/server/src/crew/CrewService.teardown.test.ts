@@ -135,7 +135,7 @@ const harness = (options: Options = {}) => {
               }),
       } as never),
     ),
-    Layer.provideMerge(NodeSqliteClient.layerMemory()),
+    Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
     Layer.provideMerge(NodeServices.layer),
   );
 

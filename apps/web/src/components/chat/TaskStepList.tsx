@@ -1,3 +1,4 @@
+import { CheckIcon, CircleDotIcon, CircleIcon } from "lucide-react";
 import { memo } from "react";
 
 import { formatDuration } from "../../session-logic";
@@ -64,10 +65,10 @@ export const TaskStepList = memo(function TaskStepList({
   return (
     <>
       {keyedTaskSteps(steps).map(({ key, step }) => (
-        <ComposerBanner.Row key={key} render={<li />}>
+        <ComposerBanner.Row key={key} render={<li />} className="items-start py-1 pe-2">
           <ComposerBanner.Icon
             className={cn(
-              "font-mono text-[10px]",
+              "h-4",
               step.status === "completed"
                 ? "text-success"
                 : step.status === "inProgress"
@@ -75,10 +76,17 @@ export const TaskStepList = memo(function TaskStepList({
                   : "text-muted-foreground/40",
             )}
           >
-            {step.status === "completed" ? "✓" : step.status === "inProgress" ? "●" : "○"}
+            {step.status === "completed" ? (
+              <CheckIcon />
+            ) : step.status === "inProgress" ? (
+              <CircleDotIcon />
+            ) : (
+              <CircleIcon />
+            )}
           </ComposerBanner.Icon>
           <ComposerBanner.Content
             className={cn(
+              "block wrap-anywhere",
               step.status === "completed"
                 ? "text-muted-foreground/55"
                 : step.status === "inProgress"
@@ -86,14 +94,12 @@ export const TaskStepList = memo(function TaskStepList({
                   : "text-muted-foreground/70",
             )}
           >
+            <span className="sr-only">{taskStatusLabels[step.status]}: </span>
             {step.step}
           </ComposerBanner.Content>
           <ComposerBanner.Actions>
-            <span className="text-[10px] text-muted-foreground">
-              {taskStatusLabels[step.status]}
-            </span>
             <span
-              className="w-10 text-right text-[10px] text-muted-foreground/45 tabular-nums"
+              className="w-12 text-right text-[10px]/4 text-muted-foreground/45 tabular-nums"
               data-composer-task-duration="true"
             >
               {step.durationMs !== undefined

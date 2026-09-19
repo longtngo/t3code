@@ -56,7 +56,7 @@ describe("051_CrewTasks ids", () => {
   });
 });
 
-const layer = vitestIt.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = vitestIt.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("051_CrewTasks schema", (it) => {
   it.effect("creates crew_tasks and crew_reports with their indexes", () =>

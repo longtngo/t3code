@@ -361,6 +361,7 @@ export const make = (
     // cannot interrupt it; without this it would acquire the permit the cancel
     // just freed and go to the agent after the user pressed Stop.
     const promptCancelGenerationRef = yield* Ref.make(0);
+    const assistantUpdatesOpenRef = yield* Ref.make(true);
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
     const ensureConnected = Effect.gen(function* () {
@@ -547,6 +548,13 @@ export const make = (
           if (
             startState._tag !== "Started" ||
             notification.sessionId !== startState.result.sessionId
+          ) {
+            return;
+          }
+          if (
+            !(yield* Ref.get(assistantUpdatesOpenRef)) &&
+            (notification.update.sessionUpdate === "agent_message_chunk" ||
+              notification.update.sessionUpdate === "agent_thought_chunk")
           ) {
             return;
           }
@@ -902,7 +910,16 @@ export const make = (
         return;
       }
       const acknowledge = yield* Deferred.make<void>();
-      yield* Queue.offer(eventQueue, { _tag: "EventStreamBarrier", acknowledge });
+      yield* notificationSemaphore.withPermit(
+        Effect.gen(function* () {
+          // Keep a provider's final flushed chunks together until the adapter settles the turn.
+          if (Option.isNone(yield* Ref.get(activePromptRef))) {
+            yield* Ref.set(assistantUpdatesOpenRef, false);
+            yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
+          }
+          yield* Queue.offer(eventQueue, { _tag: "EventStreamBarrier", acknowledge });
+        }),
+      );
       yield* Effect.raceFirst(Deferred.await(acknowledge), Deferred.await(runtimeClosed));
     });
 
@@ -1001,6 +1018,7 @@ export const make = (
                         queue: eventQueue,
                         assistantSegmentRef,
                       });
+                      yield* Ref.set(assistantUpdatesOpenRef, true);
                       const requestPayload = {
                         sessionId: started.sessionId,
                         ...payload,
@@ -1017,7 +1035,7 @@ export const make = (
                         yield* Deferred.succeed(promptOptions.dispatched, undefined);
                       }
                       return active;
-                    }),
+                    }).pipe(notificationSemaphore.withPermit),
                   ),
                   (activePrompt) =>
                     Effect.gen(function* () {

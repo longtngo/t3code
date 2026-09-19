@@ -58,7 +58,9 @@ const withRepository = <E>(body: Effect.Effect<void, E, CrewRepository | SqlClie
     yield* body;
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(CrewRepositoryLive).pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),
+      Layer.mergeAll(CrewRepositoryLive).pipe(
+        Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
+      ),
     ),
   );
 

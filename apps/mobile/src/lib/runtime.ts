@@ -23,8 +23,15 @@ const httpClientLayer = remoteHttpClientLayer(fetch);
 // frames via `event.data.arrayBuffer()`, which can reorder frames under load and
 // permanently desync the msgpack codec. ArrayBuffer frames arrive synchronously
 // in wire order, so no async decode is needed.
-const webSocketConstructorLayer = Layer.succeed(Socket.WebSocketConstructor, (url, protocols) => {
-  const ws = new globalThis.WebSocket(url, protocols);
+const webSocketConstructorLayer = Layer.succeed(Socket.WebSocketConstructor, (url, options) => {
+  // Same guard as effect's `layerWebSocketConstructorGlobal`: the global constructor takes
+  // protocols only, never client options.
+  if (options !== undefined && typeof options !== "string" && !Array.isArray(options)) {
+    throw new TypeError(
+      "WebSocket client options are not supported by the global WebSocket constructor",
+    );
+  }
+  const ws = new globalThis.WebSocket(url, options);
   ws.binaryType = "arraybuffer";
   return ws;
 });

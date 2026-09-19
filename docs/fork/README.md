@@ -25,7 +25,11 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-10 (34th reconcile, 17 commits), against `origin/main`. Concentrated in
+As of 2026-09-18 (38th reconcile, 181 commits), against `origin/main`. The 38th brought effect
+rc.112 -> rc.115, Tiptap as the default composer editor, multi-model thread fan-out, provider
+thinking traces and storage cleanup; the entries 52-56 below are its decisions.
+
+Earlier: 2026-09-10 (34th reconcile, 17 commits). Concentrated in
 `apps/server` and `apps/web`.
 
 **The 34th reconcile was one feature, not seventeen commits.** Upstream's multi-pull-request
@@ -91,6 +95,10 @@ entries, ids unique and monotonic, max 60.
 
 The 37th reconcile added upstream's `052_ProjectionThreadTitleState` (#10720) as applied id **61**.
 It arrived with no migration test, so nothing needed retargeting. Manifest: 60 entries, max 61.
+
+The 38th reconcile added upstream's `053_PullRequestFilesViewed` (#7721) as applied id **62**, also
+without a test. Manifest: 61 entries, max 62. The same reconcile's effect bump removed
+`NodeSqliteClient.layerMemory()`; migration and crew tests use `layer({ filename: ":memory:" })`.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
@@ -1091,6 +1099,9 @@ importer is fork code, which is the good case. Three had to be given their `expo
   still defined, still called internally, no longer exported. The fork's `claudeCliContextWindow`
   switch (invariant 22) needs the window **mode** (`"1m"`), and upstream's surviving
   `resolveClaudeCatalogContextWindowTokens` returns a token count, so it is not a substitute.
+- **`SettingsSearchTargetProvider`** (`apps/web/src/components/settings/settingsLayout.tsx`) -
+  un-exported by upstream #9917 with its only upstream test; the fork's
+  `settingsLayout.dom.test.tsx` drives it directly. Restored at the 38th reconcile.
 - **`ComposerServerUpdateIcon`** (`apps/web/src/components/chat/ComposerServerUpdateStatus.tsx`) -
   the inverse direction. The **fork** had deleted it as unused; upstream's new
   `useAutoBalanceUpdateBanner` imports it, so the merge arrived with a live caller and the
@@ -1260,6 +1271,77 @@ places is unrelated and kept: the Queue drag-out (`fromQueue`, `leavingSection`,
 the footer panels' `items-end` row (5b), and `formatRelativeTime`'s `nowMs` parameter, which the
 fork's task panels pass.
 
+### 52. Upstream's queue-or-steer setting and its keybinding are rejected with the client queue
+
+Upstream #11964 added `followUpBehavior` ("queue" | "steer") and a `thread.steerQueuedMessage`
+keybinding (`mod+shift+enter`); #12075 turned `mod+Enter` while a turn runs into an `"alternate"`
+submission that flips that setting for one message. All three drive the client-side queue rejected
+in invariant 50, and this fork has no steer (invariant 5), so the 38th reconcile removed the
+setting (schema, patch, its contracts test, the General row, its search entry, its restore
+entries), the keybinding (contracts, shared defaults, `keybindings.test.ts`) and the docs that
+describe them. `sendShortcut` from #12075 is independent and kept. The `"alternate"` intent in
+`composer-logic.ts` is kept as upstream wrote it; `ChatView` treats it like `"foreground"`, which
+here means the send queues server-side like any mid-turn send.
+
+After an upstream commit that touches this, grep `apps/web/src`, `packages/contracts/src` and
+`packages/shared/src` for `followUpBehavior` and `steerQueuedMessage`: expect 0.
+
+### 53. `ProjectionCheckpointRepository` is fork-owned now; upstream deleted it as dead
+
+Upstream #9917 ("remove obsolete code") deleted `persistence/{Layers,Services}/ProjectionCheckpoints.ts`
+and inlined the checkpoint row schema into `ProjectionSnapshotQuery.ts`. The fork's copy carries
+`memberStates` (migration id 40), and `ProjectionSnapshotQuery` still decodes checkpoint rows
+through `ProjectionCheckpoint.mapFields`, so the files are kept (restored from `personal`) with the
+fork's schema. `ProjectionRepositories.test.ts` still exercises the legacy-NULL decode through the
+repository. A later upstream commit re-inlining the schema will conflict in `ProjectionSnapshotQuery`;
+keep `memberStates` in whichever schema survives.
+
+### 54. A folder opened from chat shows the fork's listing, not upstream's revealed tree
+
+Upstream #10909 answers "a chat link to a folder" by hiding the preview pane and revealing the
+folder in the workspace tree (`file.isNotFile`, `previewPath`). The fork's `1d1b15f84` answers the
+same failure with a browsable listing in the preview pane (`useDirectoryListingQuery`), which also
+works for a host path outside the workspace - upstream's leaves those on a read error. The 38th
+reconcile kept `FilePreviewPanel.tsx` byte-identical to `personal`. The rest of #10909
+(`projectFilesQueryState.isNotFile`, `FileBrowserPanel` reveal, `rightPanelStore` trailing-slash
+trim) merged and is harmless.
+
+### 55. Checkpoint capture is upstream's index reuse plus the fork's size bound and whole-op retry
+
+Upstream's #10792/#12154/#12181/#10944 rewrote `captureCheckpoint` in `vcs/GitVcsDriver.ts`:
+copy the real index, `read-tree --reset HEAD`, restore a racy timestamp, fall back on any
+assume-unchanged / non-sparse skip-worktree flag, sparse-checkout support, empty-nested-repo
+recovery, and fsync'd writes. That is a superset of the fork's own seeding (`resolveGitIndexPath`,
+`realIndexHasSkipBits`), which the 38th reconcile removed. Two fork pieces stay on top and must
+survive: `enumerateOversizedUntracked` (its `:(exclude,literal)` pathspecs are prepended to every
+`stageFiles` call, including the nested-repo retry) and the whole-operation `captureRetryPolicy`
+(on `resolveGitCommonDir` and around the body). Upstream's per-command transient retry in
+`VcsProcess.run` (#11665) is complementary and kept. Upstream's racy stamp now calls the fork's
+`copiedIndexStampSeconds`, which keeps its unit test pinned to the production path.
+
+### 56. The fork's arraybuffer WebSocket constructor must accept effect's options argument
+
+`apps/web/src/lib/runtime.ts` and `apps/mobile/src/lib/runtime.ts` replace effect's
+`layerWebSocketConstructorGlobal` to force `binaryType = "arraybuffer"` (Blob frames decode
+asynchronously and reordered under load). effect rc.115 widened the constructor's second argument from
+protocols to `string | string[] | WebSocketClientOptions`; both wrappers now carry effect's own
+guard (throw on client options, pass protocols through). A future effect bump that changes the
+signature again shows up as a typecheck error in exactly these two files.
+
+### 57. Every copied git index is re-stamped below its source, not only the checkpoint one
+
+A copy of `.git/index` is stamped "now", so an entry rewritten in the source index's own second
+stops looking racy and a same-size edit reads as unchanged. Upstream's capture re-stamps its copy
+(`copiedIndexStampSeconds`); its review diff's `prepareReviewIndex` in `GitVcsDriverCore.ts` did
+not, and the diff panel could hide a real edit whenever the copy landed a second after the write
+(measured 5/5 with a 1 s delay, 0/5 against the real index). The 38th reconcile re-stamps that
+copy too, after the two commands that rewrite it; `sees a same-size edit made in the same second
+as the index` pins it. Any new `copyFile` of an index needs the same stamp.
+
+Also from the 38th: capture's oversized-untracked scan (invariant 55) runs on the REAL index, so a
+corrupt user index fails it. Capture now logs and captures without the bound on a git exit;
+restore must keep failing there, since an empty set would let `git clean` delete the large files.
+
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 
 `t3code/no-manual-effect-runtime-in-tests` permits no NET-NEW manual runners per file, via a
@@ -1352,6 +1434,10 @@ own:
   a reactor is now a compile error. Do **not** rename `Lossless` away to match upstream - that
   re-opens exactly this door, and upstream's accessor is unbounded, so a later upstream change to
   it would land unreviewed.
+
+  The 38th reconcile fired the tripwire as designed: upstream moved `ThreadSettlementReactor`,
+  `PullRequestSyncReactor` and the new `storageCleanup` onto `subscribeDomainEvents`, typecheck
+  named all three plus two test stubs, and each now takes `subscribeDomainEventsLossless`.
 
   **Probing this invariant.** The compiler now enforces the half that mattered: there is no bounded
   accessor left to bind to. For the rest, grep non-test server source for `subscribeDomainEvents`

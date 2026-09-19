@@ -126,6 +126,10 @@ export interface CursorAdapterLiveOptions {
   readonly pollAccountUsage?: Effect.Effect<AccountUsageUpdatedPayload | null>;
   /** Interval between account usage polls. Defaults to 60 seconds. */
   readonly usagePollInterval?: Duration.Duration;
+  readonly onAvailableCommands?: (
+    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+    cwd: string,
+  ) => Effect.Effect<void>;
 }
 
 interface PendingApproval {
@@ -894,6 +898,11 @@ export function makeCursorAdapter(
                     return;
                   case "ModeChanged":
                     return;
+                  case "AvailableCommandsUpdated":
+                    yield* (
+                      options?.onAvailableCommands?.(event.availableCommands, cwd) ?? Effect.void
+                    );
+                    return;
                   case "AssistantItemStarted":
                     ctx.assistantReply = new CursorTransportFailure();
                     yield* offerRuntimeEvent(
@@ -948,6 +957,27 @@ export function makeCursorAdapter(
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
                         toolCall: event.toolCall,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "ThoughtDelta":
+                    // Thoughts are narration, not the reply: they stay out of
+                    // `assistantReply` so a resumed turn replays only answers.
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        streamKind: "reasoning_text",
+                        text: event.text,
                         rawPayload: event.rawPayload,
                       }),
                     );
@@ -1160,20 +1190,26 @@ export function makeCursorAdapter(
           // Substituting the response the agent would have produced, rather
           // than returning early, keeps the turn record, session update,
           // completion gate and in-flight decrement below running unchanged.
+          //
+          // ACP commands parse the complete text. Extra context can turn an exact
+          // command into an ordinary model prompt or change its arguments.
           const result =
             ctx.cancelGeneration !== cancelGenerationAtRequest
               ? { stopReason: "cancelled" as const }
               : yield* ctx.acp
                   .prompt({
-                    // ACP has no system-message field; keep runtime context separate
-                    // from the user's text.
-                    prompt: [
-                      ...promptParts,
-                      {
-                        type: "text",
-                        text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
-                      },
-                    ],
+                    prompt: /^\/[^\s/]+(?:\s|$)/.test(rawPrompt)
+                      ? promptParts
+                      : [
+                          ...promptParts,
+                          {
+                            type: "text",
+                            text: buildRuntimeInstructions({
+                              harness: "Cursor",
+                              model: resolvedModel,
+                            }),
+                          },
+                        ],
                   })
                   .pipe(
                     Effect.mapError((error) =>

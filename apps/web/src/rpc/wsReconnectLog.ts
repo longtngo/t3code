@@ -36,7 +36,8 @@ export type WsReconnectPhase =
   | "connecting"
   | "reconnecting"
   | "connected"
-  | "error";
+  | "error"
+  | "unsupported";
 
 export function wsReconnectLoggingEnabled(): boolean {
   try {

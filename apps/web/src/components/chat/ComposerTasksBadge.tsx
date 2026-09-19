@@ -40,9 +40,9 @@ function TaskSummary({
           className={progress.completedSteps >= progress.totalSteps ? "text-success" : undefined}
           data-composer-task-progress="true"
         >
-          {progress.completedSteps}/{progress.totalSteps} complete
+          {progress.completedSteps}/{progress.totalSteps}
         </ComposerBanner.Count>
-        <TaskSegments className="hidden w-20 sm:flex" steps={steps} />
+        <TaskSegments className="hidden w-20 @min-[560px]:flex" steps={steps} />
         <ComposerBanner.ToggleIcon expanded={expanded} />
       </ComposerBanner.Actions>
     </>
