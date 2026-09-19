@@ -84,7 +84,20 @@ export function SidebarQueueBlock(props: {
           // Pushed into the empty space below the rows while a main-list drag runs: the preview
           // opens space where the Queue sits, and a zone that moves with it is a target the
           // pointer chases. It shares the free space with the shelves' own auto margin.
-          props.dragging && "border border-dashed border-sidebar-foreground/25",
+          // Above the sorting preview AND opaque. The preview moves rows by TRANSFORM, which cannot
+          // push this header aside: it is not a sortable item, just a plain li in normal flow. So
+          // whenever the list already scrolls at drag start the collapse below is skipped, the header
+          // stays inline under the last Active row, and a shifted row lands on top of it - covering
+          // 810 of 810 sampled header pixels and 100% of the Queue toggle.
+          //
+          // `z-20` beats the transformed li, which is its own stacking context (NOT the row card's
+          // `z-10`, which that context already caps). But z alone only wins the HIT TEST: both
+          // elements are transparent, so the row's title still rendered across the drop zone and the
+          // leaked ink barely moved. `bg-sidebar` is what actually hides it - and it must stay a
+          // whole token, since `bg-sidebar/50` is see-through and defeated both gates written for
+          // this.
+          props.dragging &&
+            "relative z-20 border border-dashed border-sidebar-foreground/25 bg-sidebar",
           props.collapse && "mt-auto",
           isOver && "border-primary/40 bg-primary/5",
         )}

@@ -36,6 +36,13 @@ function render(dragging: boolean, collapse: boolean) {
   );
 }
 
+/** The class attribute of the element carrying the queue-header testid, and nothing else's. */
+function headerClass(markup: string) {
+  const tag = markup.match(/<[^>]*data-testid="sidebar-queue-header"[^>]*>/)?.[0];
+  if (tag === undefined) throw new Error("no queue header in the markup");
+  return tag.match(/class="([^"]*)"/)?.[1] ?? "";
+}
+
 describe("SidebarQueueBlock", () => {
   it("lists the queued rows at rest", () => {
     const markup = render(false, false);
@@ -61,5 +68,19 @@ describe("SidebarQueueBlock", () => {
     expect(markup).not.toContain("mt-auto");
     expect(markup).toContain("border-dashed");
     expect(markup).not.toContain("Queue (2)");
+    // This is the state the header gets covered in - no slack to collapse into, so the sorting
+    // preview shifts a row onto it. BOTH classes are load-bearing and neither is cosmetic: z-20
+    // wins the hit test against the transformed row, and the background is what stops the row's
+    // title rendering through. Measured live with a sentinel background on the rows: with both,
+    // 0 of 6480 band pixels show row ink; with z-20 alone, 5953; with neither, 6088.
+    //
+    // Two traps, both of which a real mutation walked through:
+    //  - read the HEADER's own class attribute, not the whole markup - a plain
+    //    `toContain("bg-sidebar")` matches other elements in this tree and stayed green with the
+    //    background deleted;
+    //  - match `bg-sidebar` as a WHOLE token - as a substring it also accepts `bg-sidebar/50`, a
+    //    half-transparent header you can read the row's title straight through.
+    expect(headerClass(markup).split(/\s+/)).toContain("z-20");
+    expect(headerClass(markup).split(/\s+/)).toContain("bg-sidebar");
   });
 });
