@@ -1356,6 +1356,21 @@ restore must keep failing there, since an empty set would let `git clean` delete
 For the same reason a listing too large to size (truncated at 16 MiB) comes back `null`, not
 empty: capture adds everything, and restore skips `git clean` entirely with a warning.
 
+### 58. Upstream's restyle ceiling does not hold here, and is left alone
+
+Upstream's `scripts/lint-restyle-ceiling.ts` caps `shadcn(no-restyle)` findings (className
+overrides on `components/ui` exports) at a number it lowers as it migrates. It runs only in
+upstream's CI, not in `pnpm verify`. At the 39th reconcile upstream sat exactly at its ceiling
+(1207) and the fork at 1254: the net +47 is entirely fork-owned files (`LocalLlmSettings`,
+`WorkspaceMemberEditor`, `TaskListPanel`, the three sidebar footer panels, `WorkEntryDetailDialog`,
+`ComposerShortcutsControls`, `viewer.$`, `VitalsGauge`, plus a few lines in `GitActionsControl` and
+`ComposerPrimaryActions`), minus the deleted `ContextWindowMeter`.
+
+The constant is deliberately NOT raised: nothing here runs it, and a fork value would conflict every
+time upstream lowers it. A red `pnpm run lint:restyle-ceiling` on this fork is expected. To measure
+the fork's share, lint an `origin/main` worktree with `vp lint --format json apps/web/src` and diff
+per file. New fork UI should still use variants, per the Taste rule in `AGENTS.md`.
+
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 
 `t3code/no-manual-effect-runtime-in-tests` permits no NET-NEW manual runners per file, via a
