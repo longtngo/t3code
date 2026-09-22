@@ -2083,9 +2083,35 @@ export default function GitActionsControl({
         </MenuPopup>
       </Menu>
     ) : null;
+  // The header keeps this instance mounted when it collapses into a menu, so a
+  // repository picked while wide is still the target there. Show it and let it change.
+  const repositoryMenu =
+    workspaceRepos.length > 1 && threadKey !== null ? (
+      <MenuSub>
+        <MenuSubTrigger density="touch" aria-label="Repository for git actions">
+          <FolderGit2Icon className="size-4" />
+          <MenuItemLabel>{activeRepo?.title ?? ""}</MenuItemLabel>
+        </MenuSubTrigger>
+        <MenuSubPopup>
+          {workspaceRepos.map((repo) => (
+            <MenuItem
+              key={repo.id}
+              density="touch"
+              onClick={() => setRepoSelection({ threadKey, repoId: repo.id })}
+            >
+              <MenuItemLabel>{repo.title}</MenuItemLabel>
+              {repo.id === activeRepo?.id ? (
+                <CheckIcon className="ml-auto size-4" aria-hidden />
+              ) : null}
+            </MenuItem>
+          ))}
+        </MenuSubPopup>
+      </MenuSub>
+    ) : null;
 
   return (
     <>
+      {presentation === "menu" ? repositoryMenu : null}
       {presentation === "menu" ? (
         !isRepo ? (
           <MenuItem
