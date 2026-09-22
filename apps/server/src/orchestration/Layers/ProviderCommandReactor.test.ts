@@ -3126,12 +3126,15 @@ describe("ProviderCommandReactor", () => {
     // `git worktree repair` cannot undo it. The recreate takes over its own
     // registered path instead.
     expect(harness.pruneWorktrees).not.toHaveBeenCalled();
-    expect(harness.createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-project",
-      refName: "feature/restore",
-      path: worktreePath,
-      reuseRegisteredPath: true,
-    });
+    expect(harness.createWorktree).toHaveBeenCalledWith(
+      {
+        cwd: "/tmp/provider-project",
+        refName: "feature/restore",
+        path: worktreePath,
+        reuseRegisteredPath: true,
+      },
+      { submodules: null },
+    );
     expect(harness.createWorktree.mock.invocationCallOrder[0]).toBeLessThan(
       harness.startSession.mock.invocationCallOrder[0]!,
     );

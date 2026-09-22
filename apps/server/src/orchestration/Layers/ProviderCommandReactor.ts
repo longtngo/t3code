@@ -41,6 +41,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
@@ -77,6 +78,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { workspaceMemberGrantChanged } from "./workspaceMemberGrant.ts";
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterSessionClosedError = Schema.is(ProviderAdapterSessionClosedError);
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
@@ -437,6 +439,9 @@ const make = Effect.gen(function* () {
     if (isProviderAdapterRequestError(failReason?.error)) {
       return failReason.error.detail;
     }
+    if (isProviderAdapterProcessError(failReason?.error)) {
+      return failReason.error.detail;
+    }
     if (isProviderAdapterValidationError(failReason?.error)) {
       return failReason.error.issue;
     }
@@ -591,8 +596,17 @@ const make = Effect.gen(function* () {
     // `git worktree repair` cannot put them back ("unable to locate repository").
     // The files and the branch survive; the registration does not. This runs on
     // every turn start, so a single absent mount could take out the rest.
+    // Best effort like the rest of this recovery: a settings read failure
+    // falls back to the checkout's t3.json.
+    const submodules = yield* projectSettingsForThread(thread.id).pipe(
+      Effect.map((settings) => settings.worktreeSubmodules),
+      Effect.orElseSucceed(() => null),
+    );
     yield* gitWorkflow
-      .createWorktree({ cwd, refName: branch, path: worktreePath, reuseRegisteredPath: true })
+      .createWorktree(
+        { cwd, refName: branch, path: worktreePath, reuseRegisteredPath: true },
+        { submodules },
+      )
       .pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)

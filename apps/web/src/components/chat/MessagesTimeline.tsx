@@ -104,6 +104,9 @@ import { WorkEntryDetailDialog } from "./WorkEntryDetailDialog";
 import { hasWorkEntryDetail } from "./workEntryDetail.logic";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown from "../ChatMarkdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Root, RootContent } from "mdast";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   BotIcon,
@@ -2448,10 +2451,15 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
           />
         }
       >
-        <Spinner className="size-3 shrink-0" />
+        <Spinner size="xs" className="shrink-0" />
         <span className="truncate">{scriptName}</span>
       </PopoverTrigger>
-      <PopoverPopup side="bottom" align="end" className="w-[32rem] max-w-[calc(100vw-2rem)] p-3">
+      <PopoverPopup
+        side="bottom"
+        align="end"
+        className="surface-glass! w-[28rem] max-w-[calc(100vw-2rem)]"
+        viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
+      >
         <WorktreeSetupCard
           snapshot={snapshot}
           embedded
@@ -2573,6 +2581,28 @@ function ThinkingTimelineRow() {
   );
 }
 
+function remarkThoughtPreview(fallback: string) {
+  return (tree: Root) => {
+    const plainText = (node: Root | RootContent): string => {
+      if (node.type === "html" || node.type === "definition") return "";
+      if ("alt" in node) return node.alt ?? "";
+      if ("value" in node) return node.value;
+      if ("children" in node) {
+        const separator = ["root", "blockquote", "list", "listItem", "table", "tableRow"].includes(
+          node.type,
+        )
+          ? " "
+          : "";
+        return node.children.map(plainText).join(separator);
+      }
+      return node.type === "break" ? " " : "";
+    };
+    tree.children = [
+      { type: "text", value: plainText(tree).replace(/\s+/g, " ").trim() || fallback },
+    ];
+  };
+}
+
 /**
  * Thinking inside a tool group has its own disclosure, preserved across recycling.
  * A group whose row already reads "Thought" (no visible tool) skips the header.
@@ -2606,7 +2636,13 @@ function ReasoningTraceBlock({
   }
   const label = streaming ? "Thinking" : "Thought";
   const collapsedPreview = messages.find((message) => message.text.trim().length > 0)?.text.trim();
-  const headerText = expanded ? label : (collapsedPreview ?? label);
+  const headerText = expanded ? (
+    label
+  ) : (
+    <ReactMarkdown remarkPlugins={[remarkGfm, [remarkThoughtPreview, label]]}>
+      {collapsedPreview ?? label}
+    </ReactMarkdown>
+  );
   return (
     <div className="flex flex-col">
       {showHeader ? (
@@ -3377,12 +3413,13 @@ function UserMessagePullRequestContextChip(props: {
   copyMarkdown: string;
   toneClassName: string;
 }) {
-  const { openPullRequest } = use(TimelineRowCtx);
+  const { activeThreadEnvironmentId, openPullRequest } = use(TimelineRowCtx);
   const metadata = props.record.pullRequest;
   if (metadata === undefined) return null;
   return (
     <PullRequestChip
       metadata={metadata}
+      environmentId={activeThreadEnvironmentId}
       label={reviewCommentContextLabel(props.record)}
       kindLabel={pullRequestContextKindLabel(props.record)}
       className={cn(CHAT_INLINE_CHIP_CLASS_NAME, props.toneClassName)}
@@ -3936,7 +3973,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
-  renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
+  renderContextReference?: (reference: ChatMarkdownContextReference) => ReactNode;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
 }) {
