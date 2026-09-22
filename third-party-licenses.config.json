@@ -169,6 +169,14 @@
       }
     },
     {
+      "name": "http_ece",
+      "sourceUrl": "https://github.com/martinthomson/encrypted-content-encoding",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Martin Thomson"]
+      }
+    },
+    {
       "name": "kubernetes-types",
       "generatedNotice": {
         "licenseId": "Apache-2.0"
