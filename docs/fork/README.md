@@ -25,7 +25,10 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-18 (38th reconcile, 181 commits), against `origin/main`. The 38th brought effect
+As of 2026-09-22 (39th reconcile, 87 commits), against `origin/main`. No effect bump; its one
+fork decision is recorded under invariant 40.
+
+The 38th (2026-09-18, 181 commits) brought effect
 rc.112 -> rc.115, Tiptap as the default composer editor, multi-model thread fan-out, provider
 thinking traces and storage cleanup; the entries 52-56 below are its decisions.
 
@@ -1034,6 +1037,15 @@ property it pins IS fork-relevant (the auth-failure message must name the config
 query was _actually_ spawned with, JSON-quoted, not a re-derived guess), so its rows drive
 `configDirPath` instead, and the blank row asserts the scrub end to end: no config dir in the env,
 and none named in the message.
+
+**39th reconcile: upstream #12624 is rejected whole.** It makes `resolveClaudeHomePath` fall back
+to an inherited `CLAUDE_CONFIG_DIR`, then `~/.claude`, and threads `processEnv` into both keys.
+Upstream's `homePath` IS the config dir; here it is `HOME`, and the fork's key appends `.claude`
+itself, so that rewrite (which merged OUTSIDE the markers) turns a blank instance's key into
+`~/.claude/.claude`. The bug it fixes (blank and explicit `~/.claude` in different groups) does not
+exist here: the key is the realpath of `<configDir>/projects` and an inherited config dir is
+scrubbed. `ClaudeHome.ts`, its test and `ClaudeDriver.ts` are the fork's. A future upstream edit to
+`resolveClaudeHomePath` needs the same check: same name, different setting.
 
 ### 36. Web tests run two projects; `--project dom` is fork-only
 
