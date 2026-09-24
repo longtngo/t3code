@@ -54,10 +54,9 @@ describe("DiffCommentAnnotation", () => {
     // `autoFocus` never reaches the DOM as an attribute on the client; React focuses the node
     // instead, so the focus itself is the only observable form of that prop.
     expect(document.activeElement).toBe(view.find("textarea"));
+    // The comment box is the standard small Textarea, not a bespoke surface.
     const textareaControl = view.find("[data-slot='textarea-control']");
-    expect(textareaControl).not.toBeNull();
-    expect(textareaControl?.className).not.toContain("ring-ring");
-    expect(view.findAll("[class*='cursor-text']").length).toBeGreaterThan(0);
+    expect(textareaControl?.getAttribute("data-size")).toBe("sm");
   });
 
   it("lets a pull-request diff configure actions without replacing the composer", async () => {

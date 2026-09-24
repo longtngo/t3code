@@ -27,3 +27,11 @@ export function sidebarFooterBadgeClass(tone: SidebarFooterBadgeTone): string {
 export function sidebarFooterSeverityBadgeClass(level: Severity): string {
   return `${BADGE_BASE} ${SEVERITY_BG[level]} font-semibold text-black`;
 }
+
+/**
+ * The footer's status controls themselves: a compact, auto-width pill holding an icon and a
+ * badge. A plain button rather than a restyled `SidebarMenuButton`, because this look belongs
+ * to these controls and `components/ui` exports own theirs.
+ */
+export const SIDEBAR_FOOTER_CONTROL_CLASS =
+  "flex h-8 w-auto shrink-0 cursor-pointer items-center gap-1 overflow-hidden rounded-lg px-1.5 text-muted-foreground/70 text-xs outline-hidden ring-ring transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 [&>svg]:shrink-0";

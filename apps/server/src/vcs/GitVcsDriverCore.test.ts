@@ -1503,39 +1503,50 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    // FORK: the review index is a copy of the real one. Stamped "now", a same-size edit
-    // made in the index's own second stopped looking racy and vanished from the diff.
-    it.effect("sees a same-size edit made in the same second as the index", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const pathService = yield* Path.Path;
-        // Pin the second everything happens in; ctime is left out so only mtime decides.
-        const second = 1_700_000_000;
-        const filePath = pathService.join(cwd, "same-size.txt");
-        yield* git(cwd, ["config", "core.trustctime", "false"]);
-        yield* writeTextFile(cwd, "same-size.txt", "changed\n");
-        yield* fileSystem.utimes(filePath, second, second);
-        yield* git(cwd, ["add", "same-size.txt"]);
-        yield* git(cwd, ["commit", "-m", "add same-size file"]);
-        yield* writeTextFile(cwd, "same-size.txt", "updated\n");
-        yield* fileSystem.utimes(filePath, second, second);
-        yield* fileSystem.utimes(pathService.join(cwd, ".git", "index"), second, second);
-        // An untracked file is what routes the read through the copied index.
-        yield* writeTextFile(cwd, "untracked.txt", "new\n");
+    for (const [timestamp, splitIndex] of [
+      [1_700_000_000, false],
+      [1_700_000_000.9999, false],
+      [1_700_000_000, true],
+      [1_700_000_000.9999, true],
+    ] as const) {
+      it.effect(
+        `preserves same-size edits with a racy review index (${timestamp}, split: ${splitIndex})`,
+        () =>
+          Effect.gen(function* () {
+            const cwd = yield* makeTmpDir();
+            yield* initRepoWithCommit(cwd);
+            const driver = yield* GitVcsDriver.GitVcsDriver;
+            const fileSystem = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const filePath = path.join(cwd, "tracked.txt");
+            const indexPath = path.join(cwd, ".git", "index");
+            // Reproduce a same-timestamp edit without relying on filesystem clock resolution.
+            yield* git(cwd, ["config", "core.trustctime", "false"]);
+            yield* writeTextFile(cwd, "tracked.txt", "before\n");
+            yield* fileSystem.utimes(filePath, timestamp, timestamp);
+            yield* git(cwd, ["add", "tracked.txt"]);
+            yield* git(cwd, ["commit", "-m", "record racy file"]);
+            if (splitIndex) yield* git(cwd, ["update-index", "--split-index"]);
+            yield* fileSystem.utimes(indexPath, timestamp, timestamp);
+            const originalIndex = yield* fileSystem.readFile(indexPath);
+            const originalIndexMtime = (yield* fileSystem.stat(indexPath)).mtime;
+            yield* writeTextFile(cwd, "tracked.txt", "after!\n");
+            yield* fileSystem.utimes(filePath, timestamp, timestamp);
+            yield* writeTextFile(cwd, "untracked.txt", "new\n");
 
-        const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
-        const dirty = preview.sources.find((source) => source.kind === "working-tree")!;
-
-        assert.deepStrictEqual(
-          dirty.files?.map((file) => file.path),
-          ["same-size.txt", "untracked.txt"],
-        );
-        assert.include(dirty.diff, "+updated");
-      }),
-    );
+            const preview = yield* driver.getReviewDiffPreview({ cwd });
+            const dirty = preview.sources.find((source) => source.kind === "working-tree")!;
+            assert.deepStrictEqual(dirty.files, [
+              { path: "tracked.txt", previousPath: null, additions: 1, deletions: 1 },
+              { path: "untracked.txt", previousPath: null, additions: 1, deletions: 0 },
+            ]);
+            assert.include(dirty.diff, "-before");
+            assert.include(dirty.diff, "+after!");
+            assert.deepStrictEqual(yield* fileSystem.readFile(indexPath), originalIndex);
+            assert.deepStrictEqual((yield* fileSystem.stat(indexPath)).mtime, originalIndexMtime);
+          }),
+      );
+    }
 
     it.effect("keeps complete stats for files beyond the combined patch limit", () =>
       Effect.gen(function* () {

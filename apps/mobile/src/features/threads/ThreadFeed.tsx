@@ -200,7 +200,7 @@ import {
   ThreadMarkdownImageView,
 } from "./ThreadMarkdownImage";
 import { JiraTicketLinksContext } from "@t3tools/mobile-markdown-text/jira-links";
-import { useJiraTicketLinks } from "../../lib/useJiraTicketLinks";
+import { useJiraTicketLinks } from "../../state/useJiraTicketLinks";
 
 /** `ml-7` gutter plus the `px-3` padding of the expanded reasoning container. */
 const REASONING_CONTENT_INSET = 52;

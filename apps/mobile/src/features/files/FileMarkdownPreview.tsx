@@ -12,7 +12,7 @@ import { RefreshControl, ScrollView, Text as NativeText, View } from "react-nati
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useFontFamily } from "../../lib/useFontFamily";
-import { useJiraTicketLinks } from "../../lib/useJiraTicketLinks";
+import { useJiraTicketLinks } from "../../state/useJiraTicketLinks";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,

@@ -74,7 +74,7 @@ function ShortcutManagerDialog({
             Buttons above the composer that insert a saved prompt. Reorder with the arrows.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-2.5">
+        <DialogPanel>
           {draft.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
               No shortcuts yet. Add one to get started.
@@ -139,10 +139,9 @@ function ShortcutManagerDialog({
                   </div>
                 </div>
                 <Button
-                  variant="ghost"
+                  variant="ghost-destructive"
                   size="icon-sm"
                   aria-label="Delete shortcut"
-                  className="text-muted-foreground hover:text-destructive"
                   onClick={() => remove(index)}
                 >
                   <Trash2Icon className="size-4" />
@@ -150,7 +149,7 @@ function ShortcutManagerDialog({
               </div>
             ))
           )}
-          <Button variant="outline" className="w-full border-dashed" onClick={add}>
+          <Button variant="outline" className="w-full" onClick={add}>
             <PlusIcon className="size-4" /> Add shortcut
           </Button>
         </DialogPanel>

@@ -25,10 +25,13 @@ import { getAppModelOptionsForInstance } from "~/modelSelection";
 import { primaryServerProvidersAtom } from "~/state/server";
 import { WindowRow } from "~/components/chat/VitalsGauge";
 import { computeWindowPace, cycleWindow, paceDiffLabel, windowSeverity } from "~/lib/vitals";
-import { sidebarFooterSeverityBadgeClass } from "./sidebarFooterBadge";
+import {
+  SIDEBAR_FOOTER_CONTROL_CLASS,
+  sidebarFooterSeverityBadgeClass,
+} from "./sidebarFooterBadge";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SidebarMenuItem } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -201,9 +204,9 @@ export function SidebarSubagentBackend() {
         <Tooltip>
           <TooltipTrigger
             render={
-              <SidebarMenuButton
-                size="sm"
-                className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+              <button
+                type="button"
+                className={SIDEBAR_FOOTER_CONTROL_CLASS}
                 onClick={() => setOpen((value) => !value)}
                 aria-expanded={open}
                 aria-controls={open ? PANEL_ID : undefined}
@@ -212,12 +215,7 @@ export function SidebarSubagentBackend() {
                 {pending ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : status.dot === "on" ? (
-                  // Wrapped, not coloured directly: the menu button colours its direct `svg`
-                  // children with a more specific selector (hover included), so a class on the
-                  // icon itself never shows.
-                  <span className="flex text-emerald-500">
-                    <BotIcon className="size-3.5" />
-                  </span>
+                  <BotIcon className="size-3.5 text-emerald-500" />
                 ) : (
                   <BotIcon className="size-3.5" />
                 )}
@@ -233,7 +231,7 @@ export function SidebarSubagentBackend() {
                     {usagePace.usage}%
                   </span>
                 ) : null}
-              </SidebarMenuButton>
+              </button>
             }
           />
           {/* The row used to print the status beside its label; an icon has nowhere to put it. */}

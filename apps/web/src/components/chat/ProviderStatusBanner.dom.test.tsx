@@ -77,10 +77,10 @@ describe("ProviderStatusBanner", () => {
     );
 
     expect(view.find('[role="alert"]')).not.toBeNull();
-    // Pinned to the banner's own corner rather than laid out in the flow, so a
-    // long message cannot push the dismiss control out of reach.
+    // In the alert's own action column rather than the message flow, so a long
+    // message cannot push the dismiss control out of reach.
     expect(
-      view.find('button[aria-label="Dismiss Codex provider warning"].absolute.top-2.right-2'),
+      view.find('[data-slot="alert-action"] button[aria-label="Dismiss Codex provider warning"]'),
     ).not.toBeNull();
   });
 

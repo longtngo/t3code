@@ -1137,6 +1137,7 @@ export interface DesktopBridge {
   getClientPlatform?: () => string;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
+  onTrackpadScrollEnd?: (listener: () => void) => () => void;
   /**
    * Resolve the absolute filesystem path of a dropped `File`, via Electron's
    * `webUtils.getPathForFile`. Returns "" when the file has no real path backing

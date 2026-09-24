@@ -5,8 +5,8 @@ import type { ResourceQueueItem } from "@t3tools/contracts";
 import { cn } from "../../lib/utils";
 import { useResourceQueue } from "../../hooks/useResourceQueue";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
-import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SIDEBAR_FOOTER_CONTROL_CLASS, sidebarFooterBadgeClass } from "./sidebarFooterBadge";
+import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   resourceAccent,
@@ -340,9 +340,9 @@ export function SidebarResourceQueue({
      * tooltip could. The `aria-label` carries the name for screen readers.
      */
     <SidebarMenuItem className="static shrink-0" onMouseEnter={onEnter} onMouseLeave={onLeave}>
-      <SidebarMenuButton
-        size="sm"
-        className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+      <button
+        type="button"
+        className={SIDEBAR_FOOTER_CONTROL_CLASS}
         onClick={togglePin}
         aria-expanded={open}
         aria-controls={open ? RESOURCE_QUEUE_PANEL_ID : undefined}
@@ -366,7 +366,7 @@ export function SidebarResourceQueue({
         ) : null}
         <CountBadge n={running.length} kind="run" />
         <CountBadge n={waiting.length} kind="wait" />
-      </SidebarMenuButton>
+      </button>
 
       {open ? (
         <div

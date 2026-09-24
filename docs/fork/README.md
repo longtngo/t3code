@@ -25,8 +25,10 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-22 (39th reconcile, 87 commits), against `origin/main`. No effect bump; its one
-fork decision is recorded under invariant 40.
+As of 2026-09-24 (40th reconcile, 88 commits), against `origin/main`. No effect bump. Upstream
+made `shadcn/no-restyle` a lint error, so the fork's own restyles were migrated (invariant 58), and
+upstream's review-index fix replaced the fork's (invariant 57). The 39th (2026-09-22, 87 commits)
+recorded one decision under invariant 40.
 
 The 38th (2026-09-18, 181 commits) brought effect
 rc.112 -> rc.115, Tiptap as the default composer editor, multi-model thread fan-out, provider
@@ -1343,12 +1345,13 @@ signature again shows up as a typecheck error in exactly these two files.
 ### 57. Every copied git index is re-stamped below its source, not only the checkpoint one
 
 A copy of `.git/index` is stamped "now", so an entry rewritten in the source index's own second
-stops looking racy and a same-size edit reads as unchanged. Upstream's capture re-stamps its copy
-(`copiedIndexStampSeconds`); its review diff's `prepareReviewIndex` in `GitVcsDriverCore.ts` did
-not, and the diff panel could hide a real edit whenever the copy landed a second after the write
-(measured 5/5 with a 1 s delay, 0/5 against the real index). The 38th reconcile re-stamps that
-copy too, after the two commands that rewrite it; `sees a same-size edit made in the same second
-as the index` pins it. Any new `copyFile` of an index needs the same stamp.
+stops looking racy and a same-size edit reads as unchanged. Capture re-stamps its copy
+(`copiedIndexStampSeconds`), and so does the review diff's `prepareReviewIndex` in
+`GitVcsDriverCore.ts`. The fork fixed the review copy first (38th reconcile, stamping after git
+rewrote it); upstream #12613 shipped its own fix, stamping right after the copy so git sees the
+racy entries and smudges them when it rewrites. The 40th reconcile adopted upstream's and its
+four-arm test (split index, fractional mtime, real index untouched), which covers the fork's case.
+Any new `copyFile` of an index needs the same stamp.
 
 Also from the 38th: capture's oversized-untracked scan (invariant 55) runs on the REAL index, so a
 corrupt user index fails it. Capture now logs and captures without the bound on a git exit;
@@ -1356,20 +1359,14 @@ restore must keep failing there, since an empty set would let `git clean` delete
 For the same reason a listing too large to size (truncated at 16 MiB) comes back `null`, not
 empty: capture adds everything, and restore skips `git clean` entirely with a warning.
 
-### 58. Upstream's restyle ceiling does not hold here, and is left alone
+### 58. `shadcn/no-restyle` is a lint error here too, so fork UI uses variants
 
-Upstream's `scripts/lint-restyle-ceiling.ts` caps `shadcn(no-restyle)` findings (className
-overrides on `components/ui` exports) at a number it lowers as it migrates. It runs only in
-upstream's CI, not in `pnpm verify`. At the 39th reconcile upstream sat exactly at its ceiling
-(1207) and the fork at 1254: the net +47 is entirely fork-owned files (`LocalLlmSettings`,
-`WorkspaceMemberEditor`, `TaskListPanel`, the three sidebar footer panels, `WorkEntryDetailDialog`,
-`ComposerShortcutsControls`, `viewer.$`, `VitalsGauge`, plus a few lines in `GitActionsControl` and
-`ComposerPrimaryActions`), minus the deleted `ContextWindowMeter`.
-
-The constant is deliberately NOT raised: nothing here runs it, and a fork value would conflict every
-time upstream lowers it. A red `pnpm run lint:restyle-ceiling` on this fork is expected. To measure
-the fork's share, lint an `origin/main` worktree with `vp lint --format json apps/web/src` and diff
-per file. New fork UI should still use variants, per the Taste rule in `AGENTS.md`.
+Upstream #13210 turned the rule into an error and deleted its CI-only restyle ceiling. The 40th
+reconcile migrated the fork's 40 findings the way upstream migrated its own: a variant or size
+(`ghost-destructive`, `font="mono"`, `padding="none"`), spacing moved to a wrapper, or a plain
+element where the look belongs to one feature (the sidebar footer controls share
+`SIDEBAR_FOOTER_CONTROL_CLASS` in `sidebarFooterBadge.ts`). A new className on a `components/ui`
+export now fails `pnpm verify` at lint, which cancels the test step (invariant 45).
 
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 

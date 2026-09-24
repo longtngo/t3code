@@ -14,7 +14,7 @@ import {
   localModelsBadge,
   mergeConfigsWithSample,
 } from "./sidebarLocalModels.logic";
-import { sidebarFooterBadgeClass } from "./sidebarFooterBadge";
+import { SIDEBAR_FOOTER_CONTROL_CLASS, sidebarFooterBadgeClass } from "./sidebarFooterBadge";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -25,7 +25,7 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** Status -> dot colour for the local-model rows below. */
@@ -162,9 +162,9 @@ export function SidebarLocalModels({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton
-              size="sm"
-              className="h-8 w-auto gap-1 px-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            <button
+              type="button"
+              className={SIDEBAR_FOOTER_CONTROL_CLASS}
               onClick={() => onOpenChange(!isOpen)}
               aria-expanded={isOpen}
               aria-controls={isOpen ? LOCAL_MODELS_PANEL_ID : undefined}
@@ -176,7 +176,7 @@ export function SidebarLocalModels({
               <span aria-label={badge.label} className={sidebarFooterBadgeClass(badge.tone)}>
                 {online}
               </span>
-            </SidebarMenuButton>
+            </button>
           }
         />
         <TooltipPopup side="top">Local models</TooltipPopup>

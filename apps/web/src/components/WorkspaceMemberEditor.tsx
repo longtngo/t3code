@@ -257,17 +257,13 @@ export default function WorkspaceMemberEditor({
                 const isParent = itemPath === browsePath.parentPath;
                 const { name } = splitMemberPath(itemPath);
                 return (
-                  <AutocompleteItem
-                    className="gap-2 font-mono text-xs"
-                    key={itemPath}
-                    value={itemPath}
-                  >
+                  <AutocompleteItem key={itemPath} value={itemPath}>
                     {isParent ? (
                       <CornerLeftUpIcon className="size-3.5 shrink-0" />
                     ) : (
                       <FolderIcon className="size-3.5 shrink-0" />
                     )}
-                    <span className="truncate">{isParent ? "Go up" : name}</span>
+                    <span className="truncate font-mono text-xs">{isParent ? "Go up" : name}</span>
                   </AutocompleteItem>
                 );
               })}
@@ -301,14 +297,10 @@ export default function WorkspaceMemberEditor({
             </AutocompleteEmpty>
             <AutocompleteList>
               {branchItems.map((branchName) => (
-                <AutocompleteItem
-                  className="justify-between gap-2 font-mono text-xs"
-                  key={branchName}
-                  value={branchName}
-                >
-                  <span className="truncate">{branchName}</span>
+                <AutocompleteItem className="justify-between" key={branchName} value={branchName}>
+                  <span className="truncate font-mono text-xs">{branchName}</span>
                   {branchName === currentBranch ? (
-                    <span className="shrink-0 font-sans text-[0.6875rem] text-muted-foreground">
+                    <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
                       checked out
                     </span>
                   ) : null}

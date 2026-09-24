@@ -223,26 +223,30 @@ export function WorkEntryDetailDialog({
     <Dialog open={entry !== null} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <span className="min-w-0 truncate">{heading || "Work log entry"}</span>
-            {entry ? (
-              <span
-                className={cn(
-                  "shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                  TONE_CLASS[entry.tone],
-                )}
-              >
-                {TONE_LABEL[entry.tone]}
-              </span>
-            ) : null}
+          <DialogTitle>
+            <span className="flex items-center gap-2">
+              <span className="min-w-0 truncate">{heading || "Work log entry"}</span>
+              {entry ? (
+                <span
+                  className={cn(
+                    "shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                    TONE_CLASS[entry.tone],
+                  )}
+                >
+                  {TONE_LABEL[entry.tone]}
+                </span>
+              ) : null}
+            </span>
           </DialogTitle>
           {showCommandDescription ? (
-            <DialogDescription className="font-mono text-xs break-all">
-              {entry?.rawCommand ?? entry?.command}
+            <DialogDescription>
+              <span className="font-mono text-xs break-all">
+                {entry?.rawCommand ?? entry?.command}
+              </span>
             </DialogDescription>
           ) : null}
         </DialogHeader>
-        <DialogPanel className="space-y-3">
+        <DialogPanel>
           {showChangedFiles ? (
             <div>
               <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

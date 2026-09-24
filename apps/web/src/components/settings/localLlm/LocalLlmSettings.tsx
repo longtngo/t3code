@@ -351,35 +351,39 @@ function ModelConfigCard(props: {
               <ChevronRightIcon className="size-3.5" />
               Advanced — provider config overrides
             </CollapsibleTrigger>
-            <CollapsiblePanel className="space-y-3 pt-2">
-              <div className="text-[12px]">
-                <span className="mb-1 block text-muted-foreground">
-                  Launch args override (provider default:{" "}
-                  {providerDefaultArgs(settings, config.providerId).join("  ") || "none"})
-                </span>
-                <GroupedArgsInput
-                  value={config.argsOverride ?? []}
-                  onChange={(next) => patch({ argsOverride: next })}
-                  placeholder="leave empty to use the provider default"
-                />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-[12px]">
-                  <span className="mb-1 block text-muted-foreground">Port override</span>
-                  <DraftInput
-                    value={config.port != null ? String(config.port) : ""}
-                    onCommit={(v) =>
-                      patch({ port: v.trim() === "" ? undefined : Number(v) || undefined })
-                    }
+            <CollapsiblePanel>
+              <div className="space-y-3 pt-2">
+                <div className="text-[12px]">
+                  <span className="mb-1 block text-muted-foreground">
+                    Launch args override (provider default:{" "}
+                    {providerDefaultArgs(settings, config.providerId).join("  ") || "none"})
+                  </span>
+                  <GroupedArgsInput
+                    value={config.argsOverride ?? []}
+                    onChange={(next) => patch({ argsOverride: next })}
+                    placeholder="leave empty to use the provider default"
                   />
-                </label>
-                <label className="block text-[12px]">
-                  <span className="mb-1 block text-muted-foreground">Model path override</span>
-                  <DraftInput
-                    value={config.modelPathOverride ?? ""}
-                    onCommit={(v) => patch({ modelPathOverride: v.trim() === "" ? undefined : v })}
-                  />
-                </label>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-[12px]">
+                    <span className="mb-1 block text-muted-foreground">Port override</span>
+                    <DraftInput
+                      value={config.port != null ? String(config.port) : ""}
+                      onCommit={(v) =>
+                        patch({ port: v.trim() === "" ? undefined : Number(v) || undefined })
+                      }
+                    />
+                  </label>
+                  <label className="block text-[12px]">
+                    <span className="mb-1 block text-muted-foreground">Model path override</span>
+                    <DraftInput
+                      value={config.modelPathOverride ?? ""}
+                      onCommit={(v) =>
+                        patch({ modelPathOverride: v.trim() === "" ? undefined : v })
+                      }
+                    />
+                  </label>
+                </div>
               </div>
             </CollapsiblePanel>
           </Collapsible>
