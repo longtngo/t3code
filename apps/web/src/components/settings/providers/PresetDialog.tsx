@@ -64,9 +64,9 @@ export function PresetDialog(props: {
 
         <div className="space-y-4 px-4 py-3">
           <div>
-            <div className="mb-1.5 text-[12px] text-muted-foreground">Model config</div>
+            <div className="mb-1.5 text-xs text-muted-foreground">Model config</div>
             {models.length === 0 ? (
-              <p className="text-[12px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 No model configs yet — create one in Settings → Local LLM.
               </p>
             ) : (
@@ -81,7 +81,7 @@ export function PresetDialog(props: {
                       onClick={() => setConfigId(m.id)}
                     >
                       {m.name}
-                      <span className="ml-1.5 text-[10px] opacity-70">
+                      <span className="ml-1.5 text-3xs opacity-70">
                         {p?.name} :{m.port ?? p?.defaultPort}
                       </span>
                     </Button>
@@ -92,7 +92,7 @@ export function PresetDialog(props: {
           </div>
 
           <div>
-            <div className="mb-1.5 text-[12px] text-muted-foreground">Apply to instance</div>
+            <div className="mb-1.5 text-xs text-muted-foreground">Apply to instance</div>
             <div className="flex flex-wrap gap-1.5">
               {targets.map((t) => (
                 <Button
@@ -109,7 +109,7 @@ export function PresetDialog(props: {
 
           {preview && config && provider ? (
             <div className="rounded-lg border border-border">
-              <div className="border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
+              <div className="border-b border-border bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 Merged environment — http://
                 {settings.providers[config.providerId]?.host ?? provider.host}:
                 {config.port ?? provider.defaultPort}/v1
@@ -122,16 +122,16 @@ export function PresetDialog(props: {
                     <div
                       key={e.name}
                       className={cn(
-                        "flex items-center justify-between gap-2 px-3 py-1.5 text-[12px]",
-                        added && "bg-emerald-500/10",
-                        overridden && "bg-amber-500/10",
+                        "flex items-center justify-between gap-2 px-3 py-1.5 text-xs",
+                        added && "bg-success/10",
+                        overridden && "bg-warning/10",
                       )}
                     >
                       <code className="truncate">{e.name}</code>
                       <code className="truncate text-muted-foreground">
                         {e.sensitive ? "••••••" : e.value}
                       </code>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                      <span className="shrink-0 text-3xs text-muted-foreground">
                         {added ? "＋ added" : overridden ? "⚠ overrides" : "kept"}
                       </span>
                     </div>

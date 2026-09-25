@@ -1648,11 +1648,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // Retargeted for upstream #8799, which moved this spacer from a literal
-    // padding to the shared titlebar scroll-fade variable. Same subject.
-    expect(
-      view.find('[class~="pt-[var(--workspace-titlebar-scroll-fade-height)]"]'),
-    ).not.toBeNull();
+    // Retargeted for upstream #8799 (literal padding -> the shared titlebar
+    // scroll-fade variable) and #13397 (the variable's shorthand syntax).
+    expect(view.find('[class~="pt-(--workspace-titlebar-scroll-fade-height)"]')).not.toBeNull();
     expect(view.text()).toContain("Load earlier turns");
   });
 

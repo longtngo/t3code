@@ -30,11 +30,11 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** Status -> dot colour for the local-model rows below. */
 const MODEL_DOT_CLASS: Record<SidebarModelStatus, string> = {
-  online: "bg-green-500",
-  loading: "bg-amber-500",
-  stopping: "bg-amber-500",
+  online: "bg-success",
+  loading: "bg-warning",
+  stopping: "bg-warning",
   offline: "bg-muted-foreground/40",
-  error: "bg-red-500",
+  error: "bg-destructive",
 };
 
 /** Links the trigger to the panel it expands, matching its neighbour in the footer row. */
@@ -95,7 +95,7 @@ function ModelRow(props: {
         }
       >
         {transitional ? (
-          <Loader2Icon className="size-3 shrink-0 animate-spin text-amber-500" />
+          <Loader2Icon className="size-3 shrink-0 animate-spin text-warning" />
         ) : (
           <span
             className={cn("size-1.5 shrink-0 rounded-full", MODEL_DOT_CLASS[status])}
@@ -111,9 +111,7 @@ function ModelRow(props: {
           >
             {row.name}
           </span>
-          <span className="block truncate text-[10px] text-muted-foreground/60">
-            {rowMeta(row)}
-          </span>
+          <span className="block truncate text-3xs text-muted-foreground/60">{rowMeta(row)}</span>
         </span>
       </TooltipTrigger>
       <TooltipPopup>{title}</TooltipPopup>
@@ -188,12 +186,12 @@ export function SidebarLocalModels({
           className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg"
         >
           {/* The row shows only an icon and a dot, so the panel carries the name. */}
-          <div className="px-0.5 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="px-0.5 pb-2 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
             Local models
           </div>
           <div className="max-h-64 overflow-y-auto">
             {rows.length === 0 ? (
-              <div className="px-2 py-1.5 text-[11px] text-muted-foreground/60">
+              <div className="px-2 py-1.5 text-2xs text-muted-foreground/60">
                 No model configs yet. Add one in Settings → Local LLM.
               </div>
             ) : (
@@ -215,10 +213,10 @@ export function SidebarLocalModels({
             )}
           </div>
           {actionError ? (
-            <div className="px-2 pt-1 text-[10px] text-red-500">{actionError}</div>
+            <div className="px-2 pt-1 text-3xs text-destructive">{actionError}</div>
           ) : null}
           {sample?.ramBudgetBytes ? (
-            <div className="px-2 pt-1 text-[10px] text-muted-foreground/50">
+            <div className="px-2 pt-1 text-3xs text-muted-foreground/50">
               RAM {formatBytes(sample.ramUsedBytes ?? 0)} / {formatBytes(sample.ramBudgetBytes)}
             </div>
           ) : null}

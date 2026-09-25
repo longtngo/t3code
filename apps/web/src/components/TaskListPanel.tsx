@@ -98,14 +98,14 @@ function TaskListHeader({
         </span>
         <span
           className={cn(
-            "shrink-0 font-mono text-[.7rem] tabular-nums text-muted-foreground",
+            "shrink-0 font-mono text-2xs tabular-nums text-muted-foreground",
             total > 0 && completed === total && "text-success",
           )}
         >
           {completed}/{total} complete
         </span>
       </div>
-      <div className="flex min-w-0 items-center gap-2 text-[.7rem] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-2 text-2xs text-muted-foreground">
         {chip ? (
           <span
             className={cn(
@@ -143,13 +143,13 @@ const TaskHistoryGroup = memo(function TaskHistoryGroup({
         <span className="min-w-0 flex-1 truncate">{group.steps[0]?.step}</span>
         <span
           className={cn(
-            "shrink-0 font-mono text-[.7rem] tabular-nums",
+            "shrink-0 font-mono text-2xs tabular-nums",
             completed === total ? "text-muted-foreground" : "text-muted-foreground/60",
           )}
         >
           {completed}/{total}
         </span>
-        <span className="w-14 shrink-0 text-right text-[.7rem] text-muted-foreground/70">
+        <span className="w-14 shrink-0 text-right text-2xs text-muted-foreground/70">
           {formatRelativeTimeLabel(group.createdAt, nowMs)}
         </span>
       </CollapsibleTrigger>
@@ -210,7 +210,7 @@ export const TaskListPanel = memo(function TaskListPanel({
           <StepList plan={primary} />
           {history.length > 0 ? (
             <section className="flex flex-col gap-0.5 pt-2">
-              <div className="px-1.5 pb-1 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="px-1.5 pb-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
                 Earlier in this thread
               </div>
               {history.map((group) => (
@@ -220,7 +220,7 @@ export const TaskListPanel = memo(function TaskListPanel({
                   nowMs={nowMs}
                 />
               ))}
-              <p className="px-1.5 pt-1 text-[.7rem] text-muted-foreground/70">
+              <p className="px-1.5 pt-1 text-2xs text-muted-foreground/70">
                 Earlier turns are kept for 3 hours.
               </p>
             </section>

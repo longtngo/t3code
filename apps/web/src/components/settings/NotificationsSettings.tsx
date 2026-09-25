@@ -175,7 +175,7 @@ export function NotificationsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection title="What to notify me about">
-        <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
+        <p className="px-3 text-xs leading-normal text-muted-foreground/80 sm:px-4">
           These apply to every device connected to this environment. The switches above are
           per-device: they control whether this browser receives anything at all.
         </p>

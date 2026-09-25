@@ -108,7 +108,7 @@ function ShortcutManagerDialog({
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="space-y-1">
                     <label
-                      className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                      className="text-3xs font-medium uppercase tracking-wide text-muted-foreground"
                       htmlFor={`shortcut-label-${shortcut.id}`}
                     >
                       Button label
@@ -124,7 +124,7 @@ function ShortcutManagerDialog({
                   </div>
                   <div className="space-y-1">
                     <label
-                      className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                      className="text-3xs font-medium uppercase tracking-wide text-muted-foreground"
                       htmlFor={`shortcut-text-${shortcut.id}`}
                     >
                       Prompt text
@@ -194,7 +194,7 @@ export function ComposerShortcutsControls({
                   disabled={disabled}
                   onClick={() => onInsert(shortcut.text)}
                   className={cn(
-                    "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border bg-background px-2.5 py-1 text-[11px] leading-none text-foreground",
+                    "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border bg-background px-2.5 py-1 text-2xs leading-none text-foreground",
                     "hover:border-primary/40 hover:bg-accent",
                     "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:bg-background",
                   )}

@@ -129,7 +129,7 @@ export function VitalsGaugeIcon(props: { inputs: VitalsGaugeInputs; size?: numbe
 // Detail popover
 // ---------------------------------------------------------------------------
 
-const CAP_CLASS = "text-[10.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground";
+const CAP_CLASS = "text-3xs font-semibold uppercase tracking-widest text-muted-foreground";
 const BLOCK_CLASS = "border-t border-border px-4 py-3 first:border-t-0";
 const TRACK_CLASS = "overflow-hidden rounded-full bg-muted";
 
@@ -159,7 +159,7 @@ function ContextBlock(props: {
       <div className="flex items-baseline justify-between gap-2">
         <span className={CAP_CLASS}>Context</span>
         {caption ? (
-          <span className="truncate font-mono text-[11px] text-muted-foreground/60">{caption}</span>
+          <span className="truncate font-mono text-2xs text-muted-foreground/60">{caption}</span>
         ) : null}
       </div>
       {hasMax ? (
@@ -197,7 +197,7 @@ function ContextBlock(props: {
             ) : null}
           </div>
           {compaction ? (
-            <div className="mt-1 font-mono text-[11px] text-muted-foreground/70">
+            <div className="mt-1 font-mono text-2xs text-muted-foreground/70">
               {compaction.label}
             </div>
           ) : null}
@@ -215,7 +215,7 @@ function ContextBlock(props: {
         send no source keep the old behaviour.
       */}
       {usage.compactsAutomatically && usage.autoCompactSource !== "auto" ? (
-        <div className="mt-2 text-pretty text-[11px] font-medium text-muted-foreground/70">
+        <div className="mt-2 text-pretty text-2xs font-medium text-muted-foreground/70">
           {props.providerDisplayName ?? "It"} automatically compacts its context when needed.
         </div>
       ) : null}
@@ -245,7 +245,7 @@ export function WindowRow(props: {
       <div className="flex items-baseline gap-2">
         <span className="text-xs font-semibold">{props.label}</span>
         {pace.diff !== null ? (
-          <span className={cn("ml-auto font-mono text-[13px] font-bold", SEVERITY_TEXT[level])}>
+          <span className={cn("ml-auto font-mono text-sm font-bold", SEVERITY_TEXT[level])}>
             {paceDiffLabel(pace.diff)}
           </span>
         ) : null}
@@ -289,7 +289,7 @@ export function WindowRow(props: {
         that rare case fall to a second line, still right-aligned, instead of
         overflowing the panel. Each half stays intact either way.
       */}
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2 font-mono text-[11px] text-muted-foreground/70">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 font-mono text-2xs text-muted-foreground/70">
         <span className="whitespace-nowrap">
           <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
           {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
@@ -343,7 +343,7 @@ function LimitsBlock(props: {
                   onClick={refresh.run}
                   disabled={refresh.pending}
                   className={cn(
-                    "-mx-1 -my-0.5 flex items-center gap-1.5 rounded px-1 py-0.5 font-mono text-[11px] text-muted-foreground/70 transition-colors",
+                    "-mx-1 -my-0.5 flex items-center gap-1.5 rounded px-1 py-0.5 font-mono text-2xs text-muted-foreground/70 transition-colors",
                     refresh.pending
                       ? "cursor-default"
                       : "cursor-pointer hover:bg-muted hover:text-foreground",
@@ -429,7 +429,7 @@ function BalanceRow(props: { balance: UsageBalanceView }) {
       <span className="min-w-0 flex-1 truncate text-xs text-foreground">{balance.label}</span>
       <span
         className={cn(
-          "font-mono text-[11px] tabular-nums",
+          "font-mono text-2xs tabular-nums",
           level === null ? "text-muted-foreground" : SEVERITY_TEXT[level],
         )}
       >
@@ -489,7 +489,7 @@ function MachineBlock(props: {
         <div className="flex min-w-0 items-baseline gap-1.5">
           <span className={cn(CAP_CLASS, "shrink-0")}>Machine</span>
           {machineName ? (
-            <span className="truncate text-[10px] text-muted-foreground/70">{machineName}</span>
+            <span className="truncate text-3xs text-muted-foreground/70">{machineName}</span>
           ) : null}
         </div>
         <Tooltip>
@@ -499,14 +499,14 @@ function MachineBlock(props: {
                 type="button"
                 onClick={() => onToggle(!enabled)}
                 aria-label={enabled ? "Pause host metrics" : "Resume host metrics"}
-                className="flex shrink-0 items-center gap-1 rounded-md p-0.5 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                className="flex shrink-0 items-center gap-1 rounded-md p-0.5 text-3xs text-muted-foreground transition-colors hover:text-foreground"
               />
             }
           >
             <span
               className={cn(
                 "size-1.5 rounded-full",
-                enabled && streaming ? "animate-pulse bg-green-500" : "bg-muted-foreground/40",
+                enabled && streaming ? "animate-pulse bg-success" : "bg-muted-foreground/40",
               )}
             />
             {enabled ? "live" : "paused"}
@@ -555,7 +555,7 @@ function MachineDetails(props: { sample: HostMetricsSample }) {
         type="button"
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+        className="flex w-full items-center gap-1 text-3xs text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon className={cn("size-3 transition-transform", open && "rotate-90")} />
         details
@@ -570,7 +570,7 @@ export function MachineDetailList(props: { sample: HostMetricsSample }) {
   const { sample } = props;
   const loadAvg = sample.cpu.loadAvg.filter((value) => Number.isFinite(value));
   return (
-    <dl className="mt-1 space-y-1 text-[11px]">
+    <dl className="mt-1 space-y-1 text-2xs">
       {sample.cpu.perCore.length > 0 ? (
         <div>
           <dt className="text-muted-foreground">
@@ -588,7 +588,7 @@ export function MachineDetailList(props: { sample: HostMetricsSample }) {
                     <span
                       aria-label={`Core ${String(index)}: ${String(Math.round(corePct))}%`}
                       className={cn(
-                        "w-1 rounded-t-[1px]",
+                        "w-1 rounded-t-xs",
                         SEVERITY_BG[vitalsLevel(clampPct(corePct))],
                       )}
                       style={{ height: `${String(Math.max(2, clampPct(corePct) * 0.16))}px` }}
@@ -712,7 +712,7 @@ export function VitalsDetail(props: {
         // are in this state permanently, so the sentence is worth its line.
         <div className={BLOCK_CLASS}>
           <span className={CAP_CLASS}>Context</span>
-          <div className="mt-1.5 text-pretty text-[11px] text-muted-foreground/70">
+          <div className="mt-1.5 text-pretty text-2xs text-muted-foreground/70">
             {missingContextReason}
           </div>
         </div>

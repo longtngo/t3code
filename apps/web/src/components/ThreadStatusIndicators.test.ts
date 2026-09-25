@@ -5,15 +5,32 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import type { AnimationEvent } from "react";
 
 import {
   ChangeRequestStatusIcon,
   linkedPullRequestSnapshotStatus,
   prStatusIndicator,
   resolveThreadPullRequestBadgePresentation,
+  synchronizeTerminalPulse,
 } from "./ThreadStatusIndicators";
 import { newestPullRequestSummary } from "../state/pullRequests";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+
+describe("synchronizeTerminalPulse", () => {
+  it("pins only the status pulse to the document clock", () => {
+    const pulse = { animationName: "status-pulse", startTime: 975 } as CSSAnimation;
+    const otherCss = { animationName: "other-animation", startTime: 125 } as CSSAnimation;
+    const otherAnimation = { startTime: 250 } as Animation;
+
+    synchronizeTerminalPulse({
+      animationName: "status-pulse",
+      currentTarget: { getAnimations: () => [pulse, otherCss, otherAnimation] },
+    } as AnimationEvent<SVGSVGElement>);
+
+    expect([pulse.startTime, otherCss.startTime, otherAnimation.startTime]).toEqual([0, 125, 250]);
+  });
+});
 
 describe("ChangeRequestStatusIcon", () => {
   it.each([

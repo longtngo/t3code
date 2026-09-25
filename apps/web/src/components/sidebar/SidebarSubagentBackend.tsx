@@ -93,7 +93,7 @@ function ThreadOffloadControl(props: {
   if (!threadMasterEnabled && notes.length === 0) return null;
   return (
     <div className="space-y-1">
-      <div className="text-[11px] leading-snug text-muted-foreground">This thread</div>
+      <div className="text-2xs leading-snug text-muted-foreground">This thread</div>
       {threadMasterEnabled ? (
         <ToggleGroup
           aria-label="This thread's subagent backend"
@@ -113,7 +113,7 @@ function ThreadOffloadControl(props: {
         </ToggleGroup>
       ) : null}
       {notes.map((note) => (
-        <p key={note} className="text-[11px] leading-snug text-muted-foreground">
+        <p key={note} className="text-2xs leading-snug text-muted-foreground">
           {note}
         </p>
       ))}
@@ -215,7 +215,7 @@ export function SidebarSubagentBackend() {
                 {pending ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : status.dot === "on" ? (
-                  <BotIcon className="size-3.5 text-emerald-500" />
+                  <BotIcon className="size-3.5 text-success" />
                 ) : (
                   <BotIcon className="size-3.5" />
                 )}
@@ -278,7 +278,7 @@ export function SidebarSubagentBackend() {
             </ToggleGroup>
 
             {isCursor ? null : (
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-2xs leading-snug text-muted-foreground">
                 Subagents run on the same provider and model as the thread that spawns them.
               </p>
             )}
@@ -350,7 +350,7 @@ export function SidebarSubagentBackend() {
             ) : null}
 
             {state?.degraded ? (
-              <div className="text-[11px] leading-snug text-amber-500">{state.degraded}</div>
+              <div className="text-2xs leading-snug text-warning">{state.degraded}</div>
             ) : null}
 
             {isCursor && usage ? (
@@ -365,7 +365,7 @@ export function SidebarSubagentBackend() {
             ) : null}
 
             {!masterEnabled ? (
-              <p className="text-[11px] leading-snug text-muted-foreground">
+              <p className="text-2xs leading-snug text-muted-foreground">
                 Subagent offload is switched off in Settings → General.
               </p>
             ) : null}

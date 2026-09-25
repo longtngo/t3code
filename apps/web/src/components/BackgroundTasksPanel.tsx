@@ -68,17 +68,17 @@ function BackgroundTaskRow({ task, nowMs }: { task: OrchestrationBackgroundTask;
         <span
           className={cn(
             // Wraps rather than truncates: the title is the answer to "what is running?".
-            "block break-words text-[13px] leading-snug",
+            "block break-words text-sm leading-snug",
             finished ? "text-muted-foreground/70" : "text-foreground/90",
           )}
         >
           {task.title}
         </span>
-        <span className="block truncate text-[11px] text-muted-foreground/60">
+        <span className="block truncate text-2xs text-muted-foreground/60">
           {backgroundTaskDetail(task, nowMs)}
         </span>
         {task.status !== "completed" && task.summary ? (
-          <span className="block break-words text-[11px] text-muted-foreground/60">
+          <span className="block break-words text-2xs text-muted-foreground/60">
             {task.summary}
           </span>
         ) : null}
@@ -131,7 +131,7 @@ export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
       <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2">
         <ActivityIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Background</span>
-        <span className="shrink-0 font-mono text-[.7rem] tabular-nums text-muted-foreground">
+        <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
           {running} running
         </span>
       </header>
@@ -142,7 +142,7 @@ export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
               <BackgroundTaskRow key={task.taskId} task={task} nowMs={nowMs} />
             ))}
           </ul>
-          <p className="px-2.5 pt-1 text-[.7rem] text-muted-foreground/70">
+          <p className="px-2.5 pt-1 text-2xs text-muted-foreground/70">
             Finished tasks are kept for 3 hours.
           </p>
           {state.failed ? (

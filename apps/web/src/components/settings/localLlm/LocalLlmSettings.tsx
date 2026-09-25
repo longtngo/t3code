@@ -57,7 +57,7 @@ function GroupedArgsInput(props: {
   };
   return (
     <textarea
-      className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-[12px] leading-relaxed"
+      className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs leading-relaxed"
       rows={Math.max(2, draft.split("\n").length)}
       value={draft}
       onChange={(e) => setDraft(e.currentTarget.value)}
@@ -115,20 +115,18 @@ function ProviderCard(props: {
           />
           <span className="font-medium">{provider.name}</span>
         </button>
-        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+        <span className="rounded-full border border-border px-2 py-0.5 text-2xs text-muted-foreground">
           {provider.format}
         </span>
         <span
           className={cn(
-            "rounded-full border px-2 py-0.5 text-[11px]",
-            provider.managed
-              ? "border-emerald-600/40 text-emerald-500"
-              : "border-amber-600/40 text-amber-500",
+            "rounded-full border px-2 py-0.5 text-2xs",
+            provider.managed ? "border-success/40 text-success" : "border-warning/40 text-warning",
           )}
         >
           {provider.managed ? "managed" : "external"}
         </span>
-        <span className="text-[12px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           :{config.port ?? provider.defaultPort}
         </span>
         <EyeToggle
@@ -143,16 +141,16 @@ function ProviderCard(props: {
       </div>
       {open ? (
         <div className="space-y-3 border-t border-border px-3 py-3">
-          <p className="text-[12px] text-muted-foreground">{provider.note}</p>
+          <p className="text-xs text-muted-foreground">{provider.note}</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-[12px]">
+            <label className="block text-xs">
               <span className="mb-1 block text-muted-foreground">Host</span>
               <DraftInput
                 value={config.host ?? provider.host}
                 onCommit={(v) => patch({ host: v })}
               />
             </label>
-            <label className="block text-[12px]">
+            <label className="block text-xs">
               <span className="mb-1 block text-muted-foreground">Default port</span>
               <DraftInput
                 value={String(config.port ?? provider.defaultPort)}
@@ -162,14 +160,14 @@ function ProviderCard(props: {
           </div>
           {provider.managed ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-[12px]">
+              <label className="block text-xs">
                 <span className="mb-1 block text-muted-foreground">Binary path</span>
                 <DraftInput
                   value={config.binaryPath ?? provider.binaryPath ?? ""}
                   onCommit={(v) => patch({ binaryPath: v })}
                 />
               </label>
-              <label className="block text-[12px]">
+              <label className="block text-xs">
                 <span className="mb-1 block text-muted-foreground">Models directory</span>
                 <DraftInput
                   value={config.modelsDir ?? provider.modelsDir ?? ""}
@@ -178,7 +176,7 @@ function ProviderCard(props: {
               </label>
             </div>
           ) : (
-            <label className="block text-[12px]">
+            <label className="block text-xs">
               <span className="mb-1 block text-muted-foreground">Base URL</span>
               <DraftInput
                 value={
@@ -189,7 +187,7 @@ function ProviderCard(props: {
               />
             </label>
           )}
-          <div className="text-[12px]">
+          <div className="text-xs">
             <span className="mb-1 block text-muted-foreground">
               Default launch args (runbook recommendation)
             </span>
@@ -252,18 +250,16 @@ function ModelConfigCard(props: {
         {model ? (
           <>
             {model.quant ? (
-              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+              <span className="rounded-full border border-border px-2 py-0.5 text-2xs text-muted-foreground">
                 {model.quant}
               </span>
             ) : null}
-            <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+            <span className="rounded-full border border-border px-2 py-0.5 text-2xs text-muted-foreground">
               {formatContext(ctx)} ctx
             </span>
           </>
         ) : null}
-        <span className="text-[12px] text-muted-foreground">
-          {provider?.name ?? config.providerId}
-        </span>
+        <span className="text-xs text-muted-foreground">{provider?.name ?? config.providerId}</span>
         <EyeToggle
           on={config.visible}
           onToggle={() => patch({ visible: !config.visible })}
@@ -276,12 +272,12 @@ function ModelConfigCard(props: {
       </div>
       {open ? (
         <div className="space-y-3 border-t border-border px-3 py-3">
-          <label className="block text-[12px]">
+          <label className="block text-xs">
             <span className="mb-1 block text-muted-foreground">Name</span>
             <DraftInput value={config.name} onCommit={(v) => patch({ name: v })} />
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-[12px]">
+            <label className="block text-xs">
               <span className="mb-1 block text-muted-foreground">① Provider</span>
               <Select
                 value={config.providerId}
@@ -300,7 +296,7 @@ function ModelConfigCard(props: {
                 </SelectPopup>
               </Select>
             </label>
-            <label className="block text-[12px]">
+            <label className="block text-xs">
               <span className="mb-1 block text-muted-foreground">② Compatible model</span>
               <Select
                 value={config.modelId}
@@ -322,7 +318,7 @@ function ModelConfigCard(props: {
               </Select>
             </label>
           </div>
-          <div className="text-[12px]">
+          <div className="text-xs">
             <div className="mb-1 flex items-center justify-between text-muted-foreground">
               <span>Context window</span>
               <span className="font-mono text-primary">{formatContext(ctx)}</span>
@@ -341,19 +337,19 @@ function ModelConfigCard(props: {
               onBlur={commitCtx}
               className="w-full accent-primary"
             />
-            <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+            <div className="mt-0.5 text-2xs text-muted-foreground/70">
               max {formatContext(maxCtx)}
             </div>
           </div>
 
           <Collapsible>
-            <CollapsibleTrigger className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground">
+            <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
               <ChevronRightIcon className="size-3.5" />
               Advanced — provider config overrides
             </CollapsibleTrigger>
             <CollapsiblePanel>
               <div className="space-y-3 pt-2">
-                <div className="text-[12px]">
+                <div className="text-xs">
                   <span className="mb-1 block text-muted-foreground">
                     Launch args override (provider default:{" "}
                     {providerDefaultArgs(settings, config.providerId).join("  ") || "none"})
@@ -365,7 +361,7 @@ function ModelConfigCard(props: {
                   />
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block text-[12px]">
+                  <label className="block text-xs">
                     <span className="mb-1 block text-muted-foreground">Port override</span>
                     <DraftInput
                       value={config.port != null ? String(config.port) : ""}
@@ -374,7 +370,7 @@ function ModelConfigCard(props: {
                       }
                     />
                   </label>
-                  <label className="block text-[12px]">
+                  <label className="block text-xs">
                     <span className="mb-1 block text-muted-foreground">Model path override</span>
                     <DraftInput
                       value={config.modelPathOverride ?? ""}
@@ -414,7 +410,7 @@ export function LocalLlmSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="Memory budget">
-        <label className="block px-3 py-2 text-[12px]">
+        <label className="block px-3 py-2 text-xs">
           <span className="mb-1 block text-muted-foreground">
             RAM budget in GB (0 = auto, ~80% of system memory)
           </span>
@@ -431,7 +427,7 @@ export function LocalLlmSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection title="Providers">
-        <p className="px-3 pb-2 text-[12px] text-muted-foreground">
+        <p className="px-3 pb-2 text-xs text-muted-foreground">
           A fixed catalog from the local-LLM runbook. The eye icon is visibility-only — a hidden
           provider stays fully configurable.
         </p>
@@ -457,7 +453,7 @@ export function LocalLlmSettingsPanel() {
       >
         <div className="space-y-2 px-1 py-2">
           {lm.models.length === 0 ? (
-            <p className="px-2 py-2 text-[12px] text-muted-foreground">
+            <p className="px-2 py-2 text-xs text-muted-foreground">
               No model configs yet. Add one to pair a model with a provider.
             </p>
           ) : (

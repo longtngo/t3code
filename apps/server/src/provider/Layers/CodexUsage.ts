@@ -157,7 +157,7 @@ const readRateLimits = (
 
     yield* client.request("initialize", buildCodexInitializeParams());
     yield* client.notify("initialized", undefined);
-    const response = yield* client.request("account/rateLimits/read", undefined);
+    const response = yield* client.request("account/rateLimits/read", null);
     return normalizeCodexRateLimits(response);
   }).pipe(
     Effect.timeout(REQUEST_TIMEOUT),

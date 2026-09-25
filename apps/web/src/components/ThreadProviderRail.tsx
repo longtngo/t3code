@@ -91,7 +91,7 @@ export function ThreadProviderChip({
         render={
           <span
             className={cn(
-              "shrink-0 rounded px-1 py-px text-[8.5px] font-bold tracking-wide tabular-nums",
+              "shrink-0 rounded px-1 py-px text-3xs font-bold tracking-wide tabular-nums",
               className,
             )}
             style={{

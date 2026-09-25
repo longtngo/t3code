@@ -99,7 +99,7 @@ export const TaskStepList = memo(function TaskStepList({
           </ComposerBanner.Content>
           <ComposerBanner.Actions>
             <span
-              className="w-12 text-right text-[10px]/4 text-muted-foreground/45 tabular-nums"
+              className="w-12 text-right text-3xs/4 text-muted-foreground/45 tabular-nums"
               data-composer-task-duration="true"
             >
               {step.durationMs !== undefined

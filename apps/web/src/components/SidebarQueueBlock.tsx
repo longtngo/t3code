@@ -116,7 +116,7 @@ export function SidebarQueueBlock(props: {
           >
             <span className="shrink-0">{label}</span>
             {paused ? (
-              <span className="min-w-0 truncate text-amber-600 dark:text-amber-400">
+              <span className="min-w-0 truncate text-warning-foreground">
                 {lastFailure ? `Paused: ${lastFailure.title} failed` : "Paused"}
               </span>
             ) : null}

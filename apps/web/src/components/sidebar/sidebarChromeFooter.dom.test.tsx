@@ -148,13 +148,13 @@ describe("SidebarChromeFooter navigation", () => {
     expect(navigate).toHaveBeenCalledWith({ to: "/usage" });
   });
 
-  it("sends Back to the root when the router has no history to pop", async () => {
-    // `useCanGoBack` is mocked false above, which is the fallback branch of `handleBackClick`.
+  it("sends Back to the root when no main app page was visited first", async () => {
+    // Back returns to the last main app URL (upstream #13516); none was recorded here.
     const view = await renderFooterAt("/usage");
 
     const back = view.findAll("button").find((button) => button.textContent?.includes("Back"));
     await view.click(back ?? null);
 
-    expect(navigate).toHaveBeenCalledWith({ to: "/" });
+    expect(navigate).toHaveBeenCalledWith({ href: "/" });
   });
 });

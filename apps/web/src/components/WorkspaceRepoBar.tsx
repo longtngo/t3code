@@ -167,11 +167,11 @@ function WorkspaceRepoTab({
         {isOwnedByOther ? (
           <TriangleAlertIcon
             aria-label="Another thread is working in this repository"
-            className="size-3 shrink-0 text-amber-500"
+            className="size-3 shrink-0 text-warning"
           />
         ) : null}
         {isOffIntegrationBranch && status?.refName ? (
-          <span className="flex min-w-0 items-center gap-0.5 text-[11px] opacity-70">
+          <span className="flex min-w-0 items-center gap-0.5 text-2xs opacity-70">
             <GitBranchIcon aria-hidden="true" className="size-3 shrink-0" />
             <span className="min-w-0 max-w-28 truncate">{status.refName}</span>
           </span>
@@ -179,7 +179,7 @@ function WorkspaceRepoTab({
         {changedFileCount > 0 ? (
           <span
             aria-label={`${changedFileCount} changed ${changedFileCount === 1 ? "file" : "files"}`}
-            className="shrink-0 rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums"
+            className="shrink-0 rounded-full bg-foreground/10 px-1.5 text-3xs tabular-nums"
           >
             {changedFileCount}
           </span>

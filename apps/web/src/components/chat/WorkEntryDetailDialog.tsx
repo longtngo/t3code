@@ -40,7 +40,7 @@ const TONE_CLASS: Record<WorkLogEntry["tone"], string> = {
 };
 
 const SECTION_LABEL_CLASS =
-  "mb-1.5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
+  "mb-1.5 flex items-center gap-2 text-3xs font-medium uppercase tracking-wide text-muted-foreground";
 const CODE_BLOCK_CLASS =
   "overflow-auto rounded-lg border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words";
 
@@ -51,7 +51,7 @@ export function QuestionsDetail({ questions }: { questions: ReadonlyArray<WorkEn
       {questions.map((question) => (
         <div key={question.question} className="space-y-2">
           {question.header ? (
-            <span className="inline-block rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-primary">
+            <span className="inline-block rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-primary">
               {question.header}
             </span>
           ) : null}
@@ -72,12 +72,10 @@ export function QuestionsDetail({ questions }: { questions: ReadonlyArray<WorkEn
                   >
                     <span className="font-medium">{option.label}</span>
                     {selected ? (
-                      <span className="ml-1.5 text-[10px] text-primary">✓ chosen</span>
+                      <span className="ml-1.5 text-3xs text-primary">✓ chosen</span>
                     ) : null}
                     {option.description ? (
-                      <span className="mt-0.5 block text-[11px] opacity-80">
-                        {option.description}
-                      </span>
+                      <span className="mt-0.5 block text-2xs opacity-80">{option.description}</span>
                     ) : null}
                   </li>
                 );
@@ -118,7 +116,7 @@ export function CommandDetail({
         <p className={SECTION_LABEL_CLASS}>
           Output
           {isError ? (
-            <span className="rounded border border-destructive/30 px-1.5 text-[9px] tracking-wide text-destructive">
+            <span className="rounded border border-destructive/30 px-1.5 text-3xs tracking-wide text-destructive">
               Error
             </span>
           ) : null}
@@ -229,7 +227,7 @@ export function WorkEntryDetailDialog({
               {entry ? (
                 <span
                   className={cn(
-                    "shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                    "shrink-0 rounded border px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide",
                     TONE_CLASS[entry.tone],
                   )}
                 >
@@ -249,7 +247,7 @@ export function WorkEntryDetailDialog({
         <DialogPanel>
           {showChangedFiles ? (
             <div>
-              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="mb-1.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 Changed files
               </p>
               <ul className="space-y-0.5">
@@ -286,7 +284,7 @@ export function WorkEntryDetailDialog({
               <p className={SECTION_LABEL_CLASS}>
                 {body.kind === "json" ? "Payload" : "Detail"}
                 {body.kind === "json" ? (
-                  <span className="rounded border border-primary/30 px-1.5 text-[9px] tracking-wide text-primary">
+                  <span className="rounded border border-primary/30 px-1.5 text-3xs tracking-wide text-primary">
                     JSON
                   </span>
                 ) : null}

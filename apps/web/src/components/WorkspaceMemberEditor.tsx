@@ -300,9 +300,7 @@ export default function WorkspaceMemberEditor({
                 <AutocompleteItem className="justify-between" key={branchName} value={branchName}>
                   <span className="truncate font-mono text-xs">{branchName}</span>
                   {branchName === currentBranch ? (
-                    <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
-                      checked out
-                    </span>
+                    <span className="shrink-0 text-2xs text-muted-foreground">checked out</span>
                   ) : null}
                 </AutocompleteItem>
               ))}

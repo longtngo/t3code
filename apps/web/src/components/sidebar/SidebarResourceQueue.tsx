@@ -49,7 +49,7 @@ function Tag({ label, className }: { label: string; className: string }) {
   return (
     <span
       className={cn(
-        "shrink-0 rounded px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide",
+        "shrink-0 rounded px-1 py-px text-3xs font-semibold uppercase tracking-wide",
         className,
       )}
     >
@@ -108,7 +108,7 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
               className="stroke-muted-foreground/40"
             />
           </svg>
-          <span className="text-[10px] text-muted-foreground">queued</span>
+          <span className="text-3xs text-muted-foreground">queued</span>
         </TooltipTrigger>
         <TooltipPopup>queued — not started</TooltipPopup>
       </Tooltip>
@@ -143,7 +143,7 @@ function RowProgressBadge({ progress }: { progress: RowProgress }) {
             strokeDashoffset={offset}
           />
         </svg>
-        <span className="text-[10px] tabular-nums text-muted-foreground">{pct}%</span>
+        <span className="text-3xs tabular-nums text-muted-foreground">{pct}%</span>
       </TooltipTrigger>
       <TooltipPopup>{pct}% of estimated time</TooltipPopup>
     </Tooltip>
@@ -184,7 +184,7 @@ function QueueRow({
         <div className="text-xs leading-snug text-foreground [overflow-wrap:anywhere]">
           <span
             className={cn(
-              "mr-1.5 inline-flex items-center rounded px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wide",
+              "mr-1.5 inline-flex items-center rounded px-1 py-px align-middle text-3xs font-semibold uppercase tracking-wide",
               resourceAccent(item.resource).badge,
             )}
           >
@@ -195,12 +195,12 @@ function QueueRow({
         </div>
         {/* line 2 — optional description mined from the reason */}
         {description ? (
-          <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">
+          <div className="mt-0.5 text-2xs leading-snug text-muted-foreground [overflow-wrap:anywhere]">
             {description}
           </div>
         ) : null}
         {/* line 3 — labels: priority badge, then project + elapsed */}
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
           <Tag label={item.priority} className={PRIORITY_BADGE[item.priority] ?? FALLBACK_BADGE} />
           <span className="opacity-40">·</span>
           <span className="truncate">{item.project || "—"}</span>
@@ -218,7 +218,7 @@ function QueueRow({
         {/* line 4 — full details, toggled open by a click (no longer hover-only) */}
         <div
           className={cn(
-            "overflow-hidden text-[10.5px] tabular-nums text-muted-foreground/70 transition-all duration-150",
+            "overflow-hidden text-3xs tabular-nums text-muted-foreground/70 transition-all duration-150",
             expanded ? "mt-1 max-h-16 opacity-100" : "max-h-0 opacity-0",
           )}
         >
@@ -355,7 +355,7 @@ export function SidebarResourceQueue({
               render={
                 <span
                   aria-label="broker in maintenance (draining)"
-                  className="rounded-full bg-red-500 px-1 py-px text-[9px] font-semibold text-white"
+                  className="rounded-full bg-destructive px-1 py-px text-3xs font-semibold text-white"
                 />
               }
             >
@@ -374,16 +374,16 @@ export function SidebarResourceQueue({
           className="absolute right-0 bottom-full left-0 z-50 mb-2 rounded-lg border bg-popover p-2 text-popover-foreground shadow-lg"
         >
           <div className="flex items-center justify-between px-0.5 pb-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               Resource queue
             </span>
             <span className="flex items-center gap-2">
               {snapshot?.maintenance ? (
-                <span className="rounded-full bg-red-500 px-1.5 py-px text-[10px] font-semibold text-white">
+                <span className="rounded-full bg-destructive px-1.5 py-px text-3xs font-semibold text-white">
                   maintenance
                 </span>
               ) : null}
-              <span className="text-[10px] text-muted-foreground/60">refresh 5s</span>
+              <span className="text-3xs text-muted-foreground/60">refresh 5s</span>
             </span>
           </div>
 
@@ -397,7 +397,7 @@ export function SidebarResourceQueue({
                   r.capacity > 0 ? Math.min(100, Math.round((r.inUse / r.capacity) * 100)) : 0;
                 return (
                   <div key={r.name} className="min-w-0">
-                    <div className="mb-0.5 flex items-baseline justify-between gap-1 text-[10px] text-muted-foreground">
+                    <div className="mb-0.5 flex items-baseline justify-between gap-1 text-3xs text-muted-foreground">
                       <Tooltip>
                         <TooltipTrigger render={<span className="truncate uppercase" />}>
                           {r.name}
@@ -451,7 +451,7 @@ export function SidebarResourceQueue({
             )}
           </div>
 
-          <div className="mt-1.5 border-t pt-1.5 text-[10px] text-muted-foreground/60">
+          <div className="mt-1.5 border-t pt-1.5 text-3xs text-muted-foreground/60">
             {running.length} running · {waiting.length} waiting
           </div>
         </div>

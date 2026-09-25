@@ -95,7 +95,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               // third badge never appears. Grows rightward into the gutter.
               <span
                 aria-hidden
-                className="absolute -top-1 -right-1 flex h-3.5 overflow-hidden rounded-full text-[9px] font-semibold tabular-nums text-white"
+                className="absolute -top-1 -right-1 flex h-3.5 overflow-hidden rounded-full text-3xs font-semibold tabular-nums text-white"
               >
                 {liveAgentCount > 0 ? (
                   <span
@@ -108,7 +108,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
                 {liveBackgroundCount > 0 ? (
                   <span
                     data-panel-badge="background"
-                    className="flex min-w-3.5 items-center justify-center bg-slate-500 px-1"
+                    className="flex min-w-3.5 items-center justify-center bg-muted-foreground px-1"
                   >
                     {liveBackgroundCount}
                   </span>
@@ -120,7 +120,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
                 aria-hidden
                 data-panel-badge="tasks"
                 className={cn(
-                  "absolute -bottom-1 -left-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-success px-[3px] text-[8px] font-bold leading-none tabular-nums text-white",
+                  "absolute -bottom-1 -left-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-success px-0.75 text-3xs font-bold leading-none tabular-nums text-white",
                   taskComplete && "w-3 px-0",
                 )}
               >

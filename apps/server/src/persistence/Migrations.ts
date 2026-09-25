@@ -152,6 +152,10 @@ import Migration0061 from "./Migrations/052_ProjectionThreadTitleState.ts";
 // already deployed ids 33-61, so it takes the next free id (62) rather than its filename
 // number.
 import Migration0062 from "./Migrations/053_PullRequestFilesViewed.ts";
+// Upstream's 054 (projection_threads.auto_settle_disabled_at, #11846) arrives after the
+// fork already deployed ids 33-62, so it takes the next free id (63) rather than its
+// filename number.
+import Migration0063 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -225,6 +229,7 @@ export const migrationEntries = [
   [60, "ProjectionThreadMessageContext", Migration0060],
   [61, "ProjectionThreadTitleState", Migration0061],
   [62, "PullRequestFilesViewed", Migration0062],
+  [63, "ProjectionThreadsAutoSettleDisabledAt", Migration0063],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

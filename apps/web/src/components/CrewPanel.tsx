@@ -36,10 +36,10 @@ const RENDERING_LABEL: Record<CrewRendering, string> = {
 
 const RENDERING_TONE: Record<CrewRendering, string> = {
   closed: "text-muted-foreground",
-  "blocked-on-human": "text-amber-600 dark:text-amber-400",
-  errored: "text-red-600 dark:text-red-400",
-  interrupted: "text-red-600 dark:text-red-400",
-  working: "text-blue-600 dark:text-blue-400",
+  "blocked-on-human": "text-warning-foreground",
+  errored: "text-destructive-foreground",
+  interrupted: "text-destructive-foreground",
+  working: "text-info-foreground",
   "idle-no-report": "text-muted-foreground",
   starting: "text-muted-foreground",
   unknown: "text-muted-foreground",
@@ -204,7 +204,7 @@ export function CrewPanel({
                     {unread > 0 ? (
                       <span
                         data-testid={`crew-unread-${task.taskId}`}
-                        className="text-[11px] text-muted-foreground"
+                        className="text-2xs text-muted-foreground"
                       >
                         {unread} unread
                       </span>
@@ -214,7 +214,7 @@ export function CrewPanel({
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <p className="truncate text-left text-[11px] text-muted-foreground">
+                        <p className="truncate text-left text-2xs text-muted-foreground">
                           {task.branch}
                         </p>
                       }
@@ -224,7 +224,7 @@ export function CrewPanel({
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <p className="truncate text-left text-[11px] text-muted-foreground">
+                        <p className="truncate text-left text-2xs text-muted-foreground">
                           {task.worktreePath}
                         </p>
                       }
@@ -233,17 +233,17 @@ export function CrewPanel({
                   </Tooltip>
 
                   {last !== undefined && last !== null ? (
-                    <p className="mt-1 text-[11px] text-foreground/80">
+                    <p className="mt-1 text-2xs text-foreground/80">
                       {last.state}: {plainNote(last.note)}
                     </p>
                   ) : null}
 
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                  <div className="mt-1 flex flex-wrap gap-2 text-2xs">
                     <button
                       type="button"
                       onClick={() => onOpenThread(task.crewThreadId)}
                       data-testid={`crew-open-${task.taskId}`}
-                      className="cursor-pointer text-blue-600 dark:text-blue-400"
+                      className="cursor-pointer text-info-foreground"
                     >
                       Open thread
                     </button>
@@ -252,7 +252,7 @@ export function CrewPanel({
                         type="button"
                         onClick={() => setAnswerFor(decision.reportId)}
                         data-testid={`crew-answer-${task.taskId}`}
-                        className="cursor-pointer text-amber-600 dark:text-amber-400"
+                        className="cursor-pointer text-warning-foreground"
                       >
                         Answer
                       </button>
@@ -295,14 +295,14 @@ export function CrewPanel({
                         value={answerText}
                         onChange={(event) => setAnswerText(event.target.value)}
                         data-testid={`crew-answer-input-${task.taskId}`}
-                        className="min-w-0 flex-1 rounded border border-border bg-background px-1 text-[11px]"
+                        className="min-w-0 flex-1 rounded border border-border bg-background px-1 text-2xs"
                         placeholder="Answer…"
                       />
                       <button
                         type="button"
                         onClick={() => submitAnswer(answerFor)}
                         data-testid={`crew-answer-send-${task.taskId}`}
-                        className="cursor-pointer text-[11px] text-blue-600 dark:text-blue-400"
+                        className="cursor-pointer text-2xs text-info-foreground"
                       >
                         Send
                       </button>

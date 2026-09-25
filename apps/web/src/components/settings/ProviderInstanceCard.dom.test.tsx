@@ -120,7 +120,7 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(view.text()).toContain("Authenticated as");
     const toggle = view.find('[aria-label="Toggle account email visibility"]');
     expect(toggle).not.toBeNull();
-    expect(toggle?.className).toContain("blur-[2px]");
+    expect(toggle?.className).toContain("blur-xs");
     expect(view.text()).not.toContain("developer@example.com");
   });
 
@@ -163,11 +163,11 @@ describe("deriveProviderModelsForDisplay", () => {
     const toggleSelector = '[aria-label="Toggle account email visibility"]';
     await view.click(view.find(toggleSelector));
     expect(view.text()).toContain("developer@example.com");
-    expect(view.find(toggleSelector)?.className).not.toContain("blur-[2px]");
+    expect(view.find(toggleSelector)?.className).not.toContain("blur-xs");
 
     await view.click(view.find(toggleSelector));
     expect(view.text()).not.toContain("developer@example.com");
-    expect(view.find(toggleSelector)?.className).toContain("blur-[2px]");
+    expect(view.find(toggleSelector)?.className).toContain("blur-xs");
   });
 
   it("surfaces a failed probe message in both the list row and the editor", async () => {

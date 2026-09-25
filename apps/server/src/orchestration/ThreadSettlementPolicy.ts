@@ -137,6 +137,7 @@ export function isThreadActive(thread: OrchestrationThreadShell, now: string): b
 /** Cheap checks that run before any source control lookup. */
 export function isAutoSettlementCandidate(thread: OrchestrationThreadShell, now: string): boolean {
   if (thread.archivedAt !== null || thread.settledOverride !== null) return false;
+  if (thread.autoSettleDisabledAt != null) return false;
   if (isThreadActive(thread, now)) return false;
   if (thread.snoozedUntil == null || Date.parse(thread.snoozedUntil) <= Date.parse(now))
     return true;

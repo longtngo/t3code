@@ -12,21 +12,21 @@ const STATUS_GLYPH_WRAPPER = "flex size-5 shrink-0 items-center justify-center r
 export function statusGlyph(tone: StatusGlyphTone): ReactNode {
   if (tone === "completed") {
     return (
-      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-emerald-500/15 text-emerald-500")}>
+      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-success/15 text-success")}>
         <CheckIcon className="size-3" />
       </span>
     );
   }
   if (tone === "failed") {
     return (
-      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-red-500/15 text-red-500")}>
+      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-destructive/15 text-destructive")}>
         <XIcon className="size-3" />
       </span>
     );
   }
   if (tone === "running") {
     return (
-      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-blue-500/15 text-blue-400")}>
+      <span className={cn(STATUS_GLYPH_WRAPPER, "bg-info/15 text-info-foreground")}>
         <LoaderIcon className="size-3 animate-spin" />
       </span>
     );
@@ -73,10 +73,10 @@ export function SidebarSection({
         ) : (
           <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40" />
         )}
-        <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
+        <span className="text-3xs font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
           {title}
         </span>
-        <span className="text-[10px] font-semibold text-muted-foreground/30">{count}</span>
+        <span className="text-3xs font-semibold text-muted-foreground/30">{count}</span>
       </button>
       {collapsed ? null : <div className="space-y-1">{children}</div>}
     </div>
@@ -115,7 +115,7 @@ export function SidebarItemRow({
         <span className="min-w-0 flex-1">
           <span
             className={cn(
-              "block truncate text-[13px] leading-snug",
+              "block truncate text-sm leading-snug",
               status === "completed" || status === "failed"
                 ? "text-muted-foreground/60"
                 : "text-foreground/90",
@@ -124,7 +124,7 @@ export function SidebarItemRow({
             {label}
           </span>
           {detail ? (
-            <span className="block truncate text-[11px] text-muted-foreground/50">{detail}</span>
+            <span className="block truncate text-2xs text-muted-foreground/50">{detail}</span>
           ) : null}
         </span>
       </button>

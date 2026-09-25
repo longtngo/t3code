@@ -25,10 +25,15 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-24 (40th reconcile, 88 commits), against `origin/main`. No effect bump. Upstream
-made `shadcn/no-restyle` a lint error, so the fork's own restyles were migrated (invariant 58), and
-upstream's review-index fix replaced the fork's (invariant 57). The 39th (2026-09-22, 87 commits)
-recorded one decision under invariant 40.
+As of 2026-09-25 (41st reconcile, 57 commits), against `origin/main`. Upstream turned on four
+more web lint errors (invariant 59), added migration 054 (applied id 63, invariant 1), and shipped
+Claude banked resets on its own config-dir rule (invariant 40). Upstream #13572's "View agents"
+button on the live-work banner is not taken: the fork's banner title parts already open the
+Agents and Background tabs.
+
+The 40th (2026-09-24, 88 commits): upstream made `shadcn/no-restyle` a lint error, so the fork's
+own restyles were migrated (invariant 58), and upstream's review-index fix replaced the fork's
+(invariant 57). The 39th (2026-09-22, 87 commits) recorded one decision under invariant 40.
 
 The 38th (2026-09-18, 181 commits) brought effect
 rc.112 -> rc.115, Tiptap as the default composer editor, multi-model thread fan-out, provider
@@ -102,7 +107,9 @@ The 37th reconcile added upstream's `052_ProjectionThreadTitleState` (#10720) as
 It arrived with no migration test, so nothing needed retargeting. Manifest: 60 entries, max 61.
 
 The 38th reconcile added upstream's `053_PullRequestFilesViewed` (#7721) as applied id **62**, also
-without a test. Manifest: 61 entries, max 62. The same reconcile's effect bump removed
+without a test. Manifest: 61 entries, max 62. The 41st added `054_ProjectionThreadsAutoSettleDisabledAt` (#11846) as
+applied id **63**; its test ran 53/54 and is retargeted to 62/63 with a `pragma_table_info`
+control asserting `auto_settle_disabled_at` is ABSENT at 62. Manifest: 62 entries, max 63. The same reconcile's effect bump removed
 `NodeSqliteClient.layerMemory()`; migration and crew tests use `layer({ filename: ":memory:" })`.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
@@ -1049,6 +1056,14 @@ exist here: the key is the realpath of `<configDir>/projects` and an inherited c
 scrubbed. `ClaudeHome.ts`, its test and `ClaudeDriver.ts` are the fork's. A future upstream edit to
 `resolveClaudeHomePath` needs the same check: same name, different setting.
 
+**41st reconcile: banked resets (#13118) are adopted, on the fork's config dir.** Upstream computes
+the login dir as `resolveClaudeHomePath(config, processEnv)` and the account file from it. Here the
+dir is `configDirPath` when set, else `<HOME>/.claude` with HOME from `homePath`, and the account
+record is `<configDirPath>/.claude.json` or `<HOME>/.claude.json` - where the spawned CLI actually
+reads them. `claudeAccountConfigPath` is unused as a result. Upstream's two reset tests in
+`ProviderInstanceRegistryLive.test.ts` wrote the login into `homePath`; they drive `configDirPath`
+here. They typecheck either way and only fail at run time, so check arriving tests for this field too.
+
 ### 36. Web tests run two projects; `--project dom` is fork-only
 
 `apps/web/package.json`'s `test` script is `vp test run --passWithNoTests --project unit --project dom`.
@@ -1367,6 +1382,16 @@ reconcile migrated the fork's 40 findings the way upstream migrated its own: a v
 element where the look belongs to one feature (the sidebar footer controls share
 `SIDEBAR_FOOTER_CONTROL_CLASS` in `sidebarFooterBadge.ts`). A new className on a `components/ui`
 export now fails `pnpm verify` at lint, which cancels the test step (invariant 45).
+
+### 59. Web classes come from theme tokens and scales, so fork UI does too
+
+Upstream #13366/#13371/#13397 made `shadcn/no-unknown-classes`, `shadcn/no-raw-colors`,
+`shadcn/no-arbitrary-values` and `shadcn/require-static-classes` errors for `apps/web/src`. The 41st
+reconcile migrated the fork's 149 findings with upstream's own mapping: `text-[10px]`/`[11px]`/`[12px]`
+to `text-3xs`/`2xs`/`xs`, smaller sizes to `text-3xs`, `13px` to `text-sm`, and amber / emerald /
+red / blue to `warning` / `success` / `destructive` / `info` (a `dark:` pair collapses to one
+`-foreground` token). Layout arbitrary values (`w-[calc(...)]`) stay legal. Class strings in `.ts`
+data (`Sidebar.logic.ts`, `vitals.ts`) are not linted, and upstream keeps raw colors there too.
 
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 
