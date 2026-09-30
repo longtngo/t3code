@@ -122,6 +122,7 @@ describe("ThreadDeletionReactor", () => {
         }),
       subscribe: () => Effect.succeed(() => undefined),
       subscribeMetadata: () => Effect.succeed(() => undefined),
+      closeIdle: () => Effect.void,
     } satisfies TerminalManager.TerminalManager["Service"]);
 
     const pendingTasks = Layer.succeed(PendingBackgroundTaskRepository, {

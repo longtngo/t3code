@@ -585,7 +585,8 @@ and reads it on every load; a client patch would re-run or skip the migration. *
 fork-only — upstream has no patch-parity test — so every `ServerSettings` field upstream adds
 without a `ServerSettingsPatch` counterpart arrives as a red test in `packages/contracts`, with
 nothing in the conflict markers to warn you.** Decide writer-ownership, then either mirror it or
-list it here.
+list it here. The 42nd reconcile mirrored upstream's `providers.codex.setupMode`: the server reads it
+as the default Codex instance's fallback, so a dropped patch would silently lose the mode.
 
 ### 11. One `environmentId` for markdown rendered without a thread
 
@@ -1192,6 +1193,9 @@ call-to-action row (`AgentSpawnCtaRow`) that opens the Agents panel, so the whol
 rejected — 112 lines on the sweep's DROPPED list, all deliberate. `AgentSpawnCtaRow`'s body had to
 be restored from `personal` afterwards: git had spliced upstream's component in over it.
 
+The 42nd reconcile: #12900 leads a question row with the question text. Its in-row expansion is
+rejected; the heading is grafted into `PlainWorkEntryRow`'s `rowText`.
+
 After rejecting these hunks, grep `MessagesTimeline.tsx` **and** `MessagesTimeline.dom.test.tsx`
 for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePreview`, `canExpand`,
 `expandedBody`, `stopRowToggle*`, `select-text`. General rule and its measured detection coverage:
@@ -1331,7 +1335,8 @@ Upstream #10909 answers "a chat link to a folder" by hiding the preview pane and
 folder in the workspace tree (`file.isNotFile`, `previewPath`). The fork's `1d1b15f84` answers the
 same failure with a browsable listing in the preview pane (`useDirectoryListingQuery`), which also
 works for a host path outside the workspace - upstream's leaves those on a read error. The 38th
-reconcile kept `FilePreviewPanel.tsx` byte-identical to `personal`. The rest of #10909
+reconcile kept `FilePreviewPanel.tsx` byte-identical to `personal`. The 42nd grafted #12449's
+`resolveFilePreviewPath` into it: a link to the workspace root opens the explorer. The rest of #10909
 (`projectFilesQueryState.isNotFile`, `FileBrowserPanel` reveal, `rightPanelStore` trailing-slash
 trim) merged and is harmless.
 
@@ -1392,6 +1397,16 @@ to `text-3xs`/`2xs`/`xs`, smaller sizes to `text-3xs`, `13px` to `text-sm`, and 
 red / blue to `warning` / `success` / `destructive` / `info` (a `dark:` pair collapses to one
 `-foreground` token). Layout arbitrary values (`w-[calc(...)]`) stay legal. Class strings in `.ts`
 data (`Sidebar.logic.ts`, `vitals.ts`) are not linted, and upstream keeps raw colors there too.
+
+### 60. The thread list's fork columns correlate on `projection_threads`, so its query stays unaliased
+
+`listActiveThreadRows` in `ProjectionSnapshotQuery.ts` selects two fork columns whose subqueries
+name the outer table: `CREW_ROLE_COLUMN` and `hasPendingBackgroundTask`, both
+`... = projection_threads.thread_id`. Upstream #13765 aliased that query's table
+(`FROM projection_threads threads`) for its shared `unsettledThreadsFilter`, which makes both
+references invalid: `SQLITE(1) SQL logic error` on every shell snapshot, 35 red server tests, and
+a clean typecheck. The 42nd reconcile keeps the table unaliased and passes the qualifier to the
+filter. An upstream edit that re-aliases it will fail the same way.
 
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 

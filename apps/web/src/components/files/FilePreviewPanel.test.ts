@@ -8,6 +8,7 @@ import {
 import {
   isMarkdownPreviewFile,
   rendersFromAssetUrl,
+  resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
 } from "./filePreviewMode";
@@ -136,5 +137,26 @@ describe("rendersFromAssetUrl", () => {
     expect(rendersFromAssetUrl("src/main.ts")).toBe(false);
     expect(rendersFromAssetUrl("README.md")).toBe(false);
     expect(rendersFromAssetUrl("reports/summary.html")).toBe(false);
+  });
+});
+
+describe("resolveFilePreviewPath", () => {
+  it.each([
+    ["/repo/project", null],
+    ["/repo/project/", null],
+    [".", null],
+    [null, null],
+    ["/repo/project/src", "/repo/project/src"],
+    ["/repo/project/src/main.ts", "/repo/project/src/main.ts"],
+    ["src/main.ts", "src/main.ts"],
+    ["/repo/project-other", "/repo/project-other"],
+  ])("opens %s in the appropriate workspace surface", (path, expected) => {
+    const relativePath = resolveFilePreviewPath(path, "/repo/project");
+    expect(relativePath).toBe(expected);
+    if (expected === null) {
+      expect(
+        shouldShowFileExplorer({ relativePath, explorerOpen: false, attachmentOpen: false }),
+      ).toBe(true);
+    }
   });
 });

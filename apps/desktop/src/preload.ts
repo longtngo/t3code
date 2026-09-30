@@ -181,6 +181,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       items,
       ...(position === undefined ? {} : { position }),
     }),
+  receiveProviderAuthCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  cancelProviderAuthCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   showNotification: (input) => ipcRenderer.invoke(IpcChannels.SHOW_NOTIFICATION_CHANNEL, input),
   // Runs in the preload context so it can access the real File object; returns

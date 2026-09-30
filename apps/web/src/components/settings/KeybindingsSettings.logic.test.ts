@@ -46,6 +46,28 @@ describe("KeybindingsSettings.logic", () => {
       );
     },
   );
+  it("orders Usage bindings and command choices like the page", () => {
+    // FORK: upstream pinned `usage.open` second, but it is outside the page's order map, so the
+    // comparator is not transitive and where it lands depends on the input list, which the fork's
+    // bindings change. The page order of the ordered commands is the subject.
+    const expected = [
+      "usage.cost",
+      "usage.tokens",
+      "usage.limits",
+      "usage.period.day",
+      "usage.period.week",
+      "usage.period.month",
+      "usage.period.quarter",
+    ];
+    const pageOrdered = (commands: ReadonlyArray<string>) =>
+      commands.filter((command) => command.startsWith("usage.") && command !== "usage.open");
+    const bindings = DEFAULT_RESOLVED_KEYBINDINGS.toReversed();
+    const rows = buildKeybindingRows(bindings, "usage").map((row) => row.command);
+    expect(pageOrdered(rows)).toEqual(expected);
+    expect(rows).toContain("usage.open");
+    expect(pageOrdered(buildKeybindingCommandOptions(bindings))).toEqual(expected);
+  });
+
   it("builds searchable rows with readable key and when values", () => {
     const rows = buildKeybindingRows(
       [

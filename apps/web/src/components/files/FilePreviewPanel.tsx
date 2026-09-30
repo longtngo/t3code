@@ -82,6 +82,7 @@ import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRev
 import {
   isMarkdownPreviewFile,
   rendersFromAssetUrl,
+  resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
 } from "./filePreviewMode";
@@ -965,7 +966,7 @@ export default function FilePreviewPanel({
   environmentId,
   cwd: projectCwd,
   projectName,
-  relativePath,
+  relativePath: requestedPath,
   fileRepoCwd,
   attachment,
   threadRef,
@@ -999,6 +1000,9 @@ export default function FilePreviewPanel({
   // against whatever the tree is showing. That is what lets the two move
   // independently without either of them reading the wrong file.
   const cwd = fileRepoCwd ?? projectCwd;
+  // A link to the workspace root opens the explorer rather than a file surface.
+  const relativePath =
+    attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
   // The breadcrumb names the repository the open file actually came from. It
   // said "pickup-v2" over a file read out of an attached member, which is the
   // same wrong-root confusion the surface root exists to prevent, just in words.
@@ -1036,7 +1040,7 @@ export default function FilePreviewPanel({
     environmentId,
     cwd,
     relativePath,
-    attachment === undefined && !isMedia && !isPdf,
+    attachment === undefined && relativePath !== null && !isMedia && !isPdf,
   );
   // Same rule as the trusted viewer: a failed read is a directory candidate, and
   // asking for the listing is the test. Rooted at this panel's own cwd + relative
