@@ -106,6 +106,12 @@ export type QueuedSendPlan =
       };
     };
 
+/** The provider instance a queued send would run on; null when it would not send. */
+export function queuedSendInstanceId(snapshot: QueuedSendSnapshot): string | null {
+  const plan = planQueuedSend(snapshot);
+  return plan.kind === "send" ? plan.modelSelection.instanceId : null;
+}
+
 const OPEN_TO_SEND = "Open the thread to send it.";
 
 export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {

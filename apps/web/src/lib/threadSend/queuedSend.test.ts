@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { executeQueuedSend, type QueuedSendCommands } from "./executeQueuedSend";
-import { planQueuedSend, type QueuedSendSnapshot } from "./queuedSend";
+import { planQueuedSend, queuedSendInstanceId, type QueuedSendSnapshot } from "./queuedSend";
 
 const env = EnvironmentId.make("env-1");
 const threadId = ThreadId.make("thread-1");
@@ -206,6 +206,28 @@ describe("planQueuedSend", () => {
         },
       },
     });
+  });
+});
+
+describe("queuedSendInstanceId", () => {
+  beforeEach(() => {
+    useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
+  });
+
+  it("is the provider instance the send would run on, null when it would not send", () => {
+    const personal = ProviderInstanceId.make("codex_personal");
+    const providers = [provider, { ...provider, instanceId: personal }];
+    const settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [personal]: { driver: "codex", enabled: true } },
+    } as typeof DEFAULT_UNIFIED_SETTINGS;
+    const onPersonal = shell({ modelSelection: createModelSelection(personal, "gpt-5.5") });
+    const personalSnapshot = () => serverSnapshot({ providers, settings, shell: onPersonal });
+    expect(queuedSendInstanceId(personalSnapshot())).toBeNull();
+    useComposerDraftStore.getState().setPrompt(threadRef, "run the tests");
+    expect(queuedSendInstanceId(personalSnapshot())).toBe(personal);
+    expect(queuedSendInstanceId(serverSnapshot({ providers }))).toBe(codex);
+    expect(queuedSendInstanceId(serverSnapshot({ environmentConnected: false }))).toBeNull();
   });
 });
 

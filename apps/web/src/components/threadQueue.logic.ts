@@ -1,6 +1,11 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { effectiveSnoozed, hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ServerProvider,
+  type ServerSettings,
+} from "@t3tools/contracts";
 
 import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
@@ -9,7 +14,15 @@ import {
   useThreadQueueStore,
   type ThreadQueueEntry,
   type ThreadQueueInFlight,
+  type ThreadQueuePrior,
 } from "../threadQueueStore";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  isProviderInstancePickerVisible,
+  sortProviderInstanceEntries,
+} from "../providerInstances";
+import { formatProviderDriverKindLabel } from "../providerModels";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 
 export type SidebarRestingSection = "snoozed" | "settled" | "pinned" | "active";
@@ -41,28 +54,51 @@ export function sidebarRestingSection(
 export const QUEUE_CLAIM_ABANDON_MS = 5 * 60_000;
 /** After a send is accepted, the landed message normally shows within seconds. */
 export const QUEUE_SENT_LANDING_CAP_MS = 2 * 60_000;
+/** A branch read waits behind pulls on the same checkout; past this the send goes without one. */
+export const QUEUE_BRANCH_READ_TIMEOUT_MS = 5_000;
 
 export type ThreadQueueAction =
   | { readonly kind: "wait" }
-  | { readonly kind: "claim" }
+  | { readonly kind: "claim"; readonly key: string }
   | { readonly kind: "clear-in-flight"; readonly claimId: string };
 
+/** The provider instance a thread occupies: the running session's, else the one it is set to. */
+function threadInstanceId(thread: EnvironmentThreadShell): string {
+  const session = thread.session;
+  return session?.status === "running" && session.providerInstanceId
+    ? session.providerInstanceId
+    : thread.modelSelection.instanceId;
+}
+
+/** Working, monitoring, or holding an accepted message no session has picked up yet. */
+export function isQueueBusy(thread: EnvironmentThreadShell, now: string): boolean {
+  const status = resolveSidebarThreadStatus(thread);
+  return status === "working" || status === "monitoring" || hasQueuedTurnStart(thread, { now });
+}
+
+const shellKey = (thread: EnvironmentThreadShell) =>
+  scopedThreadKey({ environmentId: thread.environmentId, threadId: thread.id });
+
 /**
- * What the queue coordinator does next. The head sends only when every thread
- * in Pinned or Active is done: not working, not monitoring, and not holding an
- * accepted message no session has picked up yet.
+ * What the queue coordinator does next. A queued entry sends while fewer threads
+ * are busy (working, monitoring, or holding an accepted message) than there are
+ * slots — counted per provider instance in per-provider mode. Busy entries are
+ * skipped, not waited on.
  */
 export function nextThreadQueueAction(input: {
   readonly entries: ReadonlyArray<ThreadQueueEntry>;
   readonly paused: boolean;
   readonly inFlight: ThreadQueueInFlight | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly capabilitiesFor: (
-    environmentId: EnvironmentThreadShell["environmentId"],
-  ) => SidebarSectionCapabilities | undefined;
   readonly nowMs: number;
+  readonly slots: number;
+  readonly perProvider: boolean;
+  readonly providerSlots: Readonly<Record<string, number>>;
+  readonly visibleInstanceIds: ReadonlyArray<string>;
+  readonly targetInstanceOf: (entry: ThreadQueueEntry) => string | null;
 }): ThreadQueueAction {
   const { inFlight, nowMs } = input;
+  const now = new Date(nowMs).toISOString();
   if (inFlight !== null) {
     if (inFlight.sentAt === null) {
       return nowMs - inFlight.claimedAt > QUEUE_CLAIM_ABANDON_MS
@@ -70,50 +106,68 @@ export function nextThreadQueueAction(input: {
         : { kind: "wait" };
     }
     const sentKey = threadQueueEntryKey(inFlight.entry);
-    const sentThread = input.threads.find(
-      (thread) =>
-        scopedThreadKey({ environmentId: thread.environmentId, threadId: thread.id }) === sentKey,
-    );
+    const sentThread = input.threads.find((thread) => shellKey(thread) === sentKey);
+    // The message showing up is not enough: until the thread reads busy, failed, or on
+    // a new turn, the busy count has not caught up and a second send would overshoot.
+    // A failure only counts once the session changed: a thread whose previous turn failed
+    // still reads failed when the re-sent message lands, before the server starts it.
     const landed =
       sentThread !== undefined &&
-      (sentThread.latestUserMessageAt ?? null) !== inFlight.priorUserMessageAt;
+      (sentThread.latestUserMessageAt ?? null) !== inFlight.priorUserMessageAt &&
+      (isQueueBusy(sentThread, now) ||
+        (resolveSidebarThreadStatus(sentThread) === "failed" &&
+          (sentThread.session?.updatedAt ?? null) !== inFlight.priorSessionUpdatedAt) ||
+        (sentThread.latestTurn?.turnId ?? null) !== inFlight.priorTurnId);
     return landed || nowMs - inFlight.sentAt > QUEUE_SENT_LANDING_CAP_MS
       ? { kind: "clear-in-flight", claimId: inFlight.claimId }
       : { kind: "wait" };
   }
   if (input.paused || input.entries.length === 0) return { kind: "wait" };
 
-  const queuedKeys = new Set(input.entries.map(threadQueueEntryKey));
-  const headKey = threadQueueEntryKey(input.entries[0]!);
-  const now = new Date(nowMs).toISOString();
-  const isBusy = (thread: EnvironmentThreadShell) => {
-    const status = resolveSidebarThreadStatus(thread);
-    return status === "working" || status === "monitoring" || hasQueuedTurnStart(thread, { now });
-  };
-  for (const thread of input.threads) {
-    if (thread.archivedAt !== null) continue;
-    const key = scopedThreadKey({ environmentId: thread.environmentId, threadId: thread.id });
-    // A head still finishing its own turn waits too, rather than sending into it.
-    if (key === headKey && isBusy(thread)) return { kind: "wait" };
-    if (queuedKeys.has(key)) continue;
-    const section = sidebarRestingSection(thread, input.capabilitiesFor(thread.environmentId), now);
-    if (section !== "pinned" && section !== "active") continue;
-    if (isBusy(thread)) return { kind: "wait" };
+  const busy = input.threads.filter(
+    (thread) => thread.archivedAt === null && isQueueBusy(thread, now),
+  );
+  const busyKeys = new Set(busy.map(shellKey));
+  let fits: (entry: ThreadQueueEntry) => boolean = () => true;
+  if (!input.perProvider) {
+    if (busy.length >= input.slots) return { kind: "wait" };
+  } else {
+    const busyBy = new Map<string, number>();
+    for (const thread of busy) {
+      const id = threadInstanceId(thread);
+      busyBy.set(id, (busyBy.get(id) ?? 0) + 1);
+    }
+    // An instance no longer listed (its provider was disabled) has no slots, as in the header.
+    const capBy = new Map(
+      input.visibleInstanceIds.map((id) => [id, providerSlotCap(input.providerSlots, id)]),
+    );
+    const cap = (id: string) => capBy.get(id) ?? 0;
+    let free = 0;
+    for (const [id, slots] of capBy) free += Math.max(0, slots - (busyBy.get(id) ?? 0));
+    if (free === 0) return { kind: "wait" };
+    fits = (entry) => {
+      const target = input.targetInstanceOf(entry);
+      return target === null || (busyBy.get(target) ?? 0) < cap(target);
+    };
   }
-  return { kind: "claim" };
+  const pick = input.entries.find(
+    (entry) => !busyKeys.has(threadQueueEntryKey(entry)) && fits(entry),
+  );
+  return pick ? { kind: "claim", key: threadQueueEntryKey(pick) } : { kind: "wait" };
 }
 
 /**
- * One queued send: claim the head, let a competing tab's claim land, then send
- * and record the outcome. Every store read and effect is injected except the
+ * One queued send: claim the named entry, let a competing tab's claim land, then
+ * send and record the outcome. Every store read and effect is injected except the
  * queue store itself, so the ordering can be tested.
  */
-export async function claimAndSendQueueHead(deps: {
+export async function claimAndSendQueueEntry(deps: {
+  readonly key: string;
   readonly claimId: string;
-  /** The head's checkout branch as last watched; keyed by the entry it belongs to. */
-  readonly headGitBranch: () => { key: string; branch: string | null } | null;
+  /** The claimed entry's current checkout branch, or null when not a local checkout. */
+  readonly readGitBranch: (entry: ThreadQueueEntry) => Promise<string | null>;
   readonly resolveEntry: (entry: ThreadQueueEntry) => ThreadQueueEntry;
-  readonly priorUserMessageAt: (entry: ThreadQueueEntry) => string | null;
+  readonly prior: (entry: ThreadQueueEntry) => ThreadQueuePrior;
   readonly settle: () => Promise<void>;
   readonly readSnapshot: (
     entry: ThreadQueueEntry,
@@ -122,15 +176,13 @@ export async function claimAndSendQueueHead(deps: {
   readonly send: (snapshot: QueuedSendSnapshot) => Promise<QueuedSendOutcome>;
   readonly reportFailure: (entry: ThreadQueueEntry, title: string, message: string) => void;
 }): Promise<void> {
-  // Read before claiming: the claim removes the head, and the watch moves on to
-  // the next entry as soon as the queue re-renders.
-  const headGitBranch = deps.headGitBranch();
-  const claim = useThreadQueueStore.getState().claimHead({
+  const claim = useThreadQueueStore.getState().claimEntry({
+    key: deps.key,
     claimId: deps.claimId,
     now: Date.now(),
-    resolve: (head) => {
-      const entry = deps.resolveEntry(head);
-      return { entry, priorUserMessageAt: deps.priorUserMessageAt(entry) };
+    resolve: (queued) => {
+      const entry = deps.resolveEntry(queued);
+      return { entry, prior: deps.prior(entry) };
     },
   });
   if (claim === null) return;
@@ -139,10 +191,16 @@ export async function claimAndSendQueueHead(deps: {
   if (useThreadQueueStore.getState().inFlight?.claimId !== deps.claimId) return;
 
   const { entry } = claim;
-  const snapshot = deps.readSnapshot(
-    entry,
-    headGitBranch?.key === threadQueueEntryKey(entry) ? headGitBranch.branch : null,
-  );
+  // A failed or slow read sends without a branch, so the thread keeps the one it has.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const branch = await Promise.race([
+    deps.readGitBranch(entry).catch(() => null),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), QUEUE_BRANCH_READ_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  const snapshot = deps.readSnapshot(entry, branch);
   const title =
     snapshot.shell?.title ?? (snapshot.draft?.prompt.trim().slice(0, 40) || "New thread");
   let outcome: QueuedSendOutcome;
@@ -169,4 +227,57 @@ export async function claimAndSendQueueHead(deps: {
       deps.reportFailure(entry, title, message);
     }
   }
+}
+
+export interface QueueSlotInstance {
+  instanceId: string;
+  label: string;
+}
+
+/** Picker-visible provider instances across all sources, first source wins on duplicates. */
+export function listQueueSlotInstances(
+  sources: ReadonlyArray<{
+    providers: ReadonlyArray<ServerProvider>;
+    settings: Pick<ServerSettings, "providerInstances" | "providers">;
+  }>,
+): ReadonlyArray<QueueSlotInstance> {
+  const slots = new Map<string, QueueSlotInstance>();
+  for (const { providers, settings } of sources) {
+    const entries = sortProviderInstanceEntries(
+      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+    ).filter(isProviderInstancePickerVisible);
+    for (const entry of entries) {
+      if (slots.has(entry.instanceId)) continue;
+      const driverName =
+        PROVIDER_DISPLAY_NAMES[entry.driverKind] ?? formatProviderDriverKindLabel(entry.driverKind);
+      slots.set(entry.instanceId, {
+        instanceId: entry.instanceId,
+        label:
+          entry.displayName === driverName
+            ? driverName
+            : `${driverName} \u00b7 ${entry.displayName}`,
+      });
+    }
+  }
+  return [...slots.values()];
+}
+
+/** How many threads the queue may run at once: the global count, or the sum over visible instances. */
+export function queueSlotTotal(
+  slots: number,
+  perProvider: boolean,
+  providerSlots: Readonly<Record<string, number>>,
+  instanceIds: ReadonlyArray<string>,
+): number {
+  return perProvider
+    ? instanceIds.reduce((sum, id) => sum + providerSlotCap(providerSlots, id), 0)
+    : slots;
+}
+
+/** An instance's slot count, 1 when unset. Own keys only: an id may name an Object.prototype member. */
+export function providerSlotCap(
+  providerSlots: Readonly<Record<string, number>>,
+  instanceId: string,
+): number {
+  return Object.hasOwn(providerSlots, instanceId) ? providerSlots[instanceId]! : 1;
 }

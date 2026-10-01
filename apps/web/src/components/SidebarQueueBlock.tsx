@@ -9,6 +9,7 @@ import {
   useThreadQueueStore,
   type ThreadQueueEntry,
 } from "../threadQueueStore";
+import { QueueSlotsControl, useQueueSlots } from "./QueueSlotsControl";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export const QUEUE_DROP_ID = "sidebar-queue-drop";
@@ -49,6 +50,7 @@ export function SidebarQueueBlock(props: {
   const paused = useThreadQueueStore((state) => state.paused);
   const lastFailure = useThreadQueueStore((state) => state.lastFailure);
   const setPaused = useThreadQueueStore((state) => state.setPaused);
+  const queueSlots = useQueueSlots();
   const { expanded, onToggleExpanded: toggleExpanded } = props;
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: QUEUE_DROP_ID });
   const keys = props.entries.map(threadQueueEntryKey);
@@ -115,7 +117,7 @@ export function SidebarQueueBlock(props: {
             )}
           >
             <span className="shrink-0">{label}</span>
-            {paused ? (
+            {paused || queueSlots.total === 0 ? (
               <span className="min-w-0 truncate text-warning-foreground">
                 {lastFailure ? `Paused: ${lastFailure.title} failed` : "Paused"}
               </span>
@@ -126,6 +128,7 @@ export function SidebarQueueBlock(props: {
               className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
             />
           </button>
+          <QueueSlotsControl {...queueSlots} />
           <Tooltip>
             <TooltipTrigger
               render={

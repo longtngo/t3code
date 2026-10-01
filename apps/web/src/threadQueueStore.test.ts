@@ -6,6 +6,8 @@ import {
   removeSentThreadFromQueue,
   threadQueueEntryKey,
   useThreadQueueStore,
+  type ThreadQueueEntry,
+  type ThreadQueuePrior,
 } from "./threadQueueStore";
 
 const env = EnvironmentId.make("env-1");
@@ -16,6 +18,12 @@ const b = {
   draftId: DraftId.make("draft-B"),
 };
 const c = { environmentId: env, threadId: ThreadId.make("thread-C"), draftId: null };
+const resolveWith =
+  (prior: Partial<ThreadQueuePrior> = {}) =>
+  (entry: ThreadQueueEntry) => ({
+    entry,
+    prior: { userMessageAt: null, turnId: null, sessionUpdatedAt: null, ...prior },
+  });
 const keys = () => useThreadQueueStore.getState().entries.map(threadQueueEntryKey);
 
 describe("threadQueueStore", () => {
@@ -41,19 +49,21 @@ describe("threadQueueStore", () => {
     const store = useThreadQueueStore.getState();
     store.enqueue(a);
     store.enqueue(b);
-    const claim = store.claimHead({
+    const claim = store.claimEntry({
+      key: "env-1:thread-A",
       claimId: "one",
       now: 1,
-      resolve: (entry) => ({ entry, priorUserMessageAt: "t0" }),
+      resolve: resolveWith({ userMessageAt: "t0" }),
     });
     expect(claim?.entry.threadId).toBe("thread-A");
     expect(claim?.priorUserMessageAt).toBe("t0");
     expect(keys()).toEqual(["env-1:thread-B"]);
     expect(
-      store.claimHead({
+      store.claimEntry({
+        key: "env-1:thread-B",
         claimId: "two",
         now: 2,
-        resolve: (entry) => ({ entry, priorUserMessageAt: null }),
+        resolve: resolveWith(),
       }),
     ).toBeNull();
 
@@ -61,10 +71,11 @@ describe("threadQueueStore", () => {
     expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("one");
     store.clearInFlight("one");
     expect(
-      store.claimHead({
+      store.claimEntry({
+        key: "env-1:thread-B",
         claimId: "two",
         now: 3,
-        resolve: (entry) => ({ entry, priorUserMessageAt: null }),
+        resolve: resolveWith(),
       })?.entry.threadId,
     ).toBe("thread-B");
   });
@@ -84,10 +95,11 @@ describe("threadQueueStore", () => {
     const store = useThreadQueueStore.getState();
     store.enqueue(a);
     store.enqueue(b);
-    store.claimHead({
+    store.claimEntry({
+      key: "env-1:thread-A",
       claimId: "one",
       now: 1,
-      resolve: (entry) => ({ entry, priorUserMessageAt: null }),
+      resolve: resolveWith(),
     });
     store.fail("one", { threadKey: "env-1:thread-A", title: "A", message: "boom" });
     let state = useThreadQueueStore.getState();
@@ -100,5 +112,41 @@ describe("threadQueueStore", () => {
     state = useThreadQueueStore.getState();
     expect(state.paused).toBe(false);
     expect(state.lastFailure).toBeNull();
+  });
+
+  it("claims the named entry wherever it sits, once", () => {
+    const store = useThreadQueueStore.getState();
+    store.enqueue(a);
+    store.enqueue(b);
+    store.enqueue(c);
+    const claim = store.claimEntry({
+      key: "env-1:thread-B",
+      claimId: "one",
+      now: 1,
+      resolve: resolveWith({ userMessageAt: "t0", turnId: "turn-9", sessionUpdatedAt: "s9" }),
+    });
+    expect(claim).toMatchObject({
+      entry: { threadId: "thread-B" },
+      priorTurnId: "turn-9",
+      priorSessionUpdatedAt: "s9",
+    });
+    expect(keys()).toEqual(["env-1:thread-A", "env-1:thread-C"]);
+    expect(
+      store.claimEntry({
+        key: "env-1:thread-A",
+        claimId: "two",
+        now: 2,
+        resolve: resolveWith(),
+      }),
+    ).toBeNull();
+    store.clearInFlight("one");
+    expect(
+      store.claimEntry({
+        key: "env-1:missing",
+        claimId: "three",
+        now: 3,
+        resolve: resolveWith(),
+      }),
+    ).toBeNull();
   });
 });

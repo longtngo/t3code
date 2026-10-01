@@ -41,6 +41,7 @@ import {
 import * as Struct from "effect/Struct";
 import { toastManager } from "~/components/ui/toast";
 import { isHostedStaticApp } from "~/hostedPairing";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -402,6 +403,15 @@ export function useEnvironmentSettings<T = UnifiedSettings>(
 ): T {
   const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   return useMergedSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, selector);
+}
+
+/** Non-hook read of `useEnvironmentSettings`, for code that runs outside render. */
+export function readEnvironmentSettings(environmentId: EnvironmentId): UnifiedSettings {
+  return mergeEnvironmentSettings(
+    appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId)) ??
+      DEFAULT_SERVER_SETTINGS,
+    getClientSettingsSnapshot(),
+  );
 }
 
 /** Primary-only settings access for the settings UI and other explicitly global surfaces. */

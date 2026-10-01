@@ -1,26 +1,31 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { getClientSettingsSnapshot, mergeEnvironmentSettings } from "../hooks/useSettings";
+import { readEnvironmentSettings } from "../hooks/useSettings";
 import { executeQueuedSend } from "../lib/threadSend/executeQueuedSend";
-import { planQueuedSend, type QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
+import {
+  planQueuedSend,
+  queuedSendInstanceId,
+  type QueuedSendSnapshot,
+} from "../lib/threadSend/queuedSend";
 import { newMessageId, newThreadId, randomHex, randomUUID } from "../lib/utils";
+import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
+  readEnvironmentSupportsLocalOnlyStatus,
   readProject,
   readThreadShell,
   useAllEnvironmentShellsBootstrapped,
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
-import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
-import { environmentServerConfigsAtom, serverEnvironment } from "../state/server";
+import { environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
@@ -30,7 +35,8 @@ import {
   type ThreadQueueEntry,
 } from "../threadQueueStore";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
-import { claimAndSendQueueHead, nextThreadQueueAction } from "./threadQueue.logic";
+import { visibleQueueInstanceIds } from "./queueSlotSources";
+import { claimAndSendQueueEntry, nextThreadQueueAction } from "./threadQueue.logic";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 /** How long a claiming tab waits for another tab's competing claim to land in storage. */
@@ -60,10 +66,7 @@ function readQueuedSendSnapshot(
   const projectId = shell?.projectId ?? draftSession?.projectId ?? null;
   const project = projectId ? readProject(scopeProjectRef(entry.environmentId, projectId)) : null;
   const serverConfig = appAtomRegistry.get(environmentServerConfigsAtom).get(entry.environmentId);
-  const serverSettings =
-    appAtomRegistry.get(serverEnvironment.settingsValueAtom(entry.environmentId)) ??
-    DEFAULT_SERVER_SETTINGS;
-  const clientSettings = getClientSettingsSnapshot();
+  const settings = readEnvironmentSettings(entry.environmentId);
   return {
     environmentId: entry.environmentId,
     threadId: entry.threadId,
@@ -79,28 +82,44 @@ function readQueuedSendSnapshot(
         }
       : null,
     providers: serverConfig?.providers ?? null,
-    settings: mergeEnvironmentSettings(serverSettings, clientSettings),
+    settings,
     environmentConnected: isEnvironmentConnected(entry.environmentId),
     currentGitBranch,
-    loadBalancingEnabled: clientSettings.loadBalancingEnabled,
+    loadBalancingEnabled: settings.loadBalancingEnabled,
     randomHex,
   };
 }
 
+/** A queued local-checkout thread's checkout; send moves the thread to its current branch. */
+function queuedCheckoutRoot(
+  entry: ThreadQueueEntry,
+): { environmentId: EnvironmentId; cwd: string } | null {
+  const shell = readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId));
+  if (!shell || shell.worktreePath !== null || shell.branch === null) return null;
+  const project = readProject(scopeProjectRef(entry.environmentId, shell.projectId));
+  return project ? { environmentId: entry.environmentId, cwd: project.workspaceRoot } : null;
+}
+
 /**
- * Sends the Queue's head when every Active thread is done. Mounted once at the
+ * Sends queued entries while busy threads are below the slot count. Mounted once at the
  * app root; every tab runs one, and a claim in shared storage picks the sender.
  */
 export function ThreadQueueCoordinator() {
   const navigate = useNavigate();
   const { presentationById } = useEnvironments();
   const threads = useThreadShells();
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const { entries, paused, inFlight } = useThreadQueueStore(
     useShallow((state) => ({
       entries: state.entries,
       paused: state.paused,
       inFlight: state.inFlight,
+    })),
+  );
+  const { slots, perProvider, providerSlots } = useQueueSlotSettingsStore(
+    useShallow((state) => ({
+      slots: state.slots,
+      perProvider: state.perProvider,
+      providerSlots: state.providerSlots,
     })),
   );
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -114,32 +133,29 @@ export function ThreadQueueCoordinator() {
     reportFailure: false,
   });
   const sendingRef = useRef(false);
-  // Send moves a local-checkout thread to the branch actually checked out, so the
-  // head's checkout status is watched the way the open thread watches its own.
-  const head = entries[0] ?? null;
-  const headShell = head
-    ? readThreadShell(scopeThreadRef(head.environmentId, head.threadId))
-    : null;
-  const headProject =
-    head && headShell && headShell.worktreePath === null && headShell.branch !== null
-      ? readProject(scopeProjectRef(head.environmentId, headShell.projectId))
-      : null;
-  const headGitStatus = useEnvironmentQuery(
-    head && headProject
-      ? vcsEnvironment.status({
-          environmentId: head.environmentId,
-          input: { cwd: headProject.workspaceRoot },
-        })
-      : null,
+  const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
+  const refreshLocalStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
+    reportFailure: false,
+  });
+  // Read once at send time. A server that does not honour `localOnly` gets a full status refresh
+  // for this one checkout, not a remote poller.
+  const readGitBranch = useCallback(
+    async (entry: ThreadQueueEntry) => {
+      const root = queuedCheckoutRoot(entry);
+      if (root === null) return null;
+      const target = { environmentId: root.environmentId, input: { cwd: root.cwd } };
+      const result = readEnvironmentSupportsLocalOnlyStatus(root.environmentId)
+        ? await refreshLocalStatus(target)
+        : await refreshStatus(target);
+      return result._tag === "Failure" ? null : (result.value.refName ?? null);
+    },
+    [refreshLocalStatus, refreshStatus],
   );
-  // Keyed by the head it was read for, so a send never uses another thread's checkout.
-  const headGitBranchRef = useRef<{ key: string; branch: string | null } | null>(null);
-  headGitBranchRef.current = head
-    ? {
-        key: threadQueueEntryKey(head),
-        branch: headProject ? (headGitStatus.data?.refName ?? null) : null,
-      }
-    : null;
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const visibleInstanceIds = useMemo(
+    () => visibleQueueInstanceIds(perProvider, serverConfigs),
+    [perProvider, serverConfigs],
+  );
   const [tick, setTick] = useState(0);
 
   useEffect(() => subscribeToCrossTabThreadQueueUpdates(), []);
@@ -182,6 +198,14 @@ export function ThreadQueueCoordinator() {
     [presentationById],
   );
 
+  const targetInstanceOf = useCallback(
+    (entry: ThreadQueueEntry) =>
+      queuedSendInstanceId(
+        readQueuedSendSnapshot(resolveCurrentEntry(entry), isEnvironmentConnected, null),
+      ),
+    [isEnvironmentConnected],
+  );
+
   const reportFailure = useCallback(
     (entry: ThreadQueueEntry, title: string, message: string) => {
       toastManager.add(
@@ -215,14 +239,20 @@ export function ThreadQueueCoordinator() {
   );
 
   const runQueuedSend = useCallback(
-    () =>
-      claimAndSendQueueHead({
+    (key: string) =>
+      claimAndSendQueueEntry({
+        key,
         claimId: randomUUID(),
-        headGitBranch: () => headGitBranchRef.current,
+        readGitBranch,
         resolveEntry: resolveCurrentEntry,
-        priorUserMessageAt: (entry) =>
-          readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId))
-            ?.latestUserMessageAt ?? null,
+        prior: (entry) => {
+          const shell = readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId));
+          return {
+            userMessageAt: shell?.latestUserMessageAt ?? null,
+            turnId: shell?.latestTurn?.turnId ?? null,
+            sessionUpdatedAt: shell?.session?.updatedAt ?? null,
+          };
+        },
         settle: async () => {
           await new Promise((resolve) => window.setTimeout(resolve, CLAIM_SETTLE_MS));
           await useThreadQueueStore.persist.rehydrate();
@@ -245,6 +275,7 @@ export function ThreadQueueCoordinator() {
       }),
     [
       isEnvironmentConnected,
+      readGitBranch,
       reportFailure,
       setThreadInteractionMode,
       setThreadRuntimeMode,
@@ -260,9 +291,12 @@ export function ThreadQueueCoordinator() {
       paused,
       inFlight,
       threads,
-      capabilitiesFor: (environmentId) =>
-        serverConfigs.get(environmentId)?.environment.capabilities,
       nowMs: Date.now(),
+      slots,
+      perProvider,
+      providerSlots,
+      visibleInstanceIds,
+      targetInstanceOf,
     });
     if (action.kind === "clear-in-flight") {
       useThreadQueueStore.getState().clearInFlight(action.claimId);
@@ -270,10 +304,22 @@ export function ThreadQueueCoordinator() {
     }
     if (action.kind !== "claim" || sendingRef.current) return;
     sendingRef.current = true;
-    void runQueuedSend().finally(() => {
+    void runQueuedSend(action.key).finally(() => {
       sendingRef.current = false;
     });
-  }, [entries, inFlight, paused, runQueuedSend, serverConfigs, threads, tick]);
+  }, [
+    entries,
+    inFlight,
+    paused,
+    perProvider,
+    providerSlots,
+    runQueuedSend,
+    slots,
+    targetInstanceOf,
+    threads,
+    tick,
+    visibleInstanceIds,
+  ]);
 
   return null;
 }

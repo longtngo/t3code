@@ -1,11 +1,18 @@
-import { describe, expect, it } from "vite-plus/test";
+import { act } from "react";
+import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { SidebarQueueBlock } from "./SidebarQueueBlock";
-import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueStore";
+import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
+import { renderDom } from "../testing/renderDom";
+import {
+  threadQueueEntryKey,
+  useThreadQueueStore,
+  type ThreadQueueEntry,
+} from "../threadQueueStore";
 
 const entry = (id: string): ThreadQueueEntry => ({
   environmentId: "env" as EnvironmentId,
@@ -82,5 +89,108 @@ describe("SidebarQueueBlock", () => {
     //    half-transparent header you can read the row's title straight through.
     expect(headerClass(markup).split(/\s+/)).toContain("z-20");
     expect(headerClass(markup).split(/\s+/)).toContain("bg-sidebar");
+  });
+});
+
+describe("queue slots header control", () => {
+  beforeEach(() => {
+    useQueueSlotSettingsStore.setState({ slots: 1, perProvider: false, providerSlots: {} });
+    useThreadQueueStore.setState({ paused: false });
+  });
+
+  const mount = () =>
+    renderDom(
+      <DndContext>
+        <SortableContext items={entries.map(threadQueueEntryKey)}>
+          <ul>
+            <SidebarQueueBlock
+              entries={entries}
+              routeKey={null}
+              routeDraftId={null}
+              expanded
+              onToggleExpanded={() => {}}
+              dragging={false}
+              collapse={false}
+              renderEntry={(queued) => <li>{queued.threadId}</li>}
+            />
+          </ul>
+        </SortableContext>
+      </DndContext>,
+    );
+  const press = (target: Element, key: string) =>
+    act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+  const slotText = (view: Awaited<ReturnType<typeof mount>>) =>
+    view.find('[data-testid="sidebar-queue-slots"]')?.textContent;
+
+  it("shows the slot count and edits it from the gear popover", async () => {
+    const view = await mount();
+    expect(slotText(view)).toBe("1");
+    await view.click(view.find('button[aria-label="Queue slots"]'));
+    expect(document.body.textContent).toContain("Active slots");
+    await view.click(document.querySelector('button[aria-label="Increase active slots"]'));
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(2);
+    expect(slotText(view)).toBe("2");
+  });
+
+  it("edits the slots from the keyboard and closes the popover on Escape", async () => {
+    const view = await mount();
+    await view.click(view.find('button[aria-label="Queue slots"]'));
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="active slots"]');
+    if (input === null) throw new Error("no active slots input");
+    input.focus();
+    await press(input, "ArrowUp");
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(2);
+    expect(document.body.textContent).toContain("Active slots");
+    await press(input, "Escape");
+    expect(document.body.textContent).not.toContain("Active slots");
+  });
+
+  const type = (input: HTMLInputElement, text: string) =>
+    act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const blur = (input: HTMLInputElement) =>
+    act(async () => {
+      input.blur();
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+  const openSlotsInput = async (view: Awaited<ReturnType<typeof mount>>) => {
+    await view.click(view.find('button[aria-label="Queue slots"]'));
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="active slots"]');
+    if (input === null) throw new Error("no active slots input");
+    input.focus();
+    return input;
+  };
+
+  it("saves a typed slot count on commit, not per keystroke", async () => {
+    const view = await mount();
+    const input = await openSlotsInput(view);
+    await type(input, "1");
+    await type(input, "12");
+    expect(input.value).toBe("12");
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(1);
+    await blur(input);
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(12);
+  });
+
+  it("keeps the saved slot count when the field is cleared and committed", async () => {
+    const view = await mount();
+    const input = await openSlotsInput(view);
+    await type(input, "");
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(1);
+    await blur(input);
+    expect(useQueueSlotSettingsStore.getState().slots).toBe(1);
+    expect(input.value).toBe("1");
+  });
+
+  it("labels the queue Paused when there are no slots", async () => {
+    useQueueSlotSettingsStore.setState({ slots: 0 });
+    const view = await mount();
+    expect(slotText(view)).toBe("0");
+    expect(view.text()).toContain("Paused");
   });
 });

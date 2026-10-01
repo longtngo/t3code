@@ -1,9 +1,9 @@
 /**
- * The sidebar Queue: threads (started or still drafts) waiting to send their composer draft once
- * every Active thread is done. Kept on this device only (local storage), shared by its tabs.
+ * The sidebar Queue: threads (started or still drafts) waiting to send their composer draft while
+ * fewer threads are busy than the queue's slots. Kept on this device only (local storage), shared by its tabs.
  *
- * A send is claimed before it starts: the claiming tab moves the head entry into `inFlight` in one
- * write, then re-reads storage and proceeds only if the claim is still its own. The entry is gone
+ * A send is claimed before it starts: the claiming tab moves the chosen entry into `inFlight` in
+ * one write, then re-reads storage and proceeds only if the claim is still its own. The entry is gone
  * from `entries` from that moment, so a tab that dies mid-send can never cause a second send.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -13,6 +13,10 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { DraftId } from "./composerDraftStore";
 import { resolveStorage } from "./lib/storage";
+import {
+  QUEUE_SLOT_SETTINGS_STORAGE_KEY,
+  useQueueSlotSettingsStore,
+} from "./queueSlotSettingsStore";
 
 export const THREAD_QUEUE_STORAGE_KEY = "t3code:thread-queue:v1";
 
@@ -31,8 +35,19 @@ export interface ThreadQueueInFlight {
   readonly claimedAt: number;
   /** The shell's `latestUserMessageAt` at claim time; a new value means the send landed. */
   readonly priorUserMessageAt: string | null;
+  /** The thread's latest turn id at claim time; a different one means the send started a turn. */
+  readonly priorTurnId: string | null;
+  /** The session's `updatedAt` at claim time; an error status only counts once it changes. */
+  readonly priorSessionUpdatedAt: string | null;
   /** Set once the send settled as sent; the wait for the landed message starts here. */
   readonly sentAt: number | null;
+}
+
+/** The sent thread's state at claim time, stored flat on the claim as its `prior*` fields. */
+export interface ThreadQueuePrior {
+  readonly userMessageAt: string | null;
+  readonly turnId: string | null;
+  readonly sessionUpdatedAt: string | null;
 }
 
 export interface ThreadQueueFailure {
@@ -50,16 +65,13 @@ interface ThreadQueueState {
   readonly enqueue: (entry: Omit<ThreadQueueEntry, "addedAt">, index?: number) => void;
   readonly remove: (threadKey: string) => void;
   readonly setPaused: (paused: boolean) => void;
-  /** Moves the head into `inFlight`; returns the claim, or null when there is nothing to claim. */
-  readonly claimHead: (input: {
+  /** Moves the named entry into `inFlight`; null when it is gone or a claim is already in flight. */
+  readonly claimEntry: (input: {
+    key: string;
     claimId: string;
     now: number;
-    /** The entry as it will be sent (a draft may have moved machine) and its thread's
-        `latestUserMessageAt` right now. */
-    resolve: (entry: ThreadQueueEntry) => {
-      entry: ThreadQueueEntry;
-      priorUserMessageAt: string | null;
-    };
+    /** The entry as it will be sent (a draft may have moved machine) and its thread's state now. */
+    resolve: (entry: ThreadQueueEntry) => { entry: ThreadQueueEntry; prior: ThreadQueuePrior };
   }) => ThreadQueueInFlight | null;
   readonly markSent: (claimId: string, now: number) => void;
   readonly clearInFlight: (claimId: string) => void;
@@ -101,19 +113,22 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
           return entries.length === state.entries.length ? state : { entries };
         }),
       setPaused: (paused) => set(paused ? { paused } : { paused, lastFailure: null }),
-      claimHead: ({ claimId, now, resolve }) => {
+      claimEntry: ({ key, claimId, now, resolve }) => {
         const state = get();
-        const head = state.entries[0];
-        if (!head || state.inFlight !== null) return null;
-        const resolved = resolve(head);
+        if (state.inFlight !== null) return null;
+        const target = state.entries.find((entry) => threadQueueEntryKey(entry) === key);
+        if (!target) return null;
+        const { entry, prior } = resolve(target);
         const inFlight: ThreadQueueInFlight = {
-          entry: resolved.entry,
+          entry,
           claimId,
           claimedAt: now,
-          priorUserMessageAt: resolved.priorUserMessageAt,
+          priorUserMessageAt: prior.userMessageAt,
+          priorTurnId: prior.turnId,
+          priorSessionUpdatedAt: prior.sessionUpdatedAt,
           sentAt: null,
         };
-        set({ entries: state.entries.slice(1), inFlight });
+        set({ entries: state.entries.filter((entry) => entry !== target), inFlight });
         return inFlight;
       },
       markSent: (claimId, now) =>
@@ -160,12 +175,19 @@ export function removeSentThreadFromQueue(threadKey: string, draftId: DraftId | 
   }
 }
 
-/** Keeps every tab's copy current, so no tab writes a stale queue back over another's claim. */
+/**
+ * Keeps every tab's copy of the queue and its slot settings current, so no tab writes a stale
+ * queue back over another's claim. A null key means storage was cleared.
+ */
 export function subscribeToCrossTabThreadQueueUpdates(): () => void {
   if (typeof window === "undefined") return () => {};
   const onStorage = (event: StorageEvent) => {
-    if (event.key !== null && event.key !== THREAD_QUEUE_STORAGE_KEY) return;
-    void useThreadQueueStore.persist.rehydrate();
+    if (event.key === null || event.key === THREAD_QUEUE_STORAGE_KEY) {
+      void useThreadQueueStore.persist.rehydrate();
+    }
+    if (event.key === null || event.key === QUEUE_SLOT_SETTINGS_STORAGE_KEY) {
+      void useQueueSlotSettingsStore.persist.rehydrate();
+    }
   };
   window.addEventListener("storage", onStorage);
   return () => window.removeEventListener("storage", onStorage);

@@ -86,16 +86,21 @@ their default order until the server is updated.
 
 ## Queue work for later
 
-On web and desktop, the **Queue** section holds threads that should start once your
-active work is done. Add a thread with **Add to queue** from its menu, drag its row onto
+On web and desktop, the **Queue** section holds threads that should start when a slot
+frees up. Add a thread with **Add to queue** from its menu, drag its row onto
 the **Queue** header, or use the queue button or the right-click (long-press on a phone)
 menu on a new-thread draft. Drag queued rows to change their order, and type in a queued
 thread's composer as usual. Drag a queued thread into **Pinned**, **Active**, or **Settled**
 to take it out of the queue there; the dragged row shows **Unqueue** when the drop only
 returns it to where it was.
 
-When no thread in **Pinned** or **Active** is working or watching background work, the
-top queued thread sends its composer message as if you had pressed Send, then returns to
+The number on the **Queue** header is its active slots. Queued threads send, top first,
+while fewer threads are working or watching background work than that number. A queued
+thread that is already working is skipped until it finishes. Set the number from the gear
+button; **0** holds the queue and the header reads **Paused**. Turn on **Per provider** to
+give each enabled provider its own slots, and hover the number to see the split.
+
+A queued thread sends its composer message as if you had pressed Send, then returns to
 active work. A queued thread with an empty composer returns without sending. Sending it
 yourself also takes it out of the queue.
 

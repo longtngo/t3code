@@ -1,18 +1,29 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  EnvironmentId,
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  type ServerProvider,
+  type ServerSettings,
+} from "@t3tools/contracts";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
-  threadQueueEntryKey,
   useThreadQueueStore,
   type ThreadQueueEntry,
   type ThreadQueueInFlight,
 } from "../threadQueueStore";
 import {
-  claimAndSendQueueHead,
+  claimAndSendQueueEntry,
   nextThreadQueueAction,
+  QUEUE_BRANCH_READ_TIMEOUT_MS,
   QUEUE_CLAIM_ABANDON_MS,
+  isQueueBusy,
+  listQueueSlotInstances,
+  queueSlotTotal,
   QUEUE_SENT_LANDING_CAP_MS,
 } from "./threadQueue.logic";
 
@@ -59,25 +70,37 @@ const entry = (id: string): ThreadQueueEntry => ({
   addedAt: 0,
 });
 
-const allCapabilities = () => ({ threadSettlement: true, threadSnooze: true });
+type DecideInput = Parameters<typeof nextThreadQueueAction>[0];
 
-function decide(
-  threads: EnvironmentThreadShell[],
-  overrides: Partial<Parameters<typeof nextThreadQueueAction>[0]> = {},
-) {
-  return nextThreadQueueAction({
-    entries: [entry("queued-1"), entry("queued-2")],
-    paused: false,
-    inFlight: null,
-    threads,
-    capabilitiesFor: allCapabilities,
-    nowMs: NOW,
-    ...overrides,
-  }).kind;
+const base = (): DecideInput => ({
+  entries: [entry("queued-1"), entry("queued-2")],
+  paused: false,
+  inFlight: null,
+  threads: [],
+  nowMs: NOW,
+  slots: 1,
+  perProvider: false,
+  providerSlots: {},
+  visibleInstanceIds: [],
+  targetInstanceOf: () => null,
+});
+
+function decide(threads: EnvironmentThreadShell[], overrides: Partial<DecideInput> = {}) {
+  return nextThreadQueueAction({ ...base(), threads, ...overrides }).kind;
 }
 
+const a = ProviderInstanceId.make("claudeAgent");
+const b = ProviderInstanceId.make("claudeAgent_personalsub");
+const sel = (instanceId: string) => ({ instanceId, model: "m" }) as never;
+const on = (instanceId: string, overrides: Partial<EnvironmentThreadShell> = {}) =>
+  shell(`busy-${instanceId}-${Math.random()}`, {
+    modelSelection: sel(instanceId),
+    session: { ...running, providerInstanceId: ProviderInstanceId.make(instanceId) },
+    ...overrides,
+  });
+
 describe("nextThreadQueueAction", () => {
-  it("claims when every Active and Pinned thread is done", () => {
+  it("claims when fewer threads are busy than the slots (idle, failed, or waiting on input)", () => {
     expect(
       decide([
         shell("ready"),
@@ -87,26 +110,124 @@ describe("nextThreadQueueAction", () => {
     ).toBe("claim");
   });
 
-  it("waits on a working Active thread, a working Pinned thread, or a monitoring one", () => {
+  it("waits when a working or monitoring thread fills the only slot", () => {
     expect(decide([shell("ready"), shell("busy", { session: running })])).toBe("wait");
     expect(decide([shell("pinned", { pinnedAt: iso(-5), session: running })])).toBe("wait");
     expect(decide([shell("watching", { backgroundLiveness: "monitoring" })])).toBe("wait");
   });
 
-  it("ignores busy threads that are snoozed, settled, archived, or themselves queued", () => {
+  it("counts every non-archived busy thread, whatever its section", () => {
     expect(
       decide([
         shell("snoozed", { snoozedUntil: iso(60_000), snoozedAt: iso(-5), session: running }),
-        shell("settled", { settledOverride: "settled", session: running }),
-        shell("archived", { archivedAt: iso(-5), session: running }),
-        shell("queued-2", { session: running }),
       ]),
+    ).toBe("wait");
+    expect(
+      decide([shell("settled", { settledOverride: "settled", backgroundLiveness: "monitoring" })]),
+    ).toBe("wait");
+    expect(decide([shell("archived", { archivedAt: iso(-5), session: running })])).toBe("claim");
+  });
+
+  it("sends while busy < slots, skipping busy entries", () => {
+    const busyQueued = shell("queued-1", { session: running });
+    expect(decide([busyQueued])).toBe("wait"); // slots 1, one busy
+    expect(nextThreadQueueAction({ ...base(), threads: [busyQueued], slots: 2 })).toEqual({
+      kind: "claim",
+      key: "env-1:queued-2",
+    });
+    expect(decide([busyQueued, shell("other", { session: running })], { slots: 2 })).toBe("wait");
+    expect(
+      decide([shell("x", { session: running }), shell("y", { session: running })], { slots: 1 }),
+    ).toBe("wait"); // slots below busy
+  });
+
+  it("claims the first sendable entry in queue order", () => {
+    expect(nextThreadQueueAction({ ...base(), slots: 2 })).toEqual({
+      kind: "claim",
+      key: "env-1:queued-1",
+    });
+  });
+
+  it("slots 0 holds the queue in both modes, even for an entry that would refuse", () => {
+    expect(decide([], { slots: 0 })).toBe("wait");
+    expect(
+      decide([], { perProvider: true, visibleInstanceIds: [a], providerSlots: { [a]: 0 } }),
+    ).toBe("wait");
+    expect(decide([], { perProvider: true, visibleInstanceIds: [] })).toBe("wait");
+  });
+
+  it("per provider: an entry waits only for its own instance", () => {
+    const targets: Record<string, string> = { "queued-1": a, "queued-2": b };
+    const targetInstanceOf = (e: ThreadQueueEntry) => targets[e.threadId] ?? null;
+    const input = {
+      perProvider: true,
+      visibleInstanceIds: [a, b],
+      providerSlots: { [a]: 1, [b]: 2 },
+      targetInstanceOf,
+    };
+    expect(nextThreadQueueAction({ ...base(), threads: [on(a)], ...input })).toEqual({
+      kind: "claim",
+      key: "env-1:queued-2",
+    });
+    expect(decide([on(a), on(b), on(b)], input)).toBe("wait");
+    expect(decide([on(b), on(b)], { ...input, providerSlots: { [b]: 2 } })).toBe("claim"); // a defaults to 1
+  });
+
+  it("per provider: a refusing entry (no target) waits when nothing is free", () => {
+    const input = {
+      perProvider: true,
+      visibleInstanceIds: [a],
+      providerSlots: { [a]: 1 },
+      targetInstanceOf: () => null,
+    };
+    expect(decide([on(a)], input)).toBe("wait");
+    expect(decide([], input)).toBe("claim");
+  });
+
+  it("per provider: an instance no longer listed has no slots", () => {
+    expect(
+      decide([], {
+        entries: [entry("q")],
+        perProvider: true,
+        visibleInstanceIds: [a],
+        providerSlots: { [b]: 3 },
+        targetInstanceOf: () => b,
+      }),
+    ).toBe("wait");
+  });
+
+  it("per provider: an instance id that names an Object.prototype member defaults to 1", () => {
+    expect(
+      decide([], {
+        entries: [entry("q")],
+        perProvider: true,
+        visibleInstanceIds: ["constructor"],
+        providerSlots: {},
+        targetInstanceOf: () => "constructor",
+      }),
     ).toBe("claim");
   });
 
-  it("a queued head still running its own turn waits; a busy later entry does not block", () => {
-    expect(decide([shell("queued-1", { session: running })])).toBe("wait");
-    expect(decide([shell("queued-2", { session: running })])).toBe("claim");
+  it("counts a just-switched thread on its new instance while its session starts", () => {
+    const switched = shell("switched", {
+      modelSelection: sel(b),
+      latestUserMessageAt: iso(-500),
+      session: { ...running, status: "starting", providerInstanceId: a },
+    });
+    const input = {
+      perProvider: true,
+      visibleInstanceIds: [a, b],
+      providerSlots: { [a]: 1, [b]: 1 },
+      targetInstanceOf: () => b,
+    };
+    expect(decide([switched], input)).toBe("wait");
+    const idleOld = shell("switched", {
+      modelSelection: sel(b),
+      latestUserMessageAt: iso(-500),
+      latestTurn: null,
+      session: { ...running, status: "ready", activeTurnId: null, providerInstanceId: a },
+    });
+    expect(decide([idleOld], input)).toBe("wait");
   });
 
   it("waits on a thread whose message was accepted but not yet picked up", () => {
@@ -126,6 +247,8 @@ describe("nextThreadQueueAction", () => {
       claimId: "claim-1",
       claimedAt: NOW - 1_000,
       priorUserMessageAt: iso(-3_600_000),
+      priorTurnId: null,
+      priorSessionUpdatedAt: null,
       sentAt: NOW - 500,
       ...overrides,
     });
@@ -133,16 +256,81 @@ describe("nextThreadQueueAction", () => {
     it("holds the next entry until the sent message lands on the thread", () => {
       const before = shell("sent", { latestUserMessageAt: iso(-3_600_000) });
       expect(decide([before], { inFlight: claim() })).toBe("wait");
-      const landed = shell("sent", { latestUserMessageAt: iso(-100) });
+      const landed = shell("sent", { latestUserMessageAt: iso(-100), session: running });
       expect(decide([landed], { inFlight: claim() })).toBe("clear-in-flight");
+    });
+
+    it("a landed but idle send with the same turn holds the claim; a failed start releases it", () => {
+      // Completed after the message landed (clock skew), so the thread reads idle.
+      const prior = {
+        turnId: "turn-1" as never,
+        state: "completed" as const,
+        requestedAt: iso(-9_000),
+        startedAt: iso(-8_000),
+        completedAt: iso(-50),
+        assistantMessageId: null,
+      };
+      const inFlight = claim({ priorTurnId: "turn-1" as never });
+      const idleSession = { ...running, status: "ready" as const, activeTurnId: null };
+      const idle = shell("sent", {
+        latestUserMessageAt: iso(-100),
+        latestTurn: prior,
+        session: idleSession,
+      });
+      expect(isQueueBusy(idle, iso(0))).toBe(false);
+      expect(decide([idle], { inFlight })).toBe("wait");
+      const failed = shell("sent", {
+        latestUserMessageAt: iso(-100),
+        latestTurn: prior,
+        session: { ...running, status: "error", activeTurnId: null, updatedAt: iso(-50) },
+      });
+      expect(decide([failed], { inFlight })).toBe("clear-in-flight");
+      const nextTurn = shell("sent", {
+        latestUserMessageAt: iso(-100),
+        latestTurn: { ...prior, turnId: "turn-2" as never },
+        session: idleSession,
+      });
+      expect(decide([nextTurn], { inFlight })).toBe("clear-in-flight");
+    });
+
+    it("a re-sent thread whose previous turn failed holds the claim until the session changes", () => {
+      // The message lands while the session still reads the old error: the server has
+      // not yet moved it to "starting", so that error says nothing about this send.
+      const prior = {
+        turnId: "turn-1" as never,
+        state: "error" as const,
+        requestedAt: iso(-9_000),
+        startedAt: iso(-8_000),
+        completedAt: iso(-7_000),
+        assistantMessageId: null,
+      };
+      const oldError = { ...running, status: "error" as const, activeTurnId: null };
+      const inFlight = claim({
+        priorTurnId: "turn-1" as never,
+        priorSessionUpdatedAt: oldError.updatedAt,
+      });
+      const stale = shell("sent", {
+        latestUserMessageAt: iso(-100),
+        latestTurn: prior,
+        session: oldError,
+      });
+      expect(decide([stale], { inFlight })).toBe("wait");
+      const freshError = shell("sent", {
+        latestUserMessageAt: iso(-100),
+        latestTurn: prior,
+        session: { ...oldError, updatedAt: iso(-50) },
+      });
+      expect(decide([freshError], { inFlight })).toBe("clear-in-flight");
     });
 
     it("a draft's thread appearing counts as landed", () => {
       const inFlight = claim({ priorUserMessageAt: null });
       expect(decide([], { inFlight })).toBe("wait");
-      expect(decide([shell("sent", { latestUserMessageAt: iso(-100) })], { inFlight })).toBe(
-        "clear-in-flight",
-      );
+      expect(
+        decide([shell("sent", { latestUserMessageAt: iso(-100), session: running })], {
+          inFlight,
+        }),
+      ).toBe("clear-in-flight");
     });
 
     it("gives up waiting after the caps", () => {
@@ -161,6 +349,56 @@ describe("nextThreadQueueAction", () => {
         }),
       ).toBe("clear-in-flight");
     });
+  });
+
+  it("counts a running thread on the instance its session runs on, not the one it is set to", () => {
+    const opts = {
+      perProvider: true,
+      visibleInstanceIds: [a, b],
+      providerSlots: { [a]: 1, [b]: 1 },
+    };
+    const moved = shell("moved", {
+      modelSelection: sel(b),
+      session: { ...running, providerInstanceId: a },
+    });
+    expect(decide([moved], { ...opts, entries: [entry("q")], targetInstanceOf: () => b })).toBe(
+      "claim",
+    );
+    expect(decide([moved], { ...opts, entries: [entry("q")], targetInstanceOf: () => a })).toBe(
+      "wait",
+    );
+  });
+
+  it("never lets an over-full instance cancel another instance's free slot", () => {
+    expect(
+      decide([on(a), on(a)], {
+        entries: [entry("q")],
+        perProvider: true,
+        visibleInstanceIds: [a, b],
+        providerSlots: { [a]: 1, [b]: 1 },
+        targetInstanceOf: () => b,
+      }),
+    ).toBe("claim");
+  });
+
+  it("a busy thread whose message and turn are unchanged has not landed the sent message", () => {
+    const stale = shell("sent", {
+      latestUserMessageAt: iso(-100),
+      session: running,
+    });
+    expect(
+      decide([stale], {
+        inFlight: {
+          entry: entry("sent"),
+          claimId: "claim-1",
+          claimedAt: NOW - 1_000,
+          priorUserMessageAt: iso(-100),
+          priorTurnId: null,
+          priorSessionUpdatedAt: null,
+          sentAt: NOW - 500,
+        },
+      }),
+    ).toBe("wait");
   });
 
   it("two queued entries send one at a time across a turn", () => {
@@ -185,7 +423,7 @@ describe("nextThreadQueueAction", () => {
   });
 });
 
-describe("claimAndSendQueueHead", () => {
+describe("claimAndSendQueueEntry", () => {
   beforeEach(() => {
     useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null, lastFailure: null });
     const store = useThreadQueueStore.getState();
@@ -193,24 +431,18 @@ describe("claimAndSendQueueHead", () => {
     store.enqueue(entry("B"));
   });
 
-  // The watched branch always follows whatever is at the head right now, as the
-  // coordinator's render does once the claim removes the old head.
-  const liveHeadBranch = () => {
-    const head = useThreadQueueStore.getState().entries[0];
-    return head ? { key: threadQueueEntryKey(head), branch: `branch-of-${head.threadId}` } : null;
-  };
-
-  function deps(overrides: Partial<Parameters<typeof claimAndSendQueueHead>[0]> = {}) {
+  function deps(overrides: Partial<Parameters<typeof claimAndSendQueueEntry>[0]> = {}) {
     const snapshots: Array<{ entry: ThreadQueueEntry; branch: string | null }> = [];
     const failures: string[] = [];
     return {
       snapshots,
       failures,
       deps: {
+        key: "env-1:A",
         claimId: "claim-1",
-        headGitBranch: liveHeadBranch,
+        readGitBranch: async (value: ThreadQueueEntry) => `branch-of-${value.threadId}`,
         resolveEntry: (value: ThreadQueueEntry) => value,
-        priorUserMessageAt: () => null,
+        prior: () => ({ userMessageAt: null, turnId: null, sessionUpdatedAt: null }),
         settle: async () => {},
         readSnapshot: (value: ThreadQueueEntry, branch: string | null) => {
           snapshots.push({ entry: value, branch });
@@ -225,13 +457,64 @@ describe("claimAndSendQueueHead", () => {
     };
   }
 
-  it("sends the claimed head with the branch watched for it, not for the next entry", async () => {
-    const run = deps();
-    await claimAndSendQueueHead(run.deps);
-    expect(run.snapshots).toMatchObject([{ entry: { threadId: "A" }, branch: "branch-of-A" }]);
+  it("sends the named entry with its own checkout branch", async () => {
+    const run = deps({
+      key: "env-1:B",
+      prior: () => ({ userMessageAt: null, turnId: null, sessionUpdatedAt: "session-at-claim" }),
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.snapshots).toMatchObject([{ entry: { threadId: "B" }, branch: "branch-of-B" }]);
     const state = useThreadQueueStore.getState();
-    expect(state.entries.map((value) => value.threadId)).toEqual(["B"]);
+    expect(state.entries.map((value) => value.threadId)).toEqual(["A"]);
     expect(state.inFlight?.sentAt).not.toBeNull();
+    expect(state.inFlight?.priorSessionUpdatedAt).toBe("session-at-claim");
+  });
+
+  it("reads the claimed entry's branch after the claim", async () => {
+    const reads: Array<{ environmentId: string; queued: boolean }> = [];
+    const run = deps({
+      key: "env-1:B",
+      resolveEntry: (value) => ({ ...value, environmentId: EnvironmentId.make("env-2") }),
+      readGitBranch: async (value) => {
+        reads.push({
+          environmentId: value.environmentId,
+          queued: useThreadQueueStore
+            .getState()
+            .entries.some((queued) => queued.threadId === value.threadId),
+        });
+        return `branch-of-${value.threadId}`;
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(reads).toEqual([{ environmentId: "env-2", queued: false }]);
+    expect(run.snapshots).toMatchObject([{ entry: { threadId: "B" }, branch: "branch-of-B" }]);
+  });
+
+  it("a failed branch read sends with no branch", async () => {
+    const run = deps({
+      readGitBranch: async () => {
+        throw new Error("status unavailable");
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.snapshots).toMatchObject([{ entry: { threadId: "A" }, branch: null }]);
+    expect(useThreadQueueStore.getState().inFlight?.sentAt).not.toBeNull();
+  });
+
+  it("a branch read that never returns sends with no branch after the read limit", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = deps({ readGitBranch: () => new Promise<string | null>(() => {}) });
+      const sending = claimAndSendQueueEntry(run.deps);
+      await vi.advanceTimersByTimeAsync(QUEUE_BRANCH_READ_TIMEOUT_MS - 1);
+      expect(run.snapshots).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await sending;
+      expect(run.snapshots).toMatchObject([{ entry: { threadId: "A" }, branch: null }]);
+      expect(useThreadQueueStore.getState().inFlight?.sentAt).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a claim taken over by another tab during the settle sends nothing", async () => {
@@ -242,13 +525,13 @@ describe("claimAndSendQueueHead", () => {
         }));
       },
     });
-    await claimAndSendQueueHead(run.deps);
+    await claimAndSendQueueEntry(run.deps);
     expect(run.snapshots).toEqual([]);
   });
 
   it("a refused or throwing send pauses the queue and reports why", async () => {
     const refused = deps({ send: async () => ({ kind: "refused", reason: "needs you" }) });
-    await claimAndSendQueueHead(refused.deps);
+    await claimAndSendQueueEntry(refused.deps);
     expect(useThreadQueueStore.getState()).toMatchObject({
       paused: true,
       inFlight: null,
@@ -258,13 +541,87 @@ describe("claimAndSendQueueHead", () => {
 
     useThreadQueueStore.getState().setPaused(false);
     const throwing = deps({
+      key: "env-1:B",
       claimId: "claim-2",
       send: async () => {
         throw new Error("boom");
       },
     });
-    await claimAndSendQueueHead(throwing.deps);
+    await claimAndSendQueueEntry(throwing.deps);
     expect(useThreadQueueStore.getState().lastFailure?.message).toBe("boom");
     expect(useThreadQueueStore.getState().inFlight).toBeNull();
+  });
+});
+
+describe("listQueueSlotInstances", () => {
+  const provider = (instanceId: string, driver: string, displayName?: string): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make(driver),
+    ...(displayName ? { displayName } : {}),
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+  });
+  const settings = {
+    providerInstances: {
+      claudeAgent: { driver: "claudeAgent", displayName: "UniSub", enabled: true },
+      claudeAgent_personalsub: {
+        driver: "claudeAgent",
+        displayName: "PersonalSub",
+        enabled: true,
+      },
+      codex: { driver: "codex", enabled: false },
+    },
+    providers: {},
+  } as unknown as Pick<ServerSettings, "providerInstances" | "providers">;
+
+  it("lists visible instances, labelled and deduped across sources", () => {
+    const providers = [
+      provider("claudeAgent", "claudeAgent", "UniSub"),
+      provider("claudeAgent_personalsub", "claudeAgent", "PersonalSub"),
+      provider("codex", "codex"),
+    ];
+    const claude = PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("claudeAgent")];
+    expect(
+      listQueueSlotInstances([
+        { providers, settings },
+        { providers: [providers[0]!], settings },
+      ]),
+    ).toEqual([
+      { instanceId: "claudeAgent", label: `${claude} \u00b7 UniSub` },
+      { instanceId: "claudeAgent_personalsub", label: `${claude} \u00b7 PersonalSub` },
+    ]);
+  });
+
+  it("labels a driver without a display name the way its instance name reads", () => {
+    const providers = [provider("myDriver", "myDriver")];
+    const custom = {
+      providerInstances: { myDriver: { driver: "myDriver", enabled: true } },
+      providers: {},
+    } as unknown as typeof settings;
+    expect(listQueueSlotInstances([{ providers, settings: custom }])).toEqual([
+      { instanceId: "myDriver", label: "My Driver" },
+    ]);
+  });
+});
+
+describe("queueSlotTotal", () => {
+  it("returns the global slots when per-provider is off", () => {
+    expect(queueSlotTotal(3, false, { a: 9 }, ["a"])).toBe(3);
+  });
+
+  it("sums per-instance slots over the visible ids, defaulting to 1", () => {
+    expect(queueSlotTotal(1, true, { a: 2, b: 3, hidden: 7 }, ["a", "b", "c"])).toBe(6);
+    expect(queueSlotTotal(1, true, {}, [])).toBe(0);
+  });
+
+  it("does not read Object.prototype members as slot counts", () => {
+    expect(queueSlotTotal(1, true, {}, ["constructor"])).toBe(1);
   });
 });

@@ -212,6 +212,14 @@ export function useEnvironmentSupportsLocalOnlyStatus(environmentId: Environment
   return serverConfigs.get(environmentId)?.environment.capabilities.vcsLocalOnlyStatus === true;
 }
 
+/** Non-hook read of `useEnvironmentSupportsLocalOnlyStatus`. */
+export function readEnvironmentSupportsLocalOnlyStatus(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .vcsLocalOnlyStatus === true
+  );
+}
+
 /** Whether the environment's server understands `enableCrew` and serves the
     `crew.*` RPCs. An older one has never heard of `crew.list`, and the panel and
     the command palette both poll it on a timer, so an ungated client sends a
