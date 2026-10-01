@@ -175,7 +175,9 @@ it("hot updates Tailwind classes when a source file changes in bundled dev", asy
           },
         },
       ],
-      server: { host: "127.0.0.1", port: 0 },
+      // macOS drops native watch events when fseventsd is busy (a full test run); this test is
+      // about Tailwind hot updates, not the watcher, so poll.
+      server: { host: "127.0.0.1", port: 0, watch: { usePolling: true, interval: 100 } },
     });
     await server.listen();
     const address = server.httpServer?.address();
