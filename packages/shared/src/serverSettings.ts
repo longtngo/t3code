@@ -304,8 +304,14 @@ export function applyServerSettingsPatch(
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
+    // Applied only when this server has no value yet; never stored itself.
+    queueSlotsImport,
     ...patchForMerge
   } = patch;
+  const base =
+    queueSlotsImport !== undefined && current.queueSlots === undefined
+      ? { ...current, queueSlots: queueSlotsImport }
+      : current;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
   const backgroundActivityPatch =
     backgroundActivityProfile !== undefined
@@ -341,7 +347,7 @@ export function applyServerSettingsPatch(
             },
           }
         : undefined;
-  const next = deepMerge(current, patchForMerge);
+  const next = deepMerge(base, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
     ...(worktreeCleanupPatch === undefined

@@ -865,3 +865,42 @@ describe("serverSettings helpers", () => {
     ).toEqual({ t1: "on", t2: "off", t3: "on" });
   });
 });
+
+describe("queue slots import", () => {
+  const whole = { slots: 5, perProvider: true, providerSlots: { a: 2 } };
+
+  it("seeds from the import when the server has none, then merges the patch", () => {
+    const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      queueSlotsImport: whole,
+      queueSlots: { providerSlots: { b: 3 } },
+    });
+    expect(next.queueSlots).toEqual({
+      slots: 5,
+      perProvider: true,
+      providerSlots: { a: 2, b: 3 },
+    });
+    expect("queueSlotsImport" in next).toBe(false);
+  });
+
+  it("ignores the import when the server already has a value", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      queueSlots: { slots: 3, perProvider: false, providerSlots: { x: 1 } },
+    };
+    const next = applyServerSettingsPatch(current, {
+      queueSlotsImport: whole,
+      queueSlots: { slots: 7 },
+    });
+    expect(next.queueSlots).toEqual({ slots: 7, perProvider: false, providerSlots: { x: 1 } });
+  });
+
+  it("an import alone leaves an existing value untouched", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      queueSlots: { slots: 3, perProvider: false, providerSlots: {} },
+    };
+    expect(applyServerSettingsPatch(current, { queueSlotsImport: whole }).queueSlots).toEqual(
+      current.queueSlots,
+    );
+  });
+});

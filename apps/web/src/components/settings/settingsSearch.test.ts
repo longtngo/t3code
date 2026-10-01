@@ -15,6 +15,7 @@ import {
   searchableSetting,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -483,6 +484,7 @@ describe("settings search targets", () => {
     expect(isSettingsSearchScopeAvailable(setting.scope, "project")).toBe(true);
     expect(isSettingsSearchScopeAvailable(setting.scope, "all")).toBe(true);
     expect(getSettingsSearchTargetScope("appearance")).toMatchObject({ scope: null });
+    expect(getSettingsSearchTargetScope("queue-slots")).toMatchObject({ scope: null });
     expect(getSettingsSearchTargetScope("missing-setting")).toBeNull();
   });
 
@@ -689,5 +691,22 @@ describe("General panel catalog coverage", () => {
     // Guards the guard: a substring search over two whole files matches a lot,
     // so prove it can still say no.
     expect(anchorIsMounted("not-a-real-settings-anchor")).toBe(false);
+  });
+});
+
+describe("queue settings search", () => {
+  it("routes the queue items to the Queue tab", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/queue"]).toBe("Queue");
+    for (const id of ["queue-slots", "queue-per-provider"]) {
+      expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === id)).toMatchObject({
+        to: "/settings/queue",
+      });
+    }
+  });
+
+  it("titles the queue items like the rows they land on", () => {
+    const title = (id: string) => SETTINGS_SEARCH_ITEMS.find((item) => item.id === id)?.title;
+    expect(title("queue-slots")).toBe("Active slots");
+    expect(title("queue-per-provider")).toBe("Per provider");
   });
 });

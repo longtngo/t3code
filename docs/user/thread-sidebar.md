@@ -97,17 +97,22 @@ returns it to where it was.
 The number on the **Queue** header is its active slots. Queued threads send, top first,
 while fewer threads are working or watching background work than that number. A queued
 thread that is already working is skipped until it finishes. Set the number from the gear
-button; **0** holds the queue and the header reads **Paused**. Turn on **Per provider** to
-give each enabled provider its own slots, and hover the number to see the split.
+button or **Settings → Queue**; **0** holds the queue and the header reads **Paused**. Turn
+on **Per provider** to give each enabled provider its own slots, and hover the number to see
+the split.
 
 A queued thread sends its composer message as if you had pressed Send, then returns to
 active work. A queued thread with an empty composer returns without sending. Sending it
 yourself also takes it out of the queue.
 
-The queue lives on this device and runs while T3 Code is open here. Use the pause button
-on the **Queue** header to hold it. If a queued send fails, or needs something only the
-open thread can do (attachments, a slash command, an answer to a question), the thread
-returns to active work with the reason and the queue pauses until you resume it.
+Queued threads stay on this device and send while T3 Code is open here. The slot numbers
+are saved on the server serving your web app, or the desktop app's local environment, and
+shared by its clients; app.t3.codes and a desktop app with its local environment turned off keep
+their own. Use the
+pause button on the **Queue** header to hold the queue. If a queued send fails, or needs
+something only the open thread can do (attachments, a slash command, an answer to a
+question), the thread returns to active work with the reason and the queue pauses until you
+resume it.
 
 ## Settle finished work
 

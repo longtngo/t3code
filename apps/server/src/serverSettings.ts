@@ -314,6 +314,12 @@ const decodePersistedOptionalProviderSettingsJsonExit = Schema.decodeUnknownExit
   fromLenientJson(PersistedOptionalProviderSettings),
 );
 
+/** The trust rule `loadSettingsState` applies: a missing file, or one both decodes accept. */
+const settingsJsonDecodesClean = (raw: string | null): boolean =>
+  raw === null ||
+  (Exit.isSuccess(decodeServerSettingsJsonExit(raw)) &&
+    Exit.isSuccess(decodePersistedOptionalProviderSettingsJsonExit(raw)));
+
 function restoreUsedProviders(
   settings: ServerSettings,
   persisted: typeof PersistedOptionalProviderSettings.Type,
@@ -870,6 +876,12 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const getSettings = getSettingsFromCache.pipe(
+    Effect.flatMap(materializeProviderEnvironmentSecrets),
+    Effect.map(resolveTextGenerationProvider),
+    Effect.map(migrateLocalLlmSettings),
+  );
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
@@ -1120,13 +1132,36 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
+        let effectivePatch = patch;
+        if (patch.queueSlots !== undefined || patch.queueSlotsImport !== undefined) {
+          const entry = yield* Cache.get(settingsCache, cacheKey);
+          const raw = yield* readSettingsRaw;
+          // The queue is never worth rewriting a file the user must repair, or one changed on disk
+          // since this cache loaded it (the rescan catches up); the control falls back to its local copy.
+          if (raw !== entry.raw || !settingsJsonDecodesClean(raw)) {
+            const { queueSlots: _queueSlots, queueSlotsImport: _queueSlotsImport, ...rest } = patch;
+            // Load-bearing: an empty patch would still rewrite the file through the normal path.
+            if (Object.keys(rest).length === 0) {
+              // A manual edit must not look saved (a hold at 0 would snap back); the import stays quiet.
+              if (patch.queueSlots === undefined) return yield* getSettings;
+              return yield* new ServerSettingsError({
+                settingsPath,
+                operation: "write-file",
+                reason:
+                  "the queue change was not saved because settings.json could not be read cleanly or changed on disk",
+                cause: undefined,
+              });
+            }
+            effectivePatch = rest;
+          }
+        }
         const current = yield* getSettingsFromCache;
-        const patched = applyServerSettingsPatch(current, patch);
+        const patched = applyServerSettingsPatch(current, effectivePatch);
         // Retire the deprecated `localModels` once the user writes `localLlm` directly, so
         // the read-time migration can't resurrect deleted configs from the stale legacy blob.
         // (No caller patches both fields at once — the web UI only ever sends `localLlm`.)
         const updated =
-          patch.localLlm !== undefined
+          effectivePatch.localLlm !== undefined
             ? { ...patched, localModels: DEFAULT_SERVER_SETTINGS.localModels }
             : patched;
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
@@ -1283,11 +1318,7 @@ const make = Effect.gen(function* () {
   return {
     start,
     ready: Deferred.await(startedDeferred),
-    getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeProviderEnvironmentSecrets),
-      Effect.map(resolveTextGenerationProvider),
-      Effect.map(migrateLocalLlmSettings),
-    ),
+    getSettings,
     getRawSettings: getSettingsFromCache,
     updateSettings,
     rescan,

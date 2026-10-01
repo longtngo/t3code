@@ -12,6 +12,7 @@ import {
 import {
   ArchiveIcon,
   BellIcon,
+  ListOrderedIcon,
   BlocksIcon,
   BotIcon,
   CpuIcon,
@@ -81,6 +82,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/notifications": BellIcon,
+  "/settings/queue": ListOrderedIcon,
   "/settings/projects": PanelsTopLeftIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": SnapShotIcon,

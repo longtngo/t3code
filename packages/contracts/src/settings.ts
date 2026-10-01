@@ -314,6 +314,39 @@ export const LoadBalancingWeights = Schema.Record(
   Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
 );
 
+export const MAX_QUEUE_SLOTS = 99;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** One slot count: a finite number truncated into 0..99; anything else is the default 1. */
+const normalizeSlotCount = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(MAX_QUEUE_SLOTS, Math.trunc(value)))
+    : 1;
+
+/** The sidebar Queue's slot settings from any stored shape; also used by the client's local copy. */
+export function normalizeQueueSlots(value: unknown): QueueSlotSettings {
+  const source = isPlainObject(value) ? value : {};
+  const providerSlots = isPlainObject(source.providerSlots) ? source.providerSlots : {};
+  return {
+    slots: normalizeSlotCount(source.slots),
+    perProvider: source.perProvider === true,
+    providerSlots: Object.fromEntries(
+      Object.entries(providerSlots).map(([id, n]) => [id, normalizeSlotCount(n)]),
+    ),
+  };
+}
+
+export const QueueSlotSettings = Schema.Struct({
+  /** How many threads may be busy before the queue sends; 0 holds it. */
+  slots: Schema.Number,
+  perProvider: Schema.Boolean,
+  /** Per provider instance, used while `perProvider` is on; kept when it is off. */
+  providerSlots: Schema.Record(Schema.String, Schema.Number),
+});
+export type QueueSlotSettings = typeof QueueSlotSettings.Type;
+
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 /** Maximum width of the chat timeline and composer on wide screens. */
@@ -1819,6 +1852,21 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // How many threads the sidebar Queue lets be busy before it sends. Absent until first set, so a
+  // device's older local value can be imported without overwriting one already here. Any stored
+  // shape decodes (bad values clamp, non-objects read as absent): it must never fail the file.
+  queueSlots: Schema.optionalKey(Schema.Unknown).pipe(
+    Schema.decodeTo(
+      Schema.optionalKey(QueueSlotSettings),
+      SchemaTransformation.transformOptional({
+        decode: (stored) =>
+          Option.isSome(stored) && isPlainObject(stored.value)
+            ? Option.some(normalizeQueueSlots(stored.value))
+            : Option.none(),
+        encode: (value) => value,
+      }),
+    ),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1890,6 +1938,8 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     operation: ServerSettingsOperation,
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
+    /** Why the operation was refused, when nothing threw. */
+    reason: Schema.optional(Schema.String),
     cause: Schema.Defect(),
   },
 ) {
@@ -1900,7 +1950,8 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
       this.environmentVariable === undefined
         ? ""
         : ` and environment variable ${this.environmentVariable}`;
-    return `Server settings ${this.operation} failed${provider}${variable} at ${this.settingsPath}.`;
+    const reason = this.reason === undefined ? "" : `: ${this.reason}`;
+    return `Server settings ${this.operation} failed${provider}${variable} at ${this.settingsPath}${reason}.`;
   }
 }
 
@@ -2144,6 +2195,23 @@ export const ServerSettingsPatch = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
+  // Partial: only the changed fields, merged per key (and per provider entry) over the server's value.
+  queueSlots: Schema.optionalKey(
+    Schema.Struct({
+      slots: Schema.optionalKey(
+        Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: MAX_QUEUE_SLOTS })),
+      ),
+      perProvider: Schema.optionalKey(Schema.Boolean),
+      providerSlots: Schema.optionalKey(
+        Schema.Record(
+          Schema.String,
+          Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: MAX_QUEUE_SLOTS })),
+        ),
+      ),
+    }),
+  ),
+  // A device's whole local value, applied only when this server has no `queueSlots` yet.
+  queueSlotsImport: Schema.optionalKey(QueueSlotSettings),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

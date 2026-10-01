@@ -18,6 +18,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/notifications"
+  | "/settings/queue"
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
@@ -101,6 +102,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/notifications": "Notifications",
+  "/settings/queue": "Queue",
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
@@ -487,6 +489,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "notify-failed",
     title: "Task failed",
     to: "/settings/notifications",
+  },
+  {
+    id: "queue-slots",
+    title: "Active slots",
+    to: "/settings/queue",
+    searchTerms: ["queue slots active busy send hold"],
+  },
+  {
+    id: "queue-per-provider",
+    title: "Per provider",
+    to: "/settings/queue",
+    searchTerms: ["queue provider slots instance"],
   },
   {
     id: "new-threads",
@@ -945,6 +959,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   // FORK pages: local models is machine-wide, notifications is per device.
   "/settings/local-models": null,
   "/settings/notifications": null,
+  "/settings/queue": null,
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",

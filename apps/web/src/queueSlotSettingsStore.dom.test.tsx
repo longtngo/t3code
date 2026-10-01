@@ -38,9 +38,9 @@ describe("queueSlotSettingsStore storage", () => {
 
   it("round-trips slot settings through its own key and loads bad data as defaults", async () => {
     const store = useQueueSlotSettingsStore.getState();
-    store.setSlots(3);
-    store.setPerProvider(true);
-    store.setProviderSlots("claudeAgent_personalsub", 2);
+    store.apply({ slots: 3 });
+    store.apply({ perProvider: true });
+    store.apply({ providerSlots: { claudeAgent_personalsub: 2 } });
     expect(storedSettings()).toEqual(saved);
     vi.resetModules();
     const fresh = await import("./queueSlotSettingsStore");
@@ -61,9 +61,9 @@ describe("queueSlotSettingsStore storage", () => {
 
   it("keeps slot settings when a tab on the previous version writes the queue", async () => {
     const store = useQueueSlotSettingsStore.getState();
-    store.setSlots(3);
-    store.setPerProvider(true);
-    store.setProviderSlots("claudeAgent_personalsub", 2);
+    store.apply({ slots: 3 });
+    store.apply({ perProvider: true });
+    store.apply({ providerSlots: { claudeAgent_personalsub: 2 } });
     // The previous version kept no slot settings and writes the whole queue state.
     localStorage.setItem(
       THREAD_QUEUE_STORAGE_KEY,

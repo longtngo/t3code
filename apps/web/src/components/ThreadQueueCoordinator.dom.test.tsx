@@ -1,6 +1,12 @@
+import { RegistryContext } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { QueueSlotSettings } from "@t3tools/contracts";
+import { type Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const UPDATE_SETTINGS = "environment-data:server:update-settings";
 
 // Stores and the real send pipeline stay live; only where the coordinator reads the
 // environment (shells, server config, connection) and the outgoing commands are stubbed.
@@ -67,12 +73,15 @@ const fixture = vi.hoisted(() => {
     configs: new Map([[env, { providers: [provider("codex"), provider("claudeAgent")] }]]),
     presentationById: new Map([[env, { connection: { phase: "connected" } }]]),
     commandCalls: [] as Array<{ label: string; value: unknown }>,
+    primary: null as { environmentId: string } | null,
   };
 });
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../state/environments", () => ({
   useEnvironments: () => ({ presentationById: fixture.presentationById }),
+  // No primary unless a test sets one: slot settings then come from the local store.
+  usePrimaryEnvironment: () => fixture.primary,
 }));
 vi.mock("../state/entities", () => ({
   useThreadShells: () => fixture.threads,
@@ -84,9 +93,15 @@ vi.mock("../state/entities", () => ({
 }));
 vi.mock("../state/server", async (importOriginal) => {
   const { Atom } = await import("effect/unstable/reactivity");
+  const { DEFAULT_SERVER_SETTINGS } = await import("@t3tools/contracts");
+  const primaryServerConfigAtom = Atom.make<{ settings: Record<string, unknown> } | null>(null);
   return {
     ...(await importOriginal<typeof import("../state/server")>()),
     environmentServerConfigsAtom: Atom.make(fixture.configs),
+    primaryServerConfigAtom,
+    primaryServerSettingsAtom: Atom.make(
+      (get) => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,
+    ),
   };
 });
 // The network boundary: every command the coordinator dispatches lands here.
@@ -94,12 +109,17 @@ vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: { label: string }) => async (value: unknown) => {
     fixture.commandCalls.push({ label: command.label, value });
     const { AsyncResult } = await import("effect/unstable/reactivity");
-    return AsyncResult.success(undefined);
+    // A settings write is the queue-slot import; the server accepts it.
+    const patch = (value as { input?: { patch?: { queueSlotsImport?: unknown } } }).input?.patch;
+    return AsyncResult.success(
+      command.label === UPDATE_SETTINGS ? { queueSlots: patch?.queueSlotsImport } : undefined,
+    );
   },
 }));
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
+import { primaryServerConfigAtom } from "../state/server";
 import { renderDom } from "../testing/renderDom";
 import { useThreadQueueStore, type ThreadQueueEntry } from "../threadQueueStore";
 import { ThreadQueueCoordinator } from "./ThreadQueueCoordinator";
@@ -115,6 +135,7 @@ const startedThreadIds = () =>
 beforeEach(() => {
   localStorage.clear();
   fixture.commandCalls.length = 0;
+  fixture.primary = null;
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -159,6 +180,70 @@ describe("ThreadQueueCoordinator per-provider slots", () => {
     expect(startedThreadIds()).toEqual(["queued-b"]);
     expect(useThreadQueueStore.getState().entries.map((entry) => entry.threadId)).toEqual([
       "queued-a",
+    ]);
+  });
+});
+
+const configAtom = primaryServerConfigAtom as unknown as Atom.Writable<{
+  settings: Record<string, unknown>;
+} | null>;
+
+describe("ThreadQueueCoordinator with a primary environment", () => {
+  let registry: AtomRegistry.AtomRegistry;
+  const setServerSlots = (queueSlots?: QueueSlotSettings) =>
+    act(async () => {
+      registry.set(configAtom, { settings: queueSlots === undefined ? {} : { queueSlots } });
+    });
+  const mount = () =>
+    renderDom(
+      <RegistryContext.Provider value={registry}>
+        <ThreadQueueCoordinator />
+      </RegistryContext.Provider>,
+    );
+
+  beforeEach(() => {
+    fixture.primary = { environmentId: "env-primary" };
+    registry = AtomRegistry.make();
+  });
+
+  it("sends by the server's slots, not the device copy", async () => {
+    // The device copy would send (one busy thread, five slots); the server's 0 holds the queue.
+    useQueueSlotSettingsStore.setState({ slots: 5, perProvider: false, providerSlots: {} });
+    const server: QueueSlotSettings = { slots: 0, perProvider: false, providerSlots: {} };
+    registry.set(configAtom, { settings: { queueSlots: server } });
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue queued-a");
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: threadId("queued-a"), draftId: null });
+
+    await mount();
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
+
+    await setServerSlots({ ...server, slots: 5 });
+    expect(useThreadQueueStore.getState().inFlight?.entry.threadId).toBe("queued-a");
+  });
+
+  it("imports the device copy once when the server has no value", async () => {
+    // beforeEach's store seed saved the device copy under its storage key.
+    await mount();
+    await setServerSlots();
+    await setServerSlots();
+    const imports = fixture.commandCalls.filter((call) => call.label === UPDATE_SETTINGS);
+    expect(imports.map((call) => call.value)).toEqual([
+      {
+        environmentId: "env-primary",
+        input: {
+          patch: {
+            queueSlotsImport: {
+              slots: 1,
+              perProvider: true,
+              providerSlots: { codex: 1, claudeAgent: 1 },
+            },
+          },
+        },
+      },
     ]);
   });
 });

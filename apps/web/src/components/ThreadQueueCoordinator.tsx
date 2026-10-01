@@ -14,7 +14,7 @@ import {
   type QueuedSendSnapshot,
 } from "../lib/threadSend/queuedSend";
 import { newMessageId, newThreadId, randomHex, randomUUID } from "../lib/utils";
-import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
+import { useImportLocalQueueSlots, useQueueSlotSettings } from "../queueSlotSettings";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   readEnvironmentSupportsLocalOnlyStatus,
@@ -115,13 +115,8 @@ export function ThreadQueueCoordinator() {
       inFlight: state.inFlight,
     })),
   );
-  const { slots, perProvider, providerSlots } = useQueueSlotSettingsStore(
-    useShallow((state) => ({
-      slots: state.slots,
-      perProvider: state.perProvider,
-      providerSlots: state.providerSlots,
-    })),
-  );
+  const { slots, perProvider, providerSlots } = useQueueSlotSettings();
+  useImportLocalQueueSlots();
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,

@@ -1500,3 +1500,51 @@ describe("offer thread compaction setting", () => {
     ).toBe(false);
   });
 });
+
+describe("queueSlots", () => {
+  const decodeQueue = (queueSlots: unknown) =>
+    decodeServerSettings({ cursorKeychainUsageEnabled: true, queueSlots });
+
+  it("is absent when never set", () => {
+    expect("queueSlots" in decodeServerSettings({})).toBe(false);
+  });
+
+  it.each([
+    [{ slots: 150 }, { slots: 99, perProvider: false, providerSlots: {} }],
+    [{ slots: 1.5 }, { slots: 1, perProvider: false, providerSlots: {} }],
+    [{ slots: -3 }, { slots: 0, perProvider: false, providerSlots: {} }],
+    [{ slots: "x" }, { slots: 1, perProvider: false, providerSlots: {} }],
+    [{ slots: Number.NaN }, { slots: 1, perProvider: false, providerSlots: {} }],
+    [{}, { slots: 1, perProvider: false, providerSlots: {} }],
+    [{ perProvider: "yes" }, { slots: 1, perProvider: false, providerSlots: {} }],
+    [
+      { providerSlots: { a: 500, b: "z", c: 2 } },
+      { slots: 1, perProvider: false, providerSlots: { a: 99, b: 1, c: 2 } },
+    ],
+    [{ providerSlots: [5] }, { slots: 1, perProvider: false, providerSlots: {} }],
+    [{ providerSlots: null }, { slots: 1, perProvider: false, providerSlots: {} }],
+  ])("clamps %j per field and keeps sibling settings", (input, expected) => {
+    const settings = decodeQueue(input);
+    expect(settings.queueSlots).toEqual(expected);
+    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+  });
+
+  it.each([null, "garbage", [], 3])("reads %j as absent and keeps sibling settings", (input) => {
+    const settings = decodeQueue(input);
+    expect(settings.queueSlots).toBeUndefined();
+    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+  });
+
+  it("round-trips through encode", () => {
+    const value = { slots: 3, perProvider: true, providerSlots: { a: 2 } };
+    expect(decodeServerSettings(encodeServerSettings(decodeQueue(value))).queueSlots).toEqual(
+      value,
+    );
+  });
+
+  it("decodes a partial queue patch without filling defaults", () => {
+    expect(decodeServerSettingsPatch({ queueSlots: { perProvider: true } })).toEqual({
+      queueSlots: { perProvider: true },
+    });
+  });
+});
