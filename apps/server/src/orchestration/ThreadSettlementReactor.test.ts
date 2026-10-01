@@ -264,6 +264,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     // NOT taking the read queue - upstream's new assertions count reads of the validated view.
     getRawSettings: Ref.get(settings),
     updateSettings,
+    rescan: Effect.void,
     streamChanges: Stream.fromPubSub(settingsChanges),
     subscribeChanges: PubSub.subscribe(settingsChanges).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),

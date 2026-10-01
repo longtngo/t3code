@@ -134,19 +134,30 @@ export const readThemeFileGuarded = (filePath: string, maxBytes: number): string
   }
 };
 
+interface ThemeWarning {
+  readonly message: string;
+  readonly attributes: Record<string, unknown>;
+}
+
 /**
  * Every theme the directory actually publishes. A file that is missing,
  * unreadable, malformed, colorless, or misnamed is simply skipped; the rest of
- * the set is unaffected. The one place that decides what "published" means, so
- * a caller validating an id cannot disagree with the watcher serving it.
+ * the set is unaffected. Warnings come back as data so a periodic caller can
+ * log each once; `readPublishedThemes` logs all of them. The one place that
+ * decides what "published" means, so a caller validating an id cannot disagree
+ * with the watcher serving it.
  */
-export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
+const readPublishedThemesWithWarnings = Effect.fn(function* (themesDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const entries = yield* fs
     .readDirectory(themesDir)
     .pipe(Effect.orElseSucceed((): Array<string> => []));
 
   const themes: Array<EnvironmentTheme> = [];
+  const warnings: Array<ThemeWarning> = [];
+  const warn = (message: string, attributes: ThemeWarning["attributes"]) => {
+    warnings.push({ message, attributes });
+  };
   let examined = 0;
   let totalBytes = 0;
   for (const entry of entries.toSorted()) {
@@ -161,7 +172,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
     // on every refresh and every client connect.
     examined += 1;
     if (examined > MAX_THEME_FILES) {
-      yield* Effect.logWarning("ignoring environment theme files past the limit", {
+      warn("ignoring environment theme files past the limit", {
         path: themesDir,
         limit: MAX_THEME_FILES,
       });
@@ -171,7 +182,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
     const filePath = `${themesDir}/${entry}`;
     const raw = readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
-      yield* Effect.logWarning("ignoring unusable environment theme file", {
+      warn("ignoring unusable environment theme file", {
         path: filePath,
         limit: MAX_THEME_FILE_BYTES,
       });
@@ -181,7 +192,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
 
     const decoded = decodeEnvironmentThemeFileJsonExit(raw);
     if (decoded._tag === "Failure") {
-      yield* Effect.logWarning("ignoring invalid environment theme", {
+      warn("ignoring invalid environment theme", {
         path: filePath,
         detail: Cause.pretty(decoded.cause),
       });
@@ -189,7 +200,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
     }
     const file = decoded.value;
     if (!environmentThemeFileHasColors(file)) {
-      yield* Effect.logWarning("ignoring environment theme without colors", { path: filePath });
+      warn("ignoring environment theme without colors", { path: filePath });
       continue;
     }
 
@@ -198,7 +209,7 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
     // Bytes, not string length -- the cap describes wire weight.
     totalBytes += Buffer.byteLength(raw);
     if (totalBytes > MAX_THEME_TOTAL_BYTES) {
-      yield* Effect.logWarning("ignoring environment themes past the total size limit", {
+      warn("ignoring environment themes past the total size limit", {
         path: themesDir,
         limit: MAX_THEME_TOTAL_BYTES,
       });
@@ -207,8 +218,17 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
 
     themes.push({ id, ...file });
   }
+  return { themes, warnings };
+});
+
+export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
+  const { themes, warnings } = yield* readPublishedThemesWithWarnings(themesDir);
+  for (const w of warnings) yield* Effect.logWarning(w.message, w.attributes);
   return themes;
 });
+
+// An in-memory identity key for "the same warning as last read", never decoded.
+const warningKey = (w: ThemeWarning) => JSON.stringify([w.message, w.attributes]);
 
 /**
  * Reads the directory and folds it into the sequenced state, publishing only
@@ -239,14 +259,23 @@ const make = Effect.gen(function* () {
    * observations, could not then drop.
    */
   const refreshSemaphore = yield* Semaphore.make(1);
+  const loggedWarnings = yield* Ref.make<ReadonlySet<string>>(new Set());
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
   const refresh = refreshSemaphore.withPermits(1)(
     Effect.gen(function* () {
-      const themes = yield* readPublishedThemes(environmentThemesDir).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      );
+      const { themes, warnings } = yield* readPublishedThemesWithWarnings(
+        environmentThemesDir,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+      // Logged once per incident: the 30 s re-scan would otherwise repeat a
+      // broken file's warning on every tick. Only keys absent from the last
+      // read are logged, so a file that is fixed and breaks again warns again.
+      const keyed = warnings.map((w) => [warningKey(w), w] as const);
+      const previousKeys = yield* Ref.getAndSet(loggedWarnings, new Set(keyed.map(([k]) => k)));
+      for (const [key, w] of keyed) {
+        if (!previousKeys.has(key)) yield* Effect.logWarning(w.message, w.attributes);
+      }
       // Structural equality over the whole decoded value: a hand-rolled field
       // list here silently drops republishes for any field it forgets.
       const [changed, next] = yield* Ref.modify(

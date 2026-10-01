@@ -347,6 +347,7 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      rescan: Effect.void,
       get streamChanges() {
         return Stream.fromPubSub(changes);
       },

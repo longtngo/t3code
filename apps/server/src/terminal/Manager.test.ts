@@ -2125,6 +2125,7 @@ it.layer(
         getSettings: Effect.fail(settingsError),
         getRawSettings: Effect.fail(settingsError),
         updateSettings: () => Effect.fail(settingsError),
+        rescan: Effect.void,
         streamChanges: Stream.empty,
         subscribeChanges: Effect.succeed(Stream.empty),
       });

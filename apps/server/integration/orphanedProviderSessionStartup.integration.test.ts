@@ -21,8 +21,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { HttpServer } from "effect/unstable/http";
 import * as NetAddress from "effect/unstable/net/NetAddress";
@@ -31,6 +33,7 @@ import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "../src/cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../src/config.ts";
 import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
+import { EnvironmentThemeService } from "../src/environmentTheme.ts";
 import * as Keybindings from "../src/keybindings.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
@@ -80,8 +83,13 @@ const makePersistedRuntimeLayer = (dbPath: string) => {
 const startupDependencies = Layer.mergeAll(
   Layer.mock(Keybindings.Keybindings)({
     start: Effect.void,
+    rescan: Effect.void,
   }),
   ServerSettings.layerTest(),
+  Layer.succeed(EnvironmentThemeService, {
+    current: Effect.succeed([]),
+    streamChanges: Stream.empty,
+  }),
   Layer.succeed(OrchestrationReactor.OrchestrationReactor, {
     start: () => Effect.void,
   }),
@@ -303,9 +311,18 @@ it.effect(
       }).pipe(Effect.provide(firstRuntime));
 
       const secondRuntime = makePersistedRuntimeLayer(config.dbPath);
+      // The backstop line is logged after the command gate opens, so the test waits on the line itself.
+      const backstopStarted = Deferred.makeUnsafe<string>();
+      const captureBackstop = Logger.make(({ message }) => {
+        const line = Array.isArray(message) ? String(message[0]) : String(message);
+        if (line.startsWith("watch rescan backstop")) {
+          Deferred.doneUnsafe(backstopStarted, Effect.succeed(line));
+        }
+      });
       const startupLayer = ServerRuntimeStartup.layer.pipe(
         Layer.provideMerge(secondRuntime),
         Layer.provideMerge(startupDependencies),
+        Layer.provideMerge(Logger.layer([captureBackstop], { mergeWithExisting: true })),
       );
 
       const result = yield* Effect.gen(function* () {
@@ -380,6 +397,11 @@ it.effect(
           stoppedBindingStatus: stoppedBinding.status,
           stoppedBindingResumeCursor: stoppedBinding.resumeCursor,
           stoppedBindingRuntimePayload: stoppedBinding.runtimePayload,
+          // A plain timeout never fires under it.effect's TestClock; withLive makes a missing line fail fast.
+          backstopLine: yield* Deferred.await(backstopStarted).pipe(
+            Effect.timeoutOption("5 seconds"),
+            TestClock.withLive,
+          ),
         };
       }).pipe(Effect.provide(startupLayer));
 
@@ -404,6 +426,7 @@ it.effect(
           activeTurnId: null,
           unrelated: "also-preserve-me",
         },
+        backstopLine: Option.some("watch rescan backstop started (30s)"),
       });
     }).pipe(
       Effect.provide(

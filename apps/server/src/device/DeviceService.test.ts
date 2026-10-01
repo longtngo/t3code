@@ -156,6 +156,7 @@ const fixture = Effect.fn("fixture")(function* (
             deviceOnboardingCompleted:
               patch.deviceOnboardingCompleted ?? current.deviceOnboardingCompleted,
           })),
+        rescan: Effect.void,
         streamChanges: Stream.empty,
         subscribeChanges: Effect.succeed(Stream.empty),
       }),

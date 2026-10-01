@@ -44,6 +44,8 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import { EnvironmentThemeService } from "./environmentTheme.ts";
+import { runWatchRescanBackstop, WATCH_RESCAN_INTERVAL } from "./watchRescanBackstop.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -1013,6 +1015,7 @@ export const make = (options?: StartupOptions) =>
     const backgroundTaskRecoveryWatchdog = yield* BackgroundTaskRecoveryWatchdog;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const environmentTheme = yield* EnvironmentThemeService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -1272,6 +1275,17 @@ export const make = (options?: StartupOptions) =>
           ),
         );
       }
+
+      yield* Effect.logInfo(
+        `watch rescan backstop started (${Duration.toSeconds(WATCH_RESCAN_INTERVAL)}s)`,
+      );
+      yield* Effect.forkScoped(
+        runWatchRescanBackstop([
+          serverSettings.rescan,
+          keybindings.rescan,
+          environmentTheme.current,
+        ]),
+      );
 
       yield* Effect.logDebug("startup phase: complete");
       yield* flushCompileCache;

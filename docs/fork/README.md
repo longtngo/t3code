@@ -1408,6 +1408,16 @@ references invalid: `SQLITE(1) SQL logic error` on every shell snapshot, 35 red 
 a clean typecheck. The 42nd reconcile keeps the table unaliased and passes the qualifier to the
 filter. An upstream edit that re-aliases it will fail the same way.
 
+### 61. The watch re-scan backstop is forked at startup and keeps all three steps
+
+macOS fseventsd drops directory events under load and sets no drop flag, so the settings,
+keybindings and theme watchers can miss an edit indefinitely. `watchRescanBackstop.ts` re-checks
+each source every 30 s. It is forked in `serverRuntimeStartup.ts` beside the hub gauge, never inside
+a layer, for the TestClock reason under invariant 18. A reconcile must keep its three steps wired:
+`serverSettings.rescan`, `keybindings.rescan` and `environmentTheme.current`. The startup line
+`watch rescan backstop started` is asserted in
+`integration/orphanedProviderSessionStartup.integration.test.ts`; the steps themselves are not.
+
 ### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
 
 `t3code/no-manual-effect-runtime-in-tests` permits no NET-NEW manual runners per file, via a

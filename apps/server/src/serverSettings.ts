@@ -239,6 +239,12 @@ export class ServerSettingsService extends Context.Service<
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    /**
+     * Re-read settings.json if its bytes changed since the last decode and publish a real change.
+     * Backstop for dropped watch events; driven by a timer in serverRuntimeStartup. Never fails.
+     */
+    readonly rescan: Effect.Effect<void>;
+
     /** Stream of settings change events. */
     readonly streamChanges: Stream.Stream<ServerSettings>;
 
@@ -284,6 +290,7 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
           Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
           Effect.map(resolveTextGenerationProvider),
         ),
+      rescan: Effect.void,
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
     } satisfies ServerSettingsService["Service"];
@@ -593,18 +600,17 @@ const make = Effect.gen(function* () {
   );
 
   const writeSettingsAtomically = Effect.fnUntraced(
+    /** Returns the exact contents written, for the cache entry's `raw`. */
     function* (settings: ServerSettings) {
       const sparseSettingsJson = yield* encodeServerSettingsJson(
         stripDefaultServerSettings(settings, PERSISTED_SERVER_SETTINGS_DEFAULTS) ?? {},
       );
-
-      return yield* writeFileStringAtomically({
-        filePath: settingsPath,
-        contents: `${sparseSettingsJson}\n`,
-      }).pipe(
+      const contents = `${sparseSettingsJson}\n`;
+      yield* writeFileStringAtomically({ filePath: settingsPath, contents }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, pathService),
       );
+      return contents;
     },
     Effect.mapError(
       (cause) =>
@@ -645,15 +651,38 @@ const make = Effect.gen(function* () {
       return moved ? { ...settings, bitbucket } : settings;
     });
 
-  const loadSettingsFromDisk = Effect.gen(function* () {
+  const readSettingsRaw = Effect.gen(function* () {
+    if (!(yield* readConfigExists)) return null;
+    const info = yield* fs
+      .stat(settingsPath)
+      .pipe(
+        Effect.mapError(
+          (cause) => new ServerSettingsError({ settingsPath, operation: "read-file", cause }),
+        ),
+      );
+    if (info.type !== "File") {
+      // A directory or FIFO; readFile on a FIFO blocks while we hold the write semaphore.
+      return yield* new ServerSettingsError({
+        settingsPath,
+        operation: "read-file",
+        cause: new Error(`not a regular file (${info.type})`),
+      });
+    }
+    return yield* readRawConfig;
+  });
+
+  /**
+   * Decodes `raw` (`null` when the file is missing) into settings; `trusted` is false for a file
+   * that failed to decode, `rewrote` is true when a migration wrote the file, so `raw` is stale.
+   */
+  const loadSettingsState = Effect.fnUntraced(function* (raw: string | null) {
     let settings = DEFAULT_SERVER_SETTINGS;
     let persisted: typeof PersistedOptionalProviderSettings.Type = {};
     // A file that failed to decode must stay on disk for the user to repair;
     // the fold below only writes when it started from the file's real contents.
     let settingsFileTrusted = true;
 
-    if (yield* readConfigExists) {
-      const raw = yield* readRawConfig;
+    if (raw !== null) {
       const decoded = decodeServerSettingsJsonExit(raw);
       const persistedSettings = decodePersistedOptionalProviderSettingsJsonExit(raw);
       if (persistedSettings._tag === "Success") {
@@ -731,18 +760,38 @@ const make = Effect.gen(function* () {
       : loaded;
     // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
     const migrated = settingsFileTrusted ? yield* moveInlineBitbucketTokens(folded) : folded;
-    if (migrated !== loaded) {
+    const rewrote = migrated !== loaded;
+    if (rewrote) {
       yield* writeSettingsAtomically(migrated);
     }
-    return migrated;
+    return { settings: migrated, trusted: settingsFileTrusted, rewrote };
   });
 
-  const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
+  // `raw` is the file's bytes behind `state`, or undefined when unknown, so the rescan re-reads.
+  // Exception: on an untrusted timer skip, `raw` is a broken file's bytes recorded against the last
+  // good state, or against defaults when there is none.
+  const settingsCache = yield* Cache.make<
+    typeof cacheKey,
+    { readonly raw: string | null | undefined; readonly state: ServerSettings },
+    ServerSettingsError
+  >({
     capacity: 1,
-    lookup: () => loadSettingsFromDisk,
+    lookup: () =>
+      readSettingsRaw.pipe(
+        Effect.flatMap((raw) =>
+          loadSettingsState(raw).pipe(
+            Effect.map((loaded) => ({
+              raw: loaded.rewrote ? undefined : raw,
+              state: loaded.settings,
+            })),
+          ),
+        ),
+      ),
   });
 
-  const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
+  const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
+    Effect.map((entry) => entry.state),
+  );
 
   const materializeProviderEnvironmentSecrets = (
     settings: ServerSettings,
@@ -1099,22 +1148,77 @@ const make = Effect.gen(function* () {
               yield* rollbackSecretChanges;
               return yield* Effect.failCause(writeExit.cause);
             }
-            return materializedExit.value;
+            return { materialized: materializedExit.value, written: writeExit.value };
           }),
         );
-        yield* Cache.set(settingsCache, cacheKey, next);
+        yield* Cache.set(settingsCache, cacheKey, { raw: materialized.written, state: next });
         yield* emitChange(next);
-        return migrateLocalLlmSettings(resolveTextGenerationProvider(materialized));
+        return migrateLocalLlmSettings(resolveTextGenerationProvider(materialized.materialized));
       }),
     );
 
-  const revalidateAndEmit = writeSemaphore.withPermits(1)(
-    Effect.gen(function* () {
-      yield* Cache.invalidate(settingsCache, cacheKey);
-      const settings = yield* getSettingsFromCache;
-      yield* emitChange(settings);
-    }),
-  );
+  let readFailing = false;
+  const refresh = (fromTimer: boolean) =>
+    writeSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const rawExit = yield* Effect.exit(readSettingsRaw);
+        if (Exit.isFailure(rawExit)) {
+          if (!readFailing) {
+            readFailing = true;
+            yield* Effect.logWarning("settings file unreadable", {
+              path: settingsPath,
+              cause: rawExit.cause,
+            });
+          }
+          return;
+        }
+        if (readFailing) {
+          readFailing = false;
+          yield* Effect.logInfo("settings file readable again", { path: settingsPath });
+        }
+        const raw = rawExit.value;
+        const previous = yield* Cache.getSuccess(settingsCache, cacheKey);
+        // A missing file on a tick is an editor's delete-then-create save or a dangling symlink, not a reset.
+        if (
+          fromTimer &&
+          ((Option.isSome(previous) && raw === previous.value.raw) || raw === null)
+        ) {
+          return;
+        }
+        const nextExit = yield* Effect.exit(loadSettingsState(raw));
+        if (Exit.isFailure(nextExit)) {
+          yield* Effect.logWarning("settings refresh failed", {
+            path: settingsPath,
+            cause: nextExit.cause,
+          });
+          return;
+        }
+        const next = nextExit.value;
+        // A half-written or broken file decodes to defaults; only a watch event may publish that.
+        // Record its bytes so the next tick skips it and it warns once: against the old state, or,
+        // with no good load yet, against the defaults it decoded to (as the boot lookup does).
+        if (fromTimer && !next.trusted) {
+          yield* Cache.set(settingsCache, cacheKey, {
+            raw,
+            state: Option.isSome(previous) ? previous.value.state : next.settings,
+          });
+          return;
+        }
+        yield* Cache.set(settingsCache, cacheKey, {
+          raw: next.rewrote ? undefined : raw,
+          state: next.settings,
+        });
+        if (Option.isSome(previous) && Equal.equals(previous.value.state, next.settings)) return;
+        if (fromTimer) {
+          yield* Effect.logInfo(
+            "watch rescan applied a change the file watcher had not delivered",
+            { path: settingsPath },
+          );
+        }
+        yield* emitChange(next.settings);
+      }),
+    );
+  const rescan = refresh(true);
 
   const startWatcher = Effect.gen(function* () {
     const settingsDir = pathService.dirname(settingsPath);
@@ -1132,7 +1236,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
+    const revalidateAndEmitSafely = refresh(false).pipe(Effect.ignoreCause({ log: true }));
 
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
@@ -1186,6 +1290,7 @@ const make = Effect.gen(function* () {
     ),
     getRawSettings: getSettingsFromCache,
     updateSettings,
+    rescan,
     get streamChanges() {
       return materializeChanges(Stream.fromPubSub(changesPubSub));
     },

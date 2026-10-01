@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -69,6 +70,14 @@ const currentThemes = Effect.gen(function* () {
   return yield* environmentTheme.current;
 });
 
+const warned: Array<string> = [];
+const captureWarnings = Logger.make(({ message, logLevel }) => {
+  if (logLevel === "Warn")
+    warned.push(Array.isArray(message) ? String(message[0]) : String(message));
+});
+const invalidWarnings = () =>
+  warned.filter((line) => line.includes("ignoring invalid environment theme")).length;
+
 it.layer(NodeServices.layer)("environment theme", (it) => {
   it.effect("publishes nothing when the machine has no theme files", () =>
     withEnvironmentThemes(
@@ -120,6 +129,48 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
         );
       }),
     ),
+  );
+
+  // The 30 s rescan backstop's theme step is `current`: it must re-read the directory and
+  // publish what it finds, with the watcher delivering nothing.
+  it.effect("current publishes a new file to subscribers with no watch event", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-theme-backstop-" });
+      const themesDir = path.join(baseDir, "userdata", "themes");
+      yield* fs.makeDirectory(themesDir, { recursive: true });
+      const deafFs = Layer.succeed(FileSystem.FileSystem, { ...fs, watch: () => Stream.never });
+
+      yield* Effect.gen(function* () {
+        const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
+        const seen = yield* Queue.unbounded<ReadonlyArray<{ readonly id: string }>>();
+        yield* Stream.runForEach(environmentTheme.streamChanges, (themes) =>
+          Queue.offer(seen, themes),
+        ).pipe(Effect.forkScoped);
+        assert.deepEqual(yield* Queue.take(seen), []);
+
+        yield* fs.writeFileString(
+          path.join(themesDir, "nightfall.json"),
+          encodeThemeFile(NIGHTFALL_THEME),
+        );
+        assert.deepEqual(
+          (yield* environmentTheme.current).map((theme) => theme.id),
+          ["nightfall"],
+        );
+        assert.deepEqual(
+          (yield* Queue.take(seen)).map((theme) => theme.id),
+          ["nightfall"],
+        );
+      }).pipe(
+        Effect.provide(
+          EnvironmentTheme.layer.pipe(
+            Layer.provide(deafFs),
+            Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
   );
 
   // One bad file must not take down the machine's other themes: a theme
@@ -185,6 +236,56 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
         );
       }),
     ),
+  );
+
+  it.effect("logs a broken file once per incident, not on every refresh", () =>
+    Effect.gen(function* () {
+      warned.length = 0;
+      yield* withEnvironmentThemes(
+        { "nightfall.json": encodeThemeFile(NIGHTFALL_THEME), "broken.json": "{" },
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
+          const write = (name: string) =>
+            fs.writeFileString(path.join(environmentThemesDir, name), "{");
+          const remove = (name: string) => fs.remove(path.join(environmentThemesDir, name));
+
+          yield* currentThemes;
+          yield* currentThemes;
+          yield* currentThemes;
+          assert.equal(invalidWarnings(), 1);
+
+          yield* write("second.json");
+          yield* currentThemes;
+          yield* currentThemes;
+          assert.equal(invalidWarnings(), 2);
+
+          yield* remove("broken.json");
+          yield* remove("second.json");
+          yield* currentThemes;
+          yield* write("broken.json");
+          yield* currentThemes;
+          assert.equal(invalidWarnings(), 3);
+        }),
+      ).pipe(Effect.provide(Logger.layer([captureWarnings], { mergeWithExisting: false })));
+    }),
+  );
+
+  it.effect("readPublishedThemes still logs every warning on each call", () =>
+    Effect.gen(function* () {
+      warned.length = 0;
+      yield* withEnvironmentThemes(
+        { "broken.json": "{" },
+        Effect.gen(function* () {
+          const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
+          yield* EnvironmentTheme.readPublishedThemes(environmentThemesDir);
+          yield* EnvironmentTheme.readPublishedThemes(environmentThemesDir);
+          // One from the service starting, plus one per direct call.
+          assert.equal(invalidWarnings(), 3);
+        }),
+      ).pipe(Effect.provide(Logger.layer([captureWarnings], { mergeWithExisting: false })));
+    }),
   );
 
   // A symlinked themes directory stays usable, but a symlinked file inside it

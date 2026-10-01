@@ -25,10 +25,12 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
@@ -245,6 +247,12 @@ export class Keybindings extends Context.Service<
     readonly streamChanges: Stream.Stream<KeybindingsChangeEvent>;
 
     /**
+     * Re-read keybindings.json if its bytes changed since the last decode and publish a real change.
+     * Backstop for dropped watch events; driven by a timer in serverRuntimeStartup. Never fails.
+     */
+    readonly rescan: Effect.Effect<void>;
+
+    /**
      * Upsert a keybinding rule and persist the resulting configuration.
      *
      * Writes config atomically and enforces the max rule count by truncating
@@ -344,18 +352,42 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.map(Array.filter(Predicate.isNotNull)));
   });
 
-  const loadRuntimeCustomKeybindingsConfig = Effect.fn(function* (): Effect.fn.Return<
+  const readKeybindingsRaw = Effect.gen(function* () {
+    if (!(yield* readConfigExists)) return null;
+    const info = yield* fs.stat(keybindingsConfigPath).pipe(
+      Effect.mapError(
+        (cause) =>
+          new KeybindingsConfigError({
+            configPath: keybindingsConfigPath,
+            detail: "failed to read keybindings config",
+            cause,
+          }),
+      ),
+    );
+    if (info.type !== "File") {
+      // A directory or FIFO; readFile on a FIFO blocks while we hold the upsert semaphore.
+      return yield* new KeybindingsConfigError({
+        configPath: keybindingsConfigPath,
+        detail: `keybindings config is not a regular file (${info.type})`,
+      });
+    }
+    return yield* readRawConfig;
+  });
+
+  /** Decodes `rawConfig` (`null` when the file is missing) into custom rules and issues. */
+  const loadRuntimeCustomKeybindingsConfig = Effect.fn(function* (
+    rawConfig: string | null,
+  ): Effect.fn.Return<
     {
       readonly keybindings: readonly KeybindingRule[];
       readonly issues: readonly ServerConfigIssue[];
     },
     KeybindingsConfigError
   > {
-    if (!(yield* readConfigExists)) {
+    if (rawConfig === null) {
       return { keybindings: [], issues: [] };
     }
 
-    const rawConfig = yield* readRawConfig;
     const decodedEntries = decodeRawKeybindingsEntriesExit(rawConfig);
     if (decodedEntries._tag === "Failure") {
       const detail = `expected JSON array (${Cause.pretty(decodedEntries.cause)})`;
@@ -399,16 +431,15 @@ const make = Effect.gen(function* () {
     return { keybindings, issues };
   });
 
+  /** Returns the exact contents written, for the cache entry's `raw`. */
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
     return encodeKeybindingsConfigPrettyJson(rules).pipe(
       Effect.map((encoded) => `${encoded}\n`),
-      Effect.flatMap((encoded) =>
-        writeFileStringAtomically({
-          filePath: keybindingsConfigPath,
-          contents: encoded,
-        }).pipe(
+      Effect.flatMap((contents) =>
+        writeFileStringAtomically({ filePath: keybindingsConfigPath, contents }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
+          Effect.as(contents),
         ),
       ),
       Effect.mapError(
@@ -422,42 +453,97 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const loadConfigStateFromDisk = loadRuntimeCustomKeybindingsConfig().pipe(
-    Effect.map(({ keybindings, issues }) => ({
-      keybindings: mergeWithDefaultKeybindings(compileResolvedKeybindingsConfig(keybindings)),
-      issues,
-    })),
-  );
+  const loadConfigState = (rawConfig: string | null) =>
+    loadRuntimeCustomKeybindingsConfig(rawConfig).pipe(
+      Effect.map(({ keybindings, issues }) => ({
+        keybindings: mergeWithDefaultKeybindings(compileResolvedKeybindingsConfig(keybindings)),
+        issues,
+      })),
+    );
 
+  // `raw` is the file's bytes behind `state`, or undefined when unknown, so the rescan re-reads.
+  // Unlike settings, an untrusted timer skip records nothing here: a malformed file logs nothing,
+  // so re-decoding it each tick is silent.
   const resolvedConfigCache = yield* Cache.make<
     typeof resolvedConfigCacheKey,
-    KeybindingsConfigState,
+    { readonly raw: string | null | undefined; readonly state: KeybindingsConfigState },
     KeybindingsConfigError
   >({
     capacity: 1,
-    lookup: () => loadConfigStateFromDisk,
+    lookup: () =>
+      readKeybindingsRaw.pipe(
+        Effect.flatMap((raw) => loadConfigState(raw).pipe(Effect.map((state) => ({ raw, state })))),
+      ),
   });
 
-  const loadConfigStateFromCacheOrDisk = Cache.get(resolvedConfigCache, resolvedConfigCacheKey);
+  const loadConfigStateFromCacheOrDisk = Cache.get(
+    resolvedConfigCache,
+    resolvedConfigCacheKey,
+  ).pipe(Effect.map((entry) => entry.state));
 
-  const revalidateAndEmit = upsertSemaphore.withPermits(1)(
-    Effect.gen(function* () {
-      yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
-      const configState = yield* loadConfigStateFromCacheOrDisk;
-      yield* emitChange(configState);
-    }),
-  );
+  let readFailing = false;
+  const refresh = (fromTimer: boolean) =>
+    upsertSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const rawExit = yield* Effect.exit(readKeybindingsRaw);
+        if (Exit.isFailure(rawExit)) {
+          if (!readFailing) {
+            readFailing = true;
+            yield* Effect.logWarning("keybindings file unreadable", {
+              path: keybindingsConfigPath,
+              cause: rawExit.cause,
+            });
+          }
+          return;
+        }
+        if (readFailing) {
+          readFailing = false;
+          yield* Effect.logInfo("keybindings file readable again", { path: keybindingsConfigPath });
+        }
+        const raw = rawExit.value;
+        const previous = yield* Cache.getSuccess(resolvedConfigCache, resolvedConfigCacheKey);
+        // A missing file on a tick is an editor's delete-then-create save or a dangling symlink, not a reset.
+        if (
+          fromTimer &&
+          ((Option.isSome(previous) && raw === previous.value.raw) || raw === null)
+        ) {
+          return;
+        }
+        const nextExit = yield* Effect.exit(loadConfigState(raw));
+        if (Exit.isFailure(nextExit)) {
+          yield* Effect.logWarning("keybindings refresh failed", {
+            path: keybindingsConfigPath,
+            cause: nextExit.cause,
+          });
+          return;
+        }
+        const next = nextExit.value;
+        // A half-written or broken file decodes to defaults; only a watch event may publish that.
+        const trusted = !next.issues.some((issue) => issue.kind === "keybindings.malformed-config");
+        if (fromTimer && !trusted) return;
+        yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, { raw, state: next });
+        if (Option.isSome(previous) && Equal.equals(previous.value.state, next)) return;
+        if (fromTimer) {
+          yield* Effect.logInfo(
+            "watch rescan applied a change the file watcher had not delivered",
+            { path: keybindingsConfigPath },
+          );
+        }
+        yield* emitChange(next);
+      }),
+    );
+  const rescan = refresh(true);
 
   const syncDefaultKeybindingsOnStartup = upsertSemaphore.withPermits(1)(
     Effect.gen(function* () {
-      const configExists = yield* readConfigExists;
-      if (!configExists) {
+      const rawConfig = yield* readKeybindingsRaw;
+      if (rawConfig === null) {
         yield* writeConfigAtomically(DEFAULT_KEYBINDINGS);
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
 
-      const runtimeConfig = yield* loadRuntimeCustomKeybindingsConfig();
+      const runtimeConfig = yield* loadRuntimeCustomKeybindingsConfig(rawConfig);
       if (runtimeConfig.issues.length > 0) {
         yield* Effect.logWarning(
           "skipping startup keybindings default sync because config has issues",
@@ -561,7 +647,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
+    const revalidateAndEmitSafely = refresh(false).pipe(Effect.ignoreCause({ log: true }));
 
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
@@ -616,6 +702,7 @@ const make = Effect.gen(function* () {
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },
+    rescan,
     upsertKeybindingRule: (input) =>
       upsertSemaphore.withPermits(1)(
         Effect.gen(function* () {
@@ -643,13 +730,13 @@ const make = Effect.gen(function* () {
               maxEntries: MAX_KEYBINDINGS_COUNT,
             });
           }
-          yield* writeConfigAtomically(cappedConfig);
+          const written = yield* writeConfigAtomically(cappedConfig);
           const nextResolved = mergeWithDefaultKeybindings(
             compileResolvedKeybindingsConfig(cappedConfig),
           );
           yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
-            keybindings: nextResolved,
-            issues: [],
+            raw: written,
+            state: { keybindings: nextResolved, issues: [] },
           });
           yield* emitChange({
             keybindings: nextResolved,
@@ -664,13 +751,13 @@ const make = Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const target = keybindingRuleFromRemoveInput(input);
           const nextConfig = customConfig.filter((entry) => !isSameKeybindingRule(entry, target));
-          yield* writeConfigAtomically(nextConfig);
+          const written = yield* writeConfigAtomically(nextConfig);
           const nextResolved = mergeWithDefaultKeybindings(
             compileResolvedKeybindingsConfig(nextConfig),
           );
           yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
-            keybindings: nextResolved,
-            issues: [],
+            raw: written,
+            state: { keybindings: nextResolved, issues: [] },
           });
           yield* emitChange({
             keybindings: nextResolved,
