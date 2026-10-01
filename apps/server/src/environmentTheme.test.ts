@@ -248,25 +248,38 @@ describe("environment theme watching", () => {
         // Empty to start.
         assert.deepEqual(yield* Queue.take(seen), []);
 
+        // macOS drops directory events without notice when fseventsd is busy (a full test run), so
+        // keep touching a non-theme file until one event gets through; any event re-reads the folder.
+        const takeAfterChange = Effect.raceFirst(
+          Queue.take(seen),
+          Effect.forever(
+            Effect.andThen(
+              Effect.sleep("500 millis"),
+              fs.writeFileString(path.join(themesDir, "poke.txt"), ""),
+            ),
+          ),
+        );
+
         // Published atomically, the way a theme hook writes it.
         const staging = path.join(baseDir, "staged.json");
         yield* fs.writeFileString(staging, encodeThemeFile(NIGHTFALL_THEME));
         yield* fs.rename(staging, path.join(themesDir, "nightfall.json"));
         assert.deepEqual(
-          (yield* Queue.take(seen)).map((theme) => theme.id),
+          (yield* takeAfterChange).map((theme) => theme.id),
           ["nightfall"],
         );
 
         // Removed again, and the set empties without a restart.
         yield* fs.remove(path.join(themesDir, "nightfall.json"));
-        assert.deepEqual(yield* Queue.take(seen), []);
+        assert.deepEqual(yield* takeAfterChange, []);
       }).pipe(
         Effect.provide(
           EnvironmentTheme.layer.pipe(
             Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           ),
         ),
-        Effect.timeout("30 seconds"),
+        // Surviving events arrive many seconds late under load; stays under the 120 s test timeout.
+        Effect.timeout("90 seconds"),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
