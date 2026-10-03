@@ -12,7 +12,14 @@ import * as Layer from "effect/Layer";
 import { CrewRepository } from "./CrewRepository.ts";
 import { CrewService, CrewServiceLive } from "./CrewService.ts";
 import { makeCrewTeardown } from "./CrewTeardown.ts";
-import { BRIDGE, makeCrewHarness, makeTask, shellOf, withCrew } from "./crew.testkit.ts";
+import {
+  BRIDGE,
+  CREW_BRANCH,
+  makeCrewHarness,
+  makeTask,
+  shellOf,
+  withCrew,
+} from "./crew.testkit.ts";
 
 const bridgeShells = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
   new Map([[BRIDGE as string, shellOf(BRIDGE, overrides)]]);
@@ -192,7 +199,21 @@ describe("crew_dispatch from inside a crewmate", () => {
         ],
         [
           "created",
-          shellOf(ThreadId.make("created"), { ...lineage(null), branch: "crew/task-1" } as never),
+          shellOf(ThreadId.make("created"), { ...lineage(null), branch: CREW_BRANCH } as never),
+        ],
+        [
+          "own-crew-branch",
+          shellOf(ThreadId.make("own-crew-branch"), {
+            ...lineage(null),
+            branch: "crew/my-feature",
+          } as never),
+        ],
+        [
+          "unknown-crew-uuid",
+          shellOf(ThreadId.make("unknown-crew-uuid"), {
+            ...lineage(null),
+            branch: "crew/00000000-0000-4000-8000-0000000000ff",
+          } as never),
         ],
         [
           "plain-child",
@@ -209,8 +230,11 @@ describe("crew_dispatch from inside a crewmate", () => {
           const refused = yield* Effect.flip(crew.dispatch({ prompt: "x" }, ThreadId.make(caller)));
           assert.strictEqual(refused.reason, "nested", caller);
         }
-        const allowed = yield* crew.dispatch({ prompt: "x" }, ThreadId.make("plain-child"));
-        assert.isString(allowed.taskId);
+        // A user's own crew/ branch, and the exact shape with no crew row, are not crewmates.
+        for (const caller of ["own-crew-branch", "unknown-crew-uuid", "plain-child"]) {
+          const allowed = yield* crew.dispatch({ prompt: "x" }, ThreadId.make(caller));
+          assert.isString(allowed.taskId, caller);
+        }
       }),
     );
   });

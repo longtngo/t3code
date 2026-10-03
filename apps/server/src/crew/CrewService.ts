@@ -215,16 +215,29 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         Effect.catchCause(() => Effect.succeed(false)),
       );
 
+    /** The branch is a crewmate's: the exact `crew/<taskId>` shape AND a crew row has it. */
+    const isCrewmateBranch = (branch: string | null) =>
+      isCrewBranch(branch)
+        ? repository.listAllTasks().pipe(
+            Effect.map((tasks) => tasks.some((task) => task.branch === branch)),
+            Effect.catchCause(() => Effect.succeed(false)),
+          )
+        : Effect.succeed(false);
+
     /**
      * A thread a crewmate created through upstream's own tools (`delegate_task`,
      * `create_threads`, a fork) has no crew row of its own, so the row check alone lets it
      * dispatch. Every one of those copies the creator's branch, and delegated and forked
-     * threads also record their parent in `lineage`; either marks the caller as inside a
-     * crewmate. The walk is bounded so a corrupt lineage cannot loop.
+     * threads also record their parent in `lineage`; either, confirmed by a crew row,
+     * marks the caller as inside a crewmate. A user's own `crew/my-feature` is not refused.
+     *
+     * Accepted evasions, not closed: a chain deeper than `MAX_LINEAGE_DEPTH`, and a thread
+     * a crewmate created with no lineage whose branch was then changed — both need an agent
+     * deliberately working around crew, and crew's cap still bounds what it can start.
      */
     const descendsFromCrewmate = (caller: OrchestrationV2ThreadShell) =>
       Effect.gen(function* () {
-        if (isCrewBranch(caller.branch)) {
+        if (yield* isCrewmateBranch(caller.branch)) {
           return true;
         }
         let parentId = caller.lineage.parentThreadId;
@@ -236,7 +249,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           if (parent === null) {
             return false;
           }
-          if (isCrewBranch(parent.branch)) {
+          if (yield* isCrewmateBranch(parent.branch)) {
             return true;
           }
           parentId = parent.lineage.parentThreadId;

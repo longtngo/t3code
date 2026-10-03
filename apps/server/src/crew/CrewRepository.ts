@@ -110,6 +110,12 @@ export interface CrewRepositoryShape {
   readonly insertReport: (report: CrewReport) => Effect.Effect<void, CrewRepositoryError>;
 
   /**
+   * Insert unless a report with this id exists. For server-filed reports with a
+   * deterministic id, so a step retried on the next pass files exactly one.
+   */
+  readonly insertReportIfAbsent: (report: CrewReport) => Effect.Effect<void, CrewRepositoryError>;
+
+  /**
    * Undelivered reports, blocking first: `needs-decision`, then the other states that
    * must be read (`answer`, `done`, `failed`), then `progress` last. A delivery message
    * quotes notes in this order until its byte budget runs out, so a chatty crewmate's
@@ -237,6 +243,19 @@ const makeCrewRepository = Effect.gen(function* () {
     `,
   });
 
+  const insertReportIfAbsentRow = SqlSchema.void({
+    Request: CrewReport,
+    execute: (report) => sql`
+      INSERT INTO crew_reports (
+        report_id, task_id, state, note, created_at, noted_at, reply_to
+      ) VALUES (
+        ${report.reportId}, ${report.taskId}, ${report.state}, ${report.note},
+        ${report.createdAt}, ${report.notedAt}, ${report.replyTo}
+      )
+      ON CONFLICT (report_id) DO NOTHING
+    `,
+  });
+
   const findUnnotedReportRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: CrewReport,
@@ -335,6 +354,11 @@ const makeCrewRepository = Effect.gen(function* () {
     insertReport: (report) =>
       insertReportRow(report).pipe(
         Effect.mapError(toSqlOrDecodeError("CrewRepository.insertReport")),
+      ),
+
+    insertReportIfAbsent: (report) =>
+      insertReportIfAbsentRow(report).pipe(
+        Effect.mapError(toSqlOrDecodeError("CrewRepository.insertReportIfAbsent")),
       ),
 
     selectUnnoted: () =>

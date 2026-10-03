@@ -353,49 +353,171 @@ describe("crew delivery on orchestrator v2", () => {
     );
   });
 
-  it.effect("a crewmate whose worktree setup failed is closed and its bridge is told", () => {
-    // Multi-unit: one task's setup failed, one task's ordinary run failed. Only the first
-    // is settled.
-    const failedSetup = ThreadId.make("crew-1");
-    const failedRun = ThreadId.make("crew-2");
-    const preparing = (status: string) => ({
-      type: "command_execution",
-      input: "Preparing workspace",
-      status,
-      output: "fatal: invalid reference: no-such-ref",
+  const preparing = (runId: string, status: string) => ({
+    type: "command_execution",
+    runId,
+    input: "Preparing workspace",
+    status,
+    output: "fatal: invalid reference: no-such-ref",
+  });
+  /** One task per entry: its crewmate's latest run id and command items. */
+  const settleFixture = (
+    tasks: ReadonlyArray<{
+      readonly latestRunId: string | null;
+      readonly items: ReadonlyArray<unknown>;
+    }>,
+    extra: Partial<CrewHarnessOptions> = {},
+  ) => {
+    const shells = new Map([[BRIDGE as string, shellOf(BRIDGE)]]);
+    const turnItems = new Map<string, ReadonlyArray<unknown>>();
+    tasks.forEach((task, index) => {
+      const thread = ThreadId.make(`crew-${index + 1}`);
+      shells.set(thread, shellOf(thread, { latestRunId: task.latestRunId } as never));
+      turnItems.set(thread, task.items);
     });
-    const harness = makeCrewHarness({
-      shells: new Map([
-        [BRIDGE as string, shellOf(BRIDGE)],
-        [failedSetup as string, shellOf(failedSetup, { status: "failed" })],
-        [failedRun as string, shellOf(failedRun, { status: "failed" })],
-      ]),
-      turnItems: new Map([
-        [failedSetup as string, [preparing("failed")]],
-        [failedRun as string, [preparing("completed")]],
-      ]),
+    const harness = makeCrewHarness({ shells, turnItems, ...extra });
+    const seed = Effect.gen(function* () {
+      const repository = yield* CrewRepository;
+      for (let index = 0; index < tasks.length; index += 1) {
+        yield* repository.insertTask(
+          makeTask({
+            taskId: CrewTaskId.make(`task-${index + 1}`),
+            crewThreadId: ThreadId.make(`crew-${index + 1}`),
+          }),
+        );
+      }
     });
+    const state = Effect.gen(function* () {
+      const repository = yield* CrewRepository;
+      const tasksNow = yield* repository.listAllTasks();
+      const reports = yield* repository.listReports();
+      return tasksNow.map((task) => ({
+        taskId: task.taskId as string,
+        status: task.status,
+        failedReports: reports.filter(
+          (report) => report.taskId === task.taskId && report.state === "failed",
+        ).length,
+      }));
+    });
+    return { harness, seed, state };
+  };
+
+  it.effect(
+    "settles a crewmate whose latest preparation failed or was cancelled, and no other",
+    () => {
+      // Multi-unit: failed setup; cancelled setup (startup recovery); an OLD failed setup
+      // followed by a later run; a completed setup whose run then failed; no run yet.
+      const { harness, seed, state } = settleFixture([
+        { latestRunId: "run-1", items: [preparing("run-1", "failed")] },
+        { latestRunId: "run-1", items: [preparing("run-1", "cancelled")] },
+        { latestRunId: "run-2", items: [preparing("run-1", "failed")] },
+        { latestRunId: "run-1", items: [preparing("run-1", "completed")] },
+        { latestRunId: null, items: [] },
+      ]);
+      return withCrew(
+        harness,
+        Effect.gen(function* () {
+          yield* seed;
+          yield* (yield* sweep).runOnce();
+          assert.deepStrictEqual(
+            (yield* state).map((task) => [task.taskId, task.status, task.failedReports]),
+            [
+              ["task-1", "closed", 1],
+              ["task-2", "closed", 1],
+              ["task-3", "open", 0],
+              ["task-4", "open", 0],
+              ["task-5", "open", 0],
+            ],
+          );
+          // Both reports reach the bridge in this same pass.
+          assert.strictEqual(harness.sends.length, 1);
+          assert.include(harness.sends[0]?.text ?? "", "invalid reference");
+          assert.include(harness.sends[0]?.text ?? "", "cancelled");
+        }),
+      );
+    },
+  );
+
+  it.effect.each(["insertReportIfAbsent", "closeTask"] as const)(
+    "a one-shot %s failure is retried next pass and ends with exactly one report",
+    (failing) => {
+      // Multi-task: only task-1's call fails, once; task-2 settles normally alongside it.
+      let fired = false;
+      const { harness, seed, state } = settleFixture(
+        [
+          { latestRunId: "run-1", items: [preparing("run-1", "failed")] },
+          { latestRunId: "run-1", items: [preparing("run-1", "failed")] },
+        ],
+        {
+          failRepository: (method, taskId) => {
+            if (method !== failing || taskId !== "task-1" || fired) return false;
+            fired = true;
+            return true;
+          },
+        },
+      );
+      return withCrew(
+        harness,
+        Effect.gen(function* () {
+          yield* seed;
+          const crewSweep = yield* sweep;
+          yield* crewSweep.runOnce();
+          assert.isTrue(fired);
+          assert.strictEqual((yield* state)[0]?.status, "open");
+          yield* crewSweep.runOnce();
+          yield* crewSweep.runOnce();
+          assert.deepStrictEqual(
+            (yield* state).map((task) => [task.taskId, task.status, task.failedReports]),
+            [
+              ["task-1", "closed", 1],
+              ["task-2", "closed", 1],
+            ],
+          );
+        }),
+      );
+    },
+  );
+
+  it.effect("reports that do not fit stay unnoted and go out, named, in the next pass", () => {
+    // Nine crewmates each file a 1 KiB terminal report to one lead in one pass.
+    const shells = new Map([[BRIDGE as string, shellOf(BRIDGE)]]);
+    for (let index = 0; index < 9; index += 1) {
+      shells.set(`crew-${index}`, shellOf(ThreadId.make(`crew-${index}`)));
+    }
+    const harness = makeCrewHarness({ shells });
     return withCrew(
       harness,
       Effect.gen(function* () {
         const repository = yield* CrewRepository;
-        yield* repository.insertTask(makeTask());
-        yield* repository.insertTask(
-          makeTask({ taskId: CrewTaskId.make("task-2"), crewThreadId: failedRun }),
-        );
-        yield* (yield* sweep).runOnce();
-        const statuses = (yield* repository.listAllTasks()).map((task) => [
-          task.taskId,
-          task.status,
-        ]);
-        assert.deepStrictEqual(statuses, [
-          ["task-1", "closed"],
-          ["task-2", "open"],
-        ]);
-        assert.strictEqual(harness.sends.length, 1);
-        assert.strictEqual(harness.sends[0]?.threadId, BRIDGE);
-        assert.include(harness.sends[0]?.text ?? "", "invalid reference");
-        assert.include(harness.codes(), "crew.dispatch.compensate.skipped");
+        for (let index = 0; index < 9; index += 1) {
+          const taskId = CrewTaskId.make(`task-${index}`);
+          yield* repository.insertTask(
+            makeTask({ taskId, crewThreadId: ThreadId.make(`crew-${index}`) }),
+          );
+          yield* repository.insertReport(
+            report(`done-${index}`, {
+              taskId,
+              state: index === 8 ? "failed" : "done",
+              note: `note-${index} ${"x".repeat(990)}`,
+              createdAt: `2026-10-03T00:00:0${index}.000Z`,
+            }),
+          );
+        }
+        const crewSweep = yield* sweep;
+        yield* crewSweep.runOnce();
+        const first = harness.sends[0]?.text ?? "";
+        const waitingAfterFirst = yield* unnotedIds;
+        assert.isAbove(waitingAfterFirst.length, 0);
+        for (const id of waitingAfterFirst) {
+          // Not quoted, and its task is named in the tail.
+          assert.notInclude(first, `note-${id.slice("done-".length)} `);
+          assert.include(first, `task-${id.slice("done-".length)}`);
+        }
+        yield* crewSweep.runOnce();
+        assert.deepStrictEqual(yield* unnotedIds, []);
+        const all = harness.sends.map((sent) => sent.text).join("\n");
+        for (let index = 0; index < 9; index += 1) assert.include(all, `note-${index} `);
+        assert.strictEqual(harness.sends.length, 2);
       }),
     );
   });
@@ -439,15 +561,18 @@ describe("crew delivery on orchestrator v2", () => {
 });
 
 describe("renderDelivery", () => {
-  it("quotes up to the byte budget and names the rest", () => {
-    const task = makeTask();
+  it("quotes up to the byte budget, leaves the rest out, and names their tasks", () => {
     const rows = Array.from({ length: 12 }, (_, index) => ({
       report: report(`r${index}`, { note: "x".repeat(1000) }),
-      task,
+      task: makeTask({ taskId: CrewTaskId.make(`task-${index}`) }),
     }));
-    const text = renderDelivery(rows);
-    assert.isAtMost(new TextEncoder().encode(text).length, CREW_DELIVERY_QUOTED_BYTE_LIMIT + 200);
-    assert.match(text, /…and \d+ more crew reports\. Read them with crew_status\./);
-    assert.include(text, "report r0");
+    const { text, quoted } = renderDelivery(rows);
+    assert.isAtMost(new TextEncoder().encode(text).length, CREW_DELIVERY_QUOTED_BYTE_LIMIT + 300);
+    assert.isAbove(quoted.length, 0);
+    assert.isBelow(quoted.length, rows.length);
+    const waiting = rows.slice(quoted.length);
+    assert.include(text, `${waiting.length} more crew reports are waiting`);
+    for (const { task } of waiting) assert.include(text, task.taskId);
+    assert.notInclude(text, `report r${quoted.length}:`);
   });
 });

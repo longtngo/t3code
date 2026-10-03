@@ -35,6 +35,7 @@ import {
   type ThreadManagementError,
   type ThreadManagementSendInput,
 } from "../orchestration-v2/ThreadManagementService.ts";
+import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { TerminalManager } from "../terminal/Manager.ts";
@@ -43,6 +44,8 @@ import { CrewRepository, CrewRepositoryLive } from "./CrewRepository.ts";
 
 export const PROJECT = ProjectId.make("project-1");
 export const BRIDGE = ThreadId.make("bridge-1");
+/** `makeTask()`'s branch: the exact `crew/<uuid>` shape `crew_dispatch` gives a crewmate. */
+export const CREW_BRANCH = "crew/00000000-0000-4000-8000-000000000001";
 
 export const shellOf = (
   id: ThreadId,
@@ -70,7 +73,7 @@ export const makeTask = (overrides: Partial<CrewTask> = {}): CrewTask => ({
   crewThreadId: ThreadId.make("crew-1"),
   projectId: PROJECT,
   baseRef: null,
-  branch: "crew/task-1",
+  branch: CREW_BRANCH,
   worktreePath: "/tmp/crew-task-1",
   provider: "claudeAgent" as CrewTask["provider"],
   status: "open",
@@ -97,6 +100,14 @@ export interface CrewHarnessOptions {
   readonly failSteps?: ReadonlySet<number>;
   /** `command_execution` turn items per thread, for the setup-failure check. */
   readonly turnItems?: Map<string, ReadonlyArray<unknown>>;
+  /**
+   * Repository calls that fail, for failure-injection tests. Called per call; return true to
+   * fail that one call.
+   */
+  readonly failRepository?: (
+    method: "insertReportIfAbsent" | "closeTask",
+    taskId: string,
+  ) => boolean;
   /** Teardown dispatches (6, 7) that are rejected, leaving a rejected receipt. */
   readonly rejectStep?: (step: number) => boolean;
   readonly settings?: { readonly enableCrew?: boolean; readonly browserAccess?: boolean };
@@ -228,8 +239,32 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
     record: (code, fields) => Effect.sync(() => void records.push({ code, fields: fields ?? {} })),
   });
 
+  const failRepository = options.failRepository;
+  const repository =
+    failRepository === undefined
+      ? CrewRepositoryLive
+      : Layer.effect(
+          CrewRepository,
+          Effect.gen(function* () {
+            const live = yield* CrewRepository;
+            const injected = (method: string, taskId: string) =>
+              Effect.fail(toPersistenceSqlError(`${method}:${taskId}`)("injected"));
+            return {
+              ...live,
+              insertReportIfAbsent: (report) =>
+                failRepository("insertReportIfAbsent", report.taskId)
+                  ? injected("insertReportIfAbsent", report.taskId)
+                  : live.insertReportIfAbsent(report),
+              closeTask: (input) =>
+                failRepository("closeTask", input.taskId)
+                  ? injected("closeTask", input.taskId)
+                  : live.closeTask(input),
+            };
+          }),
+        ).pipe(Layer.provide(CrewRepositoryLive));
+
   const layer = Layer.mergeAll(
-    CrewRepositoryLive,
+    repository,
     crewLog,
     threads,
     launchLayer,

@@ -57,6 +57,9 @@ import { CrewSweep, CrewSweepLive } from "../crew/CrewSweep.ts";
 import { McpSessionRegistry } from "../mcp/McpSessionRegistry.ts";
 import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
 import { isCrewBranch } from "@t3tools/contracts";
+import { makeSqlitePersistenceLive } from "../persistence/Layers/Sqlite.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as FileSystem from "effect/FileSystem";
 
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
@@ -105,8 +108,10 @@ interface HarnessOptions {
   readonly providers?: ReadonlyArray<ServerProvider>;
 }
 
-function makeHarness(options: HarnessOptions = {}) {
-  const database = SqlitePersistenceMemory;
+function makeHarness(
+  options: HarnessOptions & { readonly database?: typeof SqlitePersistenceMemory } = {},
+) {
+  const database = options.database ?? SqlitePersistenceMemory;
   const registry = ProviderAdapterRegistry.makeLayer([adapter]);
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "thread-launch" },
@@ -244,7 +249,7 @@ function waitUntil<E, R>(predicate: () => Effect.Effect<boolean, E, R>): Effect.
 
 const BRIDGE = ThreadId.make("thread:crew-launch:bridge");
 
-function crewOn(harness: ReturnType<typeof makeHarness>) {
+function crewOn<ROut, E>(harness: { readonly layer: Layer.Layer<ROut, E> }) {
   const codes: Array<CrewLogCode> = [];
   const detaches: Array<string> = [];
   const crewLog = Layer.succeed(CrewLog, {
@@ -392,4 +397,63 @@ it.effect("a teardown during worktree setup leaves the archived thread without a
       assert.equal(harness.runSetup.mock.calls.length, 0);
     }).pipe(Effect.provide(crew));
   }),
+);
+
+it.effect("a server that dies during worktree setup settles the task after it restarts", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const scratch = yield* fileSystem.makeTempDirectoryScoped({ prefix: "crew-launch-crash-" });
+    const live = `${scratch}/live.sqlite`;
+    const crashed = `${scratch}/crashed.sqlite`;
+    const fileDb = (path: string) =>
+      makeSqlitePersistenceLive(path).pipe(
+        Layer.provide(NodeServices.layer),
+      ) as never as typeof SqlitePersistenceMemory;
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      serverSettings: crewSettings,
+      database: fileDb(live),
+      createWorktree: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    // Boot 1: dispatch, then snapshot the database mid-provisioning — a crash, with no
+    // shutdown handlers run.
+    const taskId = yield* Effect.gen(function* () {
+      yield* createBridge;
+      const dispatched = yield* (yield* CrewService).dispatch({ prompt: "x" }, BRIDGE);
+      yield* Deferred.await(entered);
+      yield* (yield* SqlClient.SqlClient).unsafe(`VACUUM INTO '${crashed}'`);
+      return dispatched.taskId;
+    }).pipe(Effect.provide(crewOn(harness).crew), Effect.scoped);
+
+    // Boot 2: upstream's startup recovery on the crashed copy, then crew's sweep.
+    const registry = ProviderAdapterRegistry.makeLayer([adapter]);
+    const recovered = makeOrchestratorV2ReplayLayerWithRegistry({ name: "crew-crash" }, registry, {
+      databaseLayer: fileDb(crashed),
+      recoverOnStartup: true,
+    });
+    const boot2 = crewOn({
+      layer: Layer.mergeAll(
+        ThreadManagement.layer.pipe(Layer.provideMerge(recovered)),
+        fileDb(crashed),
+        ServerSettings.layerTest(crewSettings),
+        Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+        Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      const repository = yield* CrewRepository;
+      const sweep = yield* CrewSweep;
+      yield* sweep.reapOrphans();
+      yield* sweep.runOnce();
+      yield* sweep.runOnce();
+      const task = (yield* repository.listAllTasks()).find((row) => row.taskId === taskId);
+      assert.equal(task?.status, "closed");
+      const reports = yield* repository.listReportsByTaskId({ taskId });
+      assert.deepStrictEqual(
+        reports.map((report) => report.state),
+        ["failed"],
+      );
+      assert.include(boot2.codes, "crew.dispatch.compensate.skipped");
+    }).pipe(Effect.provide(boot2.crew), Effect.scoped);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

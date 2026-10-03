@@ -497,9 +497,12 @@ transient rejection left the set undeliverable forever `[X: probe C, a rejection
 three healthy passes, still unnoted]`. The walk past rejected ids is bounded per pass.
 
 **The message quotes each row's note** (1 KiB each, bounded at insert) until 8 KiB of
-quoted text is spent, then names the rest — "…and N more crew reports. Read them with
-`crew_status`." — so no pass can ship an unbounded prompt. Every row the message
-carries is stamped, quoted or named.
+quoted text is spent, so no pass can ship an unbounded prompt. **Only quoted rows are in
+the message and only they are stamped.** A row that did not fit stays unnoted and goes
+out in the next pass; the message's last line says how many are waiting and names their
+task ids, so the reader knows more is coming. Mode, ids, sender and stamping are all
+computed over the quoted rows. Each pass quotes at least one row (a note is at most
+1 KiB), so a backlog always drains.
 
 **While crew is switched off the pass delivers answers only** (§8).
 
@@ -558,7 +561,11 @@ Step 6 is what stops turn start re-creating a directory the operator deleted (§
 clears `worktreePath` only: turn start re-creates a worktree only when path and branch
 are both set, and the `crew/<taskId>` branch is kept as the crewmate's marker, which
 is how every client silences the crewmate's notifications (§2 cost 3) without a crew
-query.
+query, and why no client offers to check that branch out in the main checkout. The
+marker is matched exactly — `crew/` then a lowercase v4 uuid — by one shared
+`isCrewBranch`, so a user's own `crew/my-feature` is not a crewmate. The server, which
+can read `crew_tasks`, also requires a crew row with that branch before it treats a
+thread as a crewmate's (§8 `nested`).
 
 **A teardown that races worktree setup** archives the thread while launch is still
 provisioning. Launch checks for an archived thread before writing the worktree back
@@ -580,6 +587,15 @@ slot already released. Step 7's archive detaches it through upstream's outbox, a
 not at boot, not on teardown. A failed dispatch closes its row, logs
 `crew.dispatch.compensate.skipped`, and leaves whatever git created for the
 operator.
+
+**A dispatch whose worktree setup never finishes is settled by the sweep.** Launch
+provisions in the background, so `crew_dispatch` has already returned. Each pass reads
+the "Preparing workspace" item of each open crewmate's **latest** run: `failed` (setup
+failed) or `cancelled` (startup recovery cancels a preparation the server died during)
+settles the task; an older failed item followed by later runs does not. The sweep files
+one `failed` report under an id derived from the task (insert-or-ignore), then closes
+the row; a failure in either step leaves the task open, and the next pass retries with
+exactly one report in the end. The report goes out in the same pass.
 
 Revision 13 had two deletion sites behind six guards — created-flags, an identity
 stamp, a readdir gate, a symlink refusal, a no-`--force` rule, a path assertion —

@@ -85,8 +85,16 @@ export type CrewReport = typeof CrewReport.Type;
  */
 export const crewBranchFor = (taskId: string): string => `crew/${taskId}`;
 
+/**
+ * Exactly `crew/<taskId>`, where a task id is the lowercase UUIDv4 `crew_dispatch` mints.
+ * A user's own `crew/my-feature` does not match. The name alone is still only a marker;
+ * where a crew row is reachable (the server), confirm with it.
+ */
+const CREW_BRANCH_PATTERN =
+  /^crew\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 export const isCrewBranch = (branch: string | null | undefined): boolean =>
-  branch?.startsWith("crew/") === true;
+  typeof branch === "string" && CREW_BRANCH_PATTERN.test(branch);
 
 /**
  * A thread's relation to crew. A bridge is `bridge` only while it parents an `open`
