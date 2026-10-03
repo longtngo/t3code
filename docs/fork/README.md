@@ -378,55 +378,37 @@ Per-member project **renaming** ended with the dialog on the default sidebar —
 group-level by design, and the per-member inputs were upstream's own deleted code. It still exists
 in the legacy sidebar's context menu.
 
-### 7. `interruptTurn` is the COOPERATIVE rung; `stopSession` is the hard one
+### 7. Stop is two rungs: `run.interrupt` `mode: "cooperative"`, then `"hard"`
 
-Upstream `#5891` replaced Claude's `interruptTurn` body with `stopSessionInternal(context)` — one
-hard kill, on the reasoning that `interrupt()` can acknowledge while resumed background tasks keep
-the CLI alive. This fork keeps the two rungs apart, because the Stop button is a **client-side
-ladder** (`ChatView.logic.ts` `nextStopAction`): the first press sends a cooperative
-`thread.turn.interrupt`, and a deliberate second press inside a 500ms–10s band escalates to a hard
-`thread.session.stop`. Collapsing rung 1 into rung 2 makes that band vestigial for the
-most-used provider and charges every "stop to redirect" a cold subprocess restart.
+Upstream v2 makes every user Stop a hard runtime restart (`requestRuntimeRestart: true` in every
+adapter). The fork keeps the cheap "stop to redirect": the client ladder
+(`packages/client-runtime/src/state/stopLadder.ts`, `nextStopAction`) sends `run.interrupt` with
+`mode: "cooperative"` on the first press and `mode: "hard"` on a deliberate second press inside
+the 500 ms - 10 s band. Absent `mode` is upstream's hard Stop, so the MCP and other callers are
+unchanged.
 
-Neither side was a superset, so the 20th reconcile took a hybrid:
+- `Orchestrator.dispatchRunInterrupt` passes `cooperative: true` on the `provider-turn.interrupt`
+  effect only while the provider turn is `running`; a Stop on a settled turn's background work
+  is always hard.
+- `ProviderTurnControlService.interrupt` runs the cooperative rung as `interruptTurn({
+cooperative: true })` and then waits for the projected turn to leave `running`, both bounded by
+  `COOPERATIVE_INTERRUPT_GRACE` (8 s, measured: 491 of 572 Claude cooperative interrupts on the
+  fork's V1 log settled within 5 s, 493 within 8 s, 4 more by 15 s). A rejected or late rung
+  falls through to the hard call itself, so a provider that cannot cooperate is handled
+  explicitly. It returns which rung ended the stop.
+- `EffectWorker` dispatches `thread.background-work.settle` only after the hard rung. The
+  cooperative rung keeps the process, which still reports on its background work.
+- Adapters: an interrupt without `requestRuntimeRestart` was already soft in Codex, Cursor,
+  OpenCode, OpenCode2, Pi and ACP (Grok, Antigravity), so they ignore the flag. Claude's
+  restart-steer interrupt closes its query, so `ClaudeAdapterV2.interruptTurn` reads
+  `cooperative` and only sends `query.interrupt`. The fork's V1 `stopTask` sweep is not ported:
+  background tasks surviving the first rung is the point, and the hard rung ends them.
 
-- **`interruptTurn` stays the fork's** — bounded `stopTask` fleet sweep (each task's
-  `task.completed` made authoritative), then `query.interrupt()` bounded by
-  `INTERRUPT_REQUEST_GRACE`. Both bounds exist because this runs on the single reactor command
-  worker, where an unbounded await head-of-line blocks every later command including the
-  watchdog's own `session.stop`.
-- **`stopSessionInternal` is upstream's, hardened** — `query.close()` moved to the very top
-  (before `context.stopped = true`, so a close failure leaves the session usable), a
-  `task.completed` sweep over `liveTaskIds` that does not need `stopTask` support, an
-  identity-guarded `sessions.delete`, and `stopSessions` collecting per-session failures for
-  `stopAll`. The fork's own contribution here — bounding `Fiber.interrupt(streamFiber)` with
-  `STOP_INTERRUPT_GRACE` — is kept on top of it.
+### 8. RETIRED with V1: the interrupt reactor's live-session gate
 
-Two consequences a later reconcile must not undo:
-
-- `ClaudeQueryRuntime.interrupt` and `.stopTask` were **removed by upstream outside any conflict
-  marker**, and restored here. If they vanish again, the fork's `interruptTurn` stops compiling —
-  which is the good case; the bad case is a resolution that also takes upstream's `interruptTurn`
-  and leaves nothing failing.
-- Upstream's four new tests are **retargeted, not deleted**. Three of them now drive
-  `stopSession`, whose semantics they actually describe here: the one about settling live tasks
-  and closing the provider session, the one about keeping the session available when the process
-  close fails, and the one about keeping a resumed replacement session during slow stop cleanup.
-  The fourth, covering `stopAll` when one close fails, needed no change.
-
-### 8. The interrupt reactor gates on the LIVE session, not the projection
-
-`processTurnInterruptRequested` asks `hasLiveSessionForThread` before forwarding. With no live
-session the interrupt's goal is already met, so it settles the thread to `stopped` (clearing the
-spinner) rather than appending a `provider.turn.interrupt.failed` activity — and deliberately does
-not resume a subprocess just to no-op it. Upstream reads `thread.session` from the projection
-instead.
-
-Upstream `#7412`'s `recoverInterruptFailure` (stop the session and record the detail when the
-provider's interrupt fails) is **adopted on top of** that gate. Its three tests set up a projected
-session only, so each needed `harness.runtimeSessions.push({...})` added to reach the path it
-tests; without it they pass through the fork's gate and assert `lastError: null`. A future
-upstream test about interrupt failure will need the same line.
+V1's `processTurnInterruptRequested` is gone. Upstream v2 already treats an interrupt with no
+live session as done (`ProviderTurnControlService` load, "treating as already stopped"), and
+`dispatchRunInterrupt` settles projected background work itself when no process is left.
 
 ### 9. `entrypoint.test.ts` realpaths its temp dir (macOS)
 
@@ -886,21 +868,20 @@ normalizers (`codexRateLimitsToUpdate` and `normalizeCodexRateLimitsNotification
 that keeps only upstream's branch silently blanks the gauge; one that keeps only the fork's
 leaves the Limits tab empty for Codex.
 
-### 30. A failed session stop: clear the spinner, unless a compaction was in flight
+### 30. A failed hard stop still ends the turn (the compaction exception is retired)
 
-Two rules meet in `processSessionStopRequested` (`ProviderCommandReactor.ts`) and a compaction
-in flight is the only thing that tells them apart.
+FORK `868ed1c02`: a provider that cannot be stopped must not leave a spinner. In v2 the hard
+paths of the adapters already end the turn locally when the provider does not answer. The one
+gap was Claude: `ClaudeAdapterV2.interruptTurn` yielded `query.interrupt` before closing, so a
+rejected request (dead transport) aborted the stop, and a CLI wedged in a tool never answered
+it. That call is now bounded at 8 s and its failure logged, so the close and the 10 s finalize
+fallback always run.
 
-- FORK (`868ed1c02`): a provider that cannot be stopped — dead process, closed transport — must
-  still get the `stopped` session write, or the thread sits with a spinner nothing can clear.
-  Its test is "still clears the session, and says so, when the provider fails to stop".
-- UPSTREAM (#9293): when the stop interrupted a compaction, the failure path restores the
-  session itself, and a `stopped` write on top clobbers that fresher state. Its test is "does
-  not overwrite concurrent session state after compaction failure".
-
-So the write is skipped exactly when this handler found the thread in `compactingThreadIds` on
-entry. Note the ordering trap: `restoreCompaction` returns without writing while the thread is
-in `stoppingThreadIds`, so the stopping mark has to come off before it is called.
+The V1 exception "unless a compaction was in flight" protected upstream #9293's
+`restoreCompaction` session write. v2 has no compaction-owned session state: `/compact` is an
+ordinary provider turn (`compactThread` = `startTurn("/compact")`), so a failed stop during it
+ends like any other turn. Test: "a hard Stop whose interrupt request fails still ends the
+compaction".
 
 ### 31. The live subscription is bounded by upstream's budget, not the fork's pump
 
@@ -1149,17 +1130,13 @@ export as unused - the pressure is entirely one-way.
 
 ### 39. Two interrupts, and only one of them arms the Stop ladder
 
-Upstream #4308 added a keybinding command for stopping a thread, and its handler is a stable
-`useCallback` in `ChatView.tsx` fed by `interruptContextRef`. The fork already had an
-`onInterrupt` there: the two-press Stop ladder (invariant 7). They collided on the name only, and
-the merge produced two `const onInterrupt` in one scope.
-
-Upstream's is renamed **`onInterruptRunningThread`** - it pairs with the
-`canInterruptRunningThread` predicate declared beside it - and the ladder keeps `onInterrupt`.
-The rename is not cosmetic: like Cancel, the keybinding dispatches the plain cooperative
-interrupt and neither reads nor advances the escalation ledger, so a shortcut press cannot arm a
-force-stop. A merge that unifies these two into one handler makes every keyboard interrupt a
-candidate first rung, and the next Stop click a force-stop.
+In `ChatView.tsx`, `onInterrupt` is the ladder (the Stop button and `Escape`, which
+`ChatComposer` routes through `nextEscapeAction`). Upstream's `thread.stop` keybinding calls
+`onInterruptRunningThread`, which sends a plain cooperative interrupt and neither reads nor arms
+the ladder, so a shortcut press can never make the next Stop click a force-stop. The background
+work strip's Stop (`handleStopBackgroundWork`) sends no `mode`, i.e. hard: ending background work
+is what it is for. v2 has no Cancel-question button; the pending-question row shows the same
+ladder Stop.
 
 ### 41. Work-entry detail is a dialog here, so upstream's in-row expansion has no fork surface
 

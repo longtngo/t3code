@@ -8027,6 +8027,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       if (command.holdQueue === true) yield* holdQueuedRuns;
       yield* stopCompletionCohort();
+      // FORK Stop ladder: the cooperative rung only has a turn to end while one
+      // runs. A Stop on a settled turn's background work is always hard.
+      const cooperative = command.mode === "cooperative" && providerTurn.status === "running";
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -8038,6 +8041,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerSessionId,
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
+            ...(cooperative ? { cooperative: true } : {}),
           },
         } satisfies PendingOrchestrationEffectV2,
       ]);

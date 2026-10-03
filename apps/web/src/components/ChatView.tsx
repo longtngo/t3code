@@ -8,7 +8,12 @@ import {
   resolveWorktreeSetupProgress,
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
-import { restorePlanFollowUpComposer } from "./ChatView.logic";
+import {
+  restorePlanFollowUpComposer,
+  STOP_ESCALATION_WINDOW_MS,
+  nextStopAction,
+  type ArmedStopEscalation,
+} from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
 import {
@@ -4385,20 +4390,93 @@ export default function ChatView(props: ChatViewProps) {
     activeThread !== undefined,
     activeRuntime,
   );
+  /**
+   * FORK Stop ladder (registry inv 7, 39). The arming is held twice: the ref is
+   * what `onInterrupt` READS, because the gesture is an impatient double-click
+   * and a ref is current inside the first click's handler; the state only
+   * renders the armed rung. Both are written through `armStopEscalation` alone.
+   * It carries WHEN it was armed, since `nextStopAction` decides from that
+   * timestamp; the timer only reverts the button's look (a background tab
+   * throttles timers, and the arming must still have expired on return).
+   */
+  const armedStopEscalationRef = useRef<ArmedStopEscalation | null>(null);
+  const [escalatedStopThreadId, setEscalatedStopThreadId] = useState<string | null>(null);
+  const stopEscalationDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armStopEscalation = useCallback(function arm(threadId: string | null) {
+    if (stopEscalationDecayRef.current !== null) {
+      clearTimeout(stopEscalationDecayRef.current);
+      stopEscalationDecayRef.current = null;
+    }
+    armedStopEscalationRef.current = threadId === null ? null : { threadId, atMs: Date.now() };
+    setEscalatedStopThreadId(threadId);
+    if (threadId !== null) {
+      stopEscalationDecayRef.current = setTimeout(() => arm(null), STOP_ESCALATION_WINDOW_MS);
+    }
+  }, []);
+  useEffect(
+    () => () => {
+      if (stopEscalationDecayRef.current !== null) clearTimeout(stopEscalationDecayRef.current);
+    },
+    [],
+  );
+  // The turn ended: the wedge the arming belonged to is over, so a Stop pressed
+  // once today never makes tomorrow's first press hard. A thread switch needs no
+  // reset: the arming is keyed by thread id.
+  useEffect(() => {
+    if (!canInterruptRunningThread) armStopEscalation(null);
+  }, [armStopEscalation, canInterruptRunningThread]);
+  const isStopEscalated =
+    escalatedStopThreadId !== null && escalatedStopThreadId === activeThread?.id;
+  const dispatchInterrupt = useCallback(
+    async (threadId: ThreadId, mode: "cooperative" | "hard") => {
+      const result = await interruptThreadTurn({
+        environmentId,
+        input: { threadId, mode },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          threadId,
+          error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [environmentId, interruptThreadTurn, setThreadError],
+  );
+  /**
+   * The Stop button and Escape. First press: cooperative interrupt (the turn
+   * ends, the provider session survives). A deliberate second press inside the
+   * 500 ms - 10 s band: hard stop (the provider runtime restarts). This is the
+   * ONLY place the ladder is armed.
+   */
   const onInterrupt = useCallback(async () => {
     if (!activeThread) return;
-    const result = await interruptThreadTurn({
-      environmentId,
-      input: { threadId: activeThread.id },
+    const threadId = activeThread.id;
+    const action = nextStopAction({
+      threadId,
+      armed: armedStopEscalationRef.current,
+      nowMs: Date.now(),
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      setThreadError(
-        activeThread.id,
-        error instanceof Error ? error.message : "Failed to interrupt the current turn.",
-      );
+    if (action === "ignore") return;
+    if (action === "hardStop") {
+      armStopEscalation(null);
+      await dispatchInterrupt(threadId, "hard");
+      return;
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+    armStopEscalation(threadId);
+    if (!(await dispatchInterrupt(threadId, "cooperative"))) armStopEscalation(null);
+  }, [activeThread, armStopEscalation, dispatchInterrupt]);
+  /**
+   * The `thread.stop` keybinding (inv 39): the plain cooperative interrupt. It
+   * neither reads nor arms the ladder, so a shortcut press can never turn the
+   * next Stop click into a force-stop.
+   */
+  const onInterruptRunningThread = useCallback(async () => {
+    if (!activeThread) return;
+    await dispatchInterrupt(activeThread.id, "cooperative");
+  }, [activeThread, dispatchInterrupt]);
   useEffect(() => subscribeSnapShotComposerFocus(focusComposer), [focusComposer]);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -7736,7 +7814,7 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
-        void onInterrupt();
+        void onInterruptRunningThread();
         return;
       }
 
@@ -7773,7 +7851,7 @@ export default function ChatView(props: ChatViewProps) {
     keybindings,
     handleUnsettleActiveThread,
     isServerThread,
-    onInterrupt,
+    onInterruptRunningThread,
     onToggleDiff,
     pinThread,
     settleThread,
@@ -11170,6 +11248,7 @@ export default function ChatView(props: ChatViewProps) {
                               onSend={onSend}
                               onResume={onResume}
                               onInterrupt={onInterrupt}
+                              isStopEscalated={isStopEscalated}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
                               onSelectActivePendingUserInputOption={

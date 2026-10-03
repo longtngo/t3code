@@ -7155,6 +7155,15 @@ export function makeClaudeAdapterV2(
             const existing = yield* Ref.get(queryContext);
             const currentTurn = yield* Ref.get(activeTurn);
             const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId ?? null;
+            // FORK: the cooperative rung only ends the running turn. If it
+            // already ended there is nothing to do, and failing here would
+            // escalate to a hard stop that closes the process for nothing.
+            if (
+              turnInput.cooperative === true &&
+              currentTurn?.providerTurnId !== turnInput.providerTurnId
+            ) {
+              return;
+            }
             if (currentTurn === null && turnInput.requestRuntimeRestart === true) {
               // Stop after the turn settled. With no CLI process of this
               // native thread left, nothing it started is still running: its
@@ -7199,7 +7208,29 @@ export function makeClaudeAdapterV2(
               next.add(turnInput.providerTurnId);
               return next;
             });
-            yield* existing.query.interrupt;
+            if (turnInput.cooperative === true) {
+              // FORK Stop ladder, first rung: abort the turn but keep the query,
+              // so the CLI process, its session and its background tasks
+              // survive. The result frame the CLI answers with finalizes the
+              // turn as interrupted. ProviderTurnControlService bounds this
+              // and comes back with the hard stop below if the turn stays.
+              yield* existing.query.interrupt;
+              return;
+            }
+            // FORK (inv 30): a CLI wedged in a tool never answers the interrupt
+            // request, and a dead one rejects it. Neither may abort the stop:
+            // the close and the bounded wait below still end the turn, so the
+            // spinner clears. 8 s is the fork's `INTERRUPT_REQUEST_GRACE`.
+            yield* existing.query.interrupt.pipe(
+              Effect.timeoutOption("8 seconds"),
+              Effect.catch((cause) =>
+                Effect.logWarning("orchestration-v2.claude-query-interrupt-failed", {
+                  providerSessionId: input.providerSessionId,
+                  providerTurnId: turnInput.providerTurnId,
+                  cause,
+                }),
+              ),
+            );
             yield* existing.query.close.pipe(Effect.ignore);
             const closed = yield* Deferred.await(existing.closed).pipe(
               Effect.timeoutOption("10 seconds"),

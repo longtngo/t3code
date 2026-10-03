@@ -44,6 +44,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     providerSessionId: ProviderSessionId,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+    /** FORK: first Stop rung; see `run.interrupt` `mode`. */
+    cooperative: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.steer"),

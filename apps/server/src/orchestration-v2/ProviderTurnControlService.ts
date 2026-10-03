@@ -7,8 +7,11 @@ import {
   RunAttemptId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -40,13 +43,30 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
+/**
+ * FORK Stop ladder: how long the cooperative rung gets to END the turn before
+ * it escalates to the hard stop. Sized on the fork's live V1 event log
+ * (2026-10-02, 572 Claude cooperative interrupts, request to session leaving
+ * `running`): 363 settled within 0.5 s, 491 within 5 s, 493 within 8 s and only
+ * 4 more by 15 s. The 79 that missed 8 s were wedges, not slow stops: users
+ * force-stopped 72 of them by hand, a median 2.7 s after the first press.
+ * Same value as the fork's `INTERRUPT_REQUEST_GRACE`.
+ */
+export const COOPERATIVE_INTERRUPT_GRACE = Duration.seconds(8);
+const COOPERATIVE_SETTLE_POLL = Duration.millis(100);
+
+/** Which rung an interrupt ended on. Only a hard stop ends background work. */
+export type ProviderTurnInterruptOutcome = "cooperative" | "hard";
+
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
-  }) => Effect.Effect<void, ProviderTurnControlError>;
+    /** FORK: try the cooperative rung first; see `COOPERATIVE_INTERRUPT_GRACE`. */
+    readonly cooperative?: boolean;
+  }) => Effect.Effect<ProviderTurnInterruptOutcome, ProviderTurnControlError>;
   readonly steer: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -168,6 +188,25 @@ export const layer: Layer.Layer<
         return { context, providerThread: interruptProviderThread, providerTurn, session };
       });
 
+    // Terminal provider events project on a detached ingestion fiber, so the
+    // cooperative rung reads the projection until the turn leaves `running`.
+    // Always bounded by the caller's `COOPERATIVE_INTERRUPT_GRACE`.
+    const awaitProviderTurnSettled = (input: {
+      readonly threadId: ThreadId;
+      readonly providerThreadId: ProviderThreadId;
+      readonly providerTurnId: ProviderTurnId;
+    }) =>
+      Effect.gen(function* () {
+        while (true) {
+          const { providerTurn } = yield* projections.getProviderControlContext(
+            input.threadId,
+            input,
+          );
+          if (providerTurn?.status !== "running") return;
+          yield* Effect.sleep(COOPERATIVE_SETTLE_POLL);
+        }
+      });
+
     return ProviderTurnControlServiceV2.of({
       interrupt: (input) =>
         Effect.gen(function* () {
@@ -175,7 +214,35 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return;
+          if (Option.isNone(session)) return "hard" as const;
+          if (input.cooperative === true) {
+            // The turn ended before the effect ran: nothing is left to end,
+            // and the session and its background work stay as they are.
+            if (loaded.providerTurn.status !== "running") return "cooperative" as const;
+            const settled = yield* session.value
+              .interruptTurn({
+                providerThread: loaded.providerThread,
+                providerTurnId: loaded.providerTurn.id,
+                cooperative: true,
+              })
+              .pipe(
+                Effect.andThen(awaitProviderTurnSettled(input)),
+                Effect.timeoutOption(COOPERATIVE_INTERRUPT_GRACE),
+                Effect.exit,
+              );
+            if (Exit.isSuccess(settled) && Option.isSome(settled.value)) {
+              return "cooperative" as const;
+            }
+            yield* Effect.logWarning(
+              "Cooperative interrupt did not end the provider turn; escalating to a hard stop",
+              {
+                threadId: input.threadId,
+                providerSessionId: input.providerSessionId,
+                providerTurnId: input.providerTurnId,
+                reason: Exit.isFailure(settled) ? Cause.pretty(settled.cause) : "timeout",
+              },
+            );
+          }
           // A settled turn reaches its adapter too: only the adapter knows
           // whether it still runs work for the thread, and each one either
           // stops it or reports there is nothing left to stop. Background work
@@ -185,6 +252,7 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
+          return "hard" as const;
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

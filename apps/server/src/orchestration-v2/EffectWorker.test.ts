@@ -79,13 +79,18 @@ function restartEffect(
 function makeExecutorLayer(input: {
   readonly events: Ref.Ref<ReadonlyArray<string>>;
   readonly failFirstStart?: Ref.Ref<boolean>;
+  /** Which rung the fake control service reports an interrupt ended on. */
+  readonly interruptOutcome?: ProviderTurnControlService.ProviderTurnInterruptOutcome;
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const dependencies = Layer.mergeAll(
     Layer.succeed(
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
-        interrupt: () => Effect.void,
+        interrupt: (request) =>
+          record(`interrupt:${request.cooperative === true ? "cooperative" : "hard"}`).pipe(
+            Effect.as(input.interruptOutcome ?? "hard"),
+          ),
         steer: () => Effect.void,
         interruptAndAwaitTerminal: (request) =>
           record(
@@ -148,7 +153,10 @@ function makeExecutorLayer(input: {
     Layer.provide(
       Layer.mergeAll(
         dependencies,
-        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          dispatch: (command) =>
+            record(command.type).pipe(Effect.as({ sequence: 0, storedEvents: [] })),
+        }),
         ServerSettings.layerTest(),
       ),
     ),
@@ -750,6 +758,59 @@ it.effect("safely retries after replacement cleanup succeeds and start fails", (
       `interrupt:${replacementSessionId}`,
       "detach",
       "start",
+    ]);
+  }),
+);
+
+// FORK Stop ladder: the cooperative rung keeps the provider process, so the
+// background work it still reports on must not be settled as interrupted.
+it.effect("settles background work after a hard Stop, never after the cooperative rung", () =>
+  Effect.gen(function* () {
+    const timestamp = DateTime.formatIso(yield* DateTime.now);
+    const interruptEffect = (cooperative: boolean): EffectOutbox.OrchestrationEffectV2 => ({
+      id: `effect:interrupt:${cooperative}`,
+      commandId: CommandId.make(`command:interrupt:${cooperative}`),
+      threadId,
+      request: {
+        type: "provider-turn.interrupt",
+        providerSessionId: oldSessionId,
+        providerThreadId,
+        providerTurnId,
+        ...(cooperative ? { cooperative: true } : {}),
+      },
+      status: "running",
+      attemptCount: 1,
+      availableAt: timestamp,
+      leaseOwner: "test-worker",
+      leaseExpiresAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: null,
+      lastError: null,
+    });
+    const run = (
+      effect: EffectOutbox.OrchestrationEffectV2,
+      interruptOutcome: ProviderTurnControlService.ProviderTurnInterruptOutcome,
+    ) =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<string>>([]);
+        yield* Effect.gen(function* () {
+          const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+          yield* executor.execute(effect);
+        }).pipe(Effect.provide(makeExecutorLayer({ events, interruptOutcome })));
+        return yield* Ref.get(events);
+      });
+
+    assert.deepEqual(yield* run(interruptEffect(true), "cooperative"), ["interrupt:cooperative"]);
+    // The cooperative rung escalated on its own: the process restarted, so the
+    // settle follows exactly as after a hard Stop.
+    assert.deepEqual(yield* run(interruptEffect(true), "hard"), [
+      "interrupt:cooperative",
+      "thread.background-work.settle",
+    ]);
+    assert.deepEqual(yield* run(interruptEffect(false), "hard"), [
+      "interrupt:hard",
+      "thread.background-work.settle",
     ]);
   }),
 );

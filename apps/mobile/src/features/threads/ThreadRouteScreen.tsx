@@ -67,6 +67,8 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
+import { nextStopAction } from "@t3tools/client-runtime/state/stop-ladder";
+import type { ArmedStopEscalation } from "@t3tools/client-runtime/state/stop-ladder";
 import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
@@ -342,6 +344,10 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  // FORK Stop ladder. A ref, not state: the arming decides the NEXT press and
+  // must never render. Decided from a timestamp, so a backgrounded app whose
+  // timers are throttled still sees an old arming as expired.
+  const armedStopEscalationRef = useRef<ArmedStopEscalation | null>(null);
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -673,15 +679,36 @@ function ThreadRouteContent(
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
   }, [navigation]);
+  // Web re-arms from scratch when the run ends (ChatView). Without the same reset the arming outlives its wedge, and a Stop
+  // on the NEXT turn inside the band would force-stop a session the user only
+  // asked to interrupt.
+  useEffect(() => {
+    if (composer.interruptibleRunId === null) armedStopEscalationRef.current = null;
+  }, [composer.interruptibleRunId]);
   const handleStopThread = useCallback(() => {
     if (!selectedThread || composer.interruptibleRunId === null) {
       return;
+    }
+    // Same ladder as web: the first press ends the turn and keeps the provider
+    // session; a deliberate second press inside the band force-stops it, the
+    // only way out of a turn wedged inside a tool from a phone.
+    const action = nextStopAction({
+      threadId: selectedThread.id,
+      armed: armedStopEscalationRef.current,
+      nowMs: Date.now(),
+    });
+    if (action === "ignore") return;
+    if (action === "hardStop") {
+      armedStopEscalationRef.current = null;
+    } else {
+      armedStopEscalationRef.current = { threadId: selectedThread.id, atMs: Date.now() };
     }
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
         runId: composer.interruptibleRunId,
+        mode: action === "hardStop" ? "hard" : "cooperative",
       },
     });
   }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);

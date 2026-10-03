@@ -16,11 +16,12 @@ export const STOP_ESCALATION_MIN_MS = 500;
 export const STOP_ESCALATION_WINDOW_MS = 10_000;
 
 /**
- * Decide what a Stop-button press should dispatch. The first press for a thread sends a
- * cooperative `thread.turn.interrupt`; a deliberate second press (while that interrupt is still
- * pending escalation) goes straight to a hard `thread.session.stop`, which force-kills a turn
- * wedged inside a tool — the case the server's stall watchdog is structurally blind to, because
- * it abstains whenever the open-tool set is non-empty.
+ * Decide what a Stop-button press should dispatch. The first press for a thread sends
+ * `run.interrupt` with `mode: "cooperative"`, which ends the turn but keeps the provider session;
+ * a deliberate second press (while that interrupt is still pending escalation) sends
+ * `mode: "hard"`, which restarts the provider runtime and so kills a turn wedged inside a tool.
+ * The server also escalates on its own once a cooperative interrupt has not ended the turn
+ * within its grace (`COOPERATIVE_INTERRUPT_GRACE`, 8 s); the second press is the faster way out.
  *
  * Escalation is valid only inside a BAND, not merely "second press ever":
  *

@@ -89,6 +89,8 @@ import { listContinuationForEnter, listIndentForTab } from "../../composer-list-
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
+  isChatSurfaceFocused,
+  nextEscapeAction,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1391,6 +1393,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /** FORK: Stop is showing its second (hard) rung. */
+  isStopEscalated: boolean;
   onImplementPlanInNewThread: () => void;
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
@@ -1434,6 +1438,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
+        isStopEscalated={props.isStopEscalated}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
     </>
@@ -1665,7 +1670,10 @@ export interface ChatComposerProps {
     submissionIntent?: ComposerSubmissionIntent,
   ) => void;
   onResume: () => void;
+  /** FORK: the Stop ladder (button and Escape). See `ChatView` `onInterrupt`. */
   onInterrupt: () => void;
+  /** FORK: Stop is showing its second (hard) rung. */
+  isStopEscalated: boolean;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
@@ -1789,6 +1797,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onSend,
     onResume,
     onInterrupt,
+    isStopEscalated,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -6317,6 +6326,39 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
+  /**
+   * FORK: Escape walks the same Stop ladder the button does, so two deliberate
+   * presses force-stop and a held key (auto-repeat) never reaches the hard rung.
+   * Scoped by focus: every overlay that owns Escape takes focus out of this form,
+   * and `document.body` counts as the chat (clicking the transcript leaves focus
+   * there). Bubble phase, so a handler that already claimed the press wins. The
+   * fork's "recall a held message" rung is gone with its client queue.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const action = nextEscapeAction({
+        isChatSurfaceActive: isChatSurfaceFocused({
+          activeElement: document.activeElement,
+          bodyElement: document.body,
+          composerRoot: composerFormRef.current,
+          hasOpenDialog: document.querySelector('[data-slot="dialog-popup"]') !== null,
+        }),
+        alreadyHandled: event.defaultPrevented,
+        isAutoRepeat: event.repeat,
+        isComposing: event.isComposing,
+        hasRunningTurn: canInterrupt,
+        hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
+        heldMessageCount: 0,
+        recallSupported: false,
+      });
+      if (action !== "stop") return;
+      event.preventDefault();
+      handleInterruptPrimaryAction();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activePendingApproval, canInterrupt, handleInterruptPrimaryAction, pendingUserInputs.length]);
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);
@@ -7814,6 +7856,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
+                    isStopEscalated={isStopEscalated}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting

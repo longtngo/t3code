@@ -951,11 +951,9 @@ export function nextEscapeAction(input: {
   readonly isComposing: boolean;
   readonly hasRunningTurn: boolean;
   /**
-   * The agent is waiting on an approval or a question. The composer replaces
-   * Stop with Cancel there, and Cancel is deliberately NOT on this ladder - it
-   * dispatches a cooperative decline and never arms the force-stop. Escape
-   * stays out of it rather than arming, invisibly, a rung the visible UI is not
-   * even offering.
+   * The agent is waiting on an approval or a question. Escape stays out of it:
+   * a press meant to dismiss something in the answer form must not stop the
+   * agent. The row's own Stop button still walks the ladder.
    */
   readonly hasPendingQuestion: boolean;
   readonly heldMessageCount: number;
