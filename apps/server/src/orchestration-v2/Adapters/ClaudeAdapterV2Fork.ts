@@ -374,3 +374,51 @@ export function claudeTaskPlanSteps(
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Subagent offload (per-thread backend toggle)
+// ---------------------------------------------------------------------------
+
+/**
+ * Told to a Claude process whose thread resolves to Cursor, because nothing else reaches the
+ * agent's tool choice: `SUBAGENT_BACKEND_STATE` and the flag file both sit downstream of a
+ * `Bash` call the agent has to decide to make, and the native `Agent` tool reads neither.
+ * Measured over 8 trials per arm, wrapper share went 0.125 without this text to 1.000 with it
+ * (`scripts/subagent-routing-harness/` reads this constant; re-run it if the text changes).
+ *
+ * Exit 3 is named because it is the wrapper's own "offload unavailable" refusal and the only code
+ * that should send the agent back to the `Agent` tool. Everything else is deliberately NOT
+ * enumerated: the wrapper `exec`s the configured binary, so the binary's own exit code propagates
+ * (a failed Cursor run gives 1, a missing `cursor-scratch` gives 127), and any list of codes here
+ * would tell the agent to "fix its invocation" after a failure it did not cause.
+ */
+export const SUBAGENT_DISPATCH_INSTRUCTION =
+  "<subagent_dispatch>Subagent offload is ON for this thread. When you need a subagent, do NOT " +
+  "use the Agent tool: write the subagent prompt to a file and run " +
+  "`~/bin/subagent-dispatch <short-name> <prompt-file>` with the Bash tool. Exit code 3 means " +
+  "offload is unavailable for this thread — only then fall back to the Agent tool. Any other " +
+  "non-zero exit is not a fallback signal: read stderr, then either fix your invocation or treat " +
+  "it as a failed subagent run.</subagent_dispatch>";
+
+/**
+ * The instruction for a resolved backend, or an empty string. Only an exact `cursor` enables it,
+ * so a malformed, absent, or `default` flag file — all of which read back as `default` — appends
+ * nothing and leaves the session prompt byte-identical to before.
+ */
+export function subagentDispatchAppend(backend: string | undefined): string {
+  return backend === "cursor" ? SUBAGENT_DISPATCH_INSTRUCTION : "";
+}
+
+/**
+ * The process environment with `SUBAGENT_BACKEND_STATE` pointed at this thread's own flag
+ * file. A spread, never a mutation: the base environment is shared by every session of the
+ * adapter instance, so mutating it would hand one thread's path to all of them.
+ */
+export function withSubagentBackendState(
+  environment: NodeJS.ProcessEnv | undefined,
+  statePath: string | undefined,
+): NodeJS.ProcessEnv | undefined {
+  return environment === undefined || statePath === undefined
+    ? environment
+    : { ...environment, SUBAGENT_BACKEND_STATE: statePath };
+}

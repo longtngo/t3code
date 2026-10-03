@@ -2052,8 +2052,6 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
-// Port note: the account-usage refresh, crew and subagent-backend RPCs are defined
-// above but left out of the group until their orchestrator-v2 port units restore handlers.
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2103,6 +2101,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
   WsGetResourceQueueRpc,
+  WsCrewListRpc,
+  WsCrewTeardownRpc,
+  WsCrewAnswerRpc,
+  WsCrewForgetWorktreeRpc,
+  WsSubagentBackendGetRpc,
+  WsSubagentBackendSetRpc,
+  WsSubagentBackendUsageRpc,
   WsLlmServeLoadRpc,
   WsLlmServeUnloadRpc,
   WsSubscribeLlmModelsRpc,

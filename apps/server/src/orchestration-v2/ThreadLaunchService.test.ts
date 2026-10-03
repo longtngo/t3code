@@ -1178,6 +1178,40 @@ it.effect("keeps an explicit branch name instead of generating one", () =>
   }),
 );
 
+// FORK: crew names its worktrees by task id, so the row it reserves holds the real path.
+it.effect("honours an explicit worktree path and defaults to the driver's location", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:explicit-path",
+          thread: "thread:launch:explicit-path",
+          message: "Build the feature",
+          workspace: {
+            type: "worktree",
+            baseRef: "main",
+            branch: "crew/task-1",
+            path: "/tmp/worktrees/crew/task-1",
+          },
+        }),
+      );
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:derived-path",
+          thread: "thread:launch:derived-path",
+          message: "Build the feature",
+          workspace: { type: "worktree", baseRef: "main", branch: "my-feature" },
+        }),
+      );
+      yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 2));
+      const paths = harness.createWorktree.mock.calls.map((call) => call[0]?.path);
+      assert.deepEqual(paths.toSorted(), ["/tmp/worktrees/crew/task-1", null].toSorted());
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("keeps the temporary branch when branch generation fails", () =>
   Effect.gen(function* () {
     const harness = makeHarness({

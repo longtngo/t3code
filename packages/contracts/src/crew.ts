@@ -79,32 +79,29 @@ export const CrewReport = Schema.Struct({
 export type CrewReport = typeof CrewReport.Type;
 
 /**
- * Why a thread is exempt from the provider session reaper, and for how long.
- *
- * A bridge is `bridge` only while it parents an `open` task, or it would stay exempt
- * forever after its first dispatch. A crewmate becomes `crewmate-closed` when its
- * task closes, so the reaper is still able to stop a crewmate whose teardown failed —
- * an unscoped exemption would turn §6's stated residual into a permanent leak.
+ * A crewmate's branch. Set on the thread before its first run, never renamed, and kept
+ * through teardown, so it marks a crewmate's thread shell on every client and every
+ * environment without a crew query.
+ */
+export const crewBranchFor = (taskId: string): string => `crew/${taskId}`;
+
+/**
+ * Exactly `crew/<taskId>`, where a task id is the lowercase UUIDv4 `crew_dispatch` mints.
+ * A user's own `crew/my-feature` does not match. The name alone is still only a marker;
+ * where a crew row is reachable (the server), confirm with it.
+ */
+const CREW_BRANCH_PATTERN =
+  /^crew\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export const isCrewBranch = (branch: string | null | undefined): boolean =>
+  typeof branch === "string" && CREW_BRANCH_PATTERN.test(branch);
+
+/**
+ * A thread's relation to crew. A bridge is `bridge` only while it parents an `open`
+ * task; a crewmate is `crewmate` while its task is open and `crewmate-closed` after.
  */
 export const CrewRole = Schema.Literals(["bridge", "crewmate", "crewmate-closed"]);
 export type CrewRole = typeof CrewRole.Type;
-
-/**
- * The two roles the session reaper skips. `crewmate-closed` is deliberately
- * absent: after teardown's zombie-stop attempts the reaper is the last thing
- * that can stop a crewmate whose `stopSession` failed, so exempting the closed
- * role would turn that stated residual into a permanent leak.
- *
- * Accepts both absent shapes so neither can read as exempt. Only `undefined`
- * occurs today: the sole caller reads the thread shell, where `crewRole` is
- * `Schema.optionalKey`, and all three row-to-shell mappings in
- * `ProjectionSnapshotQuery` turn the projection row's `Schema.NullOr` into an
- * omitted key. The `| null` arm is there so a future caller reading the row
- * directly cannot reintroduce the bug, not because a caller passes null now.
- */
-export const isReaperExemptCrewRole = (
-  role: CrewRole | null | undefined,
-): role is "bridge" | "crewmate" => role === "bridge" || role === "crewmate";
 
 /**
  * How a task presents in the panel. `closed` is stored; everything else is derived
@@ -141,7 +138,6 @@ export const CrewDispatchRefusalReason = Schema.Literals([
   "thread",
   "provider",
   "browser-access",
-  "disk",
   "payload",
 ]);
 export type CrewDispatchRefusalReason = typeof CrewDispatchRefusalReason.Type;
@@ -170,8 +166,6 @@ export class CrewDispatchRefusedError extends Schema.TaggedError<CrewDispatchRef
         return "OpenCode cannot run as a crewmate yet. Choose claudeAgent, codex, cursor, or grok.";
       case "browser-access":
         return "Crew needs agent browser access, which is disabled. Enable it in Settings before dispatching.";
-      case "disk":
-        return `Free disk space is below the bound crew needs for a worktree (${this.detail ?? "unknown"}). Free space and retry.`;
       case "payload":
         return "The prompt is larger than the 8 KiB crew allows. Shorten it, or point the crewmate at a file.";
     }

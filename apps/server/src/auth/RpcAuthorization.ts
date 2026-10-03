@@ -211,10 +211,15 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
   [WS_METHODS.attachmentsUpload]: AuthOrchestrationOperateScope,
   [WS_METHODS.getResourceQueue]: AuthOrchestrationReadScope,
+  [WS_METHODS.crewList]: AuthOrchestrationReadScope,
   // Operate scope: these mutate crew rows and dispatch orchestration commands,
   // the same authority `dispatchCommand` needs.
-  // Operate, not read: it spends the provider's rate limit on demand.
-  // Operate, not read: it mutates a thread and cancels queued provider work.
+  [WS_METHODS.crewTeardown]: AuthOrchestrationOperateScope,
+  [WS_METHODS.crewAnswer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.crewForgetWorktree]: AuthOrchestrationOperateScope,
+  [WS_METHODS.subagentBackendGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.subagentBackendUsage]: AuthOrchestrationReadScope,
+  [WS_METHODS.subagentBackendSet]: AuthOrchestrationOperateScope,
   [WS_METHODS.llmServeLoad]: AuthOrchestrationOperateScope,
   [WS_METHODS.llmServeUnload]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeLlmModels]: AuthOrchestrationReadScope,

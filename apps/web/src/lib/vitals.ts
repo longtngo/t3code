@@ -501,3 +501,20 @@ export function rightHalfArc(r: number, pct: number | null): HalfArc {
   }
   return { trackD, fillD };
 }
+
+/**
+ * Derive a pace-able window from a billing-cycle start and reset instant.
+ * Returns null unless both parse and `resetsAt > startsAt`.
+ */
+export function cycleWindow(
+  startsAt: string | null | undefined,
+  resetsAt: string | null,
+): { windowMs: number; segmentCount: number } | null {
+  if (startsAt == null || resetsAt == null) return null;
+  const startMs = Date.parse(startsAt);
+  const endMs = Date.parse(resetsAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  const windowMs = endMs - startMs;
+  const segmentCount = Math.round(windowMs / ONE_DAY_MS);
+  return { windowMs, segmentCount };
+}

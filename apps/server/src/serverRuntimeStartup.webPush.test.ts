@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -43,6 +44,8 @@ import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeReco
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { CrewSweep } from "./crew/CrewSweep.ts";
+import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -254,6 +257,11 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(ProjectStore.ProjectStoreV2, stub()),
       Layer.succeed(ThreadLaunch.ThreadLaunchService, stub()),
       Layer.succeed(ThreadManagement.ThreadManagementService, stub()),
+      // Crew's sweep and the subagent offload's reconciler start at boot; neither is
+      // under test here.
+      Layer.succeed(CrewSweep, stub({ start: () => Effect.void })),
+      Layer.succeed(SubagentLiveThreads, stub()),
+      Layer.succeed(FileSystem.FileSystem, stub()),
     );
     yield* Layer.buildWithScope(
       ServerRuntimeStartup.layerWithOptions().pipe(Layer.provide(deps)),

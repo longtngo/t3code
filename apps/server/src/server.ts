@@ -68,6 +68,8 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
+import { CrewLayerLive } from "./crew/CrewLayer.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
@@ -535,6 +537,9 @@ const WebPushRelayLive = Layer.effectDiscard(
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   WebPushRelayLive,
+  // FORK: per-thread subagent offload. Registers the preparer Claude adapters call before
+  // they spawn a process; its reconciler is forked by ServerRuntimeStartup.
+  SubagentBackend.SubagentBackendLive,
   ThreadSettlementWorkerLive,
   Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
     Layer.provide(ProjectionStoreV2.layer),
@@ -556,6 +561,11 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   ProviderInstallationRefreshLive,
   ReplayMarkers.layer,
 ).pipe(
+  // FORK: crew orchestration — the MCP tools' CrewService, the panel's CrewDirectory,
+  // the delivery sweep ServerRuntimeStartup starts, and the CrewRoles the awareness
+  // relay above reads. Below the relay so it can provide into it; above the
+  // orchestration services it is built on.
+  Layer.provideMerge(CrewLayerLive),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

@@ -55,6 +55,12 @@ export type ThreadLaunchWorkspaceStrategy =
       readonly baseRef: string;
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
+      /**
+       * FORK: an explicit checkout path. Crew names its worktrees by task id
+       * (`<worktreesDir>/crew/<taskId>`) so the row it reserves before launch already
+       * holds the real path. Absent keeps the driver's derived location.
+       */
+      readonly path?: string | undefined;
     };
 
 export interface ThreadLaunchInitialMessage {
@@ -337,7 +343,7 @@ const make = Effect.gen(function* () {
               refName: startRef,
               newRefName: branch!,
               baseRefName: input.workspaceStrategy.baseRef,
-              path: null,
+              path: input.workspaceStrategy.path ?? null,
             },
             {
               progress: {
@@ -356,6 +362,20 @@ const make = Effect.gen(function* () {
         createdWorktreePath = worktreePath;
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
         yield* setupTracker.stageStatus(threadId, "checkout", "done");
+      }
+
+      // FORK: a thread archived while its worktree was being created (a crew teardown
+      // racing provisioning) must not have the worktree written back onto it, nor go on
+      // to run setup and start its agent. The worktree itself is left in place.
+      const shellNow = yield* threads
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      if (shellNow?.archivedAt != null) {
+        return yield* mapError(
+          input,
+          "update-thread",
+          threadId,
+        )("The thread was archived during workspace preparation.");
       }
 
       yield* threads

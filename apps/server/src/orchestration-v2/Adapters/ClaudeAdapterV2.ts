@@ -129,7 +129,11 @@ import {
   claudeResultProse,
   claudeResultTerminalStatus,
   claudeUserFacingResultErrors,
+  subagentDispatchAppend,
+  withSubagentBackendState,
 } from "./ClaudeAdapterV2Fork.ts";
+import { prepareActiveSubagentThreadBackend } from "../../subagentBackend/SubagentLiveThreads.ts";
+import type { PreparedThreadBackend } from "../../subagentBackend/SubagentBackend.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -822,6 +826,12 @@ export function makeClaudeQueryOptions(input: {
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
+  /**
+   * FORK: this thread's subagent offload, prepared just before the process spawns. Points
+   * `SUBAGENT_BACKEND_STATE` at the thread's flag file and, for `cursor`, appends the
+   * dispatch instruction. Absent leaves the environment and prompt untouched.
+   */
+  readonly subagentBackend?: PreparedThreadBackend;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -866,6 +876,7 @@ export function makeClaudeQueryOptions(input: {
           ...(autoCompactWindow === undefined ? {} : { autoCompactWindow }),
           ...(outputStyle ? { outputStyle } : {}),
         } as ClaudeSdkSettings);
+  const environment = withSubagentBackendState(input.environment, input.subagentBackend?.statePath);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
@@ -909,14 +920,15 @@ export function makeClaudeQueryOptions(input: {
     ...(input.settings?.binaryPath
       ? { pathToClaudeCodeExecutable: input.settings.binaryPath }
       : {}),
-    ...(input.environment === undefined ? {} : { env: input.environment }),
+    ...(environment === undefined ? {} : { env: environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     systemPrompt: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append:
         buildRuntimeInstructions({ harness: "Claude Code" }) +
-        (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS),
+        (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS) +
+        subagentDispatchAppend(input.subagentBackend?.backend),
     },
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
@@ -2922,6 +2934,14 @@ export interface ClaudeAdapterV2Options {
    * question so a toggle reaches live sessions. Absent means offer.
    */
   readonly offerThreadCompaction?: Effect.Effect<boolean>;
+  /**
+   * FORK: prepares a thread's subagent offload before its process spawns. Defaults to the
+   * server's live preparer (`prepareActiveSubagentThreadBackend`), which is `undefined` —
+   * no offload — when the subagent backend layer is not running.
+   */
+  readonly prepareSubagentBackend?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<PreparedThreadBackend | undefined>;
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -6990,6 +7010,17 @@ export function makeClaudeAdapterV2(
           const queryPolicyKey = claudeLiveQueryKey(queryPolicy, mcpOverrides, memberDirectories);
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
+          // FORK: run on every turn, not only when a process is spawned, so the thread's
+          // flag file — which the dispatch wrapper reads on every call — follows the
+          // Subagents toggle turn by turn. The dispatch INSTRUCTION does not: it is part of
+          // the system prompt, and the CLI fixes that when the conversation is created
+          // (`--resume` replays the original prompt; measured 2026-10-03, a resume with a
+          // changed append answered from the first one). A flip mid-conversation therefore
+          // reaches only the wrapper, which refuses when the thread is off; a conversation
+          // started while off has no instruction until a new conversation starts.
+          const subagentBackend = yield* (
+            adapterOptions.prepareSubagentBackend ?? prepareActiveSubagentThreadBackend
+          )(turnInput.threadId);
           const existing = yield* Ref.get(queryContext);
           // A continuation prompts nothing: it drains output the live process
           // already produced, so it keeps that process whatever its selection.
@@ -7067,6 +7098,7 @@ export function makeClaudeAdapterV2(
                 canUseTool,
                 onUserDialog,
                 supportedDialogKinds: ["resume_return"],
+                ...(subagentBackend === undefined ? {} : { subagentBackend }),
               }),
             })
             .pipe(
