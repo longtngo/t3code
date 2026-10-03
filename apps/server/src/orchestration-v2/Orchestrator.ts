@@ -74,7 +74,11 @@ import { notificationTurnItem } from "./Notification.ts";
 import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import {
+  supersedeCooperativeInterrupts,
+  type OrchestrationEffectRequestV2,
+  type PendingOrchestrationEffectV2,
+} from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -8029,6 +8033,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       if (command.holdQueue === true) yield* holdQueuedRuns;
       yield* stopCompletionCohort();
+      // FORK Stop ladder: the cooperative rung only has a turn to end while one
+      // runs. A Stop on a settled turn's background work is always hard.
+      const cooperative = command.mode === "cooperative" && providerTurn.status === "running";
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -8040,10 +8047,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerSessionId,
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
+            ...(cooperative ? { cooperative: true } : {}),
           },
         } satisfies PendingOrchestrationEffectV2,
       ]);
-      return undefined;
+      // FORK Stop ladder: the second press must not queue behind the first.
+      // Effects run one at a time per thread, so a hard Stop cancels a
+      // cooperative interrupt still waiting out its grace; its fiber is
+      // interrupted before it can escalate, leaving exactly one hard stop.
+      return cooperative ? undefined : supersedeCooperativeInterrupts(run.id);
     });
 
   const dispatchCheckpointRollback = (
@@ -9016,6 +9028,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly cancelUnsettledEffects?: {
         readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
         readonly reason: string;
+        readonly cooperativeOnly?: boolean;
       };
     },
     OrchestratorV2Error
@@ -9032,6 +9045,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | {
           readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
           readonly reason: string;
+          readonly cooperativeOnly?: boolean;
         }
       | undefined;
     switch (command.type) {

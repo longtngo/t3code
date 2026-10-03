@@ -266,6 +266,8 @@ export type OrchestratorFixtureInputStep =
       /** The Waiting strip's Stop: interrupts a settled run's leftover background work. */
       readonly type: "stop_background_work";
       readonly targetRunIndex: number;
+      /** FORK Stop ladder: the rung the press sends. Absent is the strip's hard Stop. */
+      readonly mode?: "cooperative" | "hard";
     }
   | {
       readonly type: "release_replay_gate_after_waiting";
@@ -884,6 +886,7 @@ export function materializeFixtureInput(input: {
               threadId: ids.threadId,
               runId: runIdFor(step.targetRunIndex),
               holdQueue: true,
+              ...(step.mode === undefined ? {} : { mode: step.mode }),
             },
             { advanceClockAfter: false },
           );

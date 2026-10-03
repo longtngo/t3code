@@ -969,4 +969,23 @@ describe("V2 environment commands", () => {
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
+
+  // FORK Stop ladder: each rung reaches the server as the run.interrupt mode.
+  it.effect("carries the Stop ladder rung as the interrupt mode", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      for (const mode of ["cooperative", "hard"] as const) {
+        yield* interruptThreadTurn({
+          commandId: CommandId.make(`interrupt-${mode}`),
+          threadId: v2ThreadId,
+          runId: RunId.make("active-run"),
+          mode,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      }
+      expect(
+        commands.map((command) => (command.type === "run.interrupt" ? command.mode : null)),
+      ).toEqual(["cooperative", "hard"]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
 });

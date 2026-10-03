@@ -2697,6 +2697,13 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
     reason: Schema.optional(Schema.String),
     holdQueue: Schema.optional(Schema.Boolean),
+    /**
+     * FORK: the Stop ladder's rung. `cooperative` ends the running provider turn
+     * but keeps the provider session and its background work (the cheap "stop to
+     * redirect"); the server escalates to `hard` itself when the provider does
+     * not settle the turn in time. Absent means `hard`, upstream's only Stop.
+     */
+    mode: Schema.optional(Schema.Literals(["cooperative", "hard"])),
   }),
   Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),

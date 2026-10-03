@@ -16,10 +16,13 @@ vi.mock("../SidebarStageBackdrop", () => ({
 
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { renderDom } from "../../testing/renderDom";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 
 const STOP = '[aria-label="Stop generation"]';
+const ARMED_STOP = '[aria-label="Force stop the provider session"]';
+const FORCE_STOPPING = '[aria-label="Force-stopping the provider session"]';
 
-function renderPendingActions(isRunning: boolean) {
+function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -42,6 +45,7 @@ function renderPendingActions(isRunning: boolean) {
       hasSendableContent: false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
+      stopRung,
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -50,7 +54,11 @@ function renderPendingActions(isRunning: boolean) {
 // `hasSendableContent` is parameterised deliberately. Send's `disabled` already
 // includes `!hasSendableContent`, so a fixture hardcoding `false` makes every
 // enabled/disabled assertion pass no matter what the running branch does.
-function renderRunning(options?: { hasSendableContent?: boolean; onInterrupt?: () => void }) {
+function renderRunning(options?: {
+  hasSendableContent?: boolean;
+  onInterrupt?: () => void;
+  stopRung?: StopRung;
+}) {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -67,6 +75,7 @@ function renderRunning(options?: { hasSendableContent?: boolean; onInterrupt?: (
       hasSendableContent: options?.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: options?.onInterrupt ?? (() => {}),
+      stopRung: options?.stopRung ?? "idle",
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -223,5 +232,34 @@ describe("ComposerPrimaryActions with hideIdleSend", () => {
     const view = await renderIdleHidden({ hasSendableContent: false, isRunning: true });
     expect(view.find(STOP)).not.toBeNull();
     expect(view.find('[aria-label="Submit message"]')).toBeNull();
+  });
+});
+
+// FORK Stop ladder: the second rung restarts the provider runtime, so it must
+// read as a different action at both Stop sites, and still press the ladder.
+describe("the armed Stop rung", () => {
+  it("is a differently named action at the standalone Stop and still presses the ladder", async () => {
+    const onInterrupt = vi.fn();
+    const armed = await renderRunning({ stopRung: "armed", onInterrupt });
+    expect(armed.find(STOP)).toBeNull();
+    armed.find<HTMLButtonElement>(ARMED_STOP)?.click();
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+
+    const unarmed = await renderRunning();
+    expect(unarmed.find(ARMED_STOP)).toBeNull();
+    expect(unarmed.find(STOP)).not.toBeNull();
+  });
+
+  it("says a force-stop is on its way after the hard press", async () => {
+    const view = await renderRunning({ stopRung: "forceStopping" });
+    expect(view.find(FORCE_STOPPING)).not.toBeNull();
+    expect(view.find(ARMED_STOP)).toBeNull();
+    expect(view.find(STOP)).toBeNull();
+  });
+
+  it("is armed in the pending-question row too, a second entry to the same ladder", async () => {
+    const armed = await renderPendingActions(true, "armed");
+    expect(armed.find(ARMED_STOP)).not.toBeNull();
+    expect(armed.find(STOP)).toBeNull();
   });
 });

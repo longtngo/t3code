@@ -162,6 +162,7 @@ import {
 } from "./tool_call_read_only_on_request/output.ts";
 import { toolCallReadOnlyOnRequestInput } from "./tool_call_read_only_on_request/input.ts";
 import {
+  stopBackgroundWorkAfterFailedTurnCooperativeInput,
   stopBackgroundWorkAfterFailedTurnInput,
   stopBackgroundWorkAfterReleaseInput,
 } from "./stop_background_work_after_failed_turn/input.ts";
@@ -1599,6 +1600,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
           "./stop_background_work_after_failed_turn/registry_transcript.ndjson",
           import.meta.url,
         ),
+        modelSelection: ACP_REGISTRY_MODEL_SELECTION,
+        assertOutput: assertStopBackgroundWorkAfterFailedTurnOutput,
+      },
+    ],
+  },
+  {
+    name: "stop_background_work_after_failed_turn_cooperative",
+    buildInput: stopBackgroundWorkAfterFailedTurnCooperativeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("acpRegistry"),
+        transcriptFile: new URL(
+          "./stop_background_work_after_failed_turn/registry_transcript.ndjson",
+          import.meta.url,
+        ),
+        recordedScenario: "stop_background_work_after_failed_turn",
         modelSelection: ACP_REGISTRY_MODEL_SELECTION,
         assertOutput: assertStopBackgroundWorkAfterFailedTurnOutput,
       },

@@ -26,6 +26,8 @@ import {
   type PendingUserInput,
   type PendingUserInputDraftAnswer,
 } from "../../lib/threadActivity";
+import { stopRungPresentation } from "./stopRungPresentation";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 
 export interface PendingUserInputCardProps {
   readonly pendingUserInput: PendingUserInput;
@@ -39,6 +41,8 @@ export interface PendingUserInputCardProps {
   readonly onToggleCollapsed: () => void;
   /** Renders a stop control on the collapsed bar, which replaces the composer. */
   readonly onStopThread?: () => void;
+  /** FORK Stop ladder: what the Stop button shows. */
+  readonly stopRung?: StopRung;
   /**
    * 0 collapsed → 1 expanded. Slides the iOS overlay card down behind the
    * collapsed bar (inside a clipping window) on the UI thread; the host
@@ -196,8 +200,8 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       </Pressable>
       {props.onStopThread ? (
         <ControlPill
-          accessibilityLabel="Stop"
-          icon="stop.fill"
+          accessibilityLabel={stopRungPresentation(props.stopRung ?? "idle", "Stop").label}
+          icon={stopRungPresentation(props.stopRung ?? "idle", "Stop").icon}
           variant="danger"
           className="h-9 w-9"
           onPress={props.onStopThread}

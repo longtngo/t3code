@@ -67,6 +67,8 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
+import { nextStopAction, stopRungAt } from "@t3tools/client-runtime/state/stop-ladder";
+import type { ArmedStopEscalation, StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
@@ -342,6 +344,39 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  // FORK Stop ladder. The ref decides the NEXT press, from a timestamp, so a
+  // backgrounded app whose timers are throttled still sees an old arming as
+  // expired. The state is only the Stop button's look (`stopRungAt`), repainted
+  // by one timer at the next boundary. Both are written through setStopLadder.
+  const stopLadderRef = useRef<ArmedStopEscalation | null>(null);
+  const [stopRung, setStopRung] = useState<{ threadId: string; rung: StopRung } | null>(null);
+  const stopRungTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setStopLadder = useCallback(function apply(next: ArmedStopEscalation | null) {
+    if (stopRungTimerRef.current !== null) {
+      clearTimeout(stopRungTimerRef.current);
+      stopRungTimerRef.current = null;
+    }
+    stopLadderRef.current = next;
+    if (next === null) {
+      setStopRung(null);
+      return;
+    }
+    const { rung, changesInMs } = stopRungAt({
+      threadId: next.threadId,
+      armed: next,
+      nowMs: Date.now(),
+    });
+    setStopRung({ threadId: next.threadId, rung });
+    if (changesInMs !== null) {
+      stopRungTimerRef.current = setTimeout(() => apply(stopLadderRef.current), changesInMs);
+    }
+  }, []);
+  useEffect(
+    () => () => {
+      if (stopRungTimerRef.current !== null) clearTimeout(stopRungTimerRef.current);
+    },
+    [],
+  );
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -673,18 +708,38 @@ function ThreadRouteContent(
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
   }, [navigation]);
+  // Web re-arms from scratch when the run ends (ChatView). Without the same
+  // reset the arming outlives its wedge, and a Stop on the NEXT turn inside the
+  // band would force-stop a session the user only asked to interrupt.
+  useEffect(() => {
+    if (composer.interruptibleRunId === null) setStopLadder(null);
+  }, [composer.interruptibleRunId, setStopLadder]);
+  const activeStopRung: StopRung =
+    stopRung !== null && stopRung.threadId === selectedThread?.id ? stopRung.rung : "idle";
   const handleStopThread = useCallback(() => {
     if (!selectedThread || composer.interruptibleRunId === null) {
       return;
     }
+    // Same ladder as web: the first press ends the turn and keeps the provider
+    // session; a deliberate second press inside the band force-stops it at
+    // once, without waiting out the server's own 8 s escalation. After that the
+    // button shows the force-stop until the turn settles.
+    const threadId = selectedThread.id;
+    const action = nextStopAction({ threadId, armed: stopLadderRef.current, nowMs: Date.now() });
+    if (action === "ignore") return;
+    const forceStopping = action === "hardStop";
+    setStopLadder({ threadId, atMs: Date.now(), ...(forceStopping ? { forceStopping } : {}) });
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
-        threadId: selectedThread.id,
+        threadId,
         runId: composer.interruptibleRunId,
+        mode: forceStopping ? "hard" : "cooperative",
       },
+    }).then((result) => {
+      if (result._tag === "Failure") setStopLadder(null);
     });
-  }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
+  }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread, setStopLadder]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -1066,6 +1121,7 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
+          stopRung={awaitingBootstrapTurn ? "idle" : activeStopRung}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           canSwitchThreadProvider={composer.canSwitchThreadProvider}

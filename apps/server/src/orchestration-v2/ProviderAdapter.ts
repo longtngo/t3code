@@ -421,6 +421,13 @@ export interface ProviderAdapterV2InterruptInput {
   readonly providerTurnId: ProviderTurnId;
   /** When true, the next `startTurn` may respawn the provider runtime (Grok Stop recovery). */
   readonly requestRuntimeRestart?: boolean;
+  /**
+   * FORK: the first Stop rung. End the running turn but keep the provider
+   * session and its background work. Most adapters already treat an interrupt
+   * without `requestRuntimeRestart` this way and ignore the flag; Claude's
+   * restart-steer interrupt closes its query, so it reads this to keep it.
+   */
+  readonly cooperative?: boolean;
 }
 
 export interface ProviderAdapterV2RuntimeRequestResponseInput {

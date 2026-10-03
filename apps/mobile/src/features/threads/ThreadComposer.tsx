@@ -122,6 +122,8 @@ import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
+import { stopRungPresentation } from "./stopRungPresentation";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -183,6 +185,8 @@ export interface ThreadComposerProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** FORK Stop ladder: what the Stop button shows. */
+  readonly stopRung?: StopRung;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
@@ -403,6 +407,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   // Stopping the agent is not what the send button means in edit mode.
   const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const stopPresentation = stopRungPresentation(props.stopRung ?? "idle", "Stop agent");
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentsUploading =
@@ -1044,8 +1049,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 />
                 {showStopAction ? (
                   <ComposerActionButton
-                    accessibilityLabel="Stop agent"
-                    icon="stop.fill"
+                    accessibilityLabel={stopPresentation.label}
+                    icon={stopPresentation.icon}
                     variant="danger"
                     onPress={props.onStopThread}
                   />
@@ -1138,8 +1143,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   />
                   {showStopAction ? (
                     <ComposerActionButton
-                      accessibilityLabel="Stop agent"
-                      icon="stop.fill"
+                      accessibilityLabel={stopPresentation.label}
+                      icon={stopPresentation.icon}
                       variant="danger"
                       onPress={props.onStopThread}
                     />

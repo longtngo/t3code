@@ -36,6 +36,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -1836,6 +1837,15 @@ describe("ClaudeAdapterV2 native session identity", () => {
 
 const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+/** The provider turn the adapter last reported running. */
+const runningProviderTurnId = (events: ReadonlyArray<ProviderAdapterV2Event>): ProviderTurnId => {
+  const running = events.findLast(
+    (event) => event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+  );
+  if (running?.type !== "provider_turn.updated") throw new Error("No running provider turn.");
+  return running.providerTurn.id;
+};
+
 describe("ClaudeAdapterV2 background wake turns", () => {
   const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
   // Background Bash ids and texts follow the claude_background_task_wake
@@ -2005,7 +2015,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   const makeWakeHarnessWithOptions = (options?: {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
-    readonly interrupt?: Effect.Effect<void>;
+    readonly interrupt?: Effect.Effect<void, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
     readonly environment?: NodeJS.ProcessEnv;
   }) =>
     Effect.gen(function* () {
@@ -2029,6 +2039,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const systemNoticeReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>>();
       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+      let opens = 0;
       const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CLAUDE_SETTINGS,
@@ -2048,6 +2059,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           open: (input) =>
             Effect.sync(() => {
               openedOptions = input.options;
+              opens++;
               return {
                 messages: Stream.fromQueue(sdkMessages).pipe(
                   Stream.flatMap((message) =>
@@ -2128,6 +2140,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminalReceipts,
         systemNoticeReceipts,
         getOpenedOptions: () => openedOptions,
+        openCount: () => opens,
         terminalEvents,
         hasPendingBackgroundWork,
       };
@@ -3536,6 +3549,303 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.continuationRequests, 0);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
+  );
+
+  const awaitRunningTurn = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
+    awaitUntil(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+        ),
+      "running provider turn",
+    );
+
+  // FORK Stop ladder (registry inv 7): the first Stop rung ends the turn and
+  // keeps the CLI process, so "stop to redirect" costs no cold restart.
+  // FORK Stop ladder: the cooperative rung keeps the CLI, so the background
+  // task it still runs stays on the Waiting roster (and keeps the session from
+  // idle release); the hard rung closes the CLI and the roster goes with it.
+  it.effect.each(["cooperative", "hard"] as const)(
+    "a %s Stop of a later turn decides whether background work survives",
+    (rung) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarnessWithOptions({
+            interrupt: Effect.void,
+            close: (sdkMessages) => Queue.shutdown(sdkMessages),
+          });
+          const now = yield* DateTime.now;
+          const input = (attempt: string) =>
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(attempt),
+              text: "Work",
+              attachments: [],
+            });
+          yield* harness.runtime.startTurn(input(`attempt-roster-${rung}-1`));
+          yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+          yield* Queue.offer(harness.sdkMessages, turnOneResult);
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+          const roster = () =>
+            (
+              providerThreadRosterEvents(harness.events).at(-1)?.providerThread
+                .pendingBackgroundTasks ?? []
+            ).map((task) => task.taskId);
+          assert.deepEqual(roster(), [WAKE_TASK_ID]);
+
+          yield* harness.runtime.startTurn(input(`attempt-roster-${rung}-2`));
+          yield* awaitUntil(
+            () =>
+              harness.events.filter(
+                (event) =>
+                  event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+              ).length >= 2,
+            "second turn running",
+          );
+          yield* harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: runningProviderTurnId(harness.events),
+            ...(rung === "cooperative" ? { cooperative: true } : { requestRuntimeRestart: true }),
+          });
+          if (rung === "cooperative") {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000fb002", result: "stopped" }),
+            );
+          }
+          yield* awaitUntil(() => harness.terminalEvents().length === 2, "second turn terminal");
+          assert.equal(harness.terminalEvents()[1]?.status, "interrupted");
+          if (rung === "cooperative") {
+            assert.deepEqual(roster(), [WAKE_TASK_ID]);
+            assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          } else {
+            assert.deepEqual(roster(), []);
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          }
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
+
+  it.effect("the cooperative Stop of a turn that already ended does nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let interrupts = 0;
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Effect.sync(() => {
+            interrupts++;
+          }),
+          close: () =>
+            Effect.sync(() => {
+              closes++;
+            }),
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-stop-after-end"),
+            text: "Work",
+            attachments: [],
+          }),
+        );
+        yield* awaitRunningTurn(harness.events);
+        const providerTurnId = runningProviderTurnId(harness.events);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn ended on its own");
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId,
+          cooperative: true,
+        });
+        assert.equal(interrupts, 0);
+        assert.equal(closes, 0);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Escalating from a cooperative rung that already asked: no second interrupt
+  // request and its wait, straight to the close.
+  it.effect("the hard Stop after a cooperative one closes without asking again", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let interrupts = 0;
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Effect.sync(() => {
+            interrupts++;
+          }),
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-escalated-stop"),
+            text: "Work",
+            attachments: [],
+          }),
+        );
+        yield* awaitRunningTurn(harness.events);
+        const providerTurnId = runningProviderTurnId(harness.events);
+        for (const rung of [{ cooperative: true }, { requestRuntimeRestart: true }]) {
+          yield* harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId,
+            ...rung,
+          });
+        }
+        assert.equal(interrupts, 1);
+        assert.equal(closes, 1);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "terminal after stop");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // A CLI wedged in a tool never answers the interrupt request: the hard Stop
+  // still reaches its close once the request's bound runs out.
+  it.effect("a hard Stop closes a CLI that never answers the interrupt request", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Effect.never,
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-wedged-stop"),
+            text: "Work",
+            attachments: [],
+          }),
+        );
+        yield* awaitRunningTurn(harness.events);
+        const stop = yield* harness.runtime
+          .interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: runningProviderTurnId(harness.events),
+            requestRuntimeRestart: true,
+          })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust("7900 millis");
+        assert.equal(closes, 0, "still waiting on the interrupt request");
+        yield* TestClock.adjust("200 millis");
+        yield* awaitUntil(() => closes === 1, "close after the interrupt request's bound");
+        yield* Fiber.join(stop);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "terminal after stop");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("the cooperative Stop ends the turn without closing the query", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let closes = 0;
+        let interrupts = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Effect.sync(() => {
+            interrupts++;
+          }),
+          close: () =>
+            Effect.sync(() => {
+              closes++;
+            }),
+        });
+        const now = yield* DateTime.now;
+        const turnInput = (attempt: string, text: string) =>
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(attempt),
+            text,
+            attachments: [],
+          });
+        yield* harness.runtime.startTurn(turnInput("attempt-claude-cooperative-stop", "Work"));
+        yield* awaitRunningTurn(harness.events);
+        const providerTurnId = runningProviderTurnId(harness.events);
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId,
+          cooperative: true,
+        });
+        assert.equal(interrupts, 1);
+        assert.equal(closes, 0, "the cooperative rung must keep the CLI process");
+        // The CLI answers the interrupt with a result frame.
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+
+        yield* harness.runtime.startTurn(turnInput("attempt-claude-after-stop", "Redirect"));
+        assert.equal(harness.openCount(), 1, "the next turn reuses the same process");
+        assert.lengthOf(harness.offeredMessages, 2);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Registry inv 30, v2 form: a CLI that rejects the interrupt request (dead
+  // transport) must not leave the turn running. A compaction in flight is no
+  // exception here: v2 runs `/compact` as an ordinary turn, so there is no
+  // compaction-owned session state for the stop to clobber.
+  it.effect.each(["turn", "compaction"] as const)(
+    "a hard Stop whose interrupt request fails still ends the %s",
+    (kind) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let closes = 0;
+          const harness = yield* makeWakeHarnessWithOptions({
+            interrupt: Effect.fail(
+              new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+                method: "interrupt",
+                cause: "transport closed",
+              }),
+            ),
+            close: (sdkMessages) =>
+              Effect.sync(() => {
+                closes++;
+              }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+          });
+          const input = makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-claude-failed-stop-${kind}`),
+            text: "Work",
+            attachments: [],
+          });
+          if (kind === "compaction") {
+            assert.isDefined(harness.runtime.compactThread);
+            yield* harness.runtime.compactThread!(input);
+          } else {
+            yield* harness.runtime.startTurn(input);
+          }
+          yield* awaitRunningTurn(harness.events);
+          yield* harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: runningProviderTurnId(harness.events),
+            requestRuntimeRestart: true,
+          });
+          assert.equal(closes, 1);
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "terminal after stop");
+          assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
   );
 
   it.effect("a settled Stop leaves a turn that replaced the closing process alone", () =>

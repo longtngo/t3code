@@ -184,6 +184,8 @@ export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
+  /** FORK Stop ladder rung; absent is upstream's hard Stop. See `state/stopLadder.ts`. */
+  readonly mode?: "cooperative" | "hard";
 }
 
 export interface RespondToThreadApprovalInput extends ThreadCommandInput {
@@ -802,6 +804,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     threadId: input.threadId,
     runId,
     holdQueue: true,
+    ...(input.mode === undefined ? {} : { mode: input.mode }),
   });
 });
 

@@ -280,17 +280,22 @@ them visible, turn on **Always show message timestamps** in **Settings → Gener
 ## Escape
 
 `Escape` walks the same ladder the Stop button does, without reaching for the
-mouse. The first press stops the agent, and a second deliberate press
-force-stops the session.
+mouse. The first press stops the agent's turn and keeps its session, so you can
+redirect it straight away. A second deliberate press force-stops the session,
+which also ends any background work. If the agent has not stopped within a few
+seconds of the first press, T3 Code force-stops it for you.
 
 The second press has to be a deliberate one. A press that lands immediately
 after the first is treated as a slip and ignored, and holding `Escape` down does
 not walk the ladder at all, so the force-stop is never something you arrive at
 by accident.
 
-While the agent is waiting on a question or an approval, `Escape` does nothing.
-The message box offers **Cancel** there, which declines without stopping the
-session, and that is a different decision from stopping the agent.
+While the agent is waiting on a question or an approval, `Escape` does nothing,
+so dismissing something in the answer form cannot stop the agent by accident.
+The Stop button is still there if you mean it.
+
+The **Stop** keyboard shortcut is a single stop: it never arms the force-stop,
+so the next Stop click after it is still the gentle one.
 
 `Escape` keeps its usual meaning everywhere else. It only stops the agent when
 the message box has focus or nothing does; while a dialog, a menu, or a terminal

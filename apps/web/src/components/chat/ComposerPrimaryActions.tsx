@@ -5,8 +5,10 @@ import {
   ChevronLeftIcon,
   CornerUpRightIcon,
   ListPlusIcon,
+  OctagonXIcon,
   PlayIcon,
 } from "lucide-react";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { useShortcutModifierState } from "../../shortcutModifierState";
@@ -61,6 +63,12 @@ interface ComposerPrimaryActionsProps {
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  /**
+   * FORK Stop ladder. `armed`: the next press is the hard rung (it restarts the
+   * provider runtime), shown only while a press would take it. `forceStopping`:
+   * the hard rung was sent and the turn has not settled; presses do nothing.
+   */
+  stopRung?: StopRung;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -114,6 +122,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
+  stopRung = "idle",
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -134,6 +143,17 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     environmentIdentificationMode === "artwork",
   );
 
+  // Both Stop sites render from here, so the armed rung cannot be styled on one
+  // and forgotten on the other. It is told apart by SHAPE (an octagon) and a
+  // ring, not colour: the button is already destructive red at rest. Static on
+  // purpose; a pulsing "armed" state is a continuously repainting animation.
+  const isStopEscalated = stopRung !== "idle";
+  const stopLabel =
+    stopRung === "armed"
+      ? "Force stop the provider session"
+      : stopRung === "forceStopping"
+        ? "Force-stopping the provider session"
+        : "Stop generation";
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <Tooltip key="interrupt">
       <TooltipTrigger
@@ -141,20 +161,34 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           <button
             type="button"
             className={cn(
-              "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-control-pressed active:shadow-none [&_svg]:pointer-events-none",
+              "flex cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-control-pressed active:shadow-none [&_svg]:pointer-events-none",
               insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+              isStopEscalated
+                ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
+                : "bg-destructive/90",
             )}
             {...pointerFocusProps}
             onClick={onInterrupt}
-            aria-label="Stop generation"
+            data-stop-rung={stopRung}
+            aria-label={stopLabel}
           />
         }
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="8" height="8" rx="1.5" />
-        </svg>
+        {isStopEscalated ? (
+          <OctagonXIcon className="size-4" aria-hidden="true" />
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        )}
       </TooltipTrigger>
-      <TooltipPopup>Interrupt</TooltipPopup>
+      <TooltipPopup>
+        {stopRung === "armed"
+          ? "The turn has not stopped yet. Press again to force-stop the provider session"
+          : stopRung === "forceStopping"
+            ? "Force-stopping the provider session"
+            : "Interrupt"}
+      </TooltipPopup>
     </Tooltip>
   );
 

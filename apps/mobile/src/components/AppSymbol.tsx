@@ -38,6 +38,7 @@ import IconChevronUp from "@tabler/icons-react-native/IconChevronUp";
 import IconCircle from "@tabler/icons-react-native/IconCircle";
 import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
 import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
+import IconOctagonFilled from "@tabler/icons-react-native/IconOctagonFilled";
 import IconTicket from "@tabler/icons-react-native/IconTicket";
 import IconClock from "@tabler/icons-react-native/IconClock";
 import IconCode from "@tabler/icons-react-native/IconCode";
@@ -215,6 +216,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "star.fill": IconStarFilled,
   "sun.max": IconSun,
   "stop.fill": IconPlayerStopFilled,
+  "xmark.octagon.fill": IconOctagonFilled,
   terminal: IconTerminal2,
   "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
