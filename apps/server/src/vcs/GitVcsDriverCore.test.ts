@@ -3129,6 +3129,80 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("holds a second recreation of a path until the first one has finished", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const shared = pathService.join(yield* makeTmpDir("git-worktrees-"), "shared");
+        // Both callers resolve the path before either goes further, so without
+        // serialization both pass their checks against the same stale entry.
+        // Then any second admin-entry delete stalls until one recreation has
+        // fully finished: the window in which the second caller would delete
+        // the winner's fresh entry.
+        const bothArrived = yield* Deferred.make<void>();
+        let arrivals = 0;
+        const firstFinished = yield* Deferred.make<void>();
+        let adminRemovals = 0;
+        const stallingFileSystem: FileSystem.FileSystem = {
+          ...fileSystem,
+          realPath: (target) =>
+            Effect.gen(function* () {
+              if (target === shared) {
+                arrivals += 1;
+                if (arrivals === 2) yield* Deferred.succeed(bothArrived, undefined);
+                if (arrivals <= 2) yield* Deferred.await(bothArrived);
+              }
+              return yield* fileSystem.realPath(target);
+            }),
+          remove: (target, options) =>
+            Effect.gen(function* () {
+              if (target.includes(`${pathService.sep}worktrees${pathService.sep}`)) {
+                adminRemovals += 1;
+                if (adminRemovals > 1) yield* Deferred.await(firstFinished);
+              }
+              return yield* fileSystem.remove(target, options);
+            }),
+        };
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(FileSystem.FileSystem, stallingFileSystem),
+          Effect.provide(ServerConfigLayer),
+        );
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* driver.createWorktree({
+          cwd,
+          path: shared,
+          refName: initialBranch,
+          newRefName: "feature/held-a",
+        });
+        yield* git(cwd, ["branch", "feature/held-b", initialBranch]);
+        yield* fileSystem.remove(shared, { recursive: true });
+
+        const results = yield* Effect.all(
+          ["feature/held-a", "feature/held-b"].map((refName) =>
+            driver.createWorktree({ cwd, path: shared, refName, reuseRegisteredPath: true }).pipe(
+              Effect.exit,
+              Effect.tap(() => Deferred.succeed(firstFinished, undefined)),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        assert.equal(results.filter(Exit.isSuccess).length, 1);
+        // The winner is a working repository that git still lists.
+        yield* git(shared, ["rev-parse", "--git-dir"]);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.equal(
+          registered
+            .split("\n")
+            .filter((line) => line.startsWith("worktree ") && line.endsWith("/shared")).length,
+          1,
+        );
+        // The second caller found the path taken and deleted nothing.
+        assert.equal(adminRemovals, 1);
+      }),
+    );
+
     it.effect("allows worktree removal to run longer than the default command timeout", () =>
       Effect.gen(function* () {
         const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;

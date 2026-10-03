@@ -34,6 +34,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { makeTransientGitRetryPolicy, resolveGitRetryAttempts } from "./gitRetry.ts";
 import {
@@ -3255,16 +3256,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   // use elsewhere. It never touches a working tree or another prunable entry,
   // unlike `add --force`, `worktree remove` or `worktree prune`. A locked entry
   // is left for git to refuse; git also holds one `locked` while its own add is
-  // in flight, and a finished add has its directory, so a second caller for the
-  // same path finds nothing to delete.
+  // in flight, and a finished add has its directory. Callers hold the
+  // workspace lease for the resolved path across this and the add: without it
+  // a second caller can pass its checks, stall, then delete the first caller's
+  // fresh entry. That only covers this process. Two servers on one repo can
+  // still race, and git itself is not safe with two concurrent adds of one path.
   const releaseMissingWorktreeRegistration = Effect.fn("releaseMissingWorktreeRegistration")(
-    function* (cwd: string, worktreePath: string) {
+    function* (cwd: string, worktreePath: string, target: string) {
       const isPresent = (target: string) =>
         fileSystem.exists(target).pipe(Effect.orElseSucceed(() => true));
       const repository = yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null));
       if (repository === null) return;
       const adminRoot = path.join(repository.gitCommonDir, "worktrees");
-      const target = yield* realPathOfMaybeMissing(worktreePath);
       const ids = yield* fileSystem
         .readDirectory(adminRoot)
         .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -3300,11 +3303,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
-    if (input.reuseRegisteredPath === true) {
-      yield* releaseMissingWorktreeRegistration(input.cwd, worktreePath);
-    }
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGit(
+    const addWorktree = executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
       ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
@@ -3326,6 +3326,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
       },
     );
+    if (input.reuseRegisteredPath === true) {
+      const target = yield* realPathOfMaybeMissing(worktreePath);
+      yield* withWorkspaceLease(
+        target,
+        releaseMissingWorktreeRegistration(input.cwd, worktreePath, target).pipe(
+          Effect.andThen(addWorktree),
+        ),
+      );
+    } else {
+      yield* addWorktree;
+    }
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);
