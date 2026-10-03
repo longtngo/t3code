@@ -84,15 +84,24 @@ export const makeSweep = Effect.gen(function* () {
   const creditSpendGuard = yield* CreditSpendGuard;
   // "Allow to spend credits" refusing the resume now: skip it instead of sending a turn the
   // start gate would fail as a non-limit error, which would drop the thread out of recovery
-  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again. The
-  // check reads the published usage only: a blocked thread is asked about every 5 s for
-  // as long as a 7-day window stays full, and the start gate does any fresh read.
+  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again.
+  //
+  // While blocked, the check reads the published usage only: a 7-day window can stay full
+  // for days. When the published reading allows the resume, the full gate runs once more
+  // just before the send, so a stale reading cannot let through a resume the start gate
+  // would refuse. Its fresh read publishes what it found, so a refusal there returns the
+  // following sweeps to the cheap published check. Cost: at most one shared fresh read per
+  // instance per sweep, and only while the published reading allows and the fresh one does
+  // not; a fresh read that fails keeps the published reading, which allows, so the resume
+  // goes out.
   const refusedThreads = new Set<ThreadId>();
   const resumeRefused = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
       if (shell === null) return false;
-      const reason = yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId);
+      const reason =
+        (yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId)) ??
+        (yield* creditSpendGuard.refusalFor(shell.providerInstanceId));
       if (reason === null) {
         refusedThreads.delete(threadId);
         return false;

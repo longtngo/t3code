@@ -141,6 +141,10 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
      *   interrupt sweeper then stops it.
      * - A continuation after a server restart that this refuses fails visibly and is not
      *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
+     * - A full window with no reset time stays blocked until a probe publishes a new
+     *   reading; nothing else can tell when it ends.
+     * - A shared read that hangs holds its slot until the probe's 25 s timeout ends it;
+     *   callers stop waiting at FRESH_READ_TIMEOUT and keep the reading they had.
      * - A one-window runtime update with changed numbers stamps the whole reading's
      *   checkedAt, so another window can look fresh and skip its re-read for up to 60 s; the
      *   sweeper is the backstop. (checkedAt also orders runtime updates against probes, so

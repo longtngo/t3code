@@ -221,8 +221,15 @@ it.effect("retries a limit resume the credit gate refused once spending is allow
       Layer.succeed(
         CreditSpendGuard,
         CreditSpendGuard.of({
-          // The recovery poller must not use the re-reading gate.
-          refusalFor: () => Effect.die("recovery must use cachedRefusalFor"),
+          // While the published reading blocks, the poller must not reach the re-reading gate.
+          refusalFor: () =>
+            Ref.get(blocked).pipe(
+              Effect.flatMap((isBlocked) =>
+                isBlocked
+                  ? Effect.die("blocked resume reached the full gate")
+                  : Effect.succeed(null),
+              ),
+            ),
           cachedRefusalFor: () =>
             Ref.get(blocked).pipe(
               Effect.tap((isBlocked) =>
@@ -434,4 +441,231 @@ it.effect(
         ),
       );
     }),
+);
+
+const reading = (
+  checkedAt: string,
+  usedPercent: number,
+  resetsAt: string | undefined,
+): ServerProvider =>
+  ({
+    instanceId: claude,
+    driver: "claudeAgent",
+    displayName: "Claude",
+    enabled: true,
+    installed: true,
+    checkedAt,
+    usageLimits: {
+      checkedAt,
+      windows: [
+        {
+          id: "seven_day",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent,
+          ...(resetsAt === undefined ? {} : { resetsAt }),
+        },
+      ],
+    },
+  }) as unknown as ServerProvider;
+
+/**
+ * Harness. `published` is what the registry publishes; `truth` is what a fresh read returns.
+ * dispatch models the real chain: the run's turn start asks the real gate (refusalFor); a
+ * refusal fails the run as permission_error, which drops the thread from recovery for good
+ * (ProjectionStore: candidates require the latest run's failure class to be usage_limit).
+ */
+const recoveryHarness = (input: {
+  threads: ReadonlyArray<string>;
+  published: (nowIso: string) => ServerProvider;
+  truth: (nowIso: string) => ServerProvider;
+  dispatchFails?: Ref.Ref<boolean>;
+  /** Every fresh read fails instead of returning `truth`. */
+  readFails?: boolean;
+}) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const resetAt = DateTime.formatIso(DateTime.add(now, { seconds: 60 }));
+    const candidates = yield* Ref.make(input.threads.map((id) => shellFor(id, now, resetAt)));
+    const outcomes = yield* Ref.make<Array<string>>([]);
+    const allow = yield* Ref.make(false);
+    const freshReads = yield* Ref.make(0);
+    const gateCalls = yield* Ref.make({ cached: 0, full: 0 });
+    const logs: Array<string> = [];
+    const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+    const published = yield* Ref.make([input.published(DateTime.formatIso(now))]);
+    const registry = Layer.mock(ProviderRegistry)({
+      getProviders: Ref.get(published),
+      refreshInstance: () =>
+        Effect.gen(function* () {
+          yield* Ref.update(freshReads, (n) => n + 1);
+          yield* Effect.yieldNow;
+          if (input.readFails === true) return yield* Effect.die("probe failed");
+          const next = [input.truth(yield* nowIso)];
+          yield* Ref.set(published, next);
+          return next;
+        }),
+    });
+    const settings = Layer.mock(ServerSettings.ServerSettingsService)({
+      getSettings: Ref.get(allow).pipe(
+        Effect.map((a) => ({ ...DEFAULT_SERVER_SETTINGS, allowSpendingCredits: a })),
+      ),
+    });
+    const guardLayer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard()).pipe(
+      Layer.provide(registry),
+      Layer.provide(settings),
+    );
+    const counting = Layer.effect(
+      CreditSpendGuard,
+      Effect.gen(function* () {
+        const inner = yield* CreditSpendGuard;
+        return CreditSpendGuard.of({
+          refusalFor: (id) =>
+            Ref.update(gateCalls, (c) => ({ ...c, full: c.full + 1 })).pipe(
+              Effect.andThen(inner.refusalFor(id)),
+            ),
+          cachedRefusalFor: (id) =>
+            Ref.update(gateCalls, (c) => ({ ...c, cached: c.cached + 1 })).pipe(
+              Effect.andThen(inner.cachedRefusalFor(id)),
+            ),
+        });
+      }),
+    ).pipe(Layer.provide(guardLayer));
+    const deps = Layer.mergeAll(
+      counting,
+      settings,
+      Layer.effect(
+        ThreadManagementService.ThreadManagementService,
+        Effect.gen(function* () {
+          // The resume's own turn start: the real gate, where a refusal drops the thread
+          // out of recovery for good (its run fails as a non-limit error).
+          const turnStartGate = yield* CreditSpendGuard;
+          return {
+            getThreadShell: (threadId: ThreadId) =>
+              Ref.get(candidates).pipe(Effect.map((all) => all.find((t) => t.id === threadId)!)),
+            dispatch: (command: OrchestrationV2ServerCommand) =>
+              Effect.gen(function* () {
+                if (input.dispatchFails && (yield* Ref.get(input.dispatchFails))) {
+                  return yield* Effect.die(new Error("dispatch failed"));
+                }
+                const refused = yield* turnStartGate.refusalFor(claude);
+                yield* Ref.update(outcomes, (all) => [
+                  ...all,
+                  `${"threadId" in command ? command.threadId : ""}:${refused === null ? "started" : "REFUSED->dropped"}`,
+                ]);
+                yield* Ref.update(candidates, (all) =>
+                  all.filter((t) => !("threadId" in command) || t.id !== command.threadId),
+                );
+                return { sequence: 1, storedEvents: [] } as never;
+              }),
+          } as never;
+        }),
+      ).pipe(Layer.provide(guardLayer)),
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({
+        getLimitRecoveryCandidates: () => Ref.get(candidates),
+      }),
+    );
+    const logger = Logger.make(({ message }) => {
+      logs.push(String(Array.isArray(message) ? message[0] : message));
+    });
+    const worker = UsageLimitRecoveryWorker.workerLive.pipe(
+      Layer.provide(deps),
+      Layer.provide(Scheduler.layer),
+      Layer.provide(Logger.layer([logger], { mergeWithExisting: false })),
+    );
+    return { worker, allow, freshReads, gateCalls, outcomes, logs, published, candidates };
+  });
+
+const snapshot = (h: Effect.Success<ReturnType<typeof recoveryHarness>>) =>
+  Effect.gen(function* () {
+    return {
+      freshReads: yield* Ref.get(h.freshReads),
+      gate: yield* Ref.get(h.gateCalls),
+      outcomes: yield* Ref.get(h.outcomes),
+      creditRefusedLogs: h.logs.filter((l) => l.includes("credit-refused")).length,
+      turnRefusedLogs: h.logs.filter((l) => l.includes("turn-refused")).length,
+    };
+  });
+
+it.effect("runs the full gate before a resume the stale published reading would allow", () =>
+  Effect.gen(function* () {
+    const h = yield* recoveryHarness({
+      threads: ["a"],
+      // Published 4 h ago at 97%; the provider is really at 100%.
+      published: () => reading("1969-12-31T20:00:00.000Z", 97, FAR),
+      truth: (t) => reading(t, 100, FAR),
+    });
+    yield* Effect.gen(function* () {
+      // In 1 s steps, so the shared fresh read (forked) runs before its 5 s timeout
+      // deadline comes due on the test clock.
+      for (let second = 0; second < 120; second++) yield* TestClock.adjust("1 second");
+      const blocked = yield* snapshot(h);
+      // Not sent into the limit, still a candidate, one fresh read, one log.
+      assert.deepEqual(blocked.outcomes, []);
+      assert.lengthOf(yield* Ref.get(h.candidates), 1);
+      assert.equal(blocked.freshReads, 1);
+      assert.equal(blocked.creditRefusedLogs, 1);
+      yield* Ref.set(h.allow, true);
+      yield* TestClock.adjust("10 seconds");
+      assert.deepEqual((yield* snapshot(h)).outcomes, ["a:started"]);
+    }).pipe(Effect.provide(h.worker));
+  }),
+);
+
+it.effect("resumes once the published reset passes, with no new publish", () =>
+  Effect.gen(function* () {
+    const h = yield* recoveryHarness({
+      threads: ["a"],
+      published: () => reading("1970-01-01T00:00:00.000Z", 100, "1970-01-01T00:10:00.000Z"),
+      truth: (t) => reading(t, 2, "1970-01-08T00:00:00.000Z"),
+    });
+    yield* Effect.gen(function* () {
+      yield* TestClock.adjust("9 minutes");
+      assert.deepEqual((yield* snapshot(h)).outcomes, []);
+      yield* TestClock.adjust("2 minutes");
+      assert.deepEqual((yield* snapshot(h)).outcomes, ["a:started"]);
+    }).pipe(Effect.provide(h.worker));
+  }),
+);
+
+it.effect("logs a credit refusal once per blocked spell", () =>
+  Effect.gen(function* () {
+    const fails = yield* Ref.make(true);
+    const h = yield* recoveryHarness({
+      threads: ["a"],
+      published: (t) => reading(t, 100, FAR),
+      truth: (t) => reading(t, 100, FAR),
+      dispatchFails: fails,
+    });
+    yield* Effect.gen(function* () {
+      yield* TestClock.adjust("5 minutes");
+      assert.equal((yield* snapshot(h)).creditRefusedLogs, 1);
+      // Allowed: the send is attempted (and fails), so the thread stays a candidate.
+      yield* Ref.set(h.allow, true);
+      yield* TestClock.adjust("30 seconds");
+      // Blocked again: a new spell, logged once more.
+      yield* Ref.set(h.allow, false);
+      yield* TestClock.adjust("5 minutes");
+      assert.equal((yield* snapshot(h)).creditRefusedLogs, 2);
+    }).pipe(Effect.provide(h.worker));
+  }),
+);
+
+it.effect("does not hold a resume on a fresh read that keeps failing", () =>
+  Effect.gen(function* () {
+    const h = yield* recoveryHarness({
+      threads: ["a", "b"],
+      published: () => reading("1969-12-31T20:00:00.000Z", 97, FAR),
+      truth: (t) => reading(t, 100, FAR),
+      readFails: true,
+    });
+    yield* Effect.gen(function* () {
+      for (let second = 0; second < 120; second++) yield* TestClock.adjust("1 second");
+      const after = yield* snapshot(h);
+      // Fail-open: the published 97% stands, so both resumes go out on their first due
+      // sweep. Reads are bounded by the sends, not by the sweeps: no read loop.
+      assert.deepEqual([...after.outcomes].sort(), ["a:started", "b:started"]);
+      assert.isAtMost(after.freshReads, 4);
+    }).pipe(Effect.provide(h.worker));
+  }),
 );
