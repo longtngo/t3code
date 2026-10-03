@@ -177,8 +177,9 @@ export const VcsCreateWorktreeInput = Schema.Struct({
    * gone (`git worktree list` calls it `prunable`).
    *
    * Only for recreating a worktree the caller has already found missing. Drops
-   * that one admin entry, then adds normally, so a path that exists or a branch
-   * checked out in another worktree is still refused.
+   * git's admin entry for that path when the directory is absent and the entry
+   * is not locked, then adds normally, so a path that exists or a branch checked
+   * out in another worktree is still refused. Never touches a working tree.
    */
   reuseRegisteredPath: Schema.optional(Schema.Boolean),
 });
