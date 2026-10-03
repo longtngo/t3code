@@ -78,8 +78,9 @@ the manifest assigns upstream's migration the next free id rather than its filen
 Verified 2026-09-08 (32nd reconcile): 57 entries, all ids unique, monotonic, max 58; upstream's
 `049_ProjectionThreadsActiveOrderKey` took applied id **58** (49-57 were already spent), and the
 fork's `052_ProjectionThreadActivityKindIndex` holds 57. Filename numbers double up on `033`,
-`037`, `038`, `039`, `041` and `042`. Id `34` is intentionally burned (an earlier fork DB applied
-a since-renamed `034_PushSubscriptions`).
+`037`, `038`, `039`, `041` and `042`. Id `34` is `PushSubscriptions`, the fork's first Web Push
+migration: real databases record it, so the manifest registers it with the same idempotent body
+as id `37` rather than leaving it unknown (which the v2 runner logs as divergent history).
 
 The 32nd reconcile is a worked example of the test half below: upstream's
 `049_ProjectionThreadsActiveOrderKey.test.ts` ran `toMigrationInclusive: 48` then `49` - its
@@ -1450,7 +1451,10 @@ reader that stopped taking, so each reader needs its own bound.
   `stream({ eventType })`). A worker must not lose events, so it is not budgeted; instead its
   handler must take promptly and hand work to a `DrainableWorker` carrying ids, never event
   bodies. Today: PullRequestSyncReactor, ThreadPullRequestService, ThreadSettlementService,
-  AgentAwarenessRelay, StorageCleanup. The one inline-blocking reader is the Orchestrator's
+  AgentAwarenessRelay, StorageCleanup, WebPushRelay. WebPushRelay's handler classifies the event
+  and enqueues a run or request id; its sends (up to 15 s each) run on the worker. Test:
+  `push/WebPushRelay.test.ts` "keeps draining the domain-event hub while every push send is
+  stuck". The one inline-blocking reader is the Orchestrator's
   terminal-run handler, which subscribes to `run.updated` only, so a wait backs up only those.
   A new worker with a slow inline handler pins every event from its position on.
 - **`groupedWithin` is banned in new code** (`no-unsafe-stream-aggregate`). On the leaking

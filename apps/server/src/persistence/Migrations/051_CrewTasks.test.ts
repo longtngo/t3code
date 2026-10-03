@@ -9,18 +9,18 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 /**
  * The ids already deployed to live databases before this change. A literal, never
  * derived from `migrationEntries`: derived, the high-water predicate below reduces
- * to `every(id => true)` and stays green even for id 34, which this fork burned and
- * must never reuse (see the renumbering note in Migrations.ts).
+ * to `every(id => true)`. Id 34 is deployed: real databases record it as the fork's
+ * first "PushSubscriptions", which the manifest registers under the same name.
  */
 const LEGACY = new Set([
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-  28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+  28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
 ]);
 
 describe("051_CrewTasks ids", () => {
   vitestIt("LEGACY is the deployed set, not a truncated paste", () => {
-    expect(LEGACY.size).toBe(49);
-    expect(LEGACY.has(34)).toBe(false);
+    expect(LEGACY.size).toBe(50);
+    expect(migrationEntries.find(([id]) => id === 34)?.[1]).toBe("PushSubscriptions");
   });
 
   vitestIt("every id is legacy or above the applied high-water mark", () => {
@@ -28,12 +28,11 @@ describe("051_CrewTasks ids", () => {
     expect(ids.every((id) => LEGACY.has(id) || id > 50)).toBe(true);
   });
 
-  // The predicate above only earns trust if it can report a hit. Each arm is the
-  // shape of a real mistake; the id-34 arm is the one a derived LEGACY would miss.
+  // The predicate above only earns trust if it can report a hit.
   vitestIt.each([
     ["accepts a fresh id 51", [...LEGACY, 51], true],
-    ["rejects id 34 reinserted in sorted position", [...LEGACY, 34], false],
-    ["rejects a gap-filling id below the mark", [...LEGACY, 34, 51], false],
+    ["rejects an undeployed id below the mark", [...LEGACY, 0], false],
+    ["rejects an undeployed id beside a fresh one", [...LEGACY, 0, 51], false],
   ])("%s", (_label, ids, expected) => {
     expect(ids.every((id) => LEGACY.has(id) || id > 50)).toBe(expected);
   });

@@ -27,6 +27,8 @@ import {
   otlpTracesProxyRouteLayer,
   assetRouteLayer,
   attachmentUploadRouteLayer,
+  pushSubscriptionsRouteLayer,
+  pushVapidPublicKeyRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   viewerAssetRouteLayer,
@@ -77,6 +79,8 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -517,8 +521,18 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+// Web Push background notifications. The relay service is merged out because the
+// server config (VAPID public key) and the HTTP key route read it.
+const WebPushRelayLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const relay = yield* WebPushRelay.WebPushRelay;
+    yield* relay.start();
+  }),
+).pipe(Layer.provideMerge(WebPushRelay.layer));
+
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
+  WebPushRelayLive,
   ThreadSettlementWorkerLive,
   Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
     Layer.provide(ProjectionStoreV2.layer),
@@ -550,6 +564,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
+  // Push subscriptions: shared by the register RPC, the HTTP re-register route and
+  // the relay's fan-out.
+  Layer.provideMerge(PushSubscriptionRepositoryLive),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
@@ -667,6 +684,8 @@ const makeRoutesLayer = Layer.mergeAll(
     viewerRouteLayer,
     viewerAssetRouteLayer,
     attachmentUploadRouteLayer,
+    pushSubscriptionsRouteLayer,
+    pushVapidPublicKeyRouteLayer,
     deviceHubProxyRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,

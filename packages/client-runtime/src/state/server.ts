@@ -1295,5 +1295,9 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    pushSubscriptionsRegister: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:push-subscriptions-register",
+      tag: WS_METHODS.pushSubscriptionsRegister,
+    }),
   };
 }

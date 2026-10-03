@@ -196,6 +196,8 @@ import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { registerPushSubscription } from "./push/register.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
@@ -1277,6 +1279,7 @@ const makeWsRpcLayer = (
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
+      const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const hostMetrics = yield* HostMetrics.HostMetrics;
       const llmServeManager = yield* LlmServeManager;
@@ -1728,6 +1731,7 @@ const makeWsRpcLayer = (
                   shellRevealInFileManagerKind: fileManagerRevealKind,
                 }),
             threadResumeCompletionMarker: true,
+            webPushVapidPublicKey: webPushRelay.vapidPublicKey,
             threadSnapshotPagination: true,
             ...Option.match(scratchWorkspaceRoot, {
               onNone: () => ({}),
@@ -2647,6 +2651,17 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pushSubscriptionsRegister,
+            // Shared with the HTTP route the service worker calls on
+            // pushsubscriptionchange (SSRF guard + upsert live in one place). The
+            // helper never fails; a non-"registered" outcome collapses to ok:false.
+            registerPushSubscription(input.subscription).pipe(
+              Effect.map((outcome) => ({ ok: outcome === "registered" })),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);
