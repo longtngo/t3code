@@ -29,7 +29,15 @@ import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
 const workspacePathsLayer = Layer.succeed(WorkspacePaths.WorkspacePaths, {
-  normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot.replace(/\/$/, "")),
+  normalizeWorkspaceRoot: (workspaceRoot) =>
+    workspaceRoot.startsWith("/gone/")
+      ? Effect.fail(
+          new WorkspacePaths.WorkspaceRootNotExistsError({
+            workspaceRoot,
+            normalizedWorkspaceRoot: workspaceRoot,
+          }),
+        )
+      : Effect.succeed(workspaceRoot.replace(/\/$/, "")),
   resolveRelativePathWithinRoot: ({ workspaceRoot, relativePath }) =>
     Effect.succeed({ absolutePath: `${workspaceRoot}/${relativePath}`, relativePath }),
 });
@@ -201,6 +209,65 @@ it.layer(TestLayer)("ProjectService", (it) => {
       assert.deepEqual(
         changes.map((change) => change.event_type),
         ["project.created", "project.meta-updated", "project.meta-updated", "project.deleted"],
+      );
+    }),
+  );
+
+  // Fork: member paths widen the agent's directory grant, so the server
+  // normalizes each one and refuses a bad or duplicated path with a message the
+  // member editor shows as-is, leaving the stored list untouched.
+  it.effect("normalizes workspace members and refuses a bad or duplicated one", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:members");
+      yield* service.create({
+        commandId: CommandId.make("command:members:create"),
+        projectId,
+        title: "Workspace",
+        workspaceRoot: "/work/members",
+      });
+      const warehouse = {
+        id: "m-warehouse",
+        path: "/work/warehouse/",
+        title: "warehouse",
+        integrationBranch: "main",
+      };
+      const api = { id: "m-api", path: "/work/api", title: "api", integrationBranch: "develop" };
+      const updated = yield* service.update({
+        commandId: CommandId.make("command:members:attach"),
+        projectId,
+        members: [warehouse, api],
+      });
+      assert.deepStrictEqual(
+        updated.members.map((member) => member.path),
+        ["/work/warehouse", "/work/api"],
+      );
+
+      const missing = yield* service
+        .update({
+          commandId: CommandId.make("command:members:missing"),
+          projectId,
+          members: [api, { ...warehouse, path: "/gone/warehouse" }],
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(missing._tag, "ProjectMemberInvalidError");
+      assert.include(missing.message, "Workspace member 'warehouse'");
+
+      const duplicate = yield* service
+        .update({
+          commandId: CommandId.make("command:members:duplicate"),
+          projectId,
+          // Same directory once normalized.
+          members: [api, { ...warehouse, id: "m-api-again", path: "/work/api/" }],
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(duplicate._tag, "ProjectMemberInvalidError");
+      assert.include(duplicate.message, "attached more than once");
+
+      const current = Option.getOrThrow(yield* service.getById(projectId));
+      assert.deepStrictEqual(
+        current.members.map((member) => member.id),
+        ["m-warehouse", "m-api"],
       );
     }),
   );

@@ -27,6 +27,7 @@ import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 it.effect.each([
   "nested",
@@ -106,6 +107,7 @@ it.effect.each([
         Layer.mergeAll(
           NodeServices.layer,
           idAllocatorLayer,
+          WorkspaceMemberHooks.inert,
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: () => Effect.succeed(Option.some({ workspaceRoot: parent } as never)),
           }),

@@ -29,6 +29,7 @@ import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 const ProjectionStoreTestLayer = Layer.mergeAll(
   ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
@@ -269,6 +270,7 @@ it.layer(ProjectionStoreTestLayer)("CheckpointCaptureServiceV2", (it) => {
           Layer.provide(
             Layer.mergeAll(
               IdAllocator.layer,
+              WorkspaceMemberHooks.inert,
               refLookupFails
                 ? CheckpointService.layer.pipe(
                     Layer.provide(
@@ -455,6 +457,7 @@ it.layer(ProjectionStoreTestLayer)("CheckpointCaptureServiceV2", (it) => {
         Layer.provide(
           Layer.mergeAll(
             IdAllocator.layer,
+            WorkspaceMemberHooks.inert,
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               materializeBaselineCheckpoint: () => Effect.die("a discarded run has no baseline"),
               capture: () => Effect.die("a discarded run must not be captured"),
@@ -680,10 +683,20 @@ it.layer(ProjectionStoreTestLayer)("CheckpointCaptureServiceV2", (it) => {
         capturedAt: cancelledAt,
       };
       const commits = yield* Ref.make(0);
+      // Fork: two workspace members, one of which could not be read.
+      const memberStates = [
+        { memberId: "m-warehouse", headSha: "abc123", isDirty: true },
+        { memberId: "m-api", isDirty: false },
+      ];
       const captureLayer = CheckpointCaptureService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
             IdAllocator.layer,
+            Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
+              checkpointStates: () => Effect.succeed(memberStates),
+              sweep: () => Effect.die("capture must not sweep members"),
+              rollbackRefusal: () => Effect.die("capture must not check rollback"),
+            }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               materializeBaselineCheckpoint: () =>
                 Effect.die("baseline materialization must be skipped when ordinal 0 is ready"),
@@ -732,6 +745,18 @@ it.layer(ProjectionStoreTestLayer)("CheckpointCaptureServiceV2", (it) => {
       );
       assert.equal(projected.rootNode?.status, "cancelled");
       assert.deepEqual([...projected.readyCheckpointOrdinals].toSorted(), [0, 1]);
+      // Fork: the run's checkpoint carries the member states through the
+      // projection, where rollback admission reads them; the baseline does not.
+      const { checkpoints } = yield* projectionStore.getThreadRecords(cancelledThreadId, [
+        "checkpoints",
+      ]);
+      assert.deepEqual(
+        checkpoints.map((checkpoint) => [checkpoint.id, checkpoint.memberStates]),
+        [
+          [CheckpointId.make("checkpoint:cancelled-baseline-0"), undefined],
+          [captured.id, memberStates],
+        ],
+      );
     }),
   );
 });

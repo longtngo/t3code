@@ -311,6 +311,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     workspaceRoot: "/workspace/project",
     defaultModelSelection: null,
     scripts: [],
+    members: [],
     createdAt: "2026-03-01T00:00:00.000Z",
     updatedAt: "2026-03-01T00:00:00.000Z",
     ...overrides,

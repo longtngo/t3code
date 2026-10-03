@@ -19,6 +19,7 @@ import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { WorkspaceMemberHooks } from "./WorkspaceMemberHooks.ts";
 
 export class CheckpointCaptureExecutionError extends Schema.TaggedError<CheckpointCaptureExecutionError>()(
   "CheckpointCaptureExecutionError",
@@ -52,6 +53,7 @@ export const layer: Layer.Layer<
   | EventSink.EventSinkV2
   | IdAllocator.IdAllocatorV2
   | ProjectionStore.ProjectionStoreV2
+  | WorkspaceMemberHooks
 > = Layer.effect(
   CheckpointCaptureServiceV2,
   Effect.gen(function* () {
@@ -59,6 +61,7 @@ export const layer: Layer.Layer<
     const eventSink = yield* EventSink.EventSinkV2;
     const ids = yield* IdAllocator.IdAllocatorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const workspaceMembers = yield* WorkspaceMemberHooks;
 
     const execute = Effect.fn("orchestrationV2.checkpointCapture.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -120,7 +123,7 @@ export const layer: Layer.Layer<
             scope,
             ordinalWithinScope: baselineOrdinalWithinScope,
           });
-      const checkpoint = yield* checkpoints.capture({
+      const capturedCheckpoint = yield* checkpoints.capture({
         scope,
         runId: run.id,
         nodeId: rootNode.id,
@@ -128,6 +131,13 @@ export const layer: Layer.Layer<
         appRunOrdinal: run.ordinal,
         capturedAt,
       });
+      // Fork: recorded, not snapshotted. Enough to tell at rollback time whether
+      // restoring this checkout alone still produces the tree this describes.
+      // Read after the capture and before the finalization sweep moves any
+      // member branch.
+      const memberStates = yield* workspaceMembers.checkpointStates({ threadId: input.threadId });
+      const checkpoint =
+        memberStates === undefined ? capturedCheckpoint : { ...capturedCheckpoint, memberStates };
       // Match RunExecutionService: capture loaded the waiting run before
       // materializing baselines. Omit delegatedCompletion so a newer cohort
       // write during capture is not overwritten by this stale snapshot

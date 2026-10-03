@@ -186,6 +186,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       workspaceRoot: "/projects/pinball-stats",
       defaultModelSelection: null,
       scripts: [],
+      members: [],
       createdAt: "2026-10-01T00:00:00.000Z",
       updatedAt: "2026-10-01T00:00:00.000Z",
       deletedAt: null,

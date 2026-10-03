@@ -279,6 +279,17 @@ export function createVcsEnvironmentAtoms<R, E>(
       cwd: target.input.cwd,
     });
 
+  // Fork: workspace member repositories. Refreshed on a timer as well as on
+  // demand: a member's branch can move because another thread swept it, and
+  // nothing pushes that to this client. Named here rather than inline so
+  // `memberActionPrepare` can invalidate it.
+  const memberBranches = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:workspace:member-branches",
+    tag: WS_METHODS.workspaceMemberBranches,
+    staleTimeMs: 15_000,
+    refreshIntervalMs: 60_000,
+  });
+
   return {
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
@@ -308,6 +319,40 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    memberBranches,
+    // Commands, not queries: both write. The prepare step moves a branch in the
+    // user's checkout, so it runs when an action is about to, never on a timer.
+    // Serialized per member rather than per path: a member id still maps to one
+    // checkout, and `memberActionPrepare` cuts and checks out a branch there,
+    // which two concurrent calls must not do at once.
+    memberActionPrepare: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workspace:member-action-prepare",
+      tag: WS_METHODS.workspaceMemberActionPrepare,
+      concurrency: {
+        mode: "serial",
+        key: (target) => `${target.environmentId}:${target.input.memberId}`,
+      },
+      // This command is the one thing on this client that moves a member's
+      // branch, so it is also the one thing that can say the reports are wrong
+      // without waiting for a poll. Every surface reading them shares this atom.
+      onSettled: (target, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            memberBranches({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId, threadId: target.input.threadId },
+            }),
+          );
+        }),
+    }),
+    memberPrBaseWrite: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workspace:member-pr-base-write",
+      tag: WS_METHODS.workspaceMemberPrBaseWrite,
+      concurrency: {
+        mode: "serial",
+        key: (target) => `${target.environmentId}:${target.input.memberId}`,
+      },
     }),
     refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-local-status",

@@ -43,6 +43,7 @@ import { layer as providerTurnStartServiceLayer } from "./ProviderTurnStartServi
 import { layer as runExecutionServiceLayer } from "./RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "./RunFinalizationService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
@@ -312,6 +313,13 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
 ).pipe(
+  // Fork: workspace member repositories in capture, finalization and rollback.
+  // A required service, so dropping this provide fails the server typecheck.
+  Layer.provide(
+    WorkspaceMemberHooks.live.pipe(
+      Layer.provide(Layer.merge(ProjectStore.layer, projectionStoreLayer)),
+    ),
+  ),
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
 );

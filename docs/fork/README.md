@@ -1137,14 +1137,16 @@ for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePr
 `expandedBody`, `stopRowToggle*`, `select-text`. General rule and its measured detection coverage:
 "Rejecting an upstream feature" below.
 
-### 42. Upstream's new server test fixtures do not set `members`
+### 42. Upstream's new test fixtures do not set `members`
 
-`OrchestrationProject` carries a fork-only required `members` array (migration id 39, workspace
-members). Every project fixture upstream adds needs `members: []` appended, and the only thing
-that names them is the **repo-wide** typecheck — five such fixtures arrived in the 34th reconcile
-(`linkCreatedPullRequest`, `pullRequests/handlers`, `PullRequestSyncReactor`,
-`decider.pullRequests`, `projector`), all in files that merged without a single conflict marker.
-`packages/client-runtime` has the same shape for `OrchestrationThreadShell.pullRequests`.
+`OrchestrationProjectShell` and `Project` (contracts) carry a fork-only required `members` array
+(workspace members, `projection_projects.members_json`, migration id 39; decodes absent as `[]`).
+Every project fixture upstream adds needs `members: []` appended, and the only thing that names
+them is the **repo-wide** typecheck: they land in files that merge without a single conflict
+marker (five in the 34th reconcile; over twenty across server, client-runtime and web at the orchestrator-v2
+port). `ProjectStoreV2`'s `ProjectRow` has the same field. Members live only in that column:
+the baseline project events migration 64 (`OrchestrationV2`) writes carry no members, so a future
+change that rebuilds projects from events would silently drop every project's members.
 
 ### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
 
@@ -1255,15 +1257,15 @@ here means the send queues server-side like any mid-turn send.
 After an upstream commit that touches this, grep `apps/web/src`, `packages/contracts/src` and
 `packages/shared/src` for `followUpBehavior` and `steerQueuedMessage`: expect 0.
 
-### 53. `ProjectionCheckpointRepository` is fork-owned now; upstream deleted it as dead
+### 53. Workspace member states live on the v2 checkpoint payload
 
-Upstream #9917 ("remove obsolete code") deleted `persistence/{Layers,Services}/ProjectionCheckpoints.ts`
-and inlined the checkpoint row schema into `ProjectionSnapshotQuery.ts`. The fork's copy carries
-`memberStates` (migration id 40), and `ProjectionSnapshotQuery` still decodes checkpoint rows
-through `ProjectionCheckpoint.mapFields`, so the files are kept (restored from `personal`) with the
-fork's schema. `ProjectionRepositories.test.ts` still exercises the legacy-NULL decode through the
-repository. A later upstream commit re-inlining the schema will conflict in `ProjectionSnapshotQuery`;
-keep `memberStates` in whichever schema survives.
+Since the orchestrator-v2 port, checkpoints are v2's (`orchestration_v2_projection_checkpoints`,
+JSON payload), and the fork's optional `memberStates` is a field of `OrchestrationV2Checkpoint`
+(contracts), recorded by `CheckpointCaptureService` through `WorkspaceMemberHooks` and read by the
+rollback guard at admission (`Orchestrator`) and execution (`CheckpointRollbackService`). The V1
+`ProjectionCheckpointRepository` and `checkpoint_member_states_json` (id 40) are no longer read;
+v2 imports no V1 checkpoints. An upstream rewrite of the checkpoint schema must keep `memberStates`
+optional, or every checkpoint captured without members stops decoding.
 
 ### 54. A folder opened from chat shows the fork's listing, not upstream's revealed tree
 

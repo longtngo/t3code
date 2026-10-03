@@ -41,6 +41,7 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
           ? {}
           : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
         ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
+        ...(mutation.members === undefined ? {} : { members: mutation.members }),
       });
 
     case "project.delete":
@@ -51,3 +52,16 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
       });
   }
 });
+
+/**
+ * What the client is told when a project mutation fails. Only errors written
+ * for the user pass through: a non-empty project on delete and a refused
+ * workspace member; anything else is generic.
+ */
+export const projectMutationErrorMessage = (cause: {
+  readonly _tag: string;
+  readonly message: string;
+}) =>
+  cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectMemberInvalidError"
+    ? cause.message
+    : "Failed to mutate project.";

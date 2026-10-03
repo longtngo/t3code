@@ -66,6 +66,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
 import { worktreeRepairDependenciesTestLayer } from "./ProviderTurnStartService.testkit.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderContinuationRequests from "./ProviderContinuationRequests.ts";
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
@@ -204,6 +205,7 @@ const providerInstanceRegistryLayer = ProviderInstanceRegistryHydrationLive.pipe
   ),
 );
 const orchestrationLayer = OrchestrationV2LayerLive.pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(worktreeRepairDependenciesTestLayer),
   Layer.provide(mcpRegistryLayer),
   Layer.provide(SqlitePersistenceMemory),

@@ -365,6 +365,7 @@ function makeProject(
     workspaceRoot,
     defaultModelSelection: null,
     scripts: [],
+    members: [],
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: NOW,
   };

@@ -41,6 +41,7 @@ import {
   ProjectServiceLayerLive,
 } from "./runtimeLayer.ts";
 import { worktreeRepairDependenciesTestLayer } from "./ProviderTurnStartService.testkit.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 const PlatformTestLayer = Layer.merge(
   NodeServices.layer,
@@ -104,6 +105,7 @@ const TestProviderInstanceRegistry = Layer.succeed(
 );
 
 const TestLayer = Layer.mergeAll(OrchestrationV2LayerLive, OrchestrationV2EventSinkLayerLive).pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provideMerge(ProjectServiceLayerLive),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({

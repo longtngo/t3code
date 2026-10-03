@@ -193,6 +193,8 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
+import * as WorkspaceMemberRpc from "./workspace/WorkspaceMemberRpc.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
@@ -201,7 +203,10 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
-import { projectMutationOperation } from "./project/ProjectMutation.ts";
+import {
+  projectMutationErrorMessage,
+  projectMutationOperation,
+} from "./project/ProjectMutation.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -560,6 +565,18 @@ export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
     url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM) ===
     String(ORCHESTRATION_PROTOCOL_VERSION)
   );
+}
+
+/** The error a failed `projectsMutate` sends to the client. */
+export function toProjectMutationError(
+  commandId: CommandId,
+  cause: { readonly _tag: string; readonly message: string },
+): ProjectMutationError {
+  return new ProjectMutationError({
+    commandId,
+    message: projectMutationErrorMessage(cause),
+    cause,
+  });
 }
 
 export function shouldUseBoundedThreadSnapshot(input: {
@@ -1218,6 +1235,17 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      // Fork: workspace member repositories. See WorkspaceMemberRpc for the rules.
+      const workspaceMemberRpc = WorkspaceMemberRpc.makeWorkspaceMemberRpc({
+        readMembers: (projectId) =>
+          projectStore
+            .get(projectId)
+            .pipe(Effect.map((project) => Option.getOrUndefined(project)?.members)),
+        readThread: (threadId) => threadManagement.getThreadShell(threadId),
+        branches: yield* WorkspaceMemberBranches.WorkspaceMemberBranches,
+        refreshLocalStatus: (cwd) =>
+          vcsStatusBroadcaster.refreshLocalStatus(cwd).pipe(Effect.ignoreCause({ log: true })),
+      });
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -3170,19 +3198,9 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsMutate]: (mutation) =>
           observeRpcEffect(
             WS_METHODS.projectsMutate,
-            startup.enqueueCommand(mutateProject(mutation)).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProjectMutationError({
-                    commandId: mutation.commandId,
-                    message:
-                      cause._tag === "ProjectNotEmptyError"
-                        ? cause.message
-                        : "Failed to mutate project.",
-                    cause,
-                  }),
-              ),
-            ),
+            startup
+              .enqueueCommand(mutateProject(mutation))
+              .pipe(Effect.mapError((cause) => toProjectMutationError(mutation.commandId, cause))),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
@@ -3355,6 +3373,22 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "vcs",
             },
+          ),
+        [WS_METHODS.workspaceMemberBranches]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceMemberBranches, workspaceMemberRpc.branches(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberActionPrepare,
+            workspaceMemberRpc.actionPrepare(input),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberPrBaseWrite,
+            workspaceMemberRpc.prBaseWrite(input),
+            { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(
