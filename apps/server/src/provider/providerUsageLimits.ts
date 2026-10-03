@@ -95,28 +95,22 @@ export function applyUsageLimitsUpdate(input: {
       changed = true;
     }
   }
-  // `checkedAt` says how current the WHOLE reading is, so only an update that names every
-  // window may move it. Claude reports one window per event, and a 5-hour update says
-  // nothing about the weekly: its new numbers publish, but the reading keeps its age.
-  const coversEveryWindow =
-    previous === undefined ||
-    previous.unavailable !== undefined ||
-    previous.windows.every((window) =>
+  if (!changed && previous !== undefined && previous.unavailable === undefined) {
+    // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
+    // but only when the update names every window (Claude reports one window per event, and
+    // a 5-hour confirmation says nothing about the weekly), and at most every
+    // RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and each new snapshot
+    // is published to every client.
+    const coversEveryWindow = previous.windows.every((window) =>
       update.windows.some((candidate) => candidate.id === window.id),
     );
-  if (!changed && previous !== undefined && previous.unavailable === undefined) {
-    // Confirmed unchanged: re-stamp at most every RESTAMP_INTERVAL_MS, because Codex repeats
-    // this on every token tick and each new snapshot is published to every client.
     return coversEveryWindow &&
       Date.parse(input.checkedAt) - Date.parse(previous.checkedAt) >= RESTAMP_INTERVAL_MS
       ? { ...previous, checkedAt: input.checkedAt }
       : previous;
   }
   return {
-    ...makeUsageLimits({
-      checkedAt: coversEveryWindow || previous === undefined ? input.checkedAt : previous.checkedAt,
-      windows: merged.values(),
-    }),
+    ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
     ...(previous?.spend !== undefined ? { spend: previous.spend } : {}),
   };
