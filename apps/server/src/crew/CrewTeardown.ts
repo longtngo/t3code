@@ -11,18 +11,20 @@
  *
  *  1. `crew_tasks.status = 'closed'` — frees the slot.
  *  2. `ThreadManagementService.interruptThread` — `run.interrupt` on the crewmate's active
- *     run, so it stops at a turn boundary before its process is released. V1's step 2
- *     cleared the stall watchdog's record; v2 has no watchdog (dropped in the port).
+ *     run, so the run ends as interrupted. V1's step 2 cleared the stall watchdog's
+ *     record; v2 has no watchdog (dropped in the port).
  *  3. `McpSessionRegistry.revokeThread` — the crewmate's MCP credential.
  *  4. `TerminalManager.close` — every terminal of the thread.
  *  5. `ProviderSessionManagerV2.detach` for each live provider session of the thread.
- *  6. `thread.metadata.update` clearing `branch` and `worktreePath`, so turn start never
- *     re-creates a worktree the operator deleted (`ProviderTurnStartService` prunes and
- *     re-creates a missing one).
+ *  6. `thread.metadata.update` clearing `worktreePath`, so turn start never re-creates a
+ *     worktree the operator deleted (`ProviderTurnStartService` re-creates a missing one
+ *     only when both path and branch are set). The `crew/<taskId>` branch is kept: it is
+ *     the shell's crew marker, which silences the crewmate's notifications.
  *  7. `thread.archive` when the thread exists and is not archived. Archive also cancels
  *     queued runs and detaches sessions through the outbox, which backs up steps 3-5.
  *
- * Step 1 runs first and step 2 precedes step 5 (interrupt, then release); steps 3-7 are
+ * Step 1 runs first; nothing else is ordered. Step 2's interrupt is durable at once but
+ * its provider effect runs from the outbox, usually after step 5's detach. Steps 2-7 are
  * individually idempotent.
  *
  * @module crew/CrewTeardown
@@ -63,9 +65,13 @@ export const makeCrewTeardown = Effect.gen(function* () {
             }),
           ),
         );
-      // Stable per task and step, whichever caller runs it: a re-run teardown replays the
-      // same receipts instead of issuing a second archive or metadata write.
-      const commandId = (name: string) => CommandId.make(`crew:teardown:${name}:${task.taskId}`);
+      // Unique per teardown run. A fixed id would replay a REJECTED receipt forever, so
+      // `Re-run teardown` could never complete a step that was refused once. Running a
+      // step twice is harmless: step 6 writes the same nulls, and step 7 is skipped once
+      // the thread is archived.
+      const runId = yield* randomUuidV4;
+      const commandId = (name: string) =>
+        CommandId.make(`crew:teardown:${name}:${task.taskId}:${runId}`);
       const updatedAt = DateTime.formatIso(yield* DateTime.now);
 
       yield* step(1, repository.closeTask({ taskId: task.taskId, updatedAt }));
@@ -73,9 +79,7 @@ export const makeCrewTeardown = Effect.gen(function* () {
         2,
         threads.interruptThread({
           projectId: task.projectId,
-          // Unique, unlike the two below: an interrupt must act on whatever run is
-          // active now, not replay a receipt from an earlier teardown.
-          commandId: commandId(`interrupt:${yield* randomUuidV4}`),
+          commandId: commandId("interrupt"),
           threadId: task.crewThreadId,
           reason: "Crew task torn down.",
         }),
@@ -106,7 +110,8 @@ export const makeCrewTeardown = Effect.gen(function* () {
           type: "thread.metadata.update",
           commandId: commandId("forget-worktree"),
           threadId: task.crewThreadId,
-          branch: null,
+          // The branch stays: turn start re-creates a worktree only when both are set,
+          // and `crew/<taskId>` is how every client recognises a crewmate's shell.
           worktreePath: null,
         }),
       );

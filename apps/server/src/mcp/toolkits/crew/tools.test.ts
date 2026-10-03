@@ -60,11 +60,6 @@ describe("crew tool refusal messages", () => {
       new CrewDispatchRefusedError({ reason: "browser-access" }),
       /browser access/,
     ],
-    [
-      "crew_dispatch.disk",
-      new CrewDispatchRefusedError({ reason: "disk", detail: "12 MiB free" }),
-      /Free disk space/,
-    ],
     ["crew_dispatch.payload", new CrewDispatchRefusedError({ reason: "payload" }), /8 KiB/],
     [
       "crew_teardown.no-row",

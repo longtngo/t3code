@@ -258,6 +258,148 @@ describe("crew delivery on orchestrator v2", () => {
     );
   });
 
+  it.effect("a rejected delivery is retried under a new id and delivered on a later pass", () => {
+    // Multi-pass: rejected once, then three healthy passes. v2 never re-runs a rejected
+    // command id, so a retry under the same id could never deliver.
+    let rejectNext = true;
+    const { harness, seed } = setup(
+      {
+        send: () => {
+          const behaviour = rejectNext ? "reject" : "ok";
+          rejectNext = false;
+          return behaviour;
+        },
+      },
+      [report("r1")],
+    );
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* seed;
+        const crewSweep = yield* sweep;
+        yield* crewSweep.runOnce();
+        assert.deepStrictEqual(yield* unnotedIds, ["r1"]);
+        yield* crewSweep.runOnce();
+        yield* crewSweep.runOnce();
+        yield* crewSweep.runOnce();
+        assert.strictEqual(harness.sends.length, 1);
+        assert.notStrictEqual(harness.sends[0]?.commandId, harness.attempts[0]?.commandId);
+        assert.deepStrictEqual(yield* unnotedIds, []);
+      }),
+    );
+  });
+
+  it.effect("a restarted sweep walks past rejected receipts to a fresh id", () => {
+    // Two sweeps share one receipt store, as two server boots do. The second starts with
+    // no memory of the first's attempts.
+    let rejecting = 2;
+    const { harness, seed } = setup({ send: () => (rejecting-- > 0 ? "reject" : "ok") }, [
+      report("r1"),
+    ]);
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* seed;
+        const first = yield* sweep;
+        yield* first.runOnce();
+        yield* first.runOnce();
+        const second = yield* sweep;
+        yield* second.runOnce();
+        assert.strictEqual(harness.sends.length, 1);
+        assert.deepStrictEqual(yield* unnotedIds, []);
+      }),
+    );
+  });
+
+  it.effect("a done report is quoted ahead of a backlog of progress notes", () => {
+    const progress = Array.from({ length: 9 }, (_, index) =>
+      report(`p${index}`, {
+        state: "progress",
+        note: `${index}`.repeat(1000),
+        createdAt: `2026-09-02T00:00:0${index}.000Z`,
+      }),
+    );
+    const { harness, seed } = setup({}, [
+      ...progress,
+      // As large as the progress notes, so it cannot squeeze into the budget's tail.
+      report("d1", {
+        note: `the done note ${"z".repeat(980)}`,
+        createdAt: "2026-09-02T00:00:59.000Z",
+      }),
+    ]);
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* seed;
+        yield* (yield* sweep).runOnce();
+        assert.include(harness.sends[0]?.text ?? "", "the done note");
+      }),
+    );
+  });
+
+  it.effect("a steer that upstream turned into a new turn is not logged as no-turn", () => {
+    const { harness, seed } = setup({ send: () => "late-steer" }, [
+      report("p1", { state: "progress" }),
+    ]);
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* seed;
+        yield* (yield* sweep).runOnce();
+        assert.strictEqual(harness.sends.length, 1);
+        assert.notInclude(harness.codes(), "crew.deliver.no-turn");
+        assert.deepStrictEqual(yield* unnotedIds, []);
+      }),
+    );
+  });
+
+  it.effect("a crewmate whose worktree setup failed is closed and its bridge is told", () => {
+    // Multi-unit: one task's setup failed, one task's ordinary run failed. Only the first
+    // is settled.
+    const failedSetup = ThreadId.make("crew-1");
+    const failedRun = ThreadId.make("crew-2");
+    const preparing = (status: string) => ({
+      type: "command_execution",
+      input: "Preparing workspace",
+      status,
+      output: "fatal: invalid reference: no-such-ref",
+    });
+    const harness = makeCrewHarness({
+      shells: new Map([
+        [BRIDGE as string, shellOf(BRIDGE)],
+        [failedSetup as string, shellOf(failedSetup, { status: "failed" })],
+        [failedRun as string, shellOf(failedRun, { status: "failed" })],
+      ]),
+      turnItems: new Map([
+        [failedSetup as string, [preparing("failed")]],
+        [failedRun as string, [preparing("completed")]],
+      ]),
+    });
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        yield* repository.insertTask(makeTask());
+        yield* repository.insertTask(
+          makeTask({ taskId: CrewTaskId.make("task-2"), crewThreadId: failedRun }),
+        );
+        yield* (yield* sweep).runOnce();
+        const statuses = (yield* repository.listAllTasks()).map((task) => [
+          task.taskId,
+          task.status,
+        ]);
+        assert.deepStrictEqual(statuses, [
+          ["task-1", "closed"],
+          ["task-2", "open"],
+        ]);
+        assert.strictEqual(harness.sends.length, 1);
+        assert.strictEqual(harness.sends[0]?.threadId, BRIDGE);
+        assert.include(harness.sends[0]?.text ?? "", "invalid reference");
+        assert.include(harness.codes(), "crew.dispatch.compensate.skipped");
+      }),
+    );
+  });
+
   it.effect(
     "the boot reap closes rows whose crew thread is gone, and only rows from before boot",
     () => {

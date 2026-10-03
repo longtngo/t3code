@@ -6,8 +6,9 @@
  * set) and placed `progress` text into a live Claude session with `appendSessionNote`. V2's
  * server-native queue makes all of that upstream's job: a message sent with mode `queue`
  * starts a run on an idle thread and waits behind active work on a busy one, durably, and
- * `steer` places text into a run already in progress without starting a turn. So per pass
- * and per destination thread:
+ * `steer` places text into a run already in progress without starting a turn (upstream
+ * turns a steer that arrives just after its run ended into a new turn, and then
+ * `no-turn` is not logged). So per pass and per destination thread:
  *
  *  - any report that must be read (`needs-decision`, `done`, `failed`, `answer`) → ONE
  *    `queue` message carrying every unnoted report for that destination;
@@ -17,7 +18,10 @@
  *
  * `notedAt` is stamped only after the send was accepted, so an undelivered row is
  * re-selected next pass. The command and message ids derive from the report ids in the
- * message, so a retry of the same set replays its receipt instead of sending twice.
+ * message plus an attempt number: a retry of the same set replays an accepted receipt
+ * instead of sending twice, and moves past a rejected one, which v2 never re-runs.
+ *
+ * Each pass first settles tasks whose worktree setup failed (`settleFailedSetups`).
  *
  * Runs every 60s; `runOnce` is also the seam the tests drive directly.
  *
@@ -27,6 +31,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   CommandId,
+  CrewReportId,
   MessageId,
   ThreadId,
   type CrewReport,
@@ -41,6 +46,11 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
+import {
+  OrchestratorCommandPreviouslyRejectedError,
+  WORKSPACE_PREPARATION_INPUT,
+} from "../orchestration-v2/Orchestrator.ts";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import {
   ThreadManagementNoSteerableRunError,
   ThreadManagementService,
@@ -108,6 +118,19 @@ export function renderDelivery(
 const deliveryKey = (reportIds: ReadonlyArray<string>) =>
   NodeCrypto.createHash("sha256").update(reportIds.join("\n")).digest("hex").slice(0, 32);
 
+/**
+ * The command and message id of one delivery attempt. Attempt 0 is the bare key; a later
+ * attempt exists only because every earlier id holds a REJECTED receipt, which v2 never
+ * re-runs, so retrying under the same id could not deliver.
+ */
+export const deliveryId = (key: string, attempt: number) =>
+  attempt === 0 ? `crew:deliver:${key}` : `crew:deliver:${key}:${attempt}`;
+
+const isPreviouslyRejected = Schema.is(OrchestratorCommandPreviouslyRejectedError);
+
+/** Rejected receipts one pass walks past for one delivery before giving up until the next. */
+const MAX_ATTEMPTS_PER_PASS = 64;
+
 const makeCrewSweep = Effect.gen(function* () {
   const repository = yield* CrewRepository;
   const threads = yield* ThreadManagementService;
@@ -125,6 +148,13 @@ const makeCrewSweep = Effect.gen(function* () {
    * lines a day.
    */
   const failingDestinations = new Set<string>();
+
+  /**
+   * The attempt to start from per delivery key, so a destination that keeps rejecting does
+   * not re-walk its rejected receipts every pass. Lost on restart, when the walk below
+   * finds the first id without a rejected receipt again.
+   */
+  const nextAttempt = new Map<string, number>();
 
   const stampAll = (reports: ReadonlyArray<CrewReport>) =>
     Effect.forEach(
@@ -163,25 +193,44 @@ const makeCrewSweep = Effect.gen(function* () {
           report.state === "answer" ? task.parentThreadId : task.crewThreadId,
         ),
       );
-      const sent = yield* Effect.result(
+      const text = renderDelivery(rows);
+      const send = (attempt: number) =>
         threads.sendToThread({
           projectId: shell.projectId,
-          commandId: CommandId.make(`crew:deliver:${key}`),
+          commandId: CommandId.make(deliveryId(key, attempt)),
           threadId: destination,
-          messageId: MessageId.make(`crew:deliver:${key}`),
-          text: renderDelivery(rows),
+          messageId: MessageId.make(deliveryId(key, attempt)),
+          text,
           attachments: [],
           mode: needsTurn ? "queue" : "steer",
           ...(senders.size === 1 ? { senderThreadId: [...senders][0]! } : {}),
           createdBy: "agent",
           creationSource: "server",
-        }),
-      );
+        });
+      // An accepted receipt replays as success, so a lost stamp is re-stamped without a
+      // second message. A rejected receipt is final for its id: move to the next attempt.
+      // Bounded per pass in case a fresh id is ever reported as previously rejected; the
+      // walk resumes from `nextAttempt` on the next pass.
+      let attempt = nextAttempt.get(key) ?? 0;
+      const lastAttempt = attempt + MAX_ATTEMPTS_PER_PASS;
+      let sent = yield* Effect.result(send(attempt));
+      while (
+        sent._tag === "Failure" &&
+        isPreviouslyRejected(sent.failure) &&
+        attempt < lastAttempt
+      ) {
+        attempt += 1;
+        nextAttempt.set(key, attempt);
+        sent = yield* Effect.result(send(attempt));
+      }
 
       if (sent._tag === "Success") {
+        nextAttempt.delete(key);
         failingDestinations.delete(destination);
         yield* stampAll(rows.map(({ report }) => report));
-        if (!needsTurn) {
+        // Upstream turns a steer that arrives after its run finished into a new turn, so
+        // `no-turn` is logged only for a delivery that actually steered.
+        if (!needsTurn && sent.success.delivery === "steered") {
           yield* Effect.forEach(
             rows,
             ({ report }) =>
@@ -212,8 +261,69 @@ const makeCrewSweep = Effect.gen(function* () {
       }
     });
 
+  /**
+   * Closes open tasks whose worktree setup failed. Launch provisions in the background, so
+   * dispatch has already returned success; upstream records the failure as the crewmate's
+   * first run failing with a failed "Preparing workspace" item, and that item is the
+   * positive signal read here. The slot is freed and the bridge is told through an
+   * ordinary `failed` report, which this same pass delivers. Read from durable state, so
+   * a failure that landed while the server was down is still caught.
+   */
+  const settleFailedSetups = Effect.gen(function* () {
+    const open = yield* repository
+      .listOpenTasks()
+      .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
+    for (const task of open) {
+      const shell = yield* shellOf(task.crewThreadId);
+      if (shell?.status !== "failed") {
+        continue;
+      }
+      const records = yield* threads
+        .getThreadRecords(task.crewThreadId, ["turnItems"], {
+          turnItemTypes: ["command_execution"],
+        })
+        .pipe(Effect.catchCause(() => Effect.succeed(null)));
+      const preparation = records?.turnItems.find(
+        (item) =>
+          item.type === "command_execution" &&
+          item.input === WORKSPACE_PREPARATION_INPUT &&
+          item.status === "failed",
+      );
+      if (preparation === undefined || preparation.type !== "command_execution") {
+        continue;
+      }
+      const now = yield* nowIso;
+      yield* repository
+        .closeTask({ taskId: task.taskId, updatedAt: now })
+        .pipe(Effect.catchCause(() => Effect.void));
+      yield* repository
+        .insertReport({
+          reportId: CrewReportId.make(yield* randomUuidV4),
+          taskId: task.taskId,
+          state: "failed",
+          note: boundNoteBytes(
+            `Worktree setup failed, so the crewmate never started and its slot is free. ${preparation.output ?? ""}`.trim(),
+            1024,
+          ),
+          createdAt: now,
+          notedAt: null,
+          replyTo: null,
+        })
+        .pipe(Effect.catchCause(() => Effect.void));
+      yield* crewLog.record("crew.dispatch.compensate.skipped", {
+        taskId: task.taskId,
+        threadId: task.crewThreadId,
+        reason: "setup",
+      });
+    }
+  });
+
   const runOnce: CrewSweepShape["runOnce"] = () =>
     Effect.gen(function* () {
+      // Before delivery, so the failure report it files goes out in this pass. Cleanup,
+      // like teardown: it runs whatever the master switch says.
+      yield* settleFailedSetups;
+
       // Per pass, not at start-up, so turning crew off takes effect within one cycle.
       const enabled = yield* serverSettings.getRawSettings.pipe(
         Effect.map(crewEnabled),

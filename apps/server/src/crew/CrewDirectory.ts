@@ -140,7 +140,7 @@ const makeCrewDirectory = Effect.gen(function* () {
           type: "thread.metadata.update",
           commandId: CommandId.make(`crew:forget-worktree:${yield* randomUuidV4}`),
           threadId: task.crewThreadId,
-          branch: null,
+          // The `crew/` branch stays as the shell's crew marker (see CrewTeardown step 6).
           worktreePath: null,
         })
         .pipe(Effect.catchCause(() => Effect.void));

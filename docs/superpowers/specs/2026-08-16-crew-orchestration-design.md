@@ -379,9 +379,10 @@ the same table. `crew_report` refuses `answer` as an input state (§8), and §4'
 **On v2 there is no reaper exemption, because there is nothing for it to protect.**
 Revision 16 exempted crew threads from the session reaper because
 `appendSessionNote` held a `progress` note in an in-process queue that a reaped
-session discarded. On v2 a report is a durable message (§5): a `steer` lands in a
-running turn or is not sent at all, and a `queue` message survives the provider
-session being released. The v2 idle release therefore carries no crew check.
+session discarded. On v2 a report is a durable message (§5): a `steer` is accepted
+into the run or refused before anything is written (and upstream turns one that
+arrives after its run ended into a new turn), and a `queue` message survives the
+provider session being released. The v2 idle release therefore carries no crew check.
 
 **Revision 15 tried to _display_ this loss instead, and could not.** A
 `notedWithoutTurn` boolean grew a companion turn id and a sixth sweep step and
@@ -439,9 +440,11 @@ directions; the code stays in the `crew.deliver.*` family for both, because it
 describes the row's fate rather than its direction. Measured, the conjunct's only value was an index seek the
 query already follows with a temp b-tree sort, on an append-only table bounded at 200 non-answer rows per task, ≤400 with answers `[X: EXPLAIN QUERY PLAN, both forms]`.
 
-This is defence in depth, not a live starvation fix: one message per destination
-drains the whole pass at once, so the ordering term changes no outcome. Keep it so
-that blocking states lead if a future change ever reintroduces a per-pass bound.
+**The order decides what a delivery message quotes.** The select returns
+`needs-decision`, then the other states that must be read (`answer`, `done`,
+`failed`), then `progress` last, and the message quotes notes in that order until its
+8 KiB budget is spent. With `progress` ahead of `done`, nine 1 KiB progress notes push
+a `done` report out of the quoted text into the "…and N more" line `[X: probe R]`.
 
 **On orchestrator v2 a report travels as an ordinary v2 message**, through
 `ThreadManagementService.sendToThread` — upstream's send path, which owns the durable
@@ -463,10 +466,16 @@ message**:
 2. **Any row that must be read** (`needs-decision`, `done`, `failed`, `answer`) → one
    `queue` message carrying every unnoted row for that destination.
 3. **Only `progress` rows** → one `steer` message if the destination has a steerable
-   run, logged `crew.deliver.no-turn` per row; otherwise nothing is sent and the rows
-   stay unnoted. They ride the next message to that thread, and `crew_status` and the
-   panel show them meanwhile. Only the typed "no run to steer" refusal means "not
-   now"; every other refusal is a failed delivery.
+   run; otherwise nothing is sent and the rows stay unnoted. They ride the next
+   message to that thread, and `crew_status` and the panel show them meanwhile. Only
+   the typed "no run to steer" refusal means "not now"; every other refusal is a
+   failed delivery. `crew.deliver.no-turn` is logged per row only when the send
+   reports it steered: upstream turns a steer whose run finished between the check
+   and the dispatch into a new turn, so in that window `progress` does start a bridge
+   turn. **Accepted:** the window is the moment a run completes, the cost is one turn
+   that carries the progress note, and closing it needs an upstream "steer or drop"
+   mode that does not exist; a crew-side pre-check cannot close it, because the check
+   is what races.
 4. **Stamp `notedAt` last, only after the send was accepted.** A refused send stamps
    nothing, so the rows are re-selected next pass, and logs `crew.deliver.failed` once
    per unbroken run of failures for that destination — not 1,440 identical lines a day.
@@ -475,9 +484,17 @@ message**:
 task in one pass go to two different threads; keyed on the bridge, the answer would
 reach the bridge while the crewmate stays blocked holding a slot.
 
-**Idempotent retries.** The command and message ids derive from the report ids the
-message carries, so a send whose acceptance landed but whose stamp did not replays
-its receipt next pass instead of delivering twice.
+**Retries.** The command and message ids derive from the report ids the message
+carries plus an attempt number. An accepted receipt replays as success, so a send
+whose acceptance landed but whose stamp did not is re-stamped next pass without a
+second message — **provided the set is unchanged.** If a new report for that
+destination arrives before the next pass, the set differs, and the unstamped rows go
+out again inside the new message. That needs a database write to fail right after an
+accepted send; it duplicates text, it loses nothing. A **rejected** receipt is final
+for its id — v2 answers every later command with that id "previously rejected" — so
+the sweep moves to the next attempt number and sends again; without that, one
+transient rejection left the set undeliverable forever `[X: probe C, a rejection then
+three healthy passes, still unnoted]`. The walk past rejected ids is bounded per pass.
 
 **The message quotes each row's note** (1 KiB each, bounded at insert) until 8 KiB of
 quoted text is spent, then names the rest — "…and N more crew reports. Read them with
@@ -527,15 +544,29 @@ synchronous-at-teardown to at most 60s later.
 
 **Step 2 replaces the v1 watchdog-record clear.** v1 needed it because a stop the
 stall watchdog had already armed would resume a torn-down thread; v2 has no such
-watchdog, and interrupting before detaching means no run is left to settle into a
-completion after step 5.
+watchdog. Step 2 records the interrupt durably (`run.interrupt`), so the active run
+ends as interrupted whatever happens to the session; the provider-side interrupt is an
+outbox effect and usually lands **after** step 5's detach. The call order is not an
+ordering guarantee and nothing depends on it.
 
-Step 6 is what stops `ensureThreadWorktree` re-creating a directory the operator
-deleted (§7).
+**Every teardown run uses fresh command ids.** A fixed id would replay a rejected
+receipt forever, so `Re-run teardown` could never complete a step that was refused
+once. Running a step twice is harmless: step 6 writes the same null, and step 7 is
+skipped once the thread is archived.
 
-**No destructive git operation.** Steps 3-7 are individually idempotent and safe
-out of order. **Step 1 runs first and step 2 precedes step 5** — the one ordering
-constraint, and the pair step 2 exists for.
+Step 6 is what stops turn start re-creating a directory the operator deleted (§7). It
+clears `worktreePath` only: turn start re-creates a worktree only when path and branch
+are both set, and the `crew/<taskId>` branch is kept as the crewmate's marker, which
+is how every client silences the crewmate's notifications (§2 cost 3) without a crew
+query.
+
+**A teardown that races worktree setup** archives the thread while launch is still
+provisioning. Launch checks for an archived thread before writing the worktree back
+onto it and stops there: no worktree recorded, no setup script, no agent turn. The
+directory git created stays, as §7 requires.
+
+**No destructive git operation.** Steps 2-7 are individually idempotent and safe
+out of order. **Step 1 runs first** — the one ordering constraint.
 
 **One residual, stated rather than hidden.** Step 1 mutes the crewmate — §8
 refuses every tool on a `closed` row — before step 5 stops it. A crewmate
@@ -601,7 +632,8 @@ the repo — zero hits for `statfs|bavail|bfree|freeSpace|diskFree`, against a
 control of 7 for `worktreesDir` `[X]`; Node's `fs.statfs` is available and unused.
 `crew_dispatch` refuses when free space on `worktreesDir`'s volume is below
 `T3CODE_CREW_MIN_FREE_BYTES` (default 25 GiB), logging
-`crew.dispatch.refused.disk` with the figure. Because the ~4.8 GB accrues
+a disk refusal with the figure. **Not built:** neither the fork nor the v2 port has
+this check, so no disk code is listed in §9. Because the ~4.8 GB accrues
 asynchronously, **re-measure after `runSetupProgram()` and tear the task down if
 the bound was crossed** — that frees the slot. It does **not** free the disk;
 nothing does. Revision 13 said "compensate" here, which would have called a
@@ -689,7 +721,7 @@ dispatches while the sweep still runs and the panel still polls.
 - **Spans:** `crew.dispatch`, `crew.sweep`, `crew.deliver`, `crew.answer`,
   `crew.teardown`, `crew.tool`.
 - **Warnings, one per refusal §8 or §5 actually has:**
-  `crew.dispatch.refused.<disabled|cap|thread|provider|browser-access|disk|nested|payload>`,
+  `crew.dispatch.refused.<disabled|cap|thread|provider|browser-access|nested|payload>`,
   `crew.dispatch.compensate.skipped`,
   `crew.deliver.no-turn`, `crew.deliver.abandoned`, `crew.deliver.failed` (a send the
   destination refused for any reason but "no run to steer"; once per unbroken run of
@@ -697,9 +729,14 @@ dispatches while the sweep still runs and the panel still polls.
   `crew.tool.refused.<tool>.<reason>` — the one family covering every non-dispatch
   refusal in §8, since `crew_report`'s per-task cap and `crew_teardown`'s and
   `crew_answer`'s row lookups each need a code or §11's both-ways correspondence
-  test fails — `crew.notification.suppressed.<web-push|agent-awareness|web>`,
+  test fails — `crew.notification.suppressed.<web-push|agent-awareness>`,
   `crew.tool.invoked.<crew_dispatch|crew_status|crew_teardown|crew_answer|crew_report>`,
   `crew.teardown.step-failed.<1|2|3|4|5|6|7>`, `crew.reap.orphan`.
+  Two codes earlier revisions listed are gone because nothing can emit them: the disk
+  refusal (§7, never built) and `…suppressed.web`, whose notifier runs in the browser
+  and has no crew log (its silence is asserted in a web unit test). `…suppressed.web-push`
+  stays listed; its emitter belongs to the Web Push relay and is wired when that relay
+  and crew are integrated.
   `crew.deliver.no-turn`, `crew.deliver.abandoned` and `crew.deliver.failed` are delivery
   **outcomes**;
   every other code above names a refusal or a deferral, and the bullet header covers

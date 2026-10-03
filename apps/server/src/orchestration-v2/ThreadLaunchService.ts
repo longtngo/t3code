@@ -364,6 +364,20 @@ const make = Effect.gen(function* () {
         yield* setupTracker.stageStatus(threadId, "checkout", "done");
       }
 
+      // FORK: a thread archived while its worktree was being created (a crew teardown
+      // racing provisioning) must not have the worktree written back onto it, nor go on
+      // to run setup and start its agent. The worktree itself is left in place.
+      const shellNow = yield* threads
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      if (shellNow?.archivedAt != null) {
+        return yield* mapError(
+          input,
+          "update-thread",
+          threadId,
+        )("The thread was archived during workspace preparation.");
+      }
+
       yield* threads
         .dispatch({
           type: "thread.metadata.update",

@@ -38,6 +38,8 @@ import {
   type CrewReportState,
   type CrewTask,
   type CrewTaskView,
+  crewBranchFor,
+  isCrewBranch,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -184,6 +186,9 @@ export const crewTaskView = (
   };
 };
 
+/** Ancestors `crew_dispatch` walks looking for a crewmate; real chains are a few deep. */
+const MAX_LINEAGE_DEPTH = 32;
+
 const makeCrewService = (options?: CrewServiceOptions) =>
   Effect.gen(function* () {
     const repository = yield* CrewRepository;
@@ -209,6 +214,35 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         Effect.map(Option.isSome),
         Effect.catchCause(() => Effect.succeed(false)),
       );
+
+    /**
+     * A thread a crewmate created through upstream's own tools (`delegate_task`,
+     * `create_threads`, a fork) has no crew row of its own, so the row check alone lets it
+     * dispatch. Every one of those copies the creator's branch, and delegated and forked
+     * threads also record their parent in `lineage`; either marks the caller as inside a
+     * crewmate. The walk is bounded so a corrupt lineage cannot loop.
+     */
+    const descendsFromCrewmate = (caller: OrchestrationV2ThreadShell) =>
+      Effect.gen(function* () {
+        if (isCrewBranch(caller.branch)) {
+          return true;
+        }
+        let parentId = caller.lineage.parentThreadId;
+        for (let depth = 0; parentId !== null && depth < MAX_LINEAGE_DEPTH; depth += 1) {
+          if (yield* isCrewmate(parentId)) {
+            return true;
+          }
+          const parent = yield* shellOf(parentId);
+          if (parent === null) {
+            return false;
+          }
+          if (isCrewBranch(parent.branch)) {
+            return true;
+          }
+          parentId = parent.lineage.parentThreadId;
+        }
+        return false;
+      });
 
     const refuseDispatch = (error: CrewDispatchRefusedError, callerThreadId: ThreadId) =>
       crewLog
@@ -259,6 +293,12 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         }
 
         const caller = yield* shellOf(callerThreadId);
+        if (caller !== null && (yield* descendsFromCrewmate(caller))) {
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({ reason: "nested" }),
+            callerThreadId,
+          );
+        }
         const deliverable = deliverabilityOf(caller);
         if (caller === null || !deliverable.ok) {
           return yield* refuseDispatch(
@@ -301,7 +341,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         const crewThreadId = ThreadId.make(yield* randomUuidV4);
         // Derived from the task id, never from the prompt, so no prompt-derived text
         // reaches a path, the panel, or a log line. Unique by construction.
-        const branch = `crew/${taskId}`;
+        const branch = crewBranchFor(taskId);
         const worktreePath = `${worktreesDir}/crew/${taskId}`;
         const createdAt = yield* nowIso;
 

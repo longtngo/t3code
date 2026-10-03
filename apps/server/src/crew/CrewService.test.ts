@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 
 import { CrewRepository } from "./CrewRepository.ts";
 import { CrewService, CrewServiceLive } from "./CrewService.ts";
+import { makeCrewTeardown } from "./CrewTeardown.ts";
 import { BRIDGE, makeCrewHarness, makeTask, shellOf, withCrew } from "./crew.testkit.ts";
 
 const bridgeShells = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
@@ -165,8 +166,58 @@ describe("crew_dispatch on orchestrator v2", () => {
   });
 });
 
+describe("crew_dispatch from inside a crewmate", () => {
+  it.effect("a thread descended from a crewmate is refused as nested", () => {
+    // Multi-unit: a delegated child (lineage only), a created thread (branch only, no
+    // lineage), a grandchild of a crewmate, and an ordinary thread with a plain parent.
+    const crewmate = ThreadId.make("crew-1");
+    const lineage = (parent: string | null) => ({
+      lineage: {
+        parentThreadId: parent === null ? null : ThreadId.make(parent),
+        relationshipToParent: parent === null ? null : "subagent",
+        rootThreadId: ThreadId.make(parent ?? "root"),
+      },
+    });
+    const harness = makeCrewHarness({
+      shells: new Map<string, OrchestrationV2ThreadShell>([
+        [BRIDGE as string, shellOf(BRIDGE, { ...lineage(null), branch: null } as never)],
+        [crewmate as string, shellOf(crewmate, { ...lineage(null), branch: null } as never)],
+        [
+          "delegated",
+          shellOf(ThreadId.make("delegated"), { ...lineage("crew-1"), branch: null } as never),
+        ],
+        [
+          "grandchild",
+          shellOf(ThreadId.make("grandchild"), { ...lineage("delegated"), branch: null } as never),
+        ],
+        [
+          "created",
+          shellOf(ThreadId.make("created"), { ...lineage(null), branch: "crew/task-1" } as never),
+        ],
+        [
+          "plain-child",
+          shellOf(ThreadId.make("plain-child"), { ...lineage("bridge-1"), branch: null } as never),
+        ],
+      ]),
+    });
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* (yield* CrewRepository).insertTask(makeTask());
+        const crew = yield* service();
+        for (const caller of ["delegated", "grandchild", "created"]) {
+          const refused = yield* Effect.flip(crew.dispatch({ prompt: "x" }, ThreadId.make(caller)));
+          assert.strictEqual(refused.reason, "nested", caller);
+        }
+        const allowed = yield* crew.dispatch({ prompt: "x" }, ThreadId.make("plain-child"));
+        assert.isString(allowed.taskId);
+      }),
+    );
+  });
+});
+
 describe("crew teardown on orchestrator v2", () => {
-  it.effect("runs the seven steps in order, interrupt before session release", () => {
+  it.effect("runs the seven steps, only live sessions released, the branch kept", () => {
     const crewmate = ThreadId.make("crew-1");
     const harness = makeCrewHarness({
       shells: new Map([
@@ -189,6 +240,12 @@ describe("crew teardown on orchestrator v2", () => {
           "6:thread.metadata.update:crew-1",
           "7:thread.archive:crew-1",
         ]);
+        // Step 6 forgets the worktree but keeps the `crew/` branch, the shell's crew marker.
+        const forget = harness.commands.find(
+          (command) => command.type === "thread.metadata.update",
+        );
+        assert.deepInclude(forget, { worktreePath: null });
+        assert.notProperty(forget, "branch");
         assert.deepStrictEqual(yield* crew.openSlots(), { open: 0, limit: 4 });
       }),
     );
@@ -247,6 +304,52 @@ describe("crew teardown on orchestrator v2", () => {
       );
     },
   );
+});
+
+describe("crew teardown retries", () => {
+  it.effect("a step rejected once completes when teardown is re-run", () => {
+    // Multi-run: the first run's archive and metadata write are rejected, which leaves a
+    // rejected receipt on their ids. A re-run must not replay those receipts.
+    const crewmate = ThreadId.make("crew-1");
+    let firstRun = true;
+    const harness = makeCrewHarness({
+      shells: new Map([
+        [BRIDGE as string, shellOf(BRIDGE)],
+        [crewmate as string, shellOf(crewmate)],
+      ]),
+      rejectStep: () => firstRun,
+    });
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* (yield* CrewRepository).insertTask(makeTask());
+        const runTeardown = yield* makeCrewTeardown;
+        yield* runTeardown(makeTask());
+        assert.notInclude(harness.calls.join(" "), "thread.archive");
+        firstRun = false;
+        yield* runTeardown(makeTask({ status: "closed" }));
+        assert.includeMembers(harness.calls, [
+          "6:thread.metadata.update:crew-1",
+          "7:thread.archive:crew-1",
+        ]);
+      }),
+    );
+  });
+
+  it.effect("crew_teardown acts on open rows only", () => {
+    const harness = makeCrewHarness({ shells: bridgeShells() });
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* (yield* CrewRepository).insertTask(makeTask());
+        const crew = yield* service();
+        yield* crew.teardown({ taskId: makeTask().taskId }, BRIDGE);
+        const again = yield* Effect.flip(crew.teardown({ taskId: makeTask().taskId }, BRIDGE));
+        assert.strictEqual(again._tag, "CrewTaskNotFoundError");
+        assert.strictEqual(harness.calls.filter((call) => call.startsWith("2:")).length, 1);
+      }),
+    );
+  });
 });
 
 describe("crew_report and crew_answer authority", () => {

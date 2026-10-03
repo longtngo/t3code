@@ -79,12 +79,18 @@ export const CrewReport = Schema.Struct({
 export type CrewReport = typeof CrewReport.Type;
 
 /**
- * Why a thread is exempt from the provider session reaper, and for how long.
- *
- * A bridge is `bridge` only while it parents an `open` task, or it would stay exempt
- * forever after its first dispatch. A crewmate becomes `crewmate-closed` when its
- * task closes, so the reaper is still able to stop a crewmate whose teardown failed —
- * an unscoped exemption would turn §6's stated residual into a permanent leak.
+ * A crewmate's branch. Set on the thread before its first run, never renamed, and kept
+ * through teardown, so it marks a crewmate's thread shell on every client and every
+ * environment without a crew query.
+ */
+export const crewBranchFor = (taskId: string): string => `crew/${taskId}`;
+
+export const isCrewBranch = (branch: string | null | undefined): boolean =>
+  branch?.startsWith("crew/") === true;
+
+/**
+ * A thread's relation to crew. A bridge is `bridge` only while it parents an `open`
+ * task; a crewmate is `crewmate` while its task is open and `crewmate-closed` after.
  */
 export const CrewRole = Schema.Literals(["bridge", "crewmate", "crewmate-closed"]);
 export type CrewRole = typeof CrewRole.Type;
@@ -124,7 +130,6 @@ export const CrewDispatchRefusalReason = Schema.Literals([
   "thread",
   "provider",
   "browser-access",
-  "disk",
   "payload",
 ]);
 export type CrewDispatchRefusalReason = typeof CrewDispatchRefusalReason.Type;
@@ -153,8 +158,6 @@ export class CrewDispatchRefusedError extends Schema.TaggedError<CrewDispatchRef
         return "OpenCode cannot run as a crewmate yet. Choose claudeAgent, codex, cursor, or grok.";
       case "browser-access":
         return "Crew needs agent browser access, which is disabled. Enable it in Settings before dispatching.";
-      case "disk":
-        return `Free disk space is below the bound crew needs for a worktree (${this.detail ?? "unknown"}). Free space and retry.`;
       case "payload":
         return "The prompt is larger than the 8 KiB crew allows. Shorten it, or point the crewmate at a file.";
     }

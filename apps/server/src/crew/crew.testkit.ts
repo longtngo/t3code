@@ -18,6 +18,10 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
 import { McpSessionRegistry } from "../mcp/McpSessionRegistry.ts";
+import {
+  OrchestratorCommandPreviouslyRejectedError,
+  type OrchestratorV2Error,
+} from "../orchestration-v2/Orchestrator.ts";
 import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
 import {
   ThreadLaunchError,
@@ -55,6 +59,8 @@ export const shellOf = (
     hasActionableProposedPlan: false,
     archivedAt: null,
     deletedAt: null,
+    branch: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
     ...overrides,
   }) as unknown as OrchestrationV2ThreadShell;
 
@@ -73,7 +79,12 @@ export const makeTask = (overrides: Partial<CrewTask> = {}): CrewTask => ({
   ...overrides,
 });
 
-export type SendBehaviour = "ok" | "no-steerable-run" | "fail";
+/**
+ * `reject` models v2's receipt store: the command is rejected and its id holds a rejected
+ * receipt, so any later command with that id fails `PreviouslyRejected`. `late-steer` is
+ * upstream turning a steer that missed its run into a new turn.
+ */
+export type SendBehaviour = "ok" | "no-steerable-run" | "fail" | "reject" | "late-steer";
 
 export interface CrewHarnessOptions {
   /** Shells by thread id; absent ids read as missing. */
@@ -84,6 +95,10 @@ export interface CrewHarnessOptions {
   readonly send?: (input: ThreadManagementSendInput) => SendBehaviour;
   /** Teardown steps whose upstream call fails. */
   readonly failSteps?: ReadonlySet<number>;
+  /** `command_execution` turn items per thread, for the setup-failure check. */
+  readonly turnItems?: Map<string, ReadonlyArray<unknown>>;
+  /** Teardown dispatches (6, 7) that are rejected, leaving a rejected receipt. */
+  readonly rejectStep?: (step: number) => boolean;
   readonly settings?: { readonly enableCrew?: boolean; readonly browserAccess?: boolean };
 }
 
@@ -95,15 +110,32 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
   /** Every send, accepted or refused. */
   const attempts: Array<ThreadManagementSendInput> = [];
   const calls: Array<string> = [];
+  /** Every command passed to `ThreadManagementService.dispatch`. */
+  const commands: Array<Record<string, unknown>> = [];
   const shells = options.shells ?? new Map<string, OrchestrationV2ThreadShell>();
   const fails = (step: number) => options.failSteps?.has(step) === true;
+  /** Command ids holding a rejected receipt. */
+  const rejectedIds = new Set<string>();
+  const previouslyRejected = (commandId: string, commandType: string) =>
+    new OrchestratorCommandPreviouslyRejectedError({
+      commandId: CommandId.make(commandId),
+      commandType,
+      detail: "Previously rejected.",
+    });
 
   const threads = Layer.mock(ThreadManagementService)({
     getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
     sendToThread: (input) =>
-      Effect.suspend((): Effect.Effect<never, ThreadManagementError> => {
+      Effect.suspend((): Effect.Effect<never, ThreadManagementError | OrchestratorV2Error> => {
         attempts.push(input);
+        if (rejectedIds.has(input.commandId)) {
+          return Effect.fail(previouslyRejected(input.commandId, "message.dispatch"));
+        }
         const behaviour = options.send?.(input) ?? "ok";
+        if (behaviour === "reject") {
+          rejectedIds.add(input.commandId);
+          return Effect.fail(new ThreadManagementThreadArchivedError({ threadId: input.threadId }));
+        }
         if (behaviour === "no-steerable-run") {
           return Effect.fail(
             new ThreadManagementNoSteerableRunError({ threadId: input.threadId, mode: "steer" }),
@@ -113,7 +145,9 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
           return Effect.fail(new ThreadManagementThreadArchivedError({ threadId: input.threadId }));
         }
         sends.push(input);
-        return Effect.succeed({} as never);
+        const delivery =
+          input.mode === "steer" && behaviour !== "late-steer" ? "steered" : "queued";
+        return Effect.succeed({ delivery } as never);
       }),
     interruptThread: (input) =>
       Effect.suspend(() => {
@@ -125,6 +159,7 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
     getThreadRecords: ((threadId: ThreadId) =>
       Effect.succeed({
         thread: {},
+        turnItems: options.turnItems?.get(threadId) ?? [],
         providerSessions: [
           { id: `session-${threadId}`, status: "ready" },
           { id: `stopped-${threadId}`, status: "stopped" },
@@ -133,6 +168,14 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
     dispatch: (command) =>
       Effect.suspend(() => {
         const index = command.type === "thread.archive" ? 7 : 6;
+        commands.push(command as unknown as Record<string, unknown>);
+        if (rejectedIds.has(command.commandId)) {
+          return Effect.fail(previouslyRejected(command.commandId, command.type));
+        }
+        if (options.rejectStep?.(index) === true) {
+          rejectedIds.add(command.commandId);
+          return Effect.die(`${command.type} rejected`);
+        }
         calls.push(`${index}:${command.type}:${"threadId" in command ? command.threadId : ""}`);
         return fails(index) ? Effect.die(`${command.type} failed`) : Effect.succeed({} as never);
       }),
@@ -204,7 +247,7 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
   );
 
   const codes = () => records.map((record) => record.code);
-  return { records, codes, launches, sends, attempts, calls, shells, layer };
+  return { records, codes, launches, sends, attempts, calls, commands, shells, layer };
 };
 
 /** Runs `body` with migrations applied, under the harness's layer. */
