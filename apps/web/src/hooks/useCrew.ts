@@ -7,8 +7,6 @@ import { crewEnvironment } from "../state/crew";
 import { useEnvironmentSupportsCrew } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 
-/** Background cadence: crew state changes on a 60s sweep, so match it. */
-const IDLE_INTERVAL_MS = 60_000;
 /** Active cadence: while the panel is open, keep up with operator actions. */
 const ACTIVE_INTERVAL_MS = 5_000;
 
@@ -26,21 +24,20 @@ export interface CrewState {
 }
 
 /**
- * Poll the environment's crew via its query atom, on the `useResourceQueue`
- * cadence: slow in the background, faster while the panel is open, re-polling
- * immediately when the cadence changes so opening the panel refreshes at once.
+ * Read the environment's crew list. The background refresh belongs to the shared atom
+ * (`CREW_LIST_REFRESH_MS`), so every caller shares one poller; `fast` adds a 5s refresh
+ * while the panel is open and the tab visible, and refreshes at once when it opens.
  *
- * Polling pauses while the tab is hidden, and a transient failure keeps the last
- * list rather than blanking the panel — a crew task that vanishes and returns
- * reads as a task that was torn down, which is a different and alarming thing.
+ * A transient failure keeps the last list rather than blanking the panel — a crew task
+ * that vanishes and returns reads as a task that was torn down, which is a different and
+ * alarming thing.
  */
 export function useCrew(environmentId: EnvironmentId | null, fast: boolean): CrewState {
   const visible = useDocumentVisible();
   // `supportsCrew` is false for a null environment too, so it subsumes the
   // id check the `queryAtom` ternary below still needs for type narrowing.
   const supportsCrew = useEnvironmentSupportsCrew(environmentId);
-  const active = visible && supportsCrew;
-  const intervalMs = fast ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
+  const active = visible && supportsCrew && fast;
 
   // Nulled when unsupported, not merely left unpolled: `useEnvironmentQuery`
   // subscribes to the atom, and subscribing is what fires the first fetch. A
@@ -64,9 +61,9 @@ export function useCrew(environmentId: EnvironmentId | null, fast: boolean): Cre
   useEffect(() => {
     if (!active) return;
     refreshRef.current();
-    const id = setInterval(() => refreshRef.current(), intervalMs);
+    const id = setInterval(() => refreshRef.current(), ACTIVE_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [active, intervalMs]);
+  }, [active]);
 
   return { tasks, supported: supportsCrew };
 }

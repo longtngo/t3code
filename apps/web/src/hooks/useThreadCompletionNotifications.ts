@@ -19,7 +19,7 @@
  */
 import { useEffect, useMemo, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { isCrewBranch, type ScopedThreadRef } from "@t3tools/contracts";
 
 import { crewRolesByThread } from "@t3tools/client-runtime/state/crew";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -131,9 +131,10 @@ export function useThreadCompletionNotifications(): void {
   categoriesBox.current = categories;
 
   // Crew threads never notify (the bridge hears from its crewmates through crew
-  // reports instead). Roles come from the primary environment's `crew.list`, polled
-  // on the sweep's 60s cadence, so a crewmate whose first run finishes inside its
-  // first minute can still notify once. Held in a ref like `categories`.
+  // reports instead). A crewmate is recognised exactly from its own shell's `crew/`
+  // branch, on any environment. Only a bridge needs `crew.list`: read from the
+  // primary environment's shared atom, which refreshes every 60s, hidden tab included.
+  // Held in a ref like `categories`.
   const crewEnvironmentId = usePrimaryEnvironmentId();
   const { tasks: crewTasks } = useCrew(crewEnvironmentId, false);
   const crewRoles = useMemo(() => crewRolesByThread(crewTasks ?? []), [crewTasks]);
@@ -196,8 +197,11 @@ export function collectThreadCompletions(input: {
       nextTurnId: shell.latestRun?.runId ?? null,
       nextState,
       title: shell.title,
-      crewRole:
-        shell.environmentId === input.crewEnvironmentId ? input.crewRoles.get(shell.id) : undefined,
+      crewRole: isCrewBranch(shell.branch)
+        ? "crewmate"
+        : shell.environmentId === input.crewEnvironmentId
+          ? input.crewRoles.get(shell.id)
+          : undefined,
     });
     if (completion) {
       out.push({

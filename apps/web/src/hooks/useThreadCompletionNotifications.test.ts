@@ -4,10 +4,16 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 
 import { collectThreadCompletions } from "./useThreadCompletionNotifications";
 
-const shell = (environmentId: string, id: string, status: string): EnvironmentThreadShell =>
+const shell = (
+  environmentId: string,
+  id: string,
+  status: string,
+  branch: string | null = null,
+): EnvironmentThreadShell =>
   ({
     environmentId,
     id,
+    branch,
     title: id,
     latestRun: { runId: `run-${id}`, status },
     pendingBackgroundTasks: [],
@@ -55,5 +61,25 @@ describe("collectThreadCompletions", () => {
       "primary:bridge-1",
       "secondary:crew-1",
     ]);
+  });
+
+  it("a crewmate is silenced by its own branch, with no crew list and on any environment", () => {
+    // No roles at all: the list was never fetched, as in a hidden tab before its first
+    // poll, or on an environment other than the primary.
+    const previous = new Map<string, string | null>();
+    const threads = (status: string) => [
+      shell("primary", "plain", status, "feature/x"),
+      shell("primary", "crew-a", status, "crew/task-a"),
+      shell("secondary", "crew-b", status, "crew/task-b"),
+    ];
+    const pass = (status: string) =>
+      collectThreadCompletions({
+        previous,
+        threads: threads(status),
+        crewEnvironmentId: "primary",
+        crewRoles: new Map(),
+      }).map(({ environmentId, completion }) => `${environmentId}:${completion.threadId}`);
+    pass("running");
+    expect(pass("completed")).toEqual(["primary:plain"]);
   });
 });

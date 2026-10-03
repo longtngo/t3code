@@ -1873,10 +1873,9 @@ function OpenCommandPaletteDialog(props: {
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
-  // Crew teardown is here as well as in the sidebar because neither sidebar
-  // renders on the Settings route, and a crewmate holding a slot has to be
-  // stoppable from wherever the operator happens to be. The palette has no
-  // registration API, so this is an edit rather than a plugin.
+  // Crew teardown is here as well as in the sidebar's crew panel so a crewmate
+  // holding a slot can be stopped from the keyboard, wherever the operator is.
+  // The palette has no registration API, so this is an edit rather than a plugin.
   for (const task of crewTasks ?? []) {
     if (task.status !== "open") continue;
     actionItems.push({

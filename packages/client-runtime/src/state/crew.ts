@@ -4,13 +4,16 @@ import { Atom } from "effect/unstable/reactivity";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
+/** Crew state changes on the server's 60s sweep, so the shared list refreshes at that rate. */
+export const CREW_LIST_REFRESH_MS = 60_000;
+
 /**
- * Query-atom family for the crew panel.
+ * Query-atom family for crew.
  *
- * A one-shot RPC on the `resourceQueue.get` precedent, not a stream: crew state
- * changes on a 60s sweep and on operator actions, so the panel drives its own
- * cadence — slow while collapsed, faster while open — by refreshing this atom.
- * A short stale window is all the family needs.
+ * A one-shot RPC on the `resourceQueue.get` precedent, not a stream. Every reader of one
+ * environment's list shares one atom, and the atom refreshes itself every
+ * `CREW_LIST_REFRESH_MS` while anything is subscribed, hidden tab included — one poller
+ * per environment however many surfaces read it. An open panel refreshes faster on top.
  */
 export function createCrewEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -20,6 +23,7 @@ export function createCrewEnvironmentAtoms<R, E>(
       label: "environment-data:crew:list",
       tag: WS_METHODS.crewList,
       staleTimeMs: 5_000,
+      refreshIntervalMs: CREW_LIST_REFRESH_MS,
     }),
     teardown: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:crew:teardown",
