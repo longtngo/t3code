@@ -2206,6 +2206,7 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     hasActiveThread: true,
     isSendBusy: false,
     isConnecting: false,
+    isRevertingCheckpoint: false,
     threadDetailLoading: false,
     settingsHydrated: true,
     sendInFlight: false,
@@ -2247,6 +2248,9 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, hasActiveThread: false })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isSendBusy: true })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isConnecting: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isRevertingCheckpoint: true })).toBe(
+      true,
+    );
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(
       true,
     );

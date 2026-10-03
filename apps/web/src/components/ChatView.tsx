@@ -279,6 +279,10 @@ import { closedTabFor, useClosedTabCount, useClosedTabsStore } from "../closedTa
 import { openPreviewSession } from "./preview/openPreviewSession";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
+import { TaskListPanel } from "./TaskListPanel";
+import { deriveTaskListView, latestRunTaskCounts } from "./TaskListPanel.logic";
+import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
+import { backgroundPanelTasks } from "./BackgroundTasksPanel.logic";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
@@ -308,7 +312,14 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import {
+  enqueueTurn,
+  hasQueuedTurnForThread,
+  retireDeliveredTurns,
+  useCommandOutbox,
+  useDeliveredTurns,
+} from "~/rpc/commandOutbox";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
 import {
@@ -524,6 +535,11 @@ import {
   resolveFileAttachmentUrl,
   prepareRevertedMessageAttachments,
   waitForRevertedMessage,
+  claimThreadRewind,
+  countRevertDiscardedMessages,
+  canQueueOfflineTurn,
+  offlineQueueRefusalReason,
+  shouldAbortSendBeforeOfflineQueue,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1518,10 +1534,6 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
   return current.messageId === null ? current : { ...current, messageId: null };
 }
 
-// FORK: the Task list and Background tabs read V1 activities; they are parked
-// (unavailable) until their v2 port (backlog U6).
-const noopParkedSurface = () => {};
-
 export default function ChatView(props: ChatViewProps) {
   const {
     environmentId,
@@ -2079,6 +2091,14 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  // FORK: Escape's recall rung (see ChatComposer) reads the server queue.
+  const queuedMessageCount = useMemo(
+    () =>
+      isServerThread
+        ? (serverProjection?.runs.filter((run) => run.status === "queued").length ?? 0)
+        : 0,
+    [isServerThread, serverProjection],
+  );
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -2445,6 +2465,12 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeActivityRun, activePlan, activeRuntime]);
   const activeComposerTaskSteps =
     activeComposerTasksProgress && activePlan ? activePlan.steps : null;
+  // FORK: the Task list tab and its launcher pill share one read of the thread's v2 plans.
+  const taskListView = useMemo(
+    () => deriveTaskListView(serverProjection, activeLatestRun?.runId ?? null),
+    [activeLatestRun?.runId, serverProjection],
+  );
+  const taskCounts = useMemo(() => latestRunTaskCounts(taskListView), [taskListView]);
   const activeProjectRef = useMemo(
     () =>
       activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
@@ -3575,6 +3601,12 @@ export default function ChatView(props: ChatViewProps) {
       }),
     ];
   }, [serverProjection]);
+  // FORK: the Background tab's rows; the settled half is the banner's own list.
+  const liveBackgroundTasks = useMemo(
+    () =>
+      backgroundPanelTasks({ projection: serverProjection, settledTasks: pendingBackgroundTasks }),
+    [pendingBackgroundTasks, serverProjection],
+  );
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
@@ -3825,6 +3857,39 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [feedbackSubmissions],
   );
+  // FORK offline outbox: turns queued while this thread's environment was unreachable, and
+  // turns the flush delivered whose echo has not arrived, render as pending user bubbles.
+  // The timeline drops each one by id as soon as the server holds the message.
+  const outboxQueue = useCommandOutbox((state) => state.queue);
+  const deliveredOutbox = useDeliveredTurns((state) => state.delivered);
+  const timelineLocalMessages = useMemo(() => {
+    const pending = [
+      ...outboxQueue
+        .filter((queued) => queued.threadId === activeThread?.id)
+        .map((queued) => ({
+          messageId: queued.messageId,
+          text: queued.input.message.text,
+          enqueuedAt: queued.enqueuedAt,
+        })),
+      ...deliveredOutbox.filter((delivered) => delivered.threadId === activeThread?.id),
+    ];
+    if (pending.length === 0) return optimisticUserMessages;
+    return [
+      ...optimisticUserMessages,
+      ...pending.map((entry): ChatMessage => ({
+        id: entry.messageId,
+        role: "user",
+        text: entry.text,
+        runId: null,
+        streaming: false,
+        createdAt: entry.enqueuedAt,
+        updatedAt: entry.enqueuedAt,
+      })),
+    ];
+  }, [activeThread?.id, deliveredOutbox, optimisticUserMessages, outboxQueue]);
+  useEffect(() => {
+    retireDeliveredTurns(serverAcknowledgedUserMessageIds);
+  }, [serverAcknowledgedUserMessageIds]);
   const timelineProjectionRef = useRef<{
     readonly threadKey: string | null;
     readonly projection: TimelineEntriesProjection;
@@ -3834,7 +3899,7 @@ export default function ChatView(props: ChatViewProps) {
     const projection = deriveTimelineEntriesFromVisibleTurnItemsWithState(
       {
         visibleTurnItems: serverVisibleTurnItems,
-        optimisticMessages: optimisticUserMessages,
+        optimisticMessages: timelineLocalMessages,
         anchoredMessages: anchoredTimelineMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
@@ -3852,7 +3917,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeThreadKey,
     anchoredTimelineMessages,
-    optimisticUserMessages,
+    timelineLocalMessages,
     serverVisibleTurnItems,
     serverProjection,
     timelineAttachmentUrlById,
@@ -4515,6 +4580,10 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
+  const recallQueuedMessage = useCallback(
+    () => queuedRunsControlRef.current?.editLatest(false) ?? false,
+    [],
+  );
   const queuedEditSaveInFlightRef = useRef(false);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const queuedEditImageResources = useMemo(
@@ -5190,6 +5259,14 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const addTasksSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "tasks");
+  }, [activeThreadRef]);
+  const addBackgroundSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "background");
+  }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -7922,6 +7999,14 @@ export default function ChatView(props: ChatViewProps) {
   if (pendingRevert && pendingRevert.routeThreadKey !== routeThreadKey) {
     setPendingRevert(null);
   }
+  // FORK: the confirm states how much the rewind discards (median measured: 258 messages).
+  const pendingRevertDiscardedCount = useMemo(
+    () =>
+      pendingRevert === null
+        ? 0
+        : countRevertDiscardedMessages(serverProjection, pendingRevert.turnCount),
+    [pendingRevert, serverProjection],
+  );
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number, messageId: MessageId, restoreFiles?: boolean) => {
@@ -7966,9 +8051,7 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
-      useComposerDraftStore.setState((store) => ({
-        rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-      }));
+      if (!claimThreadRewind(routeThreadKey)) return;
       setThreadError(activeThread.id, null);
       try {
         if (composerRef.current?.hasPendingAttachments()) {
@@ -8092,9 +8175,7 @@ export default function ChatView(props: ChatViewProps) {
             );
       if (!confirmed) return;
 
-      useComposerDraftStore.setState((store) => ({
-        rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey),
-      }));
+      if (!claimThreadRewind(routeThreadKey)) return;
       setThreadError(activeThread.id, null);
       const result = await revertThreadCheckpoint({
         environmentId,
@@ -8364,13 +8445,18 @@ export default function ChatView(props: ChatViewProps) {
     };
     if (
       !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      isRevertingCheckpoint ||
-      !clientSettingsHydrated ||
-      threadDetailLoading ||
-      sendInFlightRef.current ||
-      feedbackUploadsInFlightRef.current.has(routeThreadKey)
+      shouldAbortSendBeforeOfflineQueue({
+        hasActiveThread: true,
+        isSendBusy,
+        isConnecting,
+        isRevertingCheckpoint,
+        threadDetailLoading,
+        settingsHydrated: clientSettingsHydrated,
+        sendInFlight: sendInFlightRef.current,
+        environmentUnavailable: activeEnvironmentUnavailable,
+        hasDirectAnnotation: directAnnotation !== undefined,
+        feedbackUploadInFlight: feedbackUploadsInFlightRef.current.has(routeThreadKey),
+      })
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -8387,7 +8473,10 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    if (activeEnvironmentUnavailable) {
+    // FORK: a disconnected send is queued for reconnect further down (offline outbox). What
+    // cannot be replayed from one command bails: an annotation (above), a queued-message edit,
+    // or an answer to a pending question.
+    if (activeEnvironmentUnavailable && (editingQueuedRun !== null || activePendingProgress)) {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
@@ -8633,6 +8722,81 @@ export default function ChatView(props: ChatViewProps) {
         composerReviewComments.length +
         composerThreadContexts.length,
     });
+    // FORK offline outbox: queue a plain follow-up for replay on reconnect instead of dropping
+    // it. Stays ahead of every branch below, which mutate the draft before network work.
+    if (activeEnvironmentUnavailable) {
+      const offlineQueueInput = {
+        hasText: trimmed.length > 0,
+        isServerThread,
+        isFirstMessage: !isServerThread || activeMessageCount === 0,
+        attachmentCount: composerImages.length + composerFiles.length,
+        contextCount:
+          sendableComposerTerminalContexts.length +
+          composerPreviewAnnotations.length +
+          composerReviewComments.length +
+          composerThreadContexts.length,
+        needsWorktree: sendEnvMode === "worktree" && !activeThread.worktreePath,
+        hasPendingProgress: showPlanFollowUpPrompt && activeProposedPlan !== null,
+        modesMatchThread:
+          runtimeMode === activeThread.runtimeMode &&
+          sendInteractionMode === activeThread.interactionMode,
+        alreadyQueuedForThread: hasQueuedTurnForThread(activeThread.id),
+      };
+      // A bare "/mode" switch is a client-side command, not message text.
+      if (parseStandaloneComposerSlashCommand(trimmed)) return;
+      if (!canQueueOfflineTurn(offlineQueueInput)) {
+        // An empty composer was always a silent no-op; do not start scolding.
+        if (offlineQueueInput.hasText) {
+          setThreadError(activeThread.id, offlineQueueRefusalReason(offlineQueueInput));
+        }
+        return;
+      }
+      const queuedMessageId = newMessageId();
+      const queuedCommandId = newCommandId();
+      const queued = enqueueTurn({
+        environmentId,
+        threadId: activeThread.id,
+        messageId: queuedMessageId,
+        commandId: queuedCommandId,
+        enqueuedAt: new Date().toISOString(),
+        input: {
+          threadId: activeThread.id,
+          commandId: queuedCommandId,
+          message: {
+            messageId: queuedMessageId,
+            role: "user",
+            text: formatOutgoingPrompt({
+              provider: ctxSelectedProvider,
+              model: ctxSelectedModel,
+              models: ctxSelectedProviderModels,
+              effort: ctxSelectedPromptEffort,
+              text: trimmed,
+            }),
+            attachments: [],
+          },
+          modelSelection: ctxSelectedModelSelection,
+          // `modesMatchThread` guarantees these already equal the thread's.
+          runtimeMode,
+          interactionMode: sendInteractionMode,
+          // A replay must wait behind whatever runs by then, never steer it.
+          dispatchMode: "queue",
+        },
+      });
+      if (!queued) {
+        setThreadError(
+          activeThread.id,
+          "Too many messages are already waiting to send. Reconnect to send them first.",
+        );
+        return;
+      }
+      // Retire any earlier refusal banner: it now contradicts the pending bubble.
+      setThreadError(activeThread.id, null);
+      removeSentThreadFromQueue(routeThreadKey, draftId);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
@@ -10601,6 +10765,15 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "tasks" ? (
+      <TaskListPanel
+        primary={taskListView.primary}
+        primaryKind={taskListView.primaryKind}
+        history={taskListView.history}
+        latestRunActive={!latestRunSettled}
+      />
+    ) : renderedRightPanelSurface?.kind === "background" ? (
+      <BackgroundTasksPanel tasks={liveBackgroundTasks} />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -11258,6 +11431,8 @@ export default function ChatView(props: ChatViewProps) {
                               onResume={onResume}
                               onInterrupt={onInterrupt}
                               stopRung={activeStopRung}
+                              queuedMessageCount={queuedMessageCount}
+                              onRecallQueuedMessage={recallQueuedMessage}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
                               onSelectActivePendingUserInputOption={
@@ -11482,8 +11657,8 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurface}
           onAddDevice={addDeviceSurface}
           onUndoClosedTab={undoClosedTab}
-          onAddTasks={noopParkedSurface}
-          onAddBackground={noopParkedSurface}
+          onAddTasks={addTasksSurface}
+          onAddBackground={addBackgroundSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
@@ -11492,9 +11667,11 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
           closedTabCount={closedTabCount}
-          tasksAvailable={false}
-          backgroundAvailable={false}
-          liveBackgroundCount={0}
+          tasksAvailable
+          backgroundAvailable
+          liveBackgroundCount={liveBackgroundTasks.length}
+          taskCompletedCount={taskCounts?.completed}
+          taskTotalCount={taskCounts?.total}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -11544,8 +11721,8 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequests={addPullRequestsSurface}
             onAddDevice={addDeviceSurface}
             onUndoClosedTab={undoClosedTab}
-            onAddTasks={noopParkedSurface}
-            onAddBackground={noopParkedSurface}
+            onAddTasks={addTasksSurface}
+            onAddBackground={addBackgroundSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
@@ -11554,9 +11731,11 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
             closedTabCount={closedTabCount}
-            tasksAvailable={false}
-            backgroundAvailable={false}
-            liveBackgroundCount={0}
+            tasksAvailable
+            backgroundAvailable
+            liveBackgroundCount={liveBackgroundTasks.length}
+            taskCompletedCount={taskCounts?.completed}
+            taskTotalCount={taskCounts?.total}
           >
             {rightPanelContent}
           </RightPanelTabs>
@@ -11573,8 +11752,13 @@ export default function ChatView(props: ChatViewProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Edit from here?</AlertDialogTitle>
             <AlertDialogDescription>
-              Rewind chat to before this message. Your prompt and attachments return to the
-              composer.
+              Rewind chat to before this message.
+              {pendingRevertDiscardedCount > 0
+                ? ` ${pendingRevertDiscardedCount} ${
+                    pendingRevertDiscardedCount === 1 ? "message and its" : "messages and their"
+                  } turn diffs are discarded.`
+                : ""}{" "}
+              Your prompt and attachments return to the composer.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

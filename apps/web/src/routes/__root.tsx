@@ -33,6 +33,7 @@ import { ThreadNotificationCoordinator } from "../components/ThreadNotificationC
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
+import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ProviderAuthCallbackCoordinator } from "../components/settings/ProviderAuthCallbackCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -223,6 +224,7 @@ function RootRouteView() {
         <GlassAppearanceSync />
         <FontAppearanceSync />
         <ThreadQueueCoordinator />
+        <OutboxFlushCoordinator />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />
         <FirstRunGate

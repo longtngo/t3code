@@ -12,6 +12,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -47,7 +48,11 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftThreadState,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
@@ -1530,6 +1535,8 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
   readonly hasActiveThread: boolean;
   readonly isSendBusy: boolean;
   readonly isConnecting: boolean;
+  /** A rewind is restoring this thread's composer; a send now would race it. */
+  readonly isRevertingCheckpoint: boolean;
   readonly threadDetailLoading: boolean;
   /** Load balancing reads client settings, so a send must not race their hydration. */
   readonly settingsHydrated: boolean;
@@ -1543,6 +1550,7 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
     !input.hasActiveThread ||
     input.isSendBusy ||
     input.isConnecting ||
+    input.isRevertingCheckpoint ||
     !input.settingsHydrated ||
     input.threadDetailLoading ||
     input.sendInFlight ||
@@ -1642,4 +1650,41 @@ export function restorePlanFollowUpComposer(input: {
     prompt: input.snapshot.prompt,
     detectTrigger: true,
   });
+}
+
+/**
+ * FORK: how many messages an "Edit from here" rewind to `turnCount` removes from the thread:
+ * every message of a run the rewind rolls back (ordinal above `turnCount`), the edited message
+ * included. Runs already rolled back are gone and do not count again. The rewind's target is in
+ * the loaded window, so every newer run is too and the count is exact.
+ */
+export function countRevertDiscardedMessages(
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs"> | null,
+  turnCount: number,
+): number {
+  if (projection === null) return 0;
+  const discardedRunIds = new Set(
+    projection.runs
+      .filter((run) => run.ordinal > turnCount && run.status !== "rolled_back")
+      .map((run) => run.id),
+  );
+  return projection.messages.filter(
+    (message) => message.runId !== null && discardedRunIds.has(message.runId),
+  ).length;
+}
+
+/**
+ * FORK: claims the thread's rewind slot, or returns false when a rewind already holds it.
+ * Reads the live store rather than a render's `isRevertingCheckpoint`: a second click that
+ * lands before the re-render (a double click, or one queued behind a confirm await) still sees
+ * the claim, so one confirmation cannot dispatch two rewinds or restore the prompt twice.
+ */
+export function claimThreadRewind(routeThreadKey: string): boolean {
+  let claimed = false;
+  useComposerDraftStore.setState((store) => {
+    if (store.rewindingThreadKeys.has(routeThreadKey)) return {};
+    claimed = true;
+    return { rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey) };
+  });
+  return claimed;
 }

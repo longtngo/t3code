@@ -1384,6 +1384,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   sendDisabledReason: string | null;
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
+  /** FORK (inv 4b): no provider or no project; distinct from a disconnect, which queues. */
+  isSendBlocked: boolean;
   hasSendableContent: boolean;
   canResume: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
@@ -1429,6 +1431,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         sendDisabledReason={props.sendDisabledReason}
         isConnecting={props.isConnecting}
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
+        isSendBlocked={props.isSendBlocked}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
         canResume={props.canResume}
@@ -1675,6 +1678,10 @@ export interface ChatComposerProps {
   onInterrupt: () => void;
   /** FORK Stop ladder: what the Stop button shows. */
   stopRung: StopRung;
+  /** FORK: messages waiting in the server queue; Escape takes the newest back first. */
+  queuedMessageCount: number;
+  /** FORK: opens the newest queued message in the composer; false when it cannot right now. */
+  onRecallQueuedMessage: () => boolean;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
@@ -1799,6 +1806,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onResume,
     onInterrupt,
     stopRung,
+    queuedMessageCount,
+    onRecallQueuedMessage,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -3023,9 +3032,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    // FORK (inv 4b): a disconnect leaves Send live; the message queues for reconnect.
+    // Resume cannot queue, so only it stays disabled while disconnected.
+    (showResumeAction && environmentUnavailable !== null) ||
     (!composerSendState.hasSendableContent && !showResumeAction);
-  const collapsedComposerPrimaryActionLabel = showResumeAction ? "Resume thread" : "Send message";
+  const collapsedComposerPrimaryActionLabel = showResumeAction
+    ? "Resume thread"
+    : environmentUnavailable !== null
+      ? "Queue message to send on reconnect"
+      : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -6332,8 +6347,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    * presses force-stop and a held key (auto-repeat) never reaches the hard rung.
    * Scoped by focus: every overlay that owns Escape takes focus out of this form,
    * and `document.body` counts as the chat (clicking the transcript leaves focus
-   * there). Bubble phase, so a handler that already claimed the press wins. The
-   * fork's "recall a held message" rung is gone with its client queue.
+   * there). Bubble phase, so a handler that already claimed the press wins. With
+   * messages queued, Escape first takes the newest one back into the composer
+   * (upstream's queued-message edit), so it never stops the turn the user was
+   * about to redirect.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -6350,16 +6367,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         isComposing: event.isComposing,
         hasRunningTurn: canInterrupt,
         hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
-        heldMessageCount: 0,
-        recallSupported: false,
+        heldMessageCount: queuedMessageCount,
+        recallSupported: true,
       });
+      if (action === "recall") {
+        // Declined while a queued message is already open for editing: the
+        // press must not fall through to Stop.
+        if (onRecallQueuedMessage()) event.preventDefault();
+        return;
+      }
       if (action !== "stop") return;
       event.preventDefault();
       handleInterruptPrimaryAction();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePendingApproval, canInterrupt, handleInterruptPrimaryAction, pendingUserInputs.length]);
+  }, [
+    activePendingApproval,
+    canInterrupt,
+    handleInterruptPrimaryAction,
+    onRecallQueuedMessage,
+    pendingUserInputs.length,
+    queuedMessageCount,
+  ]);
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);
@@ -6941,11 +6971,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               isSendBusy={isSendBusy}
                               sendDisabledReason={sendDisabledReason}
                               isConnecting={isConnecting}
-                              isEnvironmentUnavailable={
-                                environmentUnavailable !== null ||
-                                noProviderAvailable ||
-                                projectSelectionRequired
-                              }
+                              isEnvironmentUnavailable={environmentUnavailable !== null}
+                              isSendBlocked={noProviderAvailable || projectSelectionRequired}
                               isPreparingWorktree={false}
                               hasSendableContent={false}
                               preserveComposerFocusOnPointerDown
@@ -7700,11 +7727,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       isSendBusy={isSendBusy}
                       sendDisabledReason={sendDisabledReason}
                       isConnecting={isConnecting}
-                      isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
-                      }
+                      isEnvironmentUnavailable={environmentUnavailable !== null}
+                      isSendBlocked={noProviderAvailable || projectSelectionRequired}
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
@@ -7842,11 +7866,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isSendBusy={isSendBusy}
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
-                    isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
-                    }
+                    isEnvironmentUnavailable={environmentUnavailable !== null}
+                    isSendBlocked={noProviderAvailable || projectSelectionRequired}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     canResume={showResumeAction}
