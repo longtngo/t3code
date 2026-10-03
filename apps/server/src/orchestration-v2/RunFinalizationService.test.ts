@@ -30,6 +30,7 @@ it.effect("refreshes workspace after checkpoint capture without reading history"
   const layer = RunFinalization.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({ execute: capture }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadProjection: () =>

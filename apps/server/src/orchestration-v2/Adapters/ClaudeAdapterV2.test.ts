@@ -2057,6 +2057,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const systemNoticeReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>>();
       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+      const openedOptionsLog: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions> = [];
       const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CLAUDE_SETTINGS,
@@ -2076,6 +2077,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           open: (input) =>
             Effect.sync(() => {
               openedOptions = input.options;
+              openedOptionsLog.push(input.options);
               return {
                 messages: Stream.fromQueue(sdkMessages).pipe(
                   Stream.flatMap((message) =>
@@ -2156,11 +2158,66 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminalReceipts,
         systemNoticeReceipts,
         getOpenedOptions: () => openedOptions,
+        openedOptionsLog,
         terminalEvents,
         hasPendingBackgroundWork,
       };
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
+
+  // Fork: workspace members. The CLI fixes its directory grant when the process
+  // starts, so a changed member list must reopen the query with the new grant,
+  // and an unchanged one must keep reusing the live process.
+  it.effect("reopens the query with the new member directories only when they change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const turn = (ordinal: number, additionalDirectories: ReadonlyArray<string>) =>
+          Effect.gen(function* () {
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make(`attempt-claude-members-${ordinal}`),
+                providerTurnOrdinal: ordinal,
+                text: `Turn ${ordinal}.`,
+                attachments: [],
+                runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+                  ...CLAUDE_TEST_RUNTIME_POLICY,
+                  additionalDirectories,
+                }),
+              }),
+            );
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: `00000000-0000-4000-8000-00000000090${ordinal}`,
+                result: `Done ${ordinal}.`,
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+          });
+        const grants = () =>
+          harness.openedOptionsLog.map((options) =>
+            (options.additionalDirectories ?? []).filter((path) => path.startsWith("/repos/")),
+          );
+
+        yield* turn(1, ["/repos/warehouse"]);
+        yield* turn(2, ["/repos/warehouse"]);
+        assert.deepEqual(grants(), [["/repos/warehouse"]]);
+
+        yield* turn(3, ["/repos/warehouse", "/repos/api"]);
+        assert.deepEqual(grants(), [["/repos/warehouse"], ["/repos/warehouse", "/repos/api"]]);
+
+        // Detaching must revoke: a reused process would keep the old grant.
+        yield* turn(4, ["/repos/api"]);
+        assert.deepEqual(grants().at(-1), ["/repos/api"]);
+        assert.equal(grants().length, 3);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, IdAllocator.layer))),
+  );
 
   it.effect.each(["completed", "interrupted"] as const)(
     "projects Claude thinking blocks when %s",

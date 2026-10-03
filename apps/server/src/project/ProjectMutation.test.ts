@@ -3,8 +3,12 @@ import { CommandId, ProjectId, type Project } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
-import { projectMutationOperation } from "./ProjectMutation.ts";
-import { type ProjectService } from "./ProjectService.ts";
+import { projectMutationErrorMessage, projectMutationOperation } from "./ProjectMutation.ts";
+import {
+  ProjectMemberInvalidError,
+  ProjectOperationError,
+  type ProjectService,
+} from "./ProjectService.ts";
 
 const projectId = ProjectId.make("project:mutation-mapping");
 const project = {
@@ -99,5 +103,34 @@ it.effect("preserves every project mutation field", () =>
       },
       { commandId: "command:delete", projectId, force: true },
     ]);
+  }),
+);
+
+it.effect("tells the client which workspace member was refused, and nothing else", () =>
+  Effect.gen(function* () {
+    const detail = "warehouse is attached twice.";
+    const failWith = (error: ProjectMemberInvalidError | ProjectOperationError) => ({
+      create: () => Effect.fail(error),
+      update: () => Effect.fail(error),
+      delete: () => Effect.fail(error),
+    });
+    const update = {
+      type: "project.update",
+      commandId: CommandId.make("command:update-members"),
+      projectId,
+      members: [member, { ...member, id: "m-warehouse-2" }],
+    } as const;
+
+    const refused = yield* projectMutationOperation(
+      failWith(new ProjectMemberInvalidError({ projectId, detail })),
+      update,
+    ).pipe(Effect.flip);
+    assert.equal(projectMutationErrorMessage(refused), detail);
+
+    const internal = yield* projectMutationOperation(
+      failWith(new ProjectOperationError({ operation: "read-project", projectId, cause: "disk" })),
+      update,
+    ).pipe(Effect.flip);
+    assert.equal(projectMutationErrorMessage(internal), "Failed to mutate project.");
   }),
 );

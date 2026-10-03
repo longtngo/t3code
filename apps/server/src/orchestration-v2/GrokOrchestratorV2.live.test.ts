@@ -36,6 +36,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { worktreeRepairDependenciesTestLayer } from "./ProviderTurnStartService.testkit.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { GROK_MODEL_SELECTION } from "./testkit/fixtures/shared.ts";
 
@@ -106,6 +107,7 @@ const providerInstanceRegistryLayer = ProviderInstanceRegistryHydrationLive.pipe
 );
 
 const liveLayer = OrchestrationV2LayerLive.pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(worktreeRepairDependenciesTestLayer),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(SqlitePersistenceMemory),

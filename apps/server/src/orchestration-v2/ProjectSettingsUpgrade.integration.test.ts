@@ -27,6 +27,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import { OrchestrationV2LayerLive, ProjectServiceLayerLive } from "./runtimeLayer.ts";
+import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 const projectId = ProjectId.make("project:upgrade");
 const icon = { kind: "emoji", emoji: "🦊" } as const;
@@ -139,6 +140,7 @@ const makeRuntimeLayer = (dbPath: string) => {
     OrchestrationV2LayerLive.pipe(Layer.provide(ProjectServiceLayerLive)),
     ProjectServiceLayerLive,
   ).pipe(
+    Layer.provide(WorkspaceMemberHooks.inert),
     Layer.provide(
       Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
         peek: () => Effect.succeed(unusedEnrichment),

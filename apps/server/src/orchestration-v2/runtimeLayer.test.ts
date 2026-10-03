@@ -209,25 +209,32 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
     }),
   );
 
-const TestLayer = Layer.mergeAll(
-  OrchestrationV2LayerLive,
-  OrchestrationV2EventSinkLayerLive,
-  ProjectStore.layer,
-  EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
-).pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(SqlitePersistenceMemory),
-  Layer.provide(CheckpointStoreTestLayer),
-  Layer.provide(ServerConfigLayer),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(TestProviderInstanceRegistry),
-  Layer.provide(GitWorkflowTestLayer),
-  Layer.provide(ProjectServiceTestLayer),
-  Layer.provide(PlatformTestLayer),
-);
+const makeTestLayer = (
+  workspaceMemberHooks: Layer.Layer<WorkspaceMemberHooks.WorkspaceMemberHooks>,
+) =>
+  Layer.mergeAll(
+    OrchestrationV2LayerLive,
+    OrchestrationV2EventSinkLayerLive,
+    ProjectStore.layer,
+    EffectOutbox.layer,
+    ThreadCommandExecutor.layer,
+  ).pipe(
+    Layer.provide(workspaceMemberHooks),
+    Layer.provide(McpSessionRegistryTestkit.layer),
+    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(CheckpointStoreTestLayer),
+    Layer.provide(ServerConfigLayer),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(TestProviderInstanceRegistry),
+    Layer.provide(GitWorkflowTestLayer),
+    Layer.provide(ProjectServiceTestLayer),
+    Layer.provide(PlatformTestLayer),
+  );
+
+const TestLayer = makeTestLayer(WorkspaceMemberHooks.inert);
 
 const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(CheckpointStoreTestLayer),
@@ -245,6 +252,7 @@ const ProjectDeletionTestLayer = Layer.mergeAll(
   OrchestrationV2EventSinkLayerLive,
   ThreadCommandExecutor.layer,
 ).pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(
     Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () =>
@@ -387,6 +395,7 @@ const SharedApplicationDataPlaneTestLayer = Layer.mergeAll(
   OrchestrationV2EventSinkLayerLive,
   OrchestrationEventInfrastructureLayerLive,
 ).pipe(
+  Layer.provide(WorkspaceMemberHooks.inert),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
       normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -786,8 +795,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
   it.effect("refuses a file-restoring rollback while workspace members have moved", () => {
     const refusals: Array<string> = [];
     const refusal = "api has changed since this checkpoint.";
-    const layer = Layer.fresh(TestLayer).pipe(
-      Layer.provide(
+    // Fresh, so the suite's shared build (with inert hooks) is not reused.
+    const layer = Layer.fresh(
+      makeTestLayer(
         Layer.succeed(WorkspaceMemberHooks.WorkspaceMemberHooks, {
           checkpointStates: () => Effect.succeed(undefined),
           sweep: () => Effect.void,

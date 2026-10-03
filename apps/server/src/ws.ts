@@ -203,7 +203,10 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
-import { projectMutationOperation } from "./project/ProjectMutation.ts";
+import {
+  projectMutationErrorMessage,
+  projectMutationOperation,
+} from "./project/ProjectMutation.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -3188,11 +3191,7 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new ProjectMutationError({
                     commandId: mutation.commandId,
-                    message:
-                      cause._tag === "ProjectNotEmptyError" ||
-                      cause._tag === "ProjectMemberInvalidError"
-                        ? cause.message
-                        : "Failed to mutate project.",
+                    message: projectMutationErrorMessage(cause),
                     cause,
                   }),
               ),

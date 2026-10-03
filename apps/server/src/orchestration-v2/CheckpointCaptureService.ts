@@ -53,6 +53,7 @@ export const layer: Layer.Layer<
   | EventSink.EventSinkV2
   | IdAllocator.IdAllocatorV2
   | ProjectionStore.ProjectionStoreV2
+  | WorkspaceMemberHooks
 > = Layer.effect(
   CheckpointCaptureServiceV2,
   Effect.gen(function* () {

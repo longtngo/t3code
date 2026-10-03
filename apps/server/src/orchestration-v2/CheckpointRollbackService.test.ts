@@ -9,6 +9,7 @@ import {
   ProviderThreadId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -65,6 +66,7 @@ it.effect("rejects a non-ready checkpoint before opening a session or restoring 
   const testLayer = checkpointRollbackServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -142,6 +144,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
   const testLayer = checkpointRollbackServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -222,6 +225,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
   const testLayer = checkpointRollbackServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -293,6 +297,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
   const testLayer = checkpointRollbackServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkspaceMemberHooks.inert,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -471,6 +476,19 @@ it.effect.each([
           service.execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles }),
         );
         assert.equal(error.reason, membersMoved ? "workspace-members-moved" : "shared-workspace");
+        if (membersMoved) {
+          // The refusal names the members, in the error and to the client.
+          assert.equal(error.message, "api has changed");
+          assert.equal(
+            CheckpointRollbackService.rollbackFailureMessage(Cause.fail(error)),
+            "api has changed",
+          );
+        } else {
+          assert.equal(
+            CheckpointRollbackService.rollbackFailureMessage(Cause.fail(error)),
+            CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+          );
+        }
         assert.deepEqual(calls, []);
         return;
       }

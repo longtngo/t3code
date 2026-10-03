@@ -1214,7 +1214,9 @@ for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePr
 Every project fixture upstream adds needs `members: []` appended, and the only thing that names
 them is the **repo-wide** typecheck: they land in files that merge without a single conflict
 marker (five in the 34th reconcile; over twenty across server, client-runtime and web at the orchestrator-v2
-port). `ProjectStoreV2`'s `ProjectRow` has the same field.
+port). `ProjectStoreV2`'s `ProjectRow` has the same field. Members live only in that column:
+the baseline project events migration 64 (`OrchestrationV2`) writes carry no members, so a future
+change that rebuilds projects from events would silently drop every project's members.
 
 ### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
 

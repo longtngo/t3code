@@ -9745,6 +9745,7 @@ export const layer: Layer.Layer<
   | ProjectionStoreV2
   | RuntimePolicyV2
   | ThreadForkServiceV2
+  | WorkspaceMemberHooks
 > = Layer.effect(OrchestratorV2, makeOrchestrator()).pipe(
   Layer.provide(threadCommandExecutorLayer),
 );

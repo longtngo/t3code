@@ -51,6 +51,7 @@ import * as RuntimePolicy from "../RuntimePolicy.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
 import * as ThreadForkService from "../ThreadForkService.ts";
+import * as WorkspaceMemberHooks from "../WorkspaceMemberHooks.ts";
 import {
   runOrchestratorV2Scenario,
   type OrchestratorV2ScenarioStepError,
@@ -385,16 +386,25 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         storesLayer,
         providerSessionManagerProvided,
         runtimeLayer,
+        WorkspaceMemberHooks.inert,
       ),
     ),
   );
   const checkpointCaptureServiceProvided = CheckpointCaptureService.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(checkpointServiceProvided, eventSinkProvided, IdAllocator.layer, storesLayer),
+      Layer.mergeAll(
+        checkpointServiceProvided,
+        eventSinkProvided,
+        IdAllocator.layer,
+        storesLayer,
+        WorkspaceMemberHooks.inert,
+      ),
     ),
   );
   const runFinalizationServiceProvided = RunFinalizationService.layer.pipe(
-    Layer.provide(Layer.merge(checkpointCaptureServiceProvided, storesLayer)),
+    Layer.provide(
+      Layer.mergeAll(checkpointCaptureServiceProvided, storesLayer, WorkspaceMemberHooks.inert),
+    ),
   );
   const threadTitleRegenerationTestLayer = Layer.succeed(
     ThreadTitleRegenerationService.ThreadTitleRegenerationService,
@@ -416,6 +426,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         providerSwitchServiceProvided,
         runExecutionServiceProvided,
         ThreadForkService.layer,
+        WorkspaceMemberHooks.inert,
       ),
     ),
   );

@@ -10,9 +10,10 @@
  *   checkpoint (`rollbackRefusal`), because restoring the thread's own checkout
  *   alone would leave the workspace out of step behind a UI promising a clean undo.
  *
- * A `Context.Reference` with an inert default, like `RunFinalizationObserver`,
- * so orchestration tests that never attach members need no extra layer. The
- * server provides `live`.
+ * A required service, not a `Context.Reference` with an inert default: a
+ * default let the production wiring go missing while everything still compiled
+ * and passed. `OrchestrationV2ProductionLayerLive` provides `live`; tests that
+ * never attach members provide `inert`.
  */
 import {
   type CheckpointMemberState,
@@ -63,16 +64,20 @@ export interface WorkspaceMemberHooksShape {
   }) => Effect.Effect<string | null, HookError>;
 }
 
-export class WorkspaceMemberHooks extends Context.Reference<WorkspaceMemberHooksShape>(
-  "t3/orchestration-v2/WorkspaceMemberHooks",
-  {
-    defaultValue: () => ({
-      checkpointStates: () => Effect.succeed(undefined),
-      sweep: () => Effect.void,
-      rollbackRefusal: () => Effect.succeed(null),
-    }),
-  },
-) {}
+export class WorkspaceMemberHooks extends Context.Service<
+  WorkspaceMemberHooks,
+  WorkspaceMemberHooksShape
+>()("t3/orchestration-v2/WorkspaceMemberHooks") {}
+
+/**
+ * For orchestration tests whose projects never attach members. Production
+ * provides `live` in `OrchestrationV2ProductionLayerLive`.
+ */
+export const inert = Layer.succeed(WorkspaceMemberHooks, {
+  checkpointStates: () => Effect.succeed(undefined),
+  sweep: () => Effect.void,
+  rollbackRefusal: () => Effect.succeed(null),
+});
 
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
