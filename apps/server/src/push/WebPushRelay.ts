@@ -319,8 +319,14 @@ export interface WebPushRelayShape {
   readonly drain: Effect.Effect<void>;
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   /**
-   * Stop pushing for the rest of this process. Server shutdown calls it before it
-   * cancels the runs still in flight, which are not the user's work ending.
+   * Take no new edges for the rest of this process. Server shutdown calls it before
+   * it cancels the runs still in flight, which are not the user's work ending; edges
+   * already queued (work that really finished) still send.
+   *
+   * Not covered: Ctrl-C in a terminal signals the whole process group, so provider
+   * CLIs can exit before this finalizer runs, and the runs they leave may be marked
+   * failed or interrupted and push. Desktop and the service launcher send SIGTERM to
+   * the server only, so they take the clean path.
    */
   readonly stop: Effect.Effect<void>;
 }
@@ -361,7 +367,9 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
   const pushRepo = yield* PushSubscriptionRepository;
   const serverSettings = yield* ServerSettingsService;
   // No trace context to a third-party push service, and no span: its url.full would
-  // carry the subscription token.
+  // carry the subscription token. TracerDisabledWhen alone does both (the client skips
+  // the span and its header injection); TracerPropagationEnabled is a second guard that
+  // no test can tell apart while the first holds.
   const httpClient = (yield* HttpClient.HttpClient).pipe(
     HttpClient.transform((effect) =>
       effect.pipe(
@@ -444,7 +452,6 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
 
   const processEdge = ({ threadId, key, edge }: PushEdge) =>
     Effect.gen(function* () {
-      if (stopped) return;
       const shell = yield* threads.getThreadShell(threadId);
       if (shell === null || shell.deletedAt !== null) {
         return;

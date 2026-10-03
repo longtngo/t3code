@@ -28,6 +28,8 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -430,22 +432,99 @@ describe("WebPushRelay", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("pushes nothing for the runs server shutdown cancels", () =>
+  it.effect("still sends queued pushes at shutdown, but none for the runs it cancels", () =>
     Effect.gen(function* () {
+      const busy = ThreadId.make("push-busy");
+      const release = yield* Deferred.make<void>();
       const { relay, harness } = yield* makeHarness({
         subscriptions: [subscription(FCM)],
-        threads: stubThreads(),
+        threads: {
+          streamDomainEvents: Stream.empty,
+          // The worker is held inside the first edge, so the second is still queued
+          // when shutdown begins.
+          getThreadShell: (threadId) =>
+            threadId === busy
+              ? Deferred.await(release).pipe(Effect.as(shell({ id: busy })))
+              : Effect.succeed(shell({ id: threadId })),
+        },
       });
-      // The shape `reconcile("shutdown")` writes for a run that was running.
+      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-busy"), threadId: busy })));
+      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-legit") })));
       yield* shutdownWithNotificationsSilenced({
         silenceNotifications: relay.stop,
+        // The shape `reconcile("shutdown")` writes for a run that was running.
         shutdown: relay
-          .handleEvent(runUpdated(run({ status: "cancelled" })))
-          .pipe(Effect.andThen(relay.drain)),
+          .handleEvent(
+            runUpdated(
+              run({
+                id: RunId.make("run-cancelled"),
+                threadId: ThreadId.make("push-cut"),
+                status: "cancelled",
+              }),
+            ),
+          )
+          .pipe(Effect.andThen(Deferred.succeed(release, undefined)), Effect.andThen(relay.drain)),
       });
-      assert.deepEqual(harness.sent, []);
+      // Both runs that really finished sent; the cancelled one did not.
+      assert.deepEqual(harness.sent, [FCM, FCM]);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("sends through the real HTTP client with no trace context and no span", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const captured: Array<Headers> = [];
+    const fetch: typeof globalThis.fetch = Object.assign(
+      (_input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+        captured.push(new Headers(init?.headers));
+        return Promise.resolve(new Response(null, { status: 201 }));
+      },
+      { preconnect: () => {} },
+    );
+    return Effect.gen(function* () {
+      const secrets = new Map<string, Uint8Array>();
+      const relay = yield* makeWebPushRelay(stubThreads()).pipe(
+        Effect.provideService(
+          ServerSecretStore.ServerSecretStore,
+          ServerSecretStore.ServerSecretStore.of({
+            get: (name) => Effect.sync(() => Option.fromUndefinedOr(secrets.get(name))),
+            create: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+            set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+            remove: (name) => Effect.sync(() => void secrets.delete(name)),
+            getOrCreateRandom: () => Effect.die("unused"),
+          }),
+        ),
+        Effect.provideService(ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("push-env")),
+          getDescriptor: Effect.die("unused"),
+        }),
+        Effect.provideService(PushSubscriptionRepository, {
+          upsert: () => Effect.die("unused"),
+          list: () => Effect.succeed([subscription(FCM)]),
+          deleteByEndpoint: () => Effect.void,
+        }),
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.provide(ServerSettings.layerTest({})),
+      );
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* relay.drain;
+      assert.lengthOf(captured, 1);
+      assert.isNull(captured[0]!.get("traceparent"));
+      assert.isNull(captured[0]!.get("b3"));
+      // No client span: its url.full attribute would carry the subscription token.
+      assert.deepEqual(
+        spans.filter((span) => span.attributes.has("url.full")).map((span) => span.name),
+        [],
+      );
+    }).pipe(Effect.scoped, Effect.provideService(Tracer.Tracer, tracer));
+  });
 
   it.effect("prunes a 404 Not Found endpoint", () =>
     Effect.gen(function* () {
