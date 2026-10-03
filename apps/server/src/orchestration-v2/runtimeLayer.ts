@@ -312,6 +312,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   ),
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
+  // The client intake gate (ThreadMessageIntake) checks receipts before refusing a send.
+  commandReceiptStoreProvided,
 ).pipe(
   // Fork: workspace member repositories in capture, finalization and rollback.
   // A required service, so dropping this provide fails the server typecheck.

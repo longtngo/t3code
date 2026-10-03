@@ -1,4 +1,5 @@
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { creditSpendIntakeAllowAll } from "./ProviderTurnStartService.testkit.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -1956,7 +1957,7 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       assert.isNotNull(path);
       assert.deepEqual(yield* fs.readFile(path), new Uint8Array([1, 2, 3, 4]));
     }
-  }).pipe(Effect.provide(Layer.mergeAll(harness.layer, files)));
+  }).pipe(Effect.provide(Layer.mergeAll(harness.layer, files, creditSpendIntakeAllowAll)));
 });
 
 it.effect("cancels tracked setup before provider work is released", () =>

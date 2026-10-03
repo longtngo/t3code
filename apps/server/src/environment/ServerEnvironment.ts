@@ -245,6 +245,8 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
       jiraTicketLinks: true,
+      // FORK: refuses turns on an instance at 100% while the switch is off (CreditSpendGuard).
+      allowSpendingCredits: true,
       // FORK: the Claude adapter answers resume questions from the setting.
       offerThreadCompaction: true,
       environmentIcon: true,

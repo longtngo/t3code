@@ -1,10 +1,18 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
-import type { ChatAttachment, OrchestrationV2Command } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  CommandId,
+  OrchestrationV2Command,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
 import * as AttachmentClaims from "./AttachmentClaims.ts";
@@ -30,6 +38,50 @@ function dispatchWasNotAccepted(
 }
 const isOrchestratorError = Schema.is(Orchestrator.OrchestratorV2Error);
 
+/** A client send refused because its provider instance is at 100% with spending off. */
+export class CreditSpendRefusedError extends Schema.TaggedError<CreditSpendRefusedError>()(
+  "CreditSpendRefusedError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+/**
+ * Refuses a client send before anything is committed, so the sender keeps the message and
+ * the sidebar Queue pauses instead of draining into failed runs. The turn-start gate in
+ * `ProviderTurnStartService` stays authoritative for every other path.
+ */
+const refuseIfCreditBlocked = Effect.fn("ThreadMessageIntake.refuseIfCreditBlocked")(function* (
+  commandId: CommandId,
+  instanceId: ProviderInstanceId | undefined,
+) {
+  if (instanceId === undefined) return;
+  const reason = yield* (yield* CreditSpendGuard).refusalFor(instanceId);
+  if (reason === null) return;
+  // A replay of an accepted command must get its receipt back, not a refusal.
+  const receipt = yield* CommandReceiptStore.CommandReceiptStoreV2.pipe(
+    Effect.flatMap((receipts) => receipts.getByCommandId(commandId)),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  if (Option.isSome(receipt)) return;
+  return yield* new CreditSpendRefusedError({ detail: reason });
+});
+
+const creditGateInstanceFor = Effect.fn("ThreadMessageIntake.creditGateInstanceFor")(function* (
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" | "queue.resume" }>,
+) {
+  if (command.type === "message.dispatch" && command.modelSelection !== undefined) {
+    return command.modelSelection.instanceId;
+  }
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const shell = yield* threads
+    .getThreadShell(command.threadId)
+    .pipe(Effect.orElseSucceed(() => null));
+  return shell?.providerInstanceId;
+});
+
 const releaseUnusedClaims = Effect.fn("ThreadMessageIntake.releaseUnusedClaims")(function* (
   claimedPaths: ReadonlyArray<string>,
   accepted: ReadonlyArray<ChatAttachment>,
@@ -53,6 +105,9 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
   command: OrchestrationV2Command,
 ) {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  if (command.type === "message.dispatch" || command.type === "queue.resume") {
+    yield* refuseIfCreditBlocked(command.commandId, yield* creditGateInstanceFor(command));
+  }
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
     const incomingByQuestionId = command.attachmentsByQuestionId;
@@ -182,6 +237,9 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
   input: ThreadLaunch.ThreadLaunchInput,
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
+  if (input.initialMessage !== undefined) {
+    yield* refuseIfCreditBlocked(input.commandId, input.modelSelection.instanceId);
+  }
   yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
   if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)) {
     return yield* launches.launch(input);

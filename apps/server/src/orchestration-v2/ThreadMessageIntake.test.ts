@@ -2,10 +2,13 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   ChatAttachmentId,
   CommandId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
   EventId,
   RuntimeRequestId,
   ThreadId,
@@ -18,18 +21,23 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import {
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorDispatchError,
 } from "./Orchestrator.ts";
+import { creditSpendIntakeAllowAll } from "./ProviderTurnStartService.testkit.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { dispatchCommand } from "./ThreadMessageIntake.ts";
+import { dispatchCommand, launchThread } from "./ThreadMessageIntake.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
 
 const intakeTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-question-intake-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(creditSpendIntakeAllowAll));
 
 const failingDispatch = (captured: OrchestrationV2ServerCommand[]) =>
   Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -764,3 +772,138 @@ it.effect("applies the image budget across all questions before dispatch", () =>
     expect(captured).toEqual([]);
   }).pipe(Effect.provide(intakeTestLayer)),
 );
+
+describe("credit spend gate at client intake", () => {
+  const blockedInstance = ProviderInstanceId.make("claude-blocked");
+  const openInstance = ProviderInstanceId.make("claude-open");
+  const REASON = 'Claude has used 100% of Weekly and "Allow to spend credits" is off.';
+  const threadId = ThreadId.make("thread-credit-gate");
+
+  const gateLayer = (input: { readonly receiptExists?: boolean } = {}) =>
+    Layer.mergeAll(
+      Layer.succeed(
+        CreditSpendGuard,
+        CreditSpendGuard.of({
+          refusalFor: (instanceId) =>
+            Effect.succeed(instanceId === blockedInstance ? REASON : null),
+        }),
+      ),
+      Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({
+        getByCommandId: () =>
+          Effect.succeed(input.receiptExists === true ? Option.some({} as never) : Option.none()),
+      }),
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-credit-intake-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    );
+
+  const threadsOn = (instanceId: ProviderInstanceId, captured: OrchestrationV2ServerCommand[]) =>
+    Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadShell: () => Effect.succeed({ providerInstanceId: instanceId } as never),
+      dispatch: (command) =>
+        Effect.sync(() => {
+          captured.push(command);
+          return { sequence: 1, storedEvents: [] };
+        }),
+    });
+
+  const send = (commandId: string) =>
+    ({
+      type: "message.dispatch",
+      commandId: CommandId.make(commandId),
+      createdBy: "user",
+      creationSource: "web",
+      threadId,
+      messageId: MessageId.make(commandId),
+      text: "Go",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+    }) satisfies OrchestrationV2Command;
+
+  it.effect("refuses a send to a blocked instance before anything is dispatched", () =>
+    Effect.gen(function* () {
+      const captured: OrchestrationV2ServerCommand[] = [];
+      const error = yield* dispatchCommand(send("credit-send")).pipe(
+        Effect.provide(threadsOn(blockedInstance, captured)),
+        Effect.flip,
+      );
+      expect(error._tag).toBe("CreditSpendRefusedError");
+      expect(error.message).toBe(REASON);
+      expect(captured).toEqual([]);
+    }).pipe(Effect.provide(gateLayer())),
+  );
+
+  it.effect("judges an explicit model selection, not the thread's instance", () =>
+    Effect.gen(function* () {
+      const captured: OrchestrationV2ServerCommand[] = [];
+      yield* dispatchCommand({
+        ...send("credit-send-switch"),
+        modelSelection: { instanceId: openInstance, model: "claude" },
+      }).pipe(Effect.provide(threadsOn(blockedInstance, captured)));
+      expect(captured.map((command) => command.commandId)).toEqual(["credit-send-switch"]);
+    }).pipe(Effect.provide(gateLayer())),
+  );
+
+  it.effect("refuses resuming a held queue on a blocked instance", () =>
+    Effect.gen(function* () {
+      const captured: OrchestrationV2ServerCommand[] = [];
+      const error = yield* dispatchCommand({
+        type: "queue.resume",
+        commandId: CommandId.make("credit-resume"),
+        threadId,
+      }).pipe(Effect.provide(threadsOn(blockedInstance, captured)), Effect.flip);
+      expect(error._tag).toBe("CreditSpendRefusedError");
+      expect(captured).toEqual([]);
+    }).pipe(Effect.provide(gateLayer())),
+  );
+
+  it.effect("lets a replay of an already accepted send reach its receipt", () =>
+    Effect.gen(function* () {
+      const captured: OrchestrationV2ServerCommand[] = [];
+      yield* dispatchCommand(send("credit-replay")).pipe(
+        Effect.provide(threadsOn(blockedInstance, captured)),
+      );
+      expect(captured.map((command) => command.commandId)).toEqual(["credit-replay"]);
+    }).pipe(Effect.provide(gateLayer({ receiptExists: true }))),
+  );
+
+  it.effect("refuses launching a thread whose first message targets a blocked instance", () =>
+    Effect.gen(function* () {
+      const launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const launchInput = (instanceId: ProviderInstanceId, withMessage: boolean) =>
+        ({
+          commandId: CommandId.make(`credit-launch-${instanceId}-${withMessage}`),
+          threadId,
+          projectId: ProjectId.make("project-credit"),
+          title: "New",
+          modelSelection: { instanceId, model: "claude" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          workspaceStrategy: { type: "root" },
+          ...(withMessage ? { initialMessage: { text: "Go", attachments: [] } } : {}),
+          createdBy: "user",
+          creationSource: "web",
+        }) satisfies ThreadLaunch.ThreadLaunchInput;
+      const launchesLayer = Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: (input) =>
+          Effect.sync(() => {
+            launches.push(input);
+            return {} as ThreadLaunch.ThreadLaunchResult;
+          }),
+      });
+
+      const refused = yield* launchThread(launchInput(blockedInstance, true)).pipe(
+        Effect.provide(launchesLayer),
+        Effect.flip,
+      );
+      expect(refused._tag).toBe("CreditSpendRefusedError");
+      // An idle thread spends nothing, and another instance is unaffected.
+      yield* launchThread(launchInput(blockedInstance, false)).pipe(Effect.provide(launchesLayer));
+      yield* launchThread(launchInput(openInstance, true)).pipe(Effect.provide(launchesLayer));
+      expect(launches.map((input) => input.modelSelection.instanceId)).toEqual([
+        blockedInstance,
+        openInstance,
+      ]);
+    }).pipe(Effect.provide(gateLayer())),
+  );
+});
