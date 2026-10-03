@@ -250,6 +250,8 @@ export const make = Effect.gen(function* () {
       // FORK: `enableCrew` and the crew.* RPCs.
       crew: true,
       jiraTicketLinks: true,
+      // FORK: refuses turns on an instance at 100% while the switch is off (CreditSpendGuard).
+      allowSpendingCredits: true,
       // FORK: the Claude adapter answers resume questions from the setting.
       offerThreadCompaction: true,
       environmentIcon: true,

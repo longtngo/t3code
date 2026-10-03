@@ -20,6 +20,8 @@ import {
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as CommandReceiptStore from "../../../orchestration-v2/CommandReceiptStore.ts";
+import { CreditSpendGuard } from "../../../provider/Services/CreditSpendGuard.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -142,6 +144,9 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ManagedProjectFolders.ManagedProjectFolders,
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
+    // Read by the "Allow to spend credits" gate in ThreadMessageIntake.launchThread.
+    CreditSpendGuard,
+    CommandReceiptStore.CommandReceiptStoreV2,
   ],
 })
   .annotate(Tool.Destructive, true)

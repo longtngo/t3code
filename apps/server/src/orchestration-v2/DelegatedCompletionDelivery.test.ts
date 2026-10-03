@@ -40,7 +40,7 @@ import {
   OrchestrationV2LayerLive,
   ProjectServiceLayerLive,
 } from "./runtimeLayer.ts";
-import { worktreeRepairDependenciesTestLayer } from "./ProviderTurnStartService.testkit.ts";
+import { providerTurnStartTestDependencies } from "./ProviderTurnStartService.testkit.ts";
 import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 
 const PlatformTestLayer = Layer.merge(
@@ -112,7 +112,7 @@ const TestLayer = Layer.mergeAll(OrchestrationV2LayerLive, OrchestrationV2EventS
       normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
     }),
   ),
-  Layer.provide(worktreeRepairDependenciesTestLayer),
+  Layer.provide(providerTurnStartTestDependencies),
   Layer.provide(
     Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
       peek: () =>

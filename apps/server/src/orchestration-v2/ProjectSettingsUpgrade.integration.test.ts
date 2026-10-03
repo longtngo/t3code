@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { creditSpendGuardAllowAll } from "./ProviderTurnStartService.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -158,6 +159,7 @@ const makeRuntimeLayer = (dbPath: string) => {
     Layer.provide(checkpointStore),
     Layer.provide(serverConfig),
     Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(creditSpendGuardAllowAll),
     Layer.provide(
       Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
         getInstance: () => Effect.succeed(undefined),

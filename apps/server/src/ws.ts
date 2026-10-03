@@ -121,6 +121,8 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import * as CommandReceiptStore from "./orchestration-v2/CommandReceiptStore.ts";
+import * as CreditSpendGuard from "./provider/Services/CreditSpendGuard.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
@@ -1205,6 +1207,8 @@ const makeWsRpcLayer = (
         | ThreadLaunchService.ThreadLaunchService
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
+        | CreditSpendGuard.CreditSpendGuard
+        | CommandReceiptStore.CommandReceiptStoreV2
       >();
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -2084,6 +2088,13 @@ const makeWsRpcLayer = (
                 })),
                 Effect.catchTags({
                   AttachmentClaimError: (cause) =>
+                    new OrchestrationV2ThreadLaunchError({
+                      commandId: input.commandId,
+                      projectId: input.projectId,
+                      message: cause.message,
+                      cause,
+                    }),
+                  CreditSpendRefusedError: (cause) =>
                     new OrchestrationV2ThreadLaunchError({
                       commandId: input.commandId,
                       projectId: input.projectId,

@@ -110,8 +110,8 @@ using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 In **Settings → General**, turn off **Allow to spend credits** when you want the server to pause
 work once a provider's usage window reaches 100%. Running turns on that provider stop, and new ones
 are refused until you turn spending back on or the window resets. Threads waiting in the sidebar
-Queue pause rather than failing one by one. This only affects providers that report limits in
-**Usage → Limits**.
+Queue pause rather than failing one by one, and messages queued behind a stopped turn stay queued
+until you resume the thread. This only affects providers that report limits in **Usage → Limits**.
 
 If you downgrade to an older version of T3 Code, spending turns back on automatically: the older
 server cannot enforce this setting.

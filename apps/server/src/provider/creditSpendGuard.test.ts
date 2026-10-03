@@ -4,6 +4,7 @@ import { ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { creditSpendBlockedReason, cursorOffloadBlockedReason } from "./creditSpendGuard.ts";
 
 const instanceId = ProviderInstanceId.make("claude-1");
+const NOW_MS = Date.parse("2026-09-14T01:00:00.000Z");
 
 const provider = (usedPercent: number | null): ServerProvider =>
   ({
@@ -29,6 +30,7 @@ describe("creditSpendBlockedReason", () => {
     // works even when everything else is broken; this pins the outcome, not the ordering.
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: true,
         providers: [provider(100)],
         instanceId,
@@ -38,6 +40,7 @@ describe("creditSpendBlockedReason", () => {
 
   it("blocks an instance whose window is at the cap", () => {
     const reason = creditSpendBlockedReason({
+      nowMs: NOW_MS,
       allowSpendingCredits: false,
       providers: [provider(100)],
       instanceId,
@@ -51,6 +54,7 @@ describe("creditSpendBlockedReason", () => {
     for (const percent of [0, 99.999]) {
       expect(
         creditSpendBlockedReason({
+          nowMs: NOW_MS,
           allowSpendingCredits: false,
           providers: [provider(percent)],
           instanceId,
@@ -59,6 +63,7 @@ describe("creditSpendBlockedReason", () => {
     }
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: [provider(null)],
         instanceId,
@@ -78,7 +83,12 @@ describe("creditSpendBlockedReason", () => {
       },
     } as unknown as ServerProvider;
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [stale], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [stale],
+        instanceId,
+      }),
     ).toBeNull();
   });
 
@@ -87,10 +97,16 @@ describe("creditSpendBlockedReason", () => {
     const other = ProviderInstanceId.make("claude-2");
     const siblings = [provider(100), { ...provider(10), instanceId: other } as ServerProvider];
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: siblings, instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: siblings,
+        instanceId,
+      }),
     ).not.toBeNull();
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: siblings,
         instanceId: other,
@@ -100,10 +116,16 @@ describe("creditSpendBlockedReason", () => {
 
   it("does not block an instance it cannot find, or an absent instance id", () => {
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [],
+        instanceId,
+      }),
     ).toBeNull();
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: [provider(100)],
         instanceId: undefined,
@@ -114,7 +136,12 @@ describe("creditSpendBlockedReason", () => {
   it("falls back to the driver name when the provider has no display name", () => {
     const unnamed = { ...provider(100), displayName: undefined } as ServerProvider;
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [unnamed], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [unnamed],
+        instanceId,
+      }),
     ).toContain("claudeAgent");
   });
 });

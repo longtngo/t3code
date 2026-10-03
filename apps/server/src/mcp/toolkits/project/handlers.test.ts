@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { creditSpendIntakeAllowAll } from "../../../orchestration-v2/ProviderTurnStartService.testkit.ts";
 import {
   EnvironmentId,
   ProjectId,
@@ -69,6 +70,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
       Layer.mock(Project.ProjectService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       NodeServices.layer,
+      creditSpendIntakeAllowAll,
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-link-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -134,6 +136,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
       }),
       NodeServices.layer,
+      creditSpendIntakeAllowAll,
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-scratch-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -229,6 +232,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
           }),
       }),
       NodeServices.layer,
+      creditSpendIntakeAllowAll,
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),

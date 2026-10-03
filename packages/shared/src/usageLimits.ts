@@ -475,16 +475,23 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
 }
 
 /**
- * The windows this snapshot reports at or over their cap.
+ * The windows this snapshot reports at or over their cap as of `nowMs`.
  *
  * Empty for a provider that reports no limits and for an `unavailable` snapshot: absence of
- * a reading is not a reading of 100%, and most drivers never report limits at all.
+ * a reading is not a reading of 100%, and most drivers never report limits at all. A window
+ * counts only while its reset is still ahead (or unknown): a 100% read before a reset that
+ * has since passed describes a window that no longer exists.
  */
 export function exhaustedUsageWindows(
   limits: ServerProviderUsageLimits | undefined,
+  nowMs: number,
 ): readonly ServerProviderUsageWindow[] {
   if (!limits || limits.unavailable) return [];
-  return limits.windows.filter((window) => window.usedPercent >= 100);
+  return limits.windows.filter(
+    (window) =>
+      window.usedPercent >= 100 &&
+      (window.resetsAt === undefined || Date.parse(window.resetsAt) > nowMs),
+  );
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */

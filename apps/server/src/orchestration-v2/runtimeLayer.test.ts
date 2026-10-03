@@ -1,4 +1,14 @@
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import * as ScheduledTasksForCredit from "../scheduledTasks/ScheduledTaskService.ts";
+import * as ThreadLaunchForCredit from "./ThreadLaunchService.ts";
+import * as NodeCryptoForCredit from "@effect/platform-node/NodeCrypto";
+import * as SchedulerForCredit from "../scheduling/Scheduler.ts";
+import { runCreditSpendSweep } from "../provider/Layers/CreditSpendGuardLive.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
+import {
+  conclusiveResumeCheck,
+  creditSpendGuardAllowAll,
+} from "./ProviderTurnStartService.testkit.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -32,6 +42,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -211,6 +222,7 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
 
 const makeTestLayer = (
   workspaceMemberHooks: Layer.Layer<WorkspaceMemberHooks.WorkspaceMemberHooks>,
+  creditSpendGuard: Layer.Layer<CreditSpendGuard> = creditSpendGuardAllowAll,
 ) =>
   Layer.mergeAll(
     OrchestrationV2LayerLive,
@@ -226,12 +238,143 @@ const makeTestLayer = (
     Layer.provide(ServerConfigLayer),
     Layer.provide(ServerSettings.layerTest()),
     Layer.provide(TestProviderInstanceRegistry),
+    Layer.provide(creditSpendGuard),
     Layer.provide(GitWorkflowTestLayer),
     Layer.provide(ProjectServiceTestLayer),
     Layer.provide(PlatformTestLayer),
   );
 
 const TestLayer = makeTestLayer(WorkspaceMemberHooks.inert);
+
+// "Allow to spend credits": a gate the test flips once the active run is underway.
+const CREDIT_REFUSAL = 'Codex has used 100% of Weekly and "Allow to spend credits" is off.';
+let creditBlocked = false;
+const creditGateForTest = (instanceId: ProviderInstanceId) =>
+  Effect.sync(() =>
+    creditBlocked && instanceId === modelSelection.instanceId ? CREDIT_REFUSAL : null,
+  );
+const CreditGateTestLayer = makeTestLayer(
+  WorkspaceMemberHooks.inert,
+  Layer.succeed(
+    CreditSpendGuard,
+    CreditSpendGuard.of({
+      refusalFor: creditGateForTest,
+      cachedRefusalFor: creditGateForTest,
+      resumeCheck: conclusiveResumeCheck(creditGateForTest),
+    }),
+  ),
+);
+
+it.layer(CreditGateTestLayer)("credit spend gate", (it) => {
+  it.effect("fails a queued run that reaches its start at the limit and holds the rest", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("runtime-layer-credit-gate-queue");
+      creditBlocked = false;
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Credit gate queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      for (const index of [0, 1, 2]) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:${index}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:${index}`),
+          text: index === 0 ? "Active" : `Queued ${index}`,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
+        });
+      }
+      // The active run's provider start is not under test; it completes by event below.
+      yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["provider-turn.start"],
+        reason: "not under test",
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs.find((run) => run.status === "starting")!;
+      const [firstQueued, secondQueued] = before.runs.filter((run) => run.status === "queued");
+      assert.isDefined(activeRun);
+      assert.isDefined(firstQueued);
+      assert.isDefined(secondQueued);
+
+      const promotedRunIds = yield* Queue.unbounded<RunId>();
+      const heldRunIds = yield* Queue.unbounded<RunId>();
+      const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.runForEach((stored) =>
+          stored.event.type !== "run.updated"
+            ? Effect.void
+            : stored.event.payload.status === "starting"
+              ? Queue.offer(promotedRunIds, stored.event.payload.id)
+              : stored.event.payload.queueHeld === true
+                ? Queue.offer(heldRunIds, stored.event.payload.id)
+                : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      // The limit is reached while the active run finishes.
+      creditBlocked = true;
+      const completedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:active-completed`),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: completedAt,
+            payload: { ...activeRun, status: "completed", completedAt },
+          },
+        ],
+      });
+      assert.equal(yield* Queue.take(promotedRunIds), firstQueued.id);
+
+      // The promoted run's provider start meets the gate.
+      yield* worker.drain();
+      assert.equal(yield* Queue.take(heldRunIds), secondQueued.id);
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.runs.find((run) => run.id === firstQueued.id)?.status, "failed");
+      const refusal = after.turnItems.find(
+        (item) => item.runId === firstQueued.id && item.type === "error",
+      );
+      assert.ok(refusal?.type === "error");
+      assert.equal(refusal.failure.code, "credit_spend_blocked");
+      assert.equal(refusal.failure.message, CREDIT_REFUSAL);
+      // Nothing behind it was sent into the limit or dropped.
+      const held = after.runs.find((run) => run.id === secondQueued.id);
+      assert.equal(held?.status, "queued");
+      assert.isTrue(held?.queueHeld);
+      assert.lengthOf(
+        after.messages.filter((message) => message.role === "user"),
+        3,
+      );
+      creditBlocked = false;
+    }),
+  );
+});
 
 const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(WorkspaceMemberHooks.inert),
@@ -241,6 +384,7 @@ const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(creditSpendGuardAllowAll),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(ProjectServiceTestLayer),
   Layer.provide(PlatformTestLayer),
@@ -281,6 +425,7 @@ const ProjectDeletionTestLayer = Layer.mergeAll(
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(creditSpendGuardAllowAll),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(PlatformTestLayer),
 );
@@ -426,6 +571,7 @@ const SharedApplicationDataPlaneTestLayer = Layer.mergeAll(
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
+  Layer.provide(creditSpendGuardAllowAll),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(PlatformTestLayer),
 );
@@ -4357,6 +4503,241 @@ it.layer(TestLayer)("usage-limit recovery", (it) => {
         assert.equal(resumed.runs[1]?.status, "starting");
         assert.isFalse(resumed.runs[1]?.queueHeld);
       }
+    }),
+  );
+});
+
+// Agent (MCP) and scheduled sends reach the same turn-start gate as client sends.
+const CreditGateSqlLayer = (creditSpendGuard: Layer.Layer<CreditSpendGuard>) =>
+  Layer.mergeAll(
+    OrchestrationV2LayerLive,
+    OrchestrationV2EventSinkLayerLive,
+    ProjectStore.layer,
+    EffectOutbox.layer,
+    ThreadCommandExecutor.layer,
+  ).pipe(
+    Layer.provide(WorkspaceMemberHooks.inert),
+    Layer.provide(McpSessionRegistryTestkit.layer),
+    Layer.provide(CheckpointStoreTestLayer),
+    Layer.provide(ServerConfigLayer),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(TestProviderInstanceRegistry),
+    Layer.provide(creditSpendGuard),
+    Layer.provide(GitWorkflowTestLayer),
+    Layer.provide(ProjectServiceTestLayer),
+    Layer.provide(PlatformTestLayer),
+    Layer.provideMerge(SqlitePersistenceMemory),
+  );
+const CreditGateSendersLayer = Layer.provideMerge(
+  ScheduledTasksForCredit.layer,
+  Layer.mergeAll(
+    Layer.mock(ThreadLaunchForCredit.ThreadLaunchService)({}),
+    NodeCryptoForCredit.layer,
+    SchedulerForCredit.layer,
+  ),
+).pipe(
+  Layer.provideMerge(
+    CreditGateSqlLayer(
+      Layer.succeed(
+        CreditSpendGuard,
+        CreditSpendGuard.of({
+          refusalFor: creditGateForTest,
+          cachedRefusalFor: creditGateForTest,
+          resumeCheck: conclusiveResumeCheck(creditGateForTest),
+        }),
+      ),
+    ),
+  ),
+);
+
+it.layer(CreditGateSendersLayer)("credit spend gate: agent and scheduled sends", (it) => {
+  const createThread = (threadId: ThreadId, projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId,
+        title: "credit e2e",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+    });
+  const outcome = (threadId: ThreadId, messageId: MessageId) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const run = projection.runs.find((candidate) => candidate.userMessageId === messageId);
+      const error = projection.turnItems.find(
+        (item) => item.runId === run?.id && item.type === "error",
+      );
+      return {
+        status: run?.status,
+        code: error?.type === "error" ? error.failure.code : undefined,
+        messageKept: projection.messages.some((m) => m.id === messageId),
+      };
+    });
+
+  it.effect.each([true, false])("MCP thread send (blocked=%s)", (blocked) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make(`credit-e2e-mcp-${blocked}`);
+      const projectId = ProjectId.make(`credit-e2e-mcp-${blocked}:project`);
+      yield* createThread(threadId, projectId);
+      creditBlocked = blocked;
+      const messageId = MessageId.make(`credit-e2e-mcp-${blocked}:msg`);
+      yield* threads.sendToThread({
+        projectId,
+        commandId: CommandId.make(`credit-e2e-mcp-${blocked}:send`),
+        threadId,
+        senderThreadId: ThreadId.make("credit-e2e-parent"),
+        messageId,
+        text: "from an agent",
+        attachments: [],
+        mode: "auto",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      yield* worker.drain();
+      const result = yield* outcome(threadId, messageId);
+      creditBlocked = false;
+      if (blocked) {
+        assert.equal(result.status, "failed");
+        assert.equal(result.code, "credit_spend_blocked");
+        assert.isTrue(result.messageKept);
+      } else {
+        assert.notEqual(result.code, "credit_spend_blocked");
+      }
+    }),
+  );
+
+  it.effect.each([true, false])("scheduled task into an existing thread (blocked=%s)", (blocked) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const scheduled = yield* ScheduledTasksForCredit.ScheduledTaskService;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make(`credit-e2e-sched-${blocked}`);
+      const projectId = ProjectId.make(`credit-e2e-sched-${blocked}:project`);
+      yield* createThread(threadId, projectId);
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const taskId = `credit-e2e-task-${blocked}`;
+      yield* sql`INSERT INTO scheduled_tasks ${sql.insert({
+        task_id: taskId,
+        title: "task",
+        prompt: "scheduled prompt",
+        enabled: 1,
+        schedule_json: '{"type":"interval","everyMs":3600000}',
+        project_id: projectId,
+        thread_id: threadId,
+        workspace_strategy_json: '{"type":"root"}',
+        model_selection_json: `{"instanceId":"${modelSelection.instanceId}","model":"${modelSelection.model}"}`,
+        runtime_mode: "full-access",
+        interaction_mode: "default",
+        created_by: "user",
+        creation_source: "web",
+        created_at: now,
+        updated_at: now,
+        next_run_at: null,
+        last_run_at: null,
+        last_run_status: "never",
+        last_run_error: null,
+        run_count: 0,
+      })}`;
+      creditBlocked = blocked;
+      const ran = yield* scheduled.runNow({ id: taskId as never });
+      yield* worker.drain();
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const message = projection.messages.find((m) => m.text === "scheduled prompt");
+      assert.isDefined(message);
+      const result = yield* outcome(threadId, message!.id);
+      creditBlocked = false;
+      if (blocked) {
+        assert.equal(result.status, "failed");
+        assert.equal(result.code, "credit_spend_blocked");
+      } else {
+        assert.notEqual(result.code, "credit_spend_blocked");
+      }
+    }),
+  );
+});
+
+it.layer(CreditGateTestLayer)("credit spend gate sweep", (it) => {
+  it.effect("stops a running thread at the limit and keeps every queued message queued", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("runtime-layer-credit-sweep-hold");
+      creditBlocked = false;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Credit sweep",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      for (const index of [0, 1, 2]) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:${index}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:${index}`),
+          text: index === 0 ? "Active" : `Queued ${index}`,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
+        });
+      }
+      yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["provider-turn.start"],
+        reason: "not under test",
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs.find((run) => run.status === "starting")!;
+      const queued = before.runs.filter((run) => run.status === "queued");
+      assert.lengthOf(queued, 2);
+
+      yield* runCreditSpendSweep({
+        allowSpendingCredits: false,
+        providers: [
+          {
+            instanceId: modelSelection.instanceId,
+            driver: "codex",
+            displayName: "Codex",
+            usageLimits: {
+              checkedAt: DateTime.formatIso(yield* DateTime.now),
+              windows: [{ id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 100 }],
+            },
+          } as never,
+        ],
+        swept: yield* Ref.make<ReadonlySet<ProviderInstanceId>>(new Set()),
+      });
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.notEqual(after.runs.find((run) => run.id === activeRun.id)?.status, "starting");
+      for (const run of queued) {
+        const current = after.runs.find((candidate) => candidate.id === run.id);
+        assert.equal(current?.status, "queued");
+        assert.isTrue(current?.queueHeld);
+      }
+      assert.isFalse(after.runs.some((run) => run.status === "failed"));
     }),
   );
 });

@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import {
@@ -91,6 +92,7 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectService.ProjectService
   | ProviderAuthService.ProviderAuthService
+  | CreditSpendGuard
   | ProjectionStore.ProjectionStoreV2
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunExecutionService.RunExecutionServiceV2
@@ -105,6 +107,7 @@ export const layer: Layer.Layer<
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
+    const creditSpendGuard = yield* CreditSpendGuard;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
@@ -453,6 +456,36 @@ export const layer: Layer.Layer<
           });
           return;
         }
+      }
+      // Every provider turn starts here: client sends, queued runs, MCP and scheduled
+      // sends, delegated completions, restart continuations and steering restarts. A
+      // refused run fails with the reason as its error, and upstream's queue rule holds
+      // whatever was queued behind it on the same instance.
+      const creditRefusal = yield* creditSpendGuard.refusalFor(run.providerInstanceId);
+      if (creditRefusal !== null) {
+        const now = yield* DateTime.now;
+        yield* settleRunBeforeStart({
+          signal: "credit-spend-refused",
+          status: "failed",
+          now,
+          providerInstanceId: run.providerInstanceId,
+          itemProviderThreadId: providerThread.id,
+          item: {
+            type: "error",
+            title: "Credit limit reached",
+            failure: makeProviderFailure({
+              class: "permission_error",
+              code: "credit_spend_blocked",
+              message: creditRefusal,
+            }),
+          },
+          providerThreadUpdate: {
+            ...providerThread,
+            status: providerThread.nativeThreadRef === null ? "not_loaded" : "idle",
+            updatedAt: now,
+          },
+        });
+        return;
       }
       const { worktreePath, branch } = projection.thread;
       if (worktreePath !== null && branch !== null) {

@@ -85,6 +85,7 @@ import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import * as CreditSpendGuardLive from "./provider/Layers/CreditSpendGuardLive.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -559,6 +560,8 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestionLive,
   ProviderInstallationRefreshLive,
+  // "Allow to spend credits": stops runs on an instance the moment it reaches 100%.
+  CreditSpendGuardLive.interruptSweeperLive,
   ReplayMarkers.layer,
 ).pipe(
   // FORK: crew orchestration — the MCP tools' CrewService, the panel's CrewDirectory,
@@ -568,6 +571,8 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(CrewLayerLive),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
+  // The turn-start and client-intake gates for "Allow to spend credits".
+  Layer.provideMerge(CreditSpendGuardLive.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(ServerSettingsLayerLive),

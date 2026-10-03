@@ -102,7 +102,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         creationSource: "mcp",
       }).pipe(
         Effect.mapError((error) =>
-          error._tag === "AttachmentClaimError"
+          error._tag === "AttachmentClaimError" || error._tag === "CreditSpendRefusedError"
             ? new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message })
             : unavailable(),
         ),

@@ -185,6 +185,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.jiraTicketLinks).toBe(true);
+      // Load-bearing: this test asserts a subset, so a schema field the server stopped
+      // advertising would pass and hide the Settings switch on every client.
+      expect(second.capabilities.allowSpendingCredits).toBe(true);
       expect(second.capabilities.offerThreadCompaction).toBe(true);
       expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);

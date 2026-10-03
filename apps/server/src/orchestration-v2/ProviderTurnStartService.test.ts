@@ -38,6 +38,11 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
+import {
+  conclusiveResumeCheck,
+  creditSpendGuardAllowAll,
+} from "./ProviderTurnStartService.testkit.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -134,6 +139,7 @@ function makeMissingWorktreeHarness(input: {
         }),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
+        creditSpendGuardAllowAll,
       ),
     ),
   );
@@ -238,6 +244,8 @@ function makeLocalCommandHarness(input: {
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
+  /** The credit gate's answer per instance; spending is allowed when omitted. */
+  readonly creditRefusal?: (instanceId: ProviderInstanceId) => string | null;
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -519,6 +527,9 @@ function makeLocalCommandHarness(input: {
           return { committed, storedEvents: [] };
         }),
   );
+  const refusalFor = vi.fn((instanceId: ProviderInstanceId) =>
+    Effect.succeed(input.creditRefusal?.(instanceId) ?? null),
+  );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -563,11 +574,20 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
         }),
+        Layer.succeed(
+          CreditSpendGuard,
+          CreditSpendGuard.of({
+            refusalFor,
+            cachedRefusalFor: refusalFor,
+            resumeCheck: conclusiveResumeCheck(refusalFor),
+          }),
+        ),
       ),
     ),
   );
   return {
     open,
+    refusalFor,
     writeIfRunCurrent,
     startRootRun,
     tryHandlePromptCommand,
@@ -872,3 +892,52 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+const CREDIT_REFUSAL = 'Codex has used 100% of Weekly and "Allow to spend credits" is off.';
+
+effectIt.effect("fails a run whose instance is at its credit limit before opening a session", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      creditRefusal: (instanceId) =>
+        instanceId === ProviderInstanceId.make("codex-personal") ? CREDIT_REFUSAL : null,
+    });
+
+    yield* harness.start;
+
+    // The run's own instance is what the gate judges, not some thread default.
+    expect(harness.refusalFor).toHaveBeenCalledWith(harness.newInstanceId);
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+    expect(harness.projection().turnItems).toMatchObject([
+      {
+        type: "error",
+        title: "Credit limit reached",
+        failure: {
+          class: "permission_error",
+          code: "credit_spend_blocked",
+          message: CREDIT_REFUSAL,
+        },
+      },
+    ]);
+  }),
+);
+
+effectIt.effect("starts a run normally when the credit gate allows it", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      openFailure: new Error("reached the session open"),
+      creditRefusal: () => null,
+    });
+
+    yield* harness.start;
+
+    expect(harness.refusalFor).toHaveBeenCalledWith(harness.newInstanceId);
+    expect(harness.open).toHaveBeenCalled();
+    expect(harness.projection().turnItems).not.toMatchObject([
+      { failure: { code: "credit_spend_blocked" } },
+    ]);
+  }),
+);

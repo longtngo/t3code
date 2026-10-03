@@ -25,13 +25,15 @@ export function creditSpendBlockedReason(input: {
   readonly allowSpendingCredits: boolean;
   readonly providers: readonly ServerProvider[];
   readonly instanceId: ProviderInstanceId | undefined;
+  /** Windows whose reset is at or before this instant no longer count. */
+  readonly nowMs: number;
 }): string | null {
   // First, so that turning the switch back on takes effect immediately and unconditionally.
   if (input.allowSpendingCredits) return null;
   if (input.instanceId === undefined) return null;
   const provider = input.providers.find((entry) => entry.instanceId === input.instanceId);
   if (!provider) return null;
-  const windows = exhaustedUsageWindows(provider.usageLimits);
+  const windows = exhaustedUsageWindows(provider.usageLimits, input.nowMs);
   if (windows.length === 0) return null;
   const name = provider.displayName ?? provider.driver;
   const labels = windows.map((window) => window.label).join(", ");
