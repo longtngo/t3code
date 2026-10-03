@@ -855,6 +855,17 @@ describe("ClaudeAdapterV2 fork deltas", () => {
   );
 });
 
+/** The fields of a thread flag file these tests read. */
+const decodeThreadFlagFile = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      backend: Schema.String,
+      binaryPath: Schema.NullOr(Schema.String),
+      degraded: Schema.NullOr(Schema.String),
+    }),
+  ),
+);
+
 describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
   // The defect this feature shipped with once (2026-09-04): every flag file was right and
   // no subagent ever went to Cursor, because nothing told the AGENT. So this drives the
@@ -906,7 +917,7 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
         const onDisk =
           statePath === undefined
             ? undefined
-            : JSON.parse(yield* fileSystem.readFileString(statePath));
+            : decodeThreadFlagFile(yield* fileSystem.readFileString(statePath));
         return { statePath, append: append ?? "", onDisk, subagentThreadsDir };
       }),
     ).pipe(provide);
@@ -916,8 +927,8 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
       const on = yield* arm({ enabled: true, mode: "on" });
       assert.isString(on.statePath);
       assert.isTrue(on.statePath!.startsWith(`${on.subagentThreadsDir}/`));
-      assert.equal(on.onDisk.backend, "cursor");
-      assert.equal(on.onDisk.binaryPath, "/bin/echo");
+      assert.equal(on.onDisk?.backend, "cursor");
+      assert.equal(on.onDisk?.binaryPath, "/bin/echo");
       assert.include(on.append, "<subagent_dispatch>");
       assert.include(on.append, "~/bin/subagent-dispatch");
     }),
@@ -926,11 +937,11 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
   it.effect("a thread switched off, or the master switch off, gets no instruction", () =>
     Effect.gen(function* () {
       const off = yield* arm({ enabled: true, mode: "off" });
-      assert.equal(off.onDisk.backend, "default");
+      assert.equal(off.onDisk?.backend, "default");
       assert.notInclude(off.append, "subagent_dispatch");
       const masterOff = yield* arm({ enabled: false, mode: "on" });
-      assert.equal(masterOff.onDisk.backend, "default");
-      assert.include(masterOff.onDisk.degraded, "switched off");
+      assert.equal(masterOff.onDisk?.backend, "default");
+      assert.include(masterOff.onDisk?.degraded, "switched off");
       assert.notInclude(masterOff.append, "subagent_dispatch");
     }),
   );
