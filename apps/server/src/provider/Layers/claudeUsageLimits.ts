@@ -239,9 +239,12 @@ const toMajor = (money: Money) => money.amount_minor / 10 ** money.exponent;
 
 /**
  * FORK: extra usage, from the structured `spend` block `get_usage` returns
- * beside the windows, else the older `extra_usage` record (integer cents).
+ * beside the windows, else the older `extra_usage` record (minor units).
  * Both ship ahead of the SDK typings, so both are read structurally. Absent
  * when spending is off, or when there is neither a limit nor any spend.
+ *
+ * `usedPercent` is clamped to 100 while `used` keeps the real figure, so an
+ * overspent month draws a full bar beside text like "CAD 201.66 of CAD 200.00".
  */
 function readSpend(rateLimits: object): ServerProviderUsageSpend | undefined {
   const { spend, extra_usage: extra } = rateLimits as {
@@ -252,7 +255,15 @@ function readSpend(rateLimits: object): ServerProviderUsageSpend | undefined {
   let limit: number | undefined;
   let currency: string | undefined;
   let percent: unknown;
-  if (typeof spend === "object" && spend !== null && (spend as { enabled?: unknown }).enabled) {
+  // `spend` is authoritative when present: an explicit `enabled: false` means
+  // no row even if the older `extra_usage` record still says enabled. Only an
+  // enabled block too malformed to read falls back to `extra_usage`.
+  const spendEnabled =
+    typeof spend === "object" && spend !== null
+      ? (spend as { enabled?: unknown }).enabled
+      : undefined;
+  if (spendEnabled === false) return undefined;
+  if (spendEnabled === true) {
     const usedMoney = readMoney((spend as { used?: unknown }).used);
     const limitMoney = readMoney((spend as { limit?: unknown }).limit);
     if (usedMoney) {
@@ -261,7 +272,9 @@ function readSpend(rateLimits: object): ServerProviderUsageSpend | undefined {
       limit = limitMoney ? toMajor(limitMoney) : undefined;
       percent = (spend as { percent?: unknown }).percent;
     }
-  } else if (
+  }
+  if (
+    used === undefined &&
     typeof extra === "object" &&
     extra !== null &&
     (extra as { is_enabled?: unknown }).is_enabled === true
@@ -271,9 +284,16 @@ function readSpend(rateLimits: object): ServerProviderUsageSpend | undefined {
       monthly_limit?: unknown;
       currency?: unknown;
       utilization?: unknown;
+      decimal_places?: unknown;
     };
-    used = typeof record.used_credits === "number" ? record.used_credits / 100 : 0;
-    limit = typeof record.monthly_limit === "number" ? record.monthly_limit / 100 : undefined;
+    // Amounts are minor units at the record's own precision (2 for CAD/USD).
+    const scale =
+      10 **
+      (typeof record.decimal_places === "number" && Number.isInteger(record.decimal_places)
+        ? record.decimal_places
+        : 2);
+    used = typeof record.used_credits === "number" ? record.used_credits / scale : 0;
+    limit = typeof record.monthly_limit === "number" ? record.monthly_limit / scale : undefined;
     currency =
       typeof record.currency === "string" && record.currency.length > 0 ? record.currency : "USD";
     percent = record.utilization;

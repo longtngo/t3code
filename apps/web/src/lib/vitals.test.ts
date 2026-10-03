@@ -411,6 +411,16 @@ describe("extraUsageWindow", () => {
     });
   });
 
+  it("has no row until spending has started", () => {
+    // The real team account today: extra usage enabled, CAD 200 cap, nothing spent.
+    expect(
+      extraUsageWindow({ used: 0, limit: 200, currency: "CAD", usedPercent: 0 }, nowMs),
+    ).toBeNull();
+    expect(
+      extraUsageWindow({ used: 0.01, limit: 200, currency: "CAD", usedPercent: 0.005 }, nowMs),
+    ).not.toBeNull();
+  });
+
   it("has no row without spending or without a percentage to pace", () => {
     expect(extraUsageWindow(null, nowMs)).toBeNull();
     expect(extraUsageWindow({ used: 3, currency: "USD" }, nowMs)).toBeNull();

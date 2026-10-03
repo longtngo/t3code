@@ -193,6 +193,57 @@ describe("claudeUsageResponseToLimits spend", () => {
   });
 });
 
+describe("claudeUsageResponseToLimits spend source", () => {
+  const extra = {
+    is_enabled: true,
+    monthly_limit: 20000,
+    used_credits: 300,
+    utilization: null,
+    currency: "CAD",
+    decimal_places: 2,
+  };
+  const spendBlock = {
+    used: { amount_minor: 0, currency: "CAD", exponent: 2 },
+    limit: { amount_minor: 20000, currency: "CAD", exponent: 2 },
+    percent: 0,
+    enabled: true,
+  };
+  const spendOf = (rateLimits: object) =>
+    claudeUsageResponseToLimits({
+      checkedAt,
+      response: { rate_limits_available: true, rate_limits: rateLimits as never },
+    }).limits.spend;
+
+  it("treats a present spend block as authoritative when it says spending is off", () => {
+    expect(
+      spendOf({ spend: { ...spendBlock, enabled: false }, extra_usage: extra }),
+    ).toBeUndefined();
+  });
+
+  it("falls back to extra_usage when an enabled spend block cannot be read", () => {
+    expect(spendOf({ spend: { ...spendBlock, used: null }, extra_usage: extra })).toEqual({
+      used: 3,
+      limit: 200,
+      currency: "CAD",
+      usedPercent: 1.5,
+    });
+  });
+
+  it("scales extra_usage by its own decimal places", () => {
+    const spend = spendOf({
+      extra_usage: {
+        ...extra,
+        currency: "JPY",
+        decimal_places: 0,
+        used_credits: 7,
+        monthly_limit: 100,
+      },
+    });
+    expect(spend).toMatchObject({ used: 7, limit: 100, currency: "JPY" });
+    expect(spend?.usedPercent).toBeCloseTo(7);
+  });
+});
+
 describe("claudeRateLimitEventToUpdate", () => {
   it("scales the 0–1 utilization and epoch-second reset onto the probe's window id", () => {
     expect(

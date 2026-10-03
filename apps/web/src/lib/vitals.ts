@@ -117,7 +117,12 @@ export interface AccountUsageView {
   readonly sevenDay: UsageWindowView | null;
   /** Claude's extra usage, when spending is enabled. Paced by {@link extraUsageWindow}. */
   readonly spend: ServerProviderUsageSpend | null;
-  /** When the provider last reported these numbers. */
+  /**
+   * When the provider last reported these numbers. Honest for the ring's
+   * 5h/7d, which every turn event updates together; the model-scoped and
+   * spend rows only refresh with a probe, so they can be up to one probe
+   * interval older than this label says.
+   */
   readonly fetchedAt: string | null;
   /** Every other window, in the provider's order. The ring glyph draws only 5h/7d. */
   readonly extraWindows: ReadonlyArray<LabeledUsageWindowView>;
@@ -187,15 +192,19 @@ function formatSpend(used: number, limit: number | null, currency: string): stri
 }
 
 /**
- * Extra usage as a paced billing-month row, or null when the provider gave no
- * percentage to pace (a spend with no cap). The reset instant is derived, not
- * reported. See {@link billingMonthWindow}.
+ * Extra usage as a paced billing-month row. Null until spending has started,
+ * as on the fork (an enabled cap with nothing spent is not worth a row), and
+ * when the provider gave no percentage to pace (a spend with no cap). The
+ * reset instant is derived, not reported. See {@link billingMonthWindow}.
+ *
+ * Overspend: the bar is capped at 100% by the server's `usedPercent`, while
+ * `detail` shows the real amount, which can exceed the limit.
  */
 export function extraUsageWindow(
   spend: ServerProviderUsageSpend | null,
   nowMs: number,
 ): SpendWindowView | null {
-  if (!spend || spend.usedPercent === undefined) return null;
+  if (!spend || spend.used <= 0 || spend.usedPercent === undefined) return null;
   const { resetsAt, windowMs } = billingMonthWindow(nowMs);
   return {
     label: "Extra usage",
