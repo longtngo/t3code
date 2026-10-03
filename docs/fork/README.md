@@ -853,14 +853,29 @@ allow. A reconcile that restores the old id-only cursor inheritance (dropping
 `sharesContinuation`) silently loses history on a stopped-session switch between two instances of
 the same store, because the switch itself is no longer refused but nothing hands the cursor over.
 
-### 29. Two rate-limit events, one Codex notification
+### 29. The Vitals gauge reads the Limits tab's store, not a channel of its own
 
-Upstream #9507's Limits tab reads `account.rate-limits.updated`; the fork's composer Vitals
-gauge reads `account.usage.updated` with a `fetchedAt` stamp. Both are emitted from the single
-`account/rateLimits/updated` notification in `CodexAdapter.ts`, through two different
-normalizers (`codexRateLimitsToUpdate` and `normalizeCodexRateLimitsNotification`). A reconcile
-that keeps only upstream's branch silently blanks the gauge; one that keeps only the fork's
-leaves the Limits tab empty for Codex.
+On orchestrator v2 the gauge's usage arcs and rows come from `ServerProvider.usageLimits` for
+the thread's provider instance (`accountUsageFromLimits` in `apps/web/src/lib/vitals.ts`), the
+same snapshot upstream's Limits tab reads. The fork's `account.usage.updated` channel and its
+OAuth/Codex/Cursor pollers are gone, so there is one normalizer per provider and one poller per
+endpoint. Do not restore the fork's direct `GET /api/oauth/usage` poll: Claude's capabilities
+probe already reads the claude.ai usage endpoint through the CLI's `get_usage`, and a second
+poller doubles the rate-limited calls.
+
+Three fork deltas keep the gauge honest on top of upstream:
+
+- `usageCheckedAt` on the Claude capabilities probe. The probe is cached for 5 minutes, so the
+  status check that publishes it must stamp the limits with when they were READ, or the gauge's
+  age label calls cached numbers fresh. `resolveUsageLimitsAfterProbe` then keeps a newer runtime
+  update over an older cached read.
+- `refreshProviders({ instanceId, fresh: true })` drops the instance's probe caches before
+  re-reading it. The gauge's refresh button sends it; without `fresh` a press inside the cache
+  window re-serves the last probe.
+- Cursor windows carry `windowDurationMins` from `billingCycleStart`, so they pace.
+
+Not carried: Claude extra-usage spend, Codex credits, Cursor on-demand spend and request count.
+The store has no field for balances; `get_usage` does return `extra_usage`.
 
 ### 30. A failed session stop: clear the spinner, unless a compaction was in flight
 

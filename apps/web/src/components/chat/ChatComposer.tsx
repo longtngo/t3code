@@ -1360,9 +1360,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   environmentId: EnvironmentId;
   activeContextWindow: ContextWindowSnapshot | null;
   activeThreadProviderDisplayName: string | null;
-  activeThreadId: ThreadId | null;
   activeThreadSessionProvider: string | null;
   activeThreadModelDisplayName: string | null;
+  usageProvider: ServerProvider | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -1400,10 +1400,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     <>
       <VitalsGaugeConnected
         environmentId={props.environmentId}
-        threadId={props.activeThreadId}
         context={props.activeContextWindow}
-        // Account usage was derived from V1 activities; it returns with the v2 port (U5).
-        accountUsage={null}
+        usageProvider={props.usageProvider}
         providerDisplayName={props.activeThreadProviderDisplayName}
         modelDisplayName={props.activeThreadModelDisplayName}
         sessionProvider={props.activeThreadSessionProvider}
@@ -2120,6 +2118,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       )?.reportsContextUsage,
     [providerStatuses, activeThread?.runtime?.providerInstanceId],
   );
+  /**
+   * The instance whose usage limits the Vitals gauge shows: the one the
+   * session spent on, else the one the thread's next turn will use.
+   */
+  const usageProvider = useMemo(() => {
+    const instanceId =
+      activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId;
+    return providerStatuses.find((status) => status.instanceId === instanceId) ?? null;
+  }, [
+    providerStatuses,
+    activeThread?.runtime?.providerInstanceId,
+    activeThreadModelSelection?.instanceId,
+  ]);
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const {
     selectedProviderEntry,
@@ -7020,10 +7031,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 >
                   <VitalsGaugeConnected
                     environmentId={environmentId}
-                    threadId={activeThread?.id ?? null}
                     context={activeContextWindow}
-                    // Account usage was derived from V1 activities; it returns with U5.
-                    accountUsage={null}
+                    usageProvider={usageProvider}
                     providerDisplayName={activeThreadProviderDisplayName}
                     modelDisplayName={activeThreadModelDisplayName}
                     sessionProvider={activeThread?.runtime?.providerName ?? null}
@@ -7775,8 +7784,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
-                    activeThreadId={activeThread?.id ?? null}
                     activeThreadSessionProvider={activeThread?.runtime?.providerName ?? null}
+                    usageProvider={usageProvider}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     canInterrupt={canInterrupt}

@@ -495,9 +495,6 @@ export const WS_METHODS = {
   llmServeLoad: "llmServe.load",
   llmServeUnload: "llmServe.unload",
 
-  // Account usage — refetch from the provider, bypassing the poll's own cadence
-  accountUsageRefresh: "account.usage.refresh",
-
   // Resource broker (resctl) — one-shot queue status read
   getResourceQueue: "resourceQueue.get",
   crewList: "crew.list",
@@ -618,7 +615,9 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
     instanceId: Schema.optional(ProviderInstanceId),
     cwd: Schema.optional(TrimmedNonEmptyString),
     /** With `instanceId` and `cwd`: rescan the workspace's skills and slash
-     * commands even when a snapshot for that cwd already exists. */
+     * commands even when a snapshot for that cwd already exists. With
+     * `instanceId` alone: drop the instance's probe caches before re-reading
+     * it, so on-demand usage limits are fetched rather than served cached. */
     fresh: Schema.optional(Schema.Boolean),
     /** Explicit user request: bypass T3-owned caches and rediscover models.
      * Background status refreshes must not open agent sessions. */
@@ -897,45 +896,6 @@ const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates
 const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
-  error: EnvironmentAuthorizationError,
-});
-
-/**
- * Refetch account usage from every configured provider now, instead of waiting for
- * the background poll. The adapters' on-demand path deliberately skips the "are any
- * sessions active" check the scheduled poll applies, so this is the cache bypass and
- * not a nudge to the scheduler.
- *
- * Answers as soon as the fetches settle, not with the usage itself: the numbers reach
- * clients the way they always do, as an `account.usage.updated` activity, so there is
- * one path for the UI to render and no second shape to keep in step. A provider that
- * fails is logged and skipped rather than failing the call, because one broken
- * provider must not deny the others their refresh.
- */
-/**
- * On-demand account-usage refresh.
- *
- * `threadId` names the thread whose UI asked. It is optional because the
- * environment-wide press and the background poller have no thread, but a press
- * that omits it only reaches threads with a LIVE provider session — which for
- * some providers is none of them — so the client should always send it when it
- * has one.
- *
- * `emitted` counts the `account.usage.updated` events the press produced, and
- * `requestedThreadServed` says whether the named thread was one of them - null
- * when no thread was named. Neither is rendered; they exist so that "polled
- * fine, reached nobody" is distinguishable from "worked", which `{ok:true}`
- * alone never was. The count on its own cannot answer it: it rises as soon as
- * any adapter emits for any live session, including threads nobody is looking
- * at.
- */
-export const WsAccountUsageRefreshRpc = Rpc.make(WS_METHODS.accountUsageRefresh, {
-  payload: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
-  success: Schema.Struct({
-    ok: Schema.Literal(true),
-    emitted: Schema.Number,
-    requestedThreadServed: Schema.NullOr(Schema.Boolean),
-  }),
   error: EnvironmentAuthorizationError,
 });
 

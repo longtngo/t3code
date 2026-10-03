@@ -637,11 +637,16 @@ export const ProviderRegistryLive = Layer.effect(
 
     const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
+      options?: { readonly fresh?: boolean },
     ) {
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
       if (!providerSource) {
         return yield* Ref.get(providersRef);
+      }
+      if (options?.fresh) {
+        const instance = yield* instanceRegistry.getInstance(instanceId);
+        yield* instance?.invalidateCaches ?? Effect.void;
       }
       return yield* refreshOneSource(providerSource);
     });
@@ -979,8 +984,8 @@ export const ProviderRegistryLive = Layer.effect(
       getProviders: Ref.get(providersRef),
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
-      refreshInstance: (instanceId: ProviderInstanceId) =>
-        refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshInstance: (instanceId: ProviderInstanceId, options?: { readonly fresh?: boolean }) =>
+        refreshInstance(instanceId, options).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshWorkspaceSnapshot: (input) =>
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,

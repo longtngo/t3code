@@ -121,6 +121,11 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
  * per-window epoch bookkeeping needed to reconcile the two was more code
  * than the sub-second regression it prevented. The next runtime event
  * corrects it.
+ *
+ * FORK: a probe can serve a cached read (Claude caches its capabilities
+ * probe for minutes), so a successful probe whose windows were read BEFORE
+ * the published ones keeps the published snapshot rather than reverting a
+ * newer runtime update to older numbers.
  */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
@@ -128,6 +133,15 @@ export function resolveUsageLimitsAfterProbe(input: {
 }): ServerProviderUsageLimits | undefined {
   const { published, probed } = input;
   if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
+    return published;
+  }
+  if (
+    probed &&
+    published &&
+    !probed.unavailable &&
+    !published.unavailable &&
+    Date.parse(probed.checkedAt) < Date.parse(published.checkedAt)
+  ) {
     return published;
   }
   return probed;

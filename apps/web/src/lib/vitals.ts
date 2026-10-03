@@ -1,12 +1,4 @@
-/**
- * The two fields {@link deriveLatestAccountUsage} reads from an activity. V1's
- * `OrchestrationThreadActivity` is gone under orchestrator v2; the account-usage
- * source returns with the v2 port (U5), so this stays structural until then.
- */
-export interface AccountUsageActivity {
-  readonly kind: string;
-  readonly payload: unknown;
-}
+import type { ServerProviderUsageLimits } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 
 import { formatShortTimestamp } from "../timestampFormat";
@@ -15,8 +7,7 @@ import { formatShortTimestamp } from "../timestampFormat";
  * Vitals gauge logic — the pure (testable) core behind the header's combined
  * context / usage-limit / host-resource affordance. Covers the two severity
  * ramps the user specified, the pace projection for rolling usage windows, the
- * client-side reader for the (previously unsurfaced) `account.usage.updated`
- * activity, and the split-ring arc geometry.
+ * view of a provider's usage limits, and the split-ring arc geometry.
  */
 
 export type Severity = "ok" | "warn" | "high" | "crit";
@@ -81,342 +72,85 @@ export function clampPct(value: number): number {
 /** Rolling-window durations, in ms, used to turn `resetsAt` into an elapsed fraction. */
 export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 export const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const ONE_MINUTE_MS = 60 * 1000;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
 export interface UsageWindowView {
-  /** Float percent 0..100(+). */
+  /** Float percent 0..100. */
   readonly utilization: number;
   /** ISO 8601 reset instant, or null when the provider doesn't expose one. */
   readonly resetsAt: string | null;
 }
 
 /**
- * A provider-native usage window (Codex primary/secondary, Cursor auto/api/total)
- * shown in the limits popover alongside — or instead of — Claude's 5h/7d. Carries
- * its own label and window length; `windowMs` is null when the provider exposes no
- * fixed window duration (then the row shows utilization only, no pace projection).
+ * Any window other than Claude's 5h/7d (Codex session/weekly, Cursor's cycle
+ * pools, Claude's model-scoped weekly), shown as a popover row. `windowMs` is
+ * null when the provider sends no window length, and the row then shows
+ * utilization without a pace projection.
  */
 export interface LabeledUsageWindowView extends UsageWindowView {
+  readonly id: string;
   readonly label: string;
   readonly windowMs: number | null;
   readonly segmentCount?: number | undefined;
 }
 
-/**
- * A limits row that is a balance rather than a window.
- *
- * Credits and on-demand spend have no reset time and no elapsed fraction, so
- * they cannot be paced and must not be rendered as a window: a pace bar implies
- * a deadline that these do not have. `detail` is already display-ready.
- */
-export interface UsageBalanceView {
-  readonly label: string;
-  readonly detail: string;
-  /** Present only when the balance genuinely has a ceiling to sit against. */
-  readonly utilization: number | null;
-}
-
-/**
- * A spend row rendered as a paced window rather than a bare balance.
- *
- * The reset instant is DERIVED (see {@link billingMonthWindow}), not sent by the
- * provider, which is why this is a distinct shape from
- * {@link LabeledUsageWindowView}: `detail` carries the money figure that a
- * percentage-only window row would drop, and `segmentCount` the days in the
- * month.
- */
-export interface SpendWindowView extends UsageWindowView {
-  readonly label: string;
-  readonly detail: string;
-  readonly windowMs: number;
-  readonly segmentCount: number;
-}
-
 export interface AccountUsageView {
   readonly fiveHour: UsageWindowView | null;
   readonly sevenDay: UsageWindowView | null;
-  /**
-   * Claude's extra-usage spend, paced against a derived calendar month. Null
-   * when the account has no extra usage to show.
-   */
-  readonly extraUsage: SpendWindowView | null;
-  /** When the account-usage snapshot was fetched from the provider, if known. */
+  /** When the provider last reported these numbers. */
   readonly fetchedAt: string | null;
-  /**
-   * Extra provider-native windows for the limits block (Codex/Cursor). Empty for
-   * a Claude account. The ring glyph stays Claude-only (context + 5h + 7d); these
-   * render as additional popover rows.
-   */
+  /** Every other window, in the provider's order. The ring glyph draws only 5h/7d. */
   readonly extraWindows: ReadonlyArray<LabeledUsageWindowView>;
-  /**
-   * Provider balances that are not windows — Cursor on-demand spend and request
-   * count, Codex credits. Empty for a Claude account.
-   */
-  readonly balances: ReadonlyArray<UsageBalanceView>;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function parseUsageWindow(value: unknown): UsageWindowView | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const utilization = asFiniteNumber(record.utilization);
-  if (utilization === null) return null;
-  const resetsAt = typeof record.resetsAt === "string" ? record.resetsAt : null;
-  return { utilization, resetsAt };
-}
-
-/** Human label for a Codex window from its length in minutes, else a fallback. */
-function codexWindowLabel(windowDurationMins: number | null, fallback: string): string {
-  if (windowDurationMins === null || windowDurationMins <= 0) return fallback;
-  if (windowDurationMins % 1440 === 0) return `Codex ${windowDurationMins / 1440}d`;
-  if (windowDurationMins % 60 === 0) return `Codex ${windowDurationMins / 60}h`;
-  return `Codex ${windowDurationMins}m`;
-}
-
-/** Codex primary/secondary usage windows, labelled by their window length. */
-function parseCodexWindows(value: unknown): LabeledUsageWindowView[] {
-  const record = asRecord(value);
-  if (!record) return [];
-  const windows: LabeledUsageWindowView[] = [];
-  for (const [key, fallback] of [
-    ["primary", "Codex primary"],
-    ["secondary", "Codex secondary"],
-  ] as const) {
-    const parsed = parseUsageWindow(record[key]);
-    if (!parsed) continue;
-    const durationMins = asFiniteNumber(asRecord(record[key])?.windowDurationMins);
-    windows.push({
-      ...parsed,
-      label: codexWindowLabel(durationMins, fallback),
-      windowMs: durationMins !== null && durationMins > 0 ? durationMins * 60_000 : null,
-    });
-  }
-  return windows;
 }
 
 /**
- * Derive a pace-able window from a billing-cycle start and reset instant.
- * Returns null unless both parse and `resetsAt > startsAt`.
- */
-export function cycleWindow(
-  startsAt: string | null | undefined,
-  resetsAt: string | null,
-): { windowMs: number; segmentCount: number } | null {
-  if (startsAt == null || resetsAt == null) return null;
-  const startMs = Date.parse(startsAt);
-  const endMs = Date.parse(resetsAt);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-  const windowMs = endMs - startMs;
-  const segmentCount = Math.round(windowMs / ONE_DAY_MS);
-  return { windowMs, segmentCount };
-}
-
-/**
- * Cursor usage windows (auto / api / total). When `cycleStartsAt` is present,
- * pace and day dividers follow the provider's billing cycle.
- */
-function parseCursorWindows(value: unknown): LabeledUsageWindowView[] {
-  const record = asRecord(value);
-  if (!record) return [];
-  const cycleStartsAt = typeof record.cycleStartsAt === "string" ? record.cycleStartsAt : null;
-  const windows: LabeledUsageWindowView[] = [];
-  for (const [key, label] of [
-    ["auto", "Cursor auto"],
-    ["api", "Cursor API"],
-    ["total", "Cursor total"],
-  ] as const) {
-    const parsed = parseUsageWindow(record[key]);
-    if (!parsed) continue;
-    const cycle = cycleWindow(cycleStartsAt, parsed.resetsAt);
-    windows.push({
-      ...parsed,
-      label,
-      windowMs: cycle?.windowMs ?? null,
-      ...(cycle !== null ? { segmentCount: cycle.segmentCount } : {}),
-    });
-  }
-  return windows;
-}
-
-/**
- * Format a spend figure with its currency, falling back to a bare number.
+ * The gauge's view of one provider instance's usage limits: the same
+ * `ServerProvider.usageLimits` snapshot the Limits tab reads, so the two
+ * surfaces cannot disagree. Claude's `five_hour` / `seven_day` windows feed
+ * the ring; everything else becomes a popover row.
  *
- * A money amount keeps both decimals on both sides — "$12.50 of $50" reads as
- * two different kinds of number — while a currency-less figure is a plain count
- * and drops them.
+ * Null when there is nothing to draw: no snapshot, an account that can never
+ * report windows, or a probe that has not produced any yet.
  */
-function formatSpend(used: number, limit: number | null, currency: string | null): string {
-  const symbol = currency === "USD" ? "$" : currency === null ? "" : `${currency} `;
-  const amount = (value: number) =>
-    currency === null ? `${String(value)}` : `${symbol}${value.toFixed(2)}`;
-  return limit === null ? amount(used) : `${amount(used)} of ${amount(limit)}`;
-}
-
-/**
- * A spend balance carried in the shared `AccountUsageExtra` shape: Claude's
- * extra credits, and Cursor's on-demand budget.
- *
- * Amounts are cents. That is not visible in the payload — `usedCredits: 20166`
- * against `monthlyLimit: 20000` reads as either $201.66 of $200.00 or twenty
- * thousand of something — so it is asserted by the tests that carry each
- * provider's real account payload.
- *
- * Stays a balance for every provider but Claude. Both reset with the billing
- * month and neither payload carries a reset time, so pacing one means inventing
- * its anchor — see {@link parseClaudeExtraUsageWindow}, which does exactly that
- * for Claude alone, on an explicit instruction, and says so.
- */
-function parseSpendBalance(value: unknown, label: string): UsageBalanceView[] {
-  const record = asRecord(value);
-  if (!record || record.isEnabled !== true) return [];
-  const used = asFiniteNumber(record.usedCredits) ?? 0;
-  const limit = asFiniteNumber(record.monthlyLimit);
-  // `isEnabled` alone is not "has something to show": the server maps an
-  // `extra_usage` object carrying only `is_enabled` to an all-zeros record, and
-  // a row reading "$0.00 of $0.00" is noise that also drags the whole limits
-  // block open on an account with nothing else in it.
-  if (used <= 0 && (limit ?? 0) <= 0) return [];
-  // An empty currency is not a currency. `formatSpend` builds its prefix as
-  // `${currency} `, so "" renders a leading space and a doubled one before the
-  // limit; the renderer this restores treated "" as absent for that reason.
-  const currency =
-    typeof record.currency === "string" && record.currency.length > 0 ? record.currency : "USD";
-  return [
-    {
-      label,
-      detail: formatSpend(used / 100, limit === null ? null : limit / 100, currency),
-      utilization: asFiniteNumber(record.utilization),
-    },
-  ];
-}
-
-/**
- * Claude's extra usage as a paced window.
- *
- * Reuses {@link parseSpendBalance} rather than re-reading the payload, so the
- * two suppression gates it encodes still apply: a row is dropped when
- * `isEnabled` is not true, and when both the spend and the limit are zero —
- * which is the exact shape the server emits for an `extra_usage` object
- * carrying only `is_enabled`, and a "$0.00 of $0.00" row would otherwise drag
- * the whole limits block open on an account with nothing in it.
- *
- * The reset instant is derived, not reported. See {@link billingMonthWindow}.
- */
-function parseClaudeExtraUsageWindow(value: unknown, nowMs: number): SpendWindowView | null {
-  const [balance] = parseSpendBalance(value, "Extra usage");
-  if (!balance || balance.utilization === null) return null;
-  const { resetsAt, windowMs } = billingMonthWindow(nowMs);
-  return {
-    label: balance.label,
-    detail: balance.detail,
-    utilization: balance.utilization,
-    resetsAt,
-    windowMs,
-    segmentCount: daysInUtcMonth(nowMs),
-  };
-}
-
-/**
- * Cursor's non-window rows: on-demand spend, and the enterprise request bucket.
- *
- * Both are ceilings you sit under rather than periods you burn through, so
- * neither carries a reset time.
- */
-function parseCursorBalances(value: unknown): UsageBalanceView[] {
-  const record = asRecord(value);
-  if (!record) return [];
-  const balances: UsageBalanceView[] = [];
-
-  // `onDemand` is an `AccountUsageExtra`, the same shape and the same cents as
-  // Claude's extra credits — not a `{ used, limit }` record. Reading the fields
-  // it does not have is what kept this row off the screen entirely.
-  const scope = record.onDemandScope;
-  balances.push(
-    ...parseSpendBalance(
-      record.onDemand,
-      scope === "team" ? "Cursor on-demand (team)" : "Cursor on-demand",
-    ),
-  );
-
-  const requests = asRecord(record.requests);
-  const requestsUsed = asFiniteNumber(requests?.used);
-  const requestsLimit = asFiniteNumber(requests?.limit);
-  if (requestsUsed !== null && requestsLimit !== null) {
-    balances.push({
-      label: "Cursor requests",
-      detail: `${String(requestsUsed)} of ${String(requestsLimit)}`,
-      utilization: asFiniteNumber(requests?.utilization),
-    });
-  }
-
-  return balances;
-}
-
-/**
- * Codex credits. `balance` is a pre-formatted string from the app server, so it
- * is shown as given rather than reformatted into a number we did not parse.
- */
-function parseCodexBalances(value: unknown): UsageBalanceView[] {
-  const credits = asRecord(asRecord(value)?.credits);
-  if (!credits) return [];
-  if (credits.unlimited === true) {
-    return [{ label: "Codex credits", detail: "Unlimited", utilization: null }];
-  }
-  const balance = typeof credits.balance === "string" ? credits.balance.trim() : "";
-  if (balance.length > 0) {
-    return [{ label: "Codex credits", detail: balance, utilization: null }];
-  }
-  // `hasCredits: false` with no balance string is still worth saying: it is the
-  // difference between "none left" and "this account does not use credits".
-  if (credits.hasCredits === false) {
-    return [{ label: "Codex credits", detail: "None remaining", utilization: null }];
-  }
-  return [];
-}
-
-/**
- * Latest account-usage snapshot from the thread activity log. Mirrors
- * {@link deriveLatestContextWindowSnapshot}: the activity payload is untyped on
- * the wire (`Schema.Unknown`), so parse defensively. Returns `null` when no
- * `account.usage.updated` activity is present; a present-but-empty snapshot
- * (both windows null — e.g. Codex/Cursor, which populate other slots) returns a
- * view with null windows so the caller can omit the block.
- */
-export function deriveLatestAccountUsage(
-  activities: ReadonlyArray<AccountUsageActivity>,
-  nowMs: number,
+export function accountUsageFromLimits(
+  limits: ServerProviderUsageLimits | null | undefined,
 ): AccountUsageView | null {
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
-    if (!activity || activity.kind !== "account.usage.updated") {
-      continue;
-    }
-    const payload = asRecord(activity.payload);
-    if (!payload) {
-      continue;
-    }
-    return {
-      fiveHour: parseUsageWindow(payload.fiveHour),
-      sevenDay: parseUsageWindow(payload.sevenDay),
-      extraUsage: parseClaudeExtraUsageWindow(payload.extra, nowMs),
-      // `fetchedAt`, not `activity.createdAt`. The activity is stamped at
-      // emission, and the cached payload is re-emitted on every session start
-      // and every poll — so `createdAt` measures when we last broadcast the
-      // numbers, not how old they are, and would read "just now" on data hours
-      // stale. Absent for snapshots recorded before the field existed.
-      fetchedAt: typeof payload.fetchedAt === "string" ? payload.fetchedAt : null,
-      extraWindows: [...parseCodexWindows(payload.codex), ...parseCursorWindows(payload.cursor)],
-      balances: [...parseCodexBalances(payload.codex), ...parseCursorBalances(payload.cursor)],
-    };
+  if (!limits || limits.unavailable?.reason === "unsupported" || limits.windows.length === 0) {
+    return null;
   }
-  return null;
+  let fiveHour: UsageWindowView | null = null;
+  let sevenDay: UsageWindowView | null = null;
+  const extraWindows: LabeledUsageWindowView[] = [];
+  for (const window of limits.windows) {
+    const view = { utilization: window.usedPercent, resetsAt: window.resetsAt ?? null };
+    if (window.id === "five_hour") {
+      fiveHour = view;
+      continue;
+    }
+    if (window.id === "seven_day") {
+      sevenDay = view;
+      continue;
+    }
+    const windowMs =
+      window.windowDurationMins !== undefined && window.windowDurationMins > 0
+        ? window.windowDurationMins * 60_000
+        : null;
+    extraWindows.push({
+      ...view,
+      id: window.id,
+      label: window.label,
+      windowMs,
+      ...(windowMs !== null ? { segmentCount: windowSegments(windowMs) } : {}),
+    });
+  }
+  return { fiveHour, sevenDay, fetchedAt: limits.checkedAt, extraWindows };
+}
+
+/** Day dividers for windows of a day or longer, hour dividers below that. */
+function windowSegments(windowMs: number): number {
+  return Math.max(1, Math.round(windowMs / (windowMs >= ONE_DAY_MS ? ONE_DAY_MS : ONE_HOUR_MS)));
 }
 
 export interface WindowPace {
@@ -527,38 +261,6 @@ export function segmentBoundariesBackground(segments: number): string | undefine
   }
   return stops.length > 0 ? `linear-gradient(to right, ${stops.join(", ")})` : undefined;
 }
-
-/** Days in the UTC month containing `nowMs`; the extra-usage bar's segment count. */
-export function daysInUtcMonth(nowMs: number): number {
-  const now = new Date(nowMs);
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-}
-
-/**
- * The billing month as a pace-able window: when it resets, and how long it is.
- *
- * The provider sends neither. `GET /api/oauth/usage` returns `extra_usage`
- * with `is_enabled`, `monthly_limit`, `used_credits`, `utilization` and
- * `currency` and no reset instant at all, so this is DERIVED from the
- * maintainer's statement that the anchor is the 1st — it is not provider data,
- * and if the account's billing anchor is not the 1st the pace is wrong.
- *
- * Derived in UTC, deliberately. Anchoring on the local month makes the boundary
- * cross at a different real instant for every user: at UTC+14 the local month
- * turns over 14 hours before the provider's counter resets, so a normal account
- * reads "+98% over pace" in the most severe colour for those 14 hours, every
- * month. `windowMs` is the distance between the two boundaries rather than
- * `days * 86_400_000`, so the length always matches the month it describes.
- */
-export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs: number } {
-  const now = new Date(nowMs);
-  const startedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  const resetsAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-  return { resetsAt: new Date(resetsAt).toISOString(), windowMs: resetsAt - startedAt };
-}
-
-const ONE_MINUTE_MS = 60 * 1000;
-const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 
 /**
  * How old a polled snapshot is, for the refresh control's label.

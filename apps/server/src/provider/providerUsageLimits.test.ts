@@ -86,4 +86,12 @@ describe("resolveUsageLimitsAfterProbe", () => {
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
   });
+
+  it("keeps a newer runtime update over a probe that served an older cached read", () => {
+    const runtime = { checkedAt: "2026-09-03T12:04:00.000Z", windows: [session] };
+    const cached = { checkedAt: "2026-09-03T12:01:00.000Z", windows: [] };
+    const fresh = { checkedAt: "2026-09-03T12:05:00.000Z", windows: [] };
+    expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: cached })).toBe(runtime);
+    expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: fresh })).toBe(fresh);
+  });
 });

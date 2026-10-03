@@ -1763,6 +1763,84 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
         }),
       );
 
+      it.effect("drops an instance's probe caches only on a fresh targeted refresh", () =>
+        Effect.gen(function* () {
+          const driver = ProviderDriverKind.make("claudeAgent");
+          const instanceId = ProviderInstanceId.make("claudeAgent");
+          const provider = {
+            instanceId,
+            driver,
+            status: "ready",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: "1.0.0",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+          const record = (call: string) => Ref.update(calls, (all) => [...all, call]);
+          const instance: ProviderInstance = {
+            instanceId,
+            driverKind: driver,
+            continuationIdentity: { driverKind: driver, continuationKey: "claude:instance" },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(provider),
+              refresh: record("refresh").pipe(Effect.as(provider)),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            invalidateCaches: record("invalidate"),
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          };
+          const registryChanges = yield* PubSub.unbounded<void>();
+          const instanceRegistryLayer = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (requestedId) =>
+                Effect.succeed(requestedId === instanceId ? instance : undefined),
+              listInstances: Effect.succeed([instance]),
+              listUnavailable: Effect.succeed([]),
+              streamChanges: Stream.fromPubSub(registryChanges),
+              subscribeChanges: PubSub.subscribe(registryChanges),
+            },
+          );
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistryLive.pipe(
+              Layer.provideMerge(instanceRegistryLayer),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-fresh-refresh-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.refreshInstance(instanceId);
+            assert.deepStrictEqual(yield* Ref.get(calls), ["refresh"]);
+            yield* registry.refreshInstance(instanceId, { fresh: true });
+            assert.deepStrictEqual(yield* Ref.get(calls), ["refresh", "invalidate", "refresh"]);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
       it.effect("refreshes OpenCode catalogs and preserves other providers", () =>
         Effect.gen(function* () {
           const codexDriver = ProviderDriverKind.make("codex");
@@ -3026,6 +3104,36 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const bedrock = yield* check({ apiProvider: "bedrock" });
           assert.deepStrictEqual(subscription.usageLimits?.resetCredits, { availableCount: 2 });
           assert.strictEqual(bedrock.usageLimits?.resetCredits, undefined);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("stamps Claude usage with when the cached probe read it", () =>
+        Effect.gen(function* () {
+          const readAt = "2026-09-03T12:00:00.000Z";
+          const provider = yield* checkClaudeProviderStatus(defaultClaudeSettings, () =>
+            Effect.succeed({
+              email: undefined,
+              subscriptionType: "max",
+              tokenSource: undefined,
+              apiProvider: undefined,
+              slashCommands: [],
+              usage: {
+                rate_limits_available: true,
+                rate_limits: { five_hour: { utilization: 40, resets_at: null } },
+              },
+              usageCheckedAt: readAt,
+            }),
+          );
+          assert.strictEqual(provider.usageLimits?.checkedAt, readAt);
+          assert.notStrictEqual(provider.checkedAt, readAt);
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {
