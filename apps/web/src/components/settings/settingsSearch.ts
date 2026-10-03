@@ -491,6 +491,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/notifications",
   },
   {
+    id: "background-notifications",
+    title: "Background notifications on this device",
+    to: "/settings/notifications",
+  },
+  {
     id: "notify-finished",
     title: "Task finished",
     to: "/settings/notifications",

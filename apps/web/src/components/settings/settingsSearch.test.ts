@@ -658,6 +658,10 @@ describe("notification settings search entries", () => {
       id: "task-completion-notifications",
       to: "/settings/notifications",
     });
+    expect(searchSettings("background notifications")[0]).toMatchObject({
+      id: "background-notifications",
+      to: "/settings/notifications",
+    });
   });
 });
 

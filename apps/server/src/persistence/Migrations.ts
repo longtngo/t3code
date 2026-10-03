@@ -46,17 +46,17 @@ import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_PendingBackgroundTasks.ts";
-// Fork migration 33 (PendingBackgroundTasks) is preserved. Web Push (former
-// fork migration 34) is a deferred re-port and its migration is removed for now.
+// Fork migration 33 (PendingBackgroundTasks) is preserved. Id 34 is the fork's first
+// Web Push migration ("PushSubscriptions"), still recorded on real databases; it is
+// registered below with the same idempotent body as 37 so the history matches.
 // Upstream migrations kept their original 033/034 filenames but are assigned
 // ids 35/36 here so the fork's already-deployed 33 is never renumbered and stays
 // consistent with live DBs.
 import Migration0035 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
-// Web Push background notifications (former fork migration 34). Re-ported with a
-// fresh unused id (37) so it never collides with the upstream 33-36 ids above; the
-// filename keeps its own 037 prefix and the CREATE TABLE IF NOT EXISTS is a no-op on
-// any fork DB that already applied the old "034_PushSubscriptions".
+// Web Push background notifications. First applied as fork id 34, re-ported as 37
+// when upstream took 33-36; real databases record both. CREATE TABLE IF NOT EXISTS
+// makes whichever runs second a no-op.
 import Migration0037 from "./Migrations/037_PushSubscriptions.ts";
 // Upstream's 035 arrives after the fork already deployed ids 35-37, so it takes the
 // next free id (38) rather than its filename number. Renumbering an applied id would
@@ -207,6 +207,7 @@ export const migrationEntries = [
   [31, "AuthAuthorizationScopes", Migration0031],
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
   [33, "PendingBackgroundTasks", Migration0033],
+  [34, "PushSubscriptions", Migration0037],
   [35, "ProjectionThreadsSettled", Migration0035],
   [36, "ProjectionThreadsSnoozed", Migration0036],
   [37, "PushSubscriptions", Migration0037],
