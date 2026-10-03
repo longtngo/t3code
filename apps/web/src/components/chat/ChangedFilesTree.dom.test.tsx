@@ -1,4 +1,4 @@
-import { TurnId } from "@t3tools/contracts";
+import { RunId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../../testing/renderDom";
@@ -8,7 +8,7 @@ describe("ChangedFilesCard", () => {
   it("keeps its compact header sticky while preserving singular labels", async () => {
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[{ path: "README.md", kind: "modified", additions: 2, deletions: 1 }]}
         allDirectoriesExpanded
         resolvedTheme="light"
@@ -27,7 +27,7 @@ describe("ChangedFilesCard", () => {
   it("shows collapsed folders and root files together", async () => {
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[
           { path: "apps/web/src/App.tsx", kind: "modified", additions: 120, deletions: 20 },
           { path: "apps/web/src/App.test.tsx", kind: "modified", additions: 30, deletions: 2 },
@@ -60,7 +60,7 @@ describe("ChangedFilesCard", () => {
   it("keeps the folder tree visible when folders are collapsed", async () => {
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[{ path: "apps/web/src/App.tsx", kind: "modified", additions: 120, deletions: 20 }]}
         allDirectoriesExpanded={false}
         resolvedTheme="light"
@@ -82,7 +82,7 @@ describe("ChangedFilesCard", () => {
     const onOpenTurnDiff = vi.fn();
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[
           { path: "apps/web/src/App.tsx", kind: "modified", additions: 120, deletions: 20 },
           { path: "README.md", kind: "modified", additions: 3, deletions: 0 },
@@ -97,14 +97,14 @@ describe("ChangedFilesCard", () => {
     await view.click(view.find('[aria-label="Open diff"]'));
 
     expect(onOpenTurnDiff).toHaveBeenCalledTimes(1);
-    expect(onOpenTurnDiff).toHaveBeenCalledWith(TurnId.make("turn-1"), "apps/web/src/App.tsx");
+    expect(onOpenTurnDiff).toHaveBeenCalledWith(RunId.make("turn-1"), "apps/web/src/App.tsx");
   });
 
   it("asks its owner to flip collapse-all when the folder control is pressed", async () => {
     const onToggleAllDirectories = vi.fn();
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[{ path: "apps/web/src/App.tsx", kind: "modified", additions: 120, deletions: 20 }]}
         allDirectoriesExpanded={false}
         resolvedTheme="light"
@@ -122,7 +122,7 @@ describe("ChangedFilesCard", () => {
   it("offers no folder control when nothing is nested", async () => {
     const view = await renderDom(
       <ChangedFilesCard
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[{ path: "README.md", kind: "modified", additions: 2, deletions: 1 }]}
         allDirectoriesExpanded
         resolvedTheme="light"
@@ -186,7 +186,7 @@ describe("ChangedFilesTree", () => {
     async ({ files, visibleLabels, hiddenLabels }) => {
       const view = await renderDom(
         <ChangedFilesTree
-          turnId={TurnId.make("turn-1")}
+          runId={RunId.make("turn-1")}
           files={files}
           allDirectoriesExpanded={false}
           resolvedTheme="light"
@@ -262,7 +262,7 @@ describe("ChangedFilesTree", () => {
     async ({ files, visibleLabels }) => {
       const view = await renderDom(
         <ChangedFilesTree
-          turnId={TurnId.make("turn-1")}
+          runId={RunId.make("turn-1")}
           files={files}
           allDirectoriesExpanded
           resolvedTheme="light"
@@ -280,7 +280,7 @@ describe("ChangedFilesTree", () => {
     const onOpenTurnDiff = vi.fn();
     const view = await renderDom(
       <ChangedFilesTree
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[
           { path: "apps/web/src/index.ts", kind: "modified", additions: 2, deletions: 1 },
           { path: "apps/web/src/main.ts", kind: "modified", additions: 3, deletions: 0 },
@@ -296,7 +296,7 @@ describe("ChangedFilesTree", () => {
     await view.click(mainRow ?? null);
 
     expect(onOpenTurnDiff).toHaveBeenCalledTimes(1);
-    expect(onOpenTurnDiff).toHaveBeenCalledWith(TurnId.make("turn-1"), "apps/web/src/main.ts");
+    expect(onOpenTurnDiff).toHaveBeenCalledWith(RunId.make("turn-1"), "apps/web/src/main.ts");
   });
 
   // The collapse-all cases above only cover the first render. The folder row owns its own
@@ -304,7 +304,7 @@ describe("ChangedFilesTree", () => {
   it("reveals a collapsed folder's files when the folder row is pressed", async () => {
     const view = await renderDom(
       <ChangedFilesTree
-        turnId={TurnId.make("turn-1")}
+        runId={RunId.make("turn-1")}
         files={[
           { path: "apps/web/src/index.ts", kind: "modified", additions: 2, deletions: 1 },
           { path: "apps/web/src/main.ts", kind: "modified", additions: 3, deletions: 0 },

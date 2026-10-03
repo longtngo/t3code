@@ -19,7 +19,7 @@ function thread(input: {
 }) {
   return {
     modelSelection: { instanceId: input.selection },
-    session:
+    runtime:
       input.hasSession === false
         ? null
         : input.sessionInstance !== undefined || input.hasSession === true

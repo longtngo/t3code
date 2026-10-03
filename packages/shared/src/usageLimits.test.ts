@@ -4,8 +4,6 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderUsageWindow,
-  EventId,
-  type OrchestrationThreadActivity,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -28,7 +26,6 @@ import {
   paceOf,
   providersWithLimits,
   remainingPercent,
-  isChatGptUsageLimitError,
   usesChatGptSharing,
 } from "./usageLimits.ts";
 
@@ -1133,6 +1130,7 @@ describe("isUsageLimitsCommand", () => {
 });
 
 describe("exhaustedUsageWindows", () => {
+  const NOW_MS = Date.parse("2026-09-14T01:00:00.000Z");
   const win = (id: string, usedPercent: number): ServerProviderUsageWindow => ({
     id,
     kind: "session",
@@ -1141,7 +1139,7 @@ describe("exhaustedUsageWindows", () => {
   });
 
   it("reports nothing when there are no limits at all", () => {
-    expect(exhaustedUsageWindows(undefined)).toEqual([]);
+    expect(exhaustedUsageWindows(undefined, NOW_MS)).toEqual([]);
   });
 
   it("reports nothing for an unavailable snapshot, whichever reason", () => {
@@ -1149,35 +1147,56 @@ describe("exhaustedUsageWindows", () => {
     // report limits (design P1), so blocking on absence disables most of the product.
     for (const reason of ["unsupported", "probeFailed"] as const) {
       expect(
-        exhaustedUsageWindows({
-          checkedAt: "2026-09-14T00:00:00.000Z",
-          windows: [win("five_hour", 100)],
-          unavailable: { reason },
-        }),
+        exhaustedUsageWindows(
+          {
+            checkedAt: "2026-09-14T00:00:00.000Z",
+            windows: [win("five_hour", 100)],
+            unavailable: { reason },
+          },
+          NOW_MS,
+        ),
       ).toEqual([]);
     }
   });
 
   it("reports nothing for an empty window list", () => {
-    expect(exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows: [] })).toEqual(
-      [],
-    );
+    expect(
+      exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows: [] }, NOW_MS),
+    ).toEqual([]);
   });
 
   it("does not report a window just below the cap", () => {
     expect(
-      exhaustedUsageWindows({
-        checkedAt: "2026-09-14T00:00:00.000Z",
-        windows: [win("five_hour", 99.999)],
-      }),
+      exhaustedUsageWindows(
+        {
+          checkedAt: "2026-09-14T00:00:00.000Z",
+          windows: [win("five_hour", 99.999)],
+        },
+        NOW_MS,
+      ),
     ).toEqual([]);
   });
 
   it("reports exactly the windows at or above the cap", () => {
     const windows = [win("five_hour", 42), win("seven_day", 100), win("seven_day_fable", 100)];
     expect(
-      exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows }).map((w) => w.id),
+      exhaustedUsageWindows({ checkedAt: "2026-09-14T00:00:00.000Z", windows }, NOW_MS).map(
+        (w) => w.id,
+      ),
     ).toEqual(["seven_day", "seven_day_fable"]);
+  });
+
+  it("does not report a full window whose reset has passed", () => {
+    const at = (resetsAt: string) => ({ ...win("five_hour", 100), resetsAt });
+    expect(
+      exhaustedUsageWindows(
+        {
+          checkedAt: "2026-09-14T00:00:00.000Z",
+          windows: [at("2026-09-14T00:59:50.000Z"), { ...at("2026-09-14T01:00:10.000Z"), id: "w" }],
+        },
+        NOW_MS,
+      ).map((w) => w.id),
+    ).toEqual(["w"]);
   });
 });
 
@@ -1256,32 +1275,6 @@ describe("ChatGPT sharing presentation", () => {
         ...codex,
         auth: { status: "unauthenticated", subscriptionSharing: true },
       }),
-    ).toBe(false);
-  });
-  it("only gives the matching current structured limit error a management action", () => {
-    const limit: OrchestrationThreadActivity = {
-      id: EventId.make("sharing-limit"),
-      tone: "error",
-      kind: "runtime.error",
-      summary: "Runtime error",
-      turnId: null,
-      createdAt: "2026-09-03T12:00:00.000Z",
-      payload: { code: "subscription_sharing_usage_limit_exceeded", message: "Limit reached" },
-    };
-    expect(isChatGptUsageLimitError([limit], "Limit reached")).toBe(true);
-    expect(isChatGptUsageLimitError([limit], "A different failure")).toBe(false);
-    expect(isChatGptUsageLimitError([limit], null)).toBe(false);
-    expect(
-      isChatGptUsageLimitError(
-        [{ ...limit, payload: { message: "Limit reached" } }],
-        "Limit reached",
-      ),
-    ).toBe(false);
-    expect(
-      isChatGptUsageLimitError(
-        [limit, { ...limit, payload: { code: "unrelated", message: "Limit reached" } }],
-        "Limit reached",
-      ),
     ).toBe(false);
   });
 });

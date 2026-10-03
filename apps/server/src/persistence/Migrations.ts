@@ -10,6 +10,7 @@
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -45,17 +46,17 @@ import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_PendingBackgroundTasks.ts";
-// Fork migration 33 (PendingBackgroundTasks) is preserved. Web Push (former
-// fork migration 34) is a deferred re-port and its migration is removed for now.
+// Fork migration 33 (PendingBackgroundTasks) is preserved. Id 34 is the fork's first
+// Web Push migration ("PushSubscriptions"), still recorded on real databases; it is
+// registered below with the same idempotent body as 37 so the history matches.
 // Upstream migrations kept their original 033/034 filenames but are assigned
 // ids 35/36 here so the fork's already-deployed 33 is never renumbered and stays
 // consistent with live DBs.
 import Migration0035 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0036 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
-// Web Push background notifications (former fork migration 34). Re-ported with a
-// fresh unused id (37) so it never collides with the upstream 33-36 ids above; the
-// filename keeps its own 037 prefix and the CREATE TABLE IF NOT EXISTS is a no-op on
-// any fork DB that already applied the old "034_PushSubscriptions".
+// Web Push background notifications. First applied as fork id 34, re-ported as 37
+// when upstream took 33-36; real databases record both. CREATE TABLE IF NOT EXISTS
+// makes whichever runs second a no-op.
 import Migration0037 from "./Migrations/037_PushSubscriptions.ts";
 // Upstream's 035 arrives after the fork already deployed ids 35-37, so it takes the
 // next free id (38) rather than its filename number. Renumbering an applied id would
@@ -69,7 +70,7 @@ import Migration0040 from "./Migrations/039_ProjectionCheckpointMemberStates.ts"
 // Upstream's 036 (thread pinning) arrives after the fork already deployed ids
 // 33-40, so it takes the next free id (41) rather than its filename number.
 import Migration0041 from "./Migrations/036_ProjectionThreadsPinned.ts";
-// Upstream's 037 (projection_turns keyset index backing windowed thread
+// Upstream's 037 (V1 turns keyset index backing windowed thread
 // pagination) arrives after the fork already deployed ids 33-41, so it takes
 // the next free id (42) rather than its filename number.
 import Migration0042 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
@@ -97,13 +98,13 @@ import Migration0047 from "./Migrations/042_DropUnusedCommandReceiptIndexes.ts";
 // 041_ProjectionThreadsTitleRegenerationFailedAt (id 46); filenames are free to
 // repeat, applied ids are not.
 import Migration0048 from "./Migrations/041_AuthSessionClientConnection.ts";
-// Upstream's 042 (projection_threads.linked_pull_request_json, #8160) arrives after
+// Upstream's 042 (V1 threads.linked_pull_request_json, #8160) arrives after
 // the fork already deployed ids 33-48, so it takes the next free id (49) rather than
 // its filename number. Its 042 filename collides with the fork's own
 // 042_DropUnusedCommandReceiptIndexes (id 47); filenames are free to repeat,
 // applied ids are not.
 import Migration0049 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
-// Upstream's 043 (projection_threads.unsettled_at, #8231) likewise takes the next
+// Upstream's 043 (V1 threads.unsettled_at, #8231) likewise takes the next
 // free id (50) rather than its filename number.
 import Migration0050 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 import Migration0051 from "./Migrations/051_CrewTasks.ts";
@@ -119,7 +120,7 @@ import Migration0053 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 // numbers. Their tests are retargeted to those applied ids.
 import Migration0054 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration0055 from "./Migrations/047_ProjectionProjectIcon.ts";
-// Upstream's 048 (projection_threads.branch_pull_request) arrives after the fork
+// Upstream's 048 (V1 threads.branch_pull_request) arrives after the fork
 // already deployed ids 33-55, so it takes the next free id (56) rather than its
 // filename number. It backs `branchPullRequest`, which replaced the fork's
 // client-side pull-request derivation in the command palette.
@@ -135,15 +136,15 @@ import Migration0057 from "./Migrations/052_ProjectionThreadActivityKindIndex.ts
 // own filename (registry section 1).
 import Migration0058 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 
-// Upstream's 050 (projection_thread_pull_requests, multi-PR links) arrives after
+// Upstream's 050 (V1 thread pull requests, multi-PR links) arrives after
 // the fork already deployed ids 33-58, so it takes the next free id (59) rather
 // than its filename number.
 import Migration0059 from "./Migrations/050_ProjectionThreadPullRequests.ts";
-// Upstream's 051 (projection_thread_messages.context_json, composer context records)
+// Upstream's 051 (V1 thread messages.context_json, composer context records)
 // arrives after the fork already deployed ids 33-59, so it takes the next free id (60)
 // rather than its filename number.
 import Migration0060 from "./Migrations/051_ProjectionThreadMessageContext.ts";
-// Upstream's 052 (projection_threads.title_state_json, #10720) arrives after the fork
+// Upstream's 052 (V1 threads.title_state_json, #10720) arrives after the fork
 // already deployed ids 33-60, so it takes the next free id (61) rather than its filename
 // number. Its 052 filename collides with the fork's own 052_ProjectionThreadActivityKindIndex
 // (id 57); filenames are free to repeat, applied ids are not.
@@ -152,10 +153,15 @@ import Migration0061 from "./Migrations/052_ProjectionThreadTitleState.ts";
 // already deployed ids 33-61, so it takes the next free id (62) rather than its filename
 // number.
 import Migration0062 from "./Migrations/053_PullRequestFilesViewed.ts";
-// Upstream's 054 (projection_threads.auto_settle_disabled_at, #11846) arrives after the
+// Upstream's 054 (V1 threads.auto_settle_disabled_at, #11846) arrives after the
 // fork already deployed ids 33-62, so it takes the next free id (63) rather than its
 // filename number.
 import Migration0063 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+// Upstream's 055 (orchestrator v2 schema, #2829) and 056 arrive after the fork
+// already deployed ids 33-63, so they take the next free ids (64, 65) rather than
+// their filename numbers (registry section 1).
+import Migration0064 from "./Migrations/055_OrchestrationV2.ts";
+import Migration0065 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -201,6 +207,7 @@ export const migrationEntries = [
   [31, "AuthAuthorizationScopes", Migration0031],
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
   [33, "PendingBackgroundTasks", Migration0033],
+  [34, "PushSubscriptions", Migration0037],
   [35, "ProjectionThreadsSettled", Migration0035],
   [36, "ProjectionThreadsSnoozed", Migration0036],
   [37, "PushSubscriptions", Migration0037],
@@ -230,6 +237,11 @@ export const migrationEntries = [
   [61, "ProjectionThreadTitleState", Migration0061],
   [62, "PullRequestFilesViewed", Migration0062],
   [63, "ProjectionThreadsAutoSettleDisabledAt", Migration0063],
+  // Upstream's 55/56. Preserve this migration's schema; future V2 schema changes need
+  // new migrations. Upstream's reconcileV2PreviewMigration is not taken: no fork database
+  // ran a V2 preview, and its renumbering targets ids the fork already spent.
+  [64, "OrchestrationV2", Migration0064],
+  [65, "RemoveRedundantProjectionIndexes", Migration0065],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -271,5 +283,30 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+
+  // The migrator keys on migration_id: a database that recorded a different
+  // migration under a shared id (local or fork builds) keeps that id and
+  // silently skips this build's migration at it. Surface the divergence so the
+  // skipped schema change is diagnosable.
+  const sql = yield* SqlClient.SqlClient;
+  const recorded = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
+  const divergent = recorded.flatMap((row) => {
+    const expected = manifestNames.get(row.migration_id);
+    if (expected === undefined) {
+      return [`${row.migration_id}:${row.name} (unknown to this build)`];
+    }
+    return expected === row.name
+      ? []
+      : [`${row.migration_id}:${row.name} (this build: ${expected})`];
+  });
+  if (divergent.length > 0) {
+    yield* Effect.logWarning(
+      "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
+    ).pipe(Effect.annotateLogs({ divergent }));
+  }
   return executedMigrations;
 });

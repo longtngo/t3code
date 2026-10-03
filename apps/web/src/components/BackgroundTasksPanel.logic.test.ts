@@ -1,87 +1,122 @@
-import type { OrchestrationBackgroundTask, OrchestrationThreadActivity } from "@t3tools/contracts";
-import { EventId } from "@t3tools/contracts";
+import {
+  MessageId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
+import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  backgroundTaskDetail,
-  backgroundTasksPanelState,
-  backgroundTasksRefreshKey,
-} from "./BackgroundTasksPanel.logic";
+import { makeThreadProjectionFixture } from "../test-fixtures";
+import { backgroundPanelTasks, backgroundTaskKindLabel } from "./BackgroundTasksPanel.logic";
 
-const activity = (id: string, kind: string, payload: unknown): OrchestrationThreadActivity => ({
-  id: EventId.make(id),
-  tone: "info",
-  kind,
-  summary: "Task",
-  payload,
-  turnId: null,
-  createdAt: "2026-09-13T10:00:00.000Z",
-});
+const base = makeThreadProjectionFixture();
+const NOW = DateTime.makeUnsafe("2026-09-12T12:00:00.000Z");
+const instanceId = ProviderInstanceId.make("claude");
 
-const task = (overrides: Partial<OrchestrationBackgroundTask>): OrchestrationBackgroundTask => ({
-  taskId: "t1",
-  title: "Run tests",
-  taskType: "local_bash",
-  status: "running",
-  startedAt: "2026-09-13T10:00:00.000Z",
-  endedAt: null,
-  summary: null,
-  ...overrides,
-});
+function run(status: OrchestrationV2Run["status"]): OrchestrationV2Run {
+  return {
+    id: RunId.make("run-1"),
+    threadId: base.thread.id,
+    ordinal: 1,
+    providerInstanceId: instanceId,
+    modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+    providerThreadId: null,
+    userMessageId: MessageId.make("message-1"),
+    rootNodeId: null,
+    activeAttemptId: null,
+    status,
+    requestedAt: NOW,
+    startedAt: null,
+    completedAt: null,
+    checkpointId: null,
+    contextHandoffId: null,
+  };
+}
 
-describe("backgroundTasksRefreshKey", () => {
-  const shellStart = activity("bg-start", "task.started", { agentKind: "background" });
-  const agentEnd = activity("agent-end", "task.completed", { agentKind: "agent" });
-  const toolRow = activity("tool", "tool.completed", { agentKind: "background" });
+function providerThread(
+  id: string,
+  tasks: OrchestrationV2ProviderThread["pendingBackgroundTasks"],
+): OrchestrationV2ProviderThread {
+  return {
+    id: ProviderThreadId.make(id),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    providerInstanceId: instanceId,
+    providerSessionId: null,
+    appThreadId: base.thread.id,
+    ownerNodeId: null,
+    nativeThreadRef: null,
+    nativeConversationHeadRef: null,
+    status: "active",
+    firstRunOrdinal: 1,
+    lastRunOrdinal: 1,
+    handoffIds: [],
+    forkedFrom: null,
+    pendingBackgroundTasks: tasks,
+    contextUsage: null,
+    nativeMetadata: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
 
-  it("moves with the newest background lifecycle row, not agent or tool rows", () => {
-    const base = backgroundTasksRefreshKey([shellStart], 1, "turn-1");
-    expect(backgroundTasksRefreshKey([shellStart, agentEnd, toolRow], 1, "turn-1")).toBe(base);
-    const shellEnd = activity("bg-end", "task.completed", { agentKind: "background" });
-    expect(backgroundTasksRefreshKey([shellStart, shellEnd], 1, "turn-1")).not.toBe(base);
-  });
+function projection(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  providerThreads: ReadonlyArray<OrchestrationV2ProviderThread>,
+  activeProviderThreadId: string | null,
+): OrchestrationV2ThreadProjection {
+  return {
+    ...base,
+    thread: {
+      ...base.thread,
+      activeProviderThreadId:
+        activeProviderThreadId === null ? null : ProviderThreadId.make(activeProviderThreadId),
+    },
+    runs,
+    providerThreads,
+  };
+}
 
-  it("moves when the live count or the latest turn changes without a new row", () => {
-    const base = backgroundTasksRefreshKey([shellStart], 1, "turn-1");
-    expect(backgroundTasksRefreshKey([shellStart], 0, "turn-1")).not.toBe(base);
-    expect(backgroundTasksRefreshKey([shellStart], 1, "turn-0")).not.toBe(base);
-  });
-});
+const shell = { taskId: "bash-1", description: "npm run dev", kind: "command" } as const;
+const watcher = { taskId: "monitor-1", description: "watch CI", kind: "monitor" } as const;
 
-describe("backgroundTaskDetail", () => {
-  const now = Date.parse("2026-09-13T10:12:00.000Z");
-
-  it("names the kind, the start, and how long a finished task ran", () => {
-    expect(backgroundTaskDetail(task({}), now)).toBe("Shell · started 12m ago");
-    expect(
-      backgroundTaskDetail(
-        task({ status: "failed", taskType: "monitor", endedAt: "2026-09-13T10:03:12.000Z" }),
-        now,
+describe("backgroundPanelTasks", () => {
+  it("lists the active provider thread's roster while a run is working", () => {
+    const tasks = backgroundPanelTasks({
+      projection: projection(
+        [run("running")],
+        [providerThread("pt-old", [watcher]), providerThread("pt-live", [shell, shell])],
+        "pt-live",
       ),
-    ).toBe("Monitor · started 12m ago · ran 3m 12s");
-    expect(backgroundTaskDetail(task({ status: "stopped" }), now)).toBe(
-      "Shell · started 12m ago · ended without a result",
-    );
+      settledTasks: [],
+    });
+    // Only the active provider thread, deduplicated by task id.
+    expect(tasks).toEqual([shell]);
+  });
+
+  it("shows exactly the banner's list once the run settles", () => {
+    const settled: ReadonlyArray<PendingBackgroundWorkTask> = [watcher];
+    const tasks = backgroundPanelTasks({
+      projection: projection([run("completed")], [providerThread("pt-live", [shell])], "pt-live"),
+      settledTasks: settled,
+    });
+    expect(tasks).toBe(settled);
+  });
+
+  it("is the settled list when there is no projection yet", () => {
+    expect(backgroundPanelTasks({ projection: null, settledTasks: [] })).toEqual([]);
   });
 });
 
-describe("backgroundTasksPanelState", () => {
-  it("keeps a landed list on screen while a refetch runs or fails", () => {
-    const tasks = [task({})];
-    expect(backgroundTasksPanelState(tasks, "pending")).toEqual({ kind: "list", failed: false });
-    expect(backgroundTasksPanelState(tasks, "error")).toEqual({ kind: "list", failed: true });
-    expect(backgroundTasksPanelState([], "ready")).toEqual({ kind: "empty" });
-  });
-
-  it("never reports an empty thread when there is no list to show", () => {
-    expect(backgroundTasksPanelState(null, "unsupported")).toEqual({
-      kind: "unavailable",
-      canRetry: false,
-    });
-    expect(backgroundTasksPanelState(null, "error")).toEqual({
-      kind: "unavailable",
-      canRetry: true,
-    });
-    expect(backgroundTasksPanelState(null, "pending")).toEqual({ kind: "loading" });
+describe("backgroundTaskKindLabel", () => {
+  it("names every kind", () => {
+    expect(
+      (["subagent", "command", "monitor", "background_task"] as const).map(backgroundTaskKindLabel),
+    ).toEqual(["Subagent", "Shell", "Monitor", "Task"]);
   });
 });

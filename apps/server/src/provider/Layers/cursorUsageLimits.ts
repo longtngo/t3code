@@ -14,12 +14,13 @@ import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "../providerUsageLimits.ts";
-import { readMacCursorAccessToken } from "../cursorCredentialStore.ts";
+import { readMacCursorAccessToken } from "../cursorKeychainToken.ts";
 
 const CursorCredentials = Schema.Struct({ accessToken: Schema.optional(Schema.String) });
 const DEFAULT_CURSOR_API_ENDPOINT = "https://api2.cursor.sh";
 const decodeCredentials = Schema.decodeEffect(Schema.fromJsonString(CursorCredentials));
 const CursorUsageResponse = Schema.Struct({
+  billingCycleStart: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
   billingCycleEnd: Schema.optional(Schema.Union([Schema.String, Schema.Number])),
   planUsage: Schema.optional(
     Schema.Struct({
@@ -40,6 +41,14 @@ export function cursorUsageResponseToLimits(
     Number(response.billingCycleEnd) > 0 && Option.isSome(reset)
       ? DateTime.formatIso(reset.value)
       : undefined;
+  // FORK: the cycle's length lets the Vitals gauge pace these windows; the
+  // dashboard reports both ends as epoch-millisecond strings.
+  const cycleStartMs = Number(response.billingCycleStart);
+  const cycleEndMs = Number(response.billingCycleEnd);
+  const windowDurationMins =
+    resetsAt && cycleStartMs > 0 && cycleEndMs > cycleStartMs
+      ? Math.round((cycleEndMs - cycleStartMs) / 60_000)
+      : undefined;
   const windows: ServerProviderUsageWindow[] = [];
   if (response.planUsage) {
     for (const { id, label } of CURSOR_USAGE_WINDOWS) {
@@ -51,6 +60,7 @@ export function cursorUsageResponseToLimits(
         label,
         usedPercent: clampPercent(usedPercent),
         ...(resetsAt ? { resetsAt } : {}),
+        ...(windowDurationMins !== undefined ? { windowDurationMins } : {}),
       });
     }
   }
@@ -71,7 +81,7 @@ export const readCursorUsageLimits = Effect.fn("readCursorUsageLimits")(function
     const path = yield* Path.Path;
     const platform = yield* HostProcessPlatform;
     const endpoint = (
-      settings.apiEndpoint.trim() ||
+      settings.apiEndpoint?.trim() ||
       environment.CURSOR_API_ENDPOINT?.trim() ||
       DEFAULT_CURSOR_API_ENDPOINT
     ).replace(/\/$/, "");

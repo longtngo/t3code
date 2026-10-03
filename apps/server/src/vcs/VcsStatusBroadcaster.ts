@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type {
   GitManagerServiceError,
+  OrchestrationV2ThreadShell,
   VcsStatusInput,
   VcsStatusLocalResult,
   VcsStatusRemoteResult,
@@ -28,8 +29,9 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { isThreadActive } from "../orchestration/ThreadSettlementPolicy.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { threadHasQueuedTurnStart } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
@@ -166,36 +168,59 @@ export class VcsAutoPullPolicy extends Context.Reference<{
   }),
 }) {}
 
+const BUSY_RUN_STATUSES: ReadonlySet<OrchestrationV2ThreadShell["status"]> = new Set([
+  "preparing",
+  "queued",
+  "starting",
+  "running",
+  "waiting",
+]);
+
+/** A thread that is running, queued, blocked on the user, or waiting on background work. */
+function isThreadWorking(thread: OrchestrationV2ThreadShell, nowMs: number): boolean {
+  return (
+    thread.activityRunStatus != null ||
+    BUSY_RUN_STATUSES.has(thread.status) ||
+    thread.pendingRuntimeRequest !== null ||
+    (thread.pendingBackgroundTasks?.length ?? 0) > 0 ||
+    threadHasQueuedTurnStart(thread, nowMs)
+  );
+}
+
 export const autoPullPolicyLayer = Layer.effect(
   VcsAutoPullPolicy,
   Effect.gen(function* () {
-    const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const projects = yield* ProjectStore.ProjectStoreV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     return {
       isEnabled: Effect.fn("VcsAutoPullPolicy.isEnabled")(
         function* (cwd: string) {
-          const project = yield* snapshots.getActiveProjectByWorkspaceRoot(cwd);
+          const project = yield* projects.findActiveByWorkspaceRoot(cwd);
           if (project._tag === "None") return false;
           const settings = yield* serverSettings.getSettings;
-          return resolveProjectSettings(settings, project.value.id).settings.defaultAutoPull;
+          return resolveProjectSettings(settings, project.value.projectId).settings.defaultAutoPull;
         },
         Effect.orElseSucceed(() => false),
       ),
       isIdle: Effect.fn("VcsAutoPullPolicy.isIdle")(
         function* (cwds: ReadonlyArray<string>) {
           const checkouts = new Set(cwds);
-          const snapshot = yield* snapshots.getShellSnapshot();
-          const rootByProjectId = new Map(
-            snapshot.projects.map((project) => [project.id, project.workspaceRoot] as const),
+          const [projectShells, snapshot] = yield* Effect.all(
+            [projects.listShells(), projections.getShellSnapshot({ location: "active" })],
+            { concurrency: "unbounded" },
           );
-          const now = DateTime.formatIso(yield* DateTime.now);
+          const rootByProjectId = new Map(
+            projectShells.map((project) => [project.id, project.workspaceRoot] as const),
+          );
+          const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
           // A thread in a worktree does not touch the project root's checkout,
           // so only threads whose effective checkout is one of ours count.
           return !snapshot.threads.some(
             (thread) =>
               thread.archivedAt === null &&
               checkouts.has(thread.worktreePath ?? rootByProjectId.get(thread.projectId) ?? "") &&
-              isThreadActive(thread, now),
+              isThreadWorking(thread, nowMs),
           );
         },
         Effect.orElseSucceed(() => false),
@@ -470,11 +495,11 @@ export const make = Effect.gen(function* () {
       const local = yield* workflow.localStatus({ cwd });
       if (!local.isRepo || !local.isDefaultRef || local.hasWorkingTreeChanges) return null;
 
-      // Last, because it reads the whole shell projection (~100ms on a real
-      // database) and a pull is rarely imminent: only enabled, behind, and clean
-      // reaches here. A clean tree says nobody has written yet, not that nobody
-      // is working - an agent mid-turn, or a background task in its checkout, is
-      // exactly what a moving HEAD would confuse.
+      // Last, because it reads the whole shell projection and a pull is rarely
+      // imminent: only enabled, behind, and clean reaches here. A clean tree
+      // says nobody has written yet, not that nobody is working - an agent
+      // mid-run, or a background task in its checkout, is exactly what a
+      // moving HEAD would confuse.
       if (!(yield* autoPullPolicy.isIdle([...new Set([cwd, ...policyCwds])]))) {
         yield* Effect.logDebug("Skipped automatic project pull", { cwd, reason: "checkout-busy" });
         return null;

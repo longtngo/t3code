@@ -15,7 +15,7 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
-import { ProviderApprovalOption } from "./orchestration.ts";
+import { ProviderApprovalOption } from "./providerPolicy.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -189,7 +189,6 @@ const ToolSummaryType = Schema.Literal("tool.summary");
 const AuthStatusType = Schema.Literal("auth.status");
 const AccountUpdatedType = Schema.Literal("account.updated");
 const AccountRateLimitsUpdatedType = Schema.Literal("account.rate-limits.updated");
-const AccountUsageUpdatedType = Schema.Literal("account.usage.updated");
 const McpStatusUpdatedType = Schema.Literal("mcp.status.updated");
 const McpOauthCompletedType = Schema.Literal("mcp.oauth.completed");
 const ModelReroutedType = Schema.Literal("model.rerouted");
@@ -290,6 +289,12 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
    * either way.
    */
   autoCompactSource: Schema.optional(Schema.String),
+  cost: Schema.optional(
+    Schema.Struct({
+      amount: Schema.Number.check(Schema.isFinite()),
+      currency: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(32)),
+    }),
+  ),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
@@ -548,43 +553,6 @@ export const TaskRunHandles = Schema.Struct({
 export type TaskRunHandles = typeof TaskRunHandles.Type;
 
 /**
- * Watch-loop task types: Monitor-tool tasks plus background shells (a shell
- * that outlives its turn is in practice a watch loop). Canonical single copy —
- * the server liveness registry, ingestion's agentKind stamp, and the client
- * fold's legacy fallback all classify with these sets.
- */
-export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
-  "monitor",
-  "monitor_mcp",
-  "local_bash",
-  "shell",
-]);
-/** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
-export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
-
-/**
- * Agent-vs-background classification, stamped by ingestion as `agentKind` so
- * persisted rows are self-describing. A deliberate denylist: the SDK's
- * agent-flavored type names drift (subagent, local_agent, local_workflow, …)
- * and an allowlist silently dropped real subagents when "local_agent"
- * appeared. A task launched from inside a subagent (agentId set) is
- * agent-internal background work UNLESS it is itself agent-flavored — a
- * nested agent can outlive its parent and stays in the roster.
- */
-export function classifyTaskAgentKind(input: {
-  readonly taskType?: string | undefined;
-  readonly agentId?: string | undefined;
-}): "agent" | "background" {
-  const { taskType, agentId } = input;
-  const nonAgentType =
-    taskType !== undefined && (MONITOR_TASK_TYPES.has(taskType) || INERT_TASK_TYPES.has(taskType));
-  if (agentId !== undefined && agentId.trim().length > 0) {
-    return taskType === undefined || nonAgentType ? "background" : "agent";
-  }
-  return nonAgentType ? "background" : "agent";
-}
-
-/**
  * Optional agent-identity linkage carried on every task lifecycle payload.
  * Repeated on progress and terminal rows (not just start) so client folds can
  * reconstruct an agent even when its start row aged out of activity retention.
@@ -595,7 +563,7 @@ const taskAgentLinkageFields = {
    * every row so folds can classify without the start row. */
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
   /**
-   * Server-stamped classification (classifyTaskAgentKind at ingestion).
+   * Server-stamped classification, set at ingestion.
    * Clients trust this stamp outright; rows without it (legacy, pre-stamp)
    * fall back to client-side heuristics.
    */
@@ -779,87 +747,6 @@ const AccountRateLimitsUpdatedPayload = Schema.Struct({
   limits: ProviderUsageLimitsUpdate,
 });
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
-
-// Normalized account usage snapshot, sourced from the Anthropic OAuth usage API
-// (GET /api/oauth/usage). `utilization` is a float percent; `resetsAt` is ISO 8601;
-// `usedCredits`/`monthlyLimit` are integer cents.
-const AccountUsageWindow = Schema.Struct({
-  utilization: Schema.Number,
-  resetsAt: Schema.NullOr(IsoDateTime),
-});
-export type AccountUsageWindow = typeof AccountUsageWindow.Type;
-
-const AccountUsageExtra = Schema.Struct({
-  isEnabled: Schema.Boolean,
-  usedCredits: Schema.Number,
-  monthlyLimit: Schema.Number,
-  utilization: Schema.Number,
-  currency: Schema.NullOr(Schema.String),
-});
-export type AccountUsageExtra = typeof AccountUsageExtra.Type;
-
-// Cursor dashboard usage (`GetCurrentPeriodUsage` + enterprise `/auth/usage`).
-// When present, the web UI renders Cursor-native labels instead of Claude 5h/7d slots.
-const AccountUsageCursorRequests = Schema.Struct({
-  used: Schema.Number,
-  limit: Schema.Number,
-  utilization: Schema.Number,
-});
-export type AccountUsageCursorRequests = typeof AccountUsageCursorRequests.Type;
-
-const AccountUsageCursorPayload = Schema.Struct({
-  auto: Schema.NullOr(AccountUsageWindow),
-  api: Schema.NullOr(AccountUsageWindow),
-  total: Schema.NullOr(AccountUsageWindow),
-  onDemand: Schema.NullOr(AccountUsageExtra),
-  onDemandScope: Schema.optional(Schema.Literals(["team", "individual"])),
-  requests: Schema.optional(AccountUsageCursorRequests),
-  cycleStartsAt: Schema.optional(Schema.NullOr(IsoDateTime)),
-});
-export type AccountUsageCursorPayload = typeof AccountUsageCursorPayload.Type;
-
-// Codex app-server usage (`account/rateLimits/read`). Primary/secondary windows
-// mirror Codex `/status`; `windowDurationMins` drives UI labels when present.
-const AccountUsageCodexWindow = Schema.Struct({
-  utilization: Schema.Number,
-  resetsAt: Schema.NullOr(IsoDateTime),
-  windowDurationMins: Schema.optional(Schema.NullOr(Schema.Number)),
-});
-export type AccountUsageCodexWindow = typeof AccountUsageCodexWindow.Type;
-
-const AccountUsageCodexCredits = Schema.Struct({
-  balance: Schema.optional(Schema.NullOr(Schema.String)),
-  hasCredits: Schema.Boolean,
-  unlimited: Schema.Boolean,
-});
-export type AccountUsageCodexCredits = typeof AccountUsageCodexCredits.Type;
-
-const AccountUsageCodexPayload = Schema.Struct({
-  primary: Schema.NullOr(AccountUsageCodexWindow),
-  secondary: Schema.NullOr(AccountUsageCodexWindow),
-  credits: Schema.optional(Schema.NullOr(AccountUsageCodexCredits)),
-  planType: Schema.optional(Schema.NullOr(Schema.String)),
-  limitName: Schema.optional(Schema.NullOr(Schema.String)),
-});
-export type AccountUsageCodexPayload = typeof AccountUsageCodexPayload.Type;
-
-const AccountUsageUpdatedPayload = Schema.Struct({
-  fiveHour: Schema.NullOr(AccountUsageWindow),
-  sevenDay: Schema.NullOr(AccountUsageWindow),
-  extra: Schema.NullOr(AccountUsageExtra),
-  cursor: Schema.optional(AccountUsageCursorPayload),
-  codex: Schema.optional(AccountUsageCodexPayload),
-  /**
-   * When these numbers were fetched from the provider.
-   *
-   * Distinct from the carrying event's `createdAt`, which is stamped at every
-   * emission - including the re-broadcast of a cached payload on session start,
-   * and the poller re-sending an unchanged one. Only this says how stale the
-   * figures are, so it is what a "last updated" readout must use.
-   */
-  fetchedAt: Schema.optional(Schema.String),
-});
-export type AccountUsageUpdatedPayload = typeof AccountUsageUpdatedPayload.Type;
 
 const McpStatusUpdatedPayload = Schema.Struct({
   status: Schema.Unknown,
@@ -1249,14 +1136,6 @@ const ProviderRuntimeAccountRateLimitsUpdatedEvent = Schema.Struct({
 export type ProviderRuntimeAccountRateLimitsUpdatedEvent =
   typeof ProviderRuntimeAccountRateLimitsUpdatedEvent.Type;
 
-const ProviderRuntimeAccountUsageUpdatedEvent = Schema.Struct({
-  ...ProviderRuntimeEventBase.fields,
-  type: AccountUsageUpdatedType,
-  payload: AccountUsageUpdatedPayload,
-});
-export type ProviderRuntimeAccountUsageUpdatedEvent =
-  typeof ProviderRuntimeAccountUsageUpdatedEvent.Type;
-
 const ProviderRuntimeMcpStatusUpdatedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: McpStatusUpdatedType,
@@ -1377,7 +1256,6 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeAuthStatusEvent,
   ProviderRuntimeAccountUpdatedEvent,
   ProviderRuntimeAccountRateLimitsUpdatedEvent,
-  ProviderRuntimeAccountUsageUpdatedEvent,
   ProviderRuntimeMcpStatusUpdatedEvent,
   ProviderRuntimeMcpOauthCompletedEvent,
   ProviderRuntimeModelReroutedEvent,

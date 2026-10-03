@@ -1,14 +1,13 @@
 /**
- * The pure rendering ladder: a task plus its crew thread's live session in, one
- * label out. No clock, no IO, no storage.
+ * The pure rendering ladder: a task plus its crew thread's shell in, one label out.
+ * No clock, no IO, no storage.
  *
  * @module crew/derive
  */
 import type {
   CrewRendering,
   CrewTaskStatus,
-  OrchestrationSession,
-  OrchestrationSessionStatus,
+  OrchestrationV2ShellThreadStatus,
 } from "@t3tools/contracts";
 
 /**
@@ -20,65 +19,60 @@ export interface CrewDeriveTask {
 }
 
 /**
- * What the ladder needs from the crew thread's shell.
+ * What the ladder needs from the crew thread's v2 shell.
  *
- * `session` is `null` when no session record exists yet — the whole
- * `runSetupProgram()` window, which is minutes long, and the only thing rule 6
- * keys on.
+ * `status` is `null` when no shell exists yet: the moment between the crew row's
+ * reservation and the launch creating the thread.
  */
 export interface CrewDeriveThread {
-  readonly session: Pick<OrchestrationSession, "status"> | null;
-  readonly hasPendingApprovals?: boolean;
-  readonly hasPendingUserInput?: boolean;
+  readonly status: OrchestrationV2ShellThreadStatus | null;
+  /** An approval or user-input request is waiting on a human. */
+  readonly hasPendingRuntimeRequest?: boolean;
   readonly hasActionableProposedPlan?: boolean;
 }
 
 /**
- * Rules 2-5, exhaustive over `OrchestrationSessionStatus`'s seven members.
+ * Rules 2-5, exhaustive over `OrchestrationV2ShellThreadStatus`'s eleven members (`idle`
+ * plus the ten run statuses).
  *
- * Keyed on `OrchestrationSessionStatus` and **not** `ProviderSessionStatus`, a
- * different five-member enum that shares three member names — `running`, `ready`,
- * and the one that matters, `error`. Keyed on the wrong enum, rule 2 mis-fires
- * silently.
- *
- * `stopped` is not a fault. It is what boot reconciliation rewrites live sessions
- * to, so treating it as one renders the whole fleet `interrupted` after every
- * restart. It belongs with the other liveness cases, and the delivery sweep treats
- * it as exactly the situation a wake turn exists for.
+ * `preparing` is the launch's worktree and setup-script window, minutes long, so it is
+ * `starting`, not `working`. `completed`, `rolled_back` and `idle` are all "the last run
+ * finished and nothing is running", which is exactly what a crewmate that has not filed a
+ * report looks like. `cancelled` is a user or teardown interrupt, not a fault.
  */
-const BY_SESSION_STATUS = {
-  error: "errored",
+const BY_THREAD_STATUS = {
+  failed: "errored",
   interrupted: "interrupted",
-  running: "working",
+  cancelled: "interrupted",
+  queued: "working",
   starting: "working",
-  ready: "idle-no-report",
+  running: "working",
+  waiting: "working",
+  preparing: "starting",
+  completed: "idle-no-report",
+  rolled_back: "idle-no-report",
   idle: "idle-no-report",
-  stopped: "idle-no-report",
-} as const satisfies Record<OrchestrationSessionStatus, CrewRendering>;
+} as const satisfies Record<OrchestrationV2ShellThreadStatus, CrewRendering>;
 
 /**
  * Blocking outranks fault outranks liveness outranks the fallback.
  *
- * `unknown` is unreachable by construction: rules 2-5 name all seven session
- * statuses and rule 6 covers the absent record. It exists so the return type is
- * total, and a test asserts no real status produces it.
+ * `unknown` is unreachable by construction: rules 2-5 name every shell status and rule 6
+ * covers the absent shell. It exists so the return type is total, and a test asserts no
+ * real status produces it.
  */
 export function derive(task: CrewDeriveTask, thread: CrewDeriveThread): CrewRendering {
   if (task.status === "closed") {
     return "closed";
   }
 
-  if (
-    thread.hasPendingApprovals === true ||
-    thread.hasPendingUserInput === true ||
-    thread.hasActionableProposedPlan === true
-  ) {
+  if (thread.hasPendingRuntimeRequest === true || thread.hasActionableProposedPlan === true) {
     return "blocked-on-human";
   }
 
-  if (thread.session === null) {
+  if (thread.status === null) {
     return "starting";
   }
 
-  return BY_SESSION_STATUS[thread.session.status] ?? "unknown";
+  return BY_THREAD_STATUS[thread.status] ?? "unknown";
 }

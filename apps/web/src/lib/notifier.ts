@@ -15,7 +15,6 @@ import {
   isInterimBackgroundLiveness,
   type EnvironmentId,
   type NotificationCategorySettings,
-  type OrchestrationThreadShell,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -23,6 +22,13 @@ import {
 import { isElectron } from "../env";
 
 export type TerminalTurnOutcome = "completed" | "error" | "interrupted";
+
+/**
+ * Background work still running after a turn settled. V1 carried this on the
+ * shell as `backgroundLiveness`; under orchestrator v2 the caller derives it
+ * from the shell's `pendingBackgroundTasks` roster.
+ */
+export type ThreadBackgroundLiveness = "working" | "monitoring" | null;
 
 export interface ThreadCompletion {
   readonly threadId: ThreadId;
@@ -34,7 +40,7 @@ export interface ThreadCompletion {
    * fans out to subagents settles its turn once per wake-up; those interim
    * finishes are a separate category from the one that means "it is all done".
    */
-  readonly backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"];
+  readonly backgroundLiveness: ThreadBackgroundLiveness;
 }
 
 /** Mirrors the server-side mapping in `WebPushRelay.filterEdgesByCategory`. */

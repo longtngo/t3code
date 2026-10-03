@@ -287,8 +287,9 @@ it.effect.skipIf(windowsHost)("reveals a file in Finder with open -R on macOS", 
 // "absolute" -- one call site still sends a workspace-relative path -- so `open` has to
 // be told where its options stop. Without the separator `open -R -a` is not a reveal at
 // all: `-a` is `open`'s "use this application" flag, and it consumes the next argument.
-for (const reveal of [true, false]) {
-  it.effect(`passes a dash-leading path to open after -- (reveal: ${reveal})`, () =>
+it.effect.each([true, false])(
+  "passes a dash-leading path to open after -- (reveal: %s)",
+  (reveal) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -318,8 +319,7 @@ for (const reveal of [true, false]) {
       assert.equal(spawned.args.at(-2), "--");
       assert.equal(spawned.args.at(-1), "-a");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-}
+);
 
 it.effect("reveals a file in File Explorer through PowerShell on Windows", () =>
   Effect.gen(function* () {

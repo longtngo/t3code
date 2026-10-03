@@ -1,7 +1,7 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useMemo } from "react";
 
-import { useProject, useThread } from "~/state/entities";
+import { useProject, useThreadShell } from "~/state/entities";
 import { resolveWorkspaceRepos, type WorkspaceRepo } from "./useWorkspaceRepos.logic";
 
 export {
@@ -22,7 +22,7 @@ export {
  * expressions produced.
  */
 export function useWorkspaceRepos(threadRef: ScopedThreadRef | null): ReadonlyArray<WorkspaceRepo> {
-  const thread = useThread(threadRef);
+  const thread = useThreadShell(threadRef);
   const project = useProject(
     thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
   );

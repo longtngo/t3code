@@ -1,6 +1,33 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
-import { isQueuedTurnStart, latestTurnTimestampMs } from "@t3tools/shared/queuedTurnStart";
+import * as DateTime from "effect/DateTime";
+
+interface SettlementRunLike {
+  readonly turnId?: unknown;
+  readonly assistantMessageId?: unknown;
+  readonly status?: string;
+  readonly state?: string;
+  readonly requestedAt?: string | null;
+  readonly startedAt?: string | null;
+  readonly completedAt?: string | null;
+}
+
+interface SettlementRuntimeLike {
+  readonly threadId?: unknown;
+  readonly providerName?: unknown;
+  readonly runtimeMode?: unknown;
+  readonly activeTurnId?: unknown;
+  readonly lastError?: unknown;
+  readonly status: string;
+  readonly updatedAt?: string;
+}
+
+interface QueuedThreadShell {
+  readonly latestUserMessageAt?: string | null;
+  readonly latestTurn?: SettlementRunLike | null;
+  readonly latestRun?: SettlementRunLike | null;
+  readonly session?: SettlementRuntimeLike | null;
+  readonly runtime?: SettlementRuntimeLike | null;
+}
 
 /**
  * A queued turn start lives for at most this long: session adoption takes
@@ -9,9 +36,7 @@ import { isQueuedTurnStart, latestTurnTimestampMs } from "@t3tools/shared/queued
  * messages with no latestTurn at all), not pending work. Without this bound
  * such threads would be permanently unsettleable.
  */
-// Re-exported, not redefined: the fork made `@t3tools/shared/queuedTurnStart` the
-// single source of this rule so the decider and the clients cannot drift apart.
-export { QUEUED_TURN_START_GRACE_MS } from "@t3tools/shared/queuedTurnStart";
+export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -24,124 +49,34 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
  * within the adoption grace window.
  */
 export function hasQueuedTurnStart(
-  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn" | "session">,
+  shell: QueuedThreadShell,
   options: { readonly now: string },
 ): boolean {
-  if (shell.latestUserMessageAt == null) return false;
-  return isQueuedTurnStart({
-    latestUserMessageAtMs: Date.parse(shell.latestUserMessageAt),
-    latestTurnAtMs: latestTurnTimestampMs(shell.latestTurn),
-    sessionStatus: shell.session?.status,
-    nowMs: Date.parse(options.now),
-  });
-}
-
-/**
- * Providers that open a DISTINCT turn for a message held during a running
- * turn, so the shell changes shape when the agent picks it up.
- *
- * Per-adapter decision, required because the label must stop being true:
- * - `claudeAgent` — holds in `pendingTurns` and drains via `startTurnNow`,
- *   which emits a fresh `turn.started`. The label clears. Included.
- * - `codex` — its app-server queues and reports a real per-turn
- *   `turn/started`, mapped straight through. The label clears. Included.
- * - `cursor`, `grok`, `opencode` — reuse the running turn's id and gate
- *   `turn.started` behind `steeringTurnId === undefined`, so no new turn is
- *   ever announced. Nothing would clear the label until the whole merged turn
- *   ended, leaving it lying while the agent was already working on the
- *   message. Excluded until those adapters open a turn of their own.
- */
-const PROVIDERS_THAT_OPEN_A_HELD_TURN: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
-
-/**
- * A user message being held until the turn currently in flight finishes.
- *
- * The message is already in the transcript — the decider persists it before
- * the adapter is ever called — so without this it looks identical to one being
- * worked on.
- *
- * Deliberately unbounded, unlike {@link hasQueuedTurnStart}. That predicate
- * covers a message NO turn has adopted, where a failed start would read as
- * pending work forever, so it needs the adoption grace window. Here a turn is
- * demonstrably running and its completion is what clears this — real holds run
- * to a p90 of 36 minutes, far past any grace window, and are still waiting.
- */
-export type WaitingMessageShell = Pick<
-  OrchestrationThreadShell,
-  "latestUserMessageAt" | "latestTurn" | "session"
->;
-
-/** The slice of a message these rules need. */
-export interface WaitingMessageLike {
-  readonly id: string;
-  readonly role: string;
-  readonly createdAt: string;
-}
-
-/**
- * The instant the running turn last advanced. Any user message strictly newer
- * than this is being held behind that turn. `null` when nothing can be held —
- * no turn in flight, a provider that never opens a distinct turn, or a
- * `latestTurn` that has drifted off the active one.
- *
- * All-null turn timestamps yield -Infinity, so every message counts as newer,
- * and an unparseable one yields NaN, so none do. Both match the per-candidate
- * comparison this replaced.
- */
-function runningTurnAdvancedAtMs(shell: WaitingMessageShell): number | null {
-  const session = shell.session;
-  // A turn must actually be in flight: without an active turn the message is
-  // either being worked on or is hasQueuedTurnStart's case, not this one.
-  if (session == null || session.activeTurnId == null) return null;
-  if (session.status !== "running" && session.status !== "starting") return null;
-  if (session.providerName == null || !PROVIDERS_THAT_OPEN_A_HELD_TURN.has(session.providerName)) {
-    return null;
+  if (
+    shell.runtime?.status === "preparing" ||
+    shell.runtime?.status === "queued" ||
+    shell.runtime?.status === "starting"
+  ) {
+    return true;
   }
-  const turn = shell.latestTurn;
-  // `latestTurn` and the session's active turn can genuinely diverge: a
-  // `thread.turn-diff-completed` for the PREVIOUS turn lands asynchronously
-  // behind a git diff and rewrites `latestTurnId` unconditionally, regressing
-  // it to that older, completed turn. Comparing against it would then label the
-  // message the agent is working on right now as "waiting", for the whole turn.
-  if (turn === null || turn.turnId !== session.activeTurnId) return null;
-  // The message that STARTED the turn shares its requestedAt, so the comparison
-  // against this is strict and that message never flags itself.
-  return Math.max(
-    ...[turn.requestedAt, turn.startedAt, turn.completedAt].map((candidate) =>
-      candidate == null ? Number.NEGATIVE_INFINITY : Date.parse(candidate),
-    ),
-  );
-}
-
-export function hasWaitingUserMessage(shell: WaitingMessageShell): boolean {
   if (shell.latestUserMessageAt == null) return false;
-  const advancedAt = runningTurnAdvancedAtMs(shell);
-  if (advancedAt === null) return false;
+  // A failed session start clears the queued state: the failure is already
+  // visible (status edge / error).
+  if (shell.session?.status === "error") return false;
   const messageAt = Date.parse(shell.latestUserMessageAt);
   if (Number.isNaN(messageAt)) return false;
-  return messageAt > advancedAt;
-}
-
-const NO_WAITING_MESSAGES: ReadonlySet<string> = new Set();
-
-/**
- * Every user message the running turn is holding, not just the newest — two
- * messages sent during one turn are both waiting, and labelling only the last
- * leaves the earlier one looking delivered.
- */
-export function waitingUserMessageIds(
-  shell: WaitingMessageShell,
-  messages: ReadonlyArray<WaitingMessageLike>,
-): ReadonlySet<string> {
-  const advancedAt = runningTurnAdvancedAtMs(shell);
-  if (advancedAt === null) return NO_WAITING_MESSAGES;
-  const ids = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "user") continue;
-    const createdAt = Date.parse(message.createdAt);
-    if (!Number.isNaN(createdAt) && createdAt > advancedAt) ids.add(message.id);
-  }
-  return ids.size === 0 ? NO_WAITING_MESSAGES : ids;
+  const nowMs = Date.parse(options.now);
+  if (Number.isNaN(nowMs)) return false;
+  // Bounded on both sides: message timestamps originate on whichever device
+  // sent the message, so a clock ahead of this one yields a negative age
+  // that would otherwise hold the queued state for the whole skew. Mirrors
+  // the decider's guard.
+  if (Math.abs(nowMs - messageAt) > QUEUED_TURN_START_GRACE_MS) return false;
+  const turn = shell.latestRun ?? shell.latestTurn ?? null;
+  if (turn === null) return true;
+  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
+    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
+  );
 }
 
 /**
@@ -150,15 +85,12 @@ export function waitingUserMessageIds(
  * "active" in the data model and is only suppressed from the inbox until
  * its wake time passes or the thread demands attention.
  */
-export type ThreadSnoozeShell = Pick<
-  OrchestrationThreadShell,
-  | "snoozedUntil"
-  | "snoozedAt"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "session"
-  | "latestTurn"
->;
+export interface ThreadSnoozeShell extends QueuedThreadShell {
+  readonly snoozedUntil?: string | null;
+  readonly snoozedAt?: string | null;
+  readonly hasPendingApprovals: boolean;
+  readonly hasPendingUserInput: boolean;
+}
 
 /**
  * A snoozed thread "raises its hand" when something happens that outranks
@@ -170,21 +102,24 @@ export type ThreadSnoozeShell = Pick<
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
+  const runtime = shell.runtime ?? shell.session ?? null;
+  const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
   // Only a FRESH failure raises the hand: a thread snoozed while already
   // failed stays snoozed — that snooze was the user saying "I saw it, not
   // now". session.updatedAt stamps the status edge, so an error newer than
   // the snooze is new information.
   if (
-    shell.session?.status === "error" &&
-    (shell.snoozedAt == null || Date.parse(shell.session.updatedAt) > Date.parse(shell.snoozedAt))
+    (runtime?.status === "error" || runtime?.status === "failed") &&
+    (shell.snoozedAt == null ||
+      (runtime.updatedAt != null && Date.parse(runtime.updatedAt) > Date.parse(shell.snoozedAt)))
   ) {
     return true;
   }
   if (
     shell.snoozedAt != null &&
-    shell.latestTurn?.state === "completed" &&
-    shell.latestTurn.completedAt != null &&
-    Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt)
+    (latestRun?.state === "completed" || latestRun?.status === "completed") &&
+    latestRun.completedAt != null &&
+    Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
   ) {
     return true;
   }
@@ -201,8 +136,14 @@ export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean 
  */
 export function canSnooze(
   shell: Pick<
-    OrchestrationThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestTurn" | "session"
+    ThreadSnoozeShell,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "latestUserMessageAt"
+    | "latestTurn"
+    | "latestRun"
+    | "session"
+    | "runtime"
   >,
   options: { readonly now: string },
 ): boolean {
@@ -253,15 +194,17 @@ export function threadWokeAt(
   // indicator the user already cleared by visiting (snoozedUntil is newer
   // than that visit's lastVisitedAt).
   if (threadRaisedHandWhileSnoozed(shell)) {
+    const latestRun = shell.latestRun ?? shell.latestTurn ?? null;
+    const runtime = shell.runtime ?? shell.session ?? null;
     if (
       shell.snoozedAt != null &&
-      shell.latestTurn?.state === "completed" &&
-      shell.latestTurn.completedAt != null &&
-      Date.parse(shell.latestTurn.completedAt) > Date.parse(shell.snoozedAt)
+      (latestRun?.state === "completed" || latestRun?.status === "completed") &&
+      latestRun.completedAt != null &&
+      Date.parse(latestRun.completedAt) > Date.parse(shell.snoozedAt)
     ) {
-      return shell.latestTurn.completedAt;
+      return latestRun.completedAt;
     }
-    return shell.session?.updatedAt ?? shell.snoozedAt ?? null;
+    return runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }
   // No raised hand: woke iff the timer elapsed (still-snoozed → null).
   return wakeAtMs <= Date.parse(options.now) ? shell.snoozedUntil : null;
@@ -288,7 +231,7 @@ function snoozeTimeOfDayLabel(date: Date): string {
 }
 
 function snoozeAtHour(base: Date, hour: number): Date {
-  const next = new Date(base);
+  const next = DateTime.toDate(DateTime.makeUnsafe(base));
   next.setHours(hour, 0, 0, 0);
   return next;
 }
@@ -297,7 +240,7 @@ function snoozeAtHour(base: Date, hour: number): Date {
 // land on the wrong local day across DST transitions (a spring-forward day
 // is 23 hours, so 23:30 + 24h skips the whole next day).
 function addSnoozeDays(base: Date, days: number): Date {
-  const next = new Date(base);
+  const next = DateTime.toDate(DateTime.makeUnsafe(base));
   next.setDate(next.getDate() + days);
   return next;
 }
@@ -310,8 +253,8 @@ function addSnoozeDays(base: Date, days: number): Date {
  * morning, so only "Tomorrow" is offered.
  */
 export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
-  const inAnHour = new Date(now.getTime() + HOUR_MS);
-  const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
+  const inAnHour = DateTime.toDate(DateTime.makeUnsafe(now.getTime() + HOUR_MS));
+  const inThreeHours = DateTime.toDate(DateTime.makeUnsafe(now.getTime() + 3 * HOUR_MS));
   const presets: SnoozePreset[] = [
     {
       id: "hour",

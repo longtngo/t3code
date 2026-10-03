@@ -7,5 +7,6 @@
  * its own project, and a `.ts` file here that imports `apps/server` source makes `pnpm typecheck`
  * fail with TS6307 on every transitive import. No other script in this repo imports app source.
  */
-const adapter = await import("../../apps/server/src/provider/Layers/ClaudeAdapter.ts");
+const adapter =
+  await import("../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2Fork.ts");
 process.stdout.write(adapter.subagentDispatchAppend("cursor"));

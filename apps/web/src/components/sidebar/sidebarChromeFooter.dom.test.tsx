@@ -33,6 +33,7 @@ vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     environments: [{ serverConfig: { environment: { capabilities: { pullRequests: true } } } }],
   }),
+  usePullRequestsSupported: () => true,
 }));
 vi.mock("./SidebarLocalModels", () => ({
   SidebarLocalModels: () => createElement("li", { "data-panel": "models" }),
@@ -44,12 +45,13 @@ vi.mock("./SidebarCrew", () => ({
   SidebarCrew: () => createElement("li", { "data-panel": "crew" }),
 }));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
-vi.mock("./SidebarSubagentBackend", () => ({
-  SidebarSubagentBackend: () => createElement("li", { "data-panel": "subagents" }),
-}));
 vi.mock("./SidebarUpdatePill", () => ({
   SidebarUpdatePill: () => null,
   SidebarUpdateArchitectureWarning: () => null,
+}));
+
+vi.mock("./SidebarSubagentBackend", () => ({
+  SidebarSubagentBackend: () => createElement("li", { "data-panel": "subagents" }),
 }));
 
 import { SidebarChromeFooter, SidebarUtilityMenu } from "./SidebarChrome";
@@ -71,6 +73,7 @@ describe("SidebarChromeFooter panel placement", () => {
     const view = await renderFooterAt("/");
     expect(view.find('[data-panel="models"]')).not.toBeNull();
     expect(view.find('[data-panel="queue"]')).not.toBeNull();
+    expect(view.find('[data-panel="crew"]')).not.toBeNull();
   });
 
   it("KEEPS both status panels on the Usage page, where Back replaces navigation", async () => {
@@ -111,7 +114,7 @@ describe("SidebarChromeFooter panel placement", () => {
     expect(row).not.toBeNull();
     expect(row?.querySelector('[data-panel="models"]')).not.toBeNull();
     expect(row?.querySelector('[data-panel="queue"]')).not.toBeNull();
-    // Subagents is an icon in the same row now, and its panel expands as that row's first item.
+    // Subagents is an icon in the same row, and its panel expands as that row's first item.
     expect(row?.querySelector('ul > [data-panel="subagents"]')).not.toBeNull();
   });
 

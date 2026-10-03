@@ -52,13 +52,11 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       onAddPullRequests={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
-      onAddAgents={() => undefined}
       onAddTasks={() => undefined}
       onAddBackground={() => undefined}
       onUndoClosedTab={() => undefined}
       onAddDevice={() => undefined}
       onRenameDevice={() => undefined}
-      liveAgentCount={0}
       liveBackgroundCount={0}
       browserAvailable
       terminalAvailable={false}
@@ -66,7 +64,6 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       filesAvailable={false}
       pullRequestAvailable={false}
       pullRequestsAvailable={false}
-      agentsAvailable={false}
       tasksAvailable={false}
       backgroundAvailable={false}
       closedTabCount={0}

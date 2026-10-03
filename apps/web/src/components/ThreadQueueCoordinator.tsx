@@ -244,8 +244,8 @@ export function ThreadQueueCoordinator() {
           const shell = readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId));
           return {
             userMessageAt: shell?.latestUserMessageAt ?? null,
-            turnId: shell?.latestTurn?.turnId ?? null,
-            sessionUpdatedAt: shell?.session?.updatedAt ?? null,
+            turnId: shell?.latestRun?.runId ?? null,
+            sessionUpdatedAt: shell?.runtime?.updatedAt ?? null,
           };
         },
         settle: async () => {

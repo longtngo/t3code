@@ -1,13 +1,27 @@
-import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, OctagonXIcon, XIcon } from "lucide-react";
+import { memo, type MouseEventHandler, type PointerEventHandler } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  CornerUpRightIcon,
+  ListPlusIcon,
+  OctagonXIcon,
+  PlayIcon,
+} from "lucide-react";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { useShortcutModifierState } from "../../shortcutModifierState";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import {
+  alternateComposerDispatchAction,
+  resolveComposerDispatchMode,
+} from "@t3tools/client-runtime/state/composer-dispatch";
 
 interface PendingActionState {
   questionIndex: number;
@@ -20,22 +34,29 @@ interface PendingActionState {
 interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
+  /** The turn is running: sending steers or queues instead of starting a turn. */
   isRunning: boolean;
+  /** Stop can reach a run, including one still preparing or starting. */
+  canInterrupt: boolean;
+  followUpBehavior?: "queue" | "steer";
+  alternateShortcutLabel?: string | null;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isConnecting: boolean;
+  /** FORK: the environment is disconnected. A plain message is QUEUED for reconnect. */
   isEnvironmentUnavailable: boolean;
   /**
-   * Blocks sending outright (no provider, no project). Distinct from
-   * `isEnvironmentUnavailable`, which only means the send will be QUEUED.
+   * FORK: blocks sending outright (no provider, no project). Distinct from
+   * `isEnvironmentUnavailable`, which leaves Send live so the message is queued.
    */
   isSendBlocked: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  canResume?: boolean;
   /**
-   * Omit Send while there is nothing to send. The collapsed layouts (desktop
+   * FORK: omit Send while there is nothing to send. The collapsed layouts (desktop
    * resting, phone row) have no room for a greyed placeholder; the expanded
    * footer keeps the disabled Send as its "type here" affordance. Stop is
    * unaffected, and the pending-question and plan follow-up branches keep
@@ -43,22 +64,17 @@ interface ComposerPrimaryActionsProps {
    */
   hideIdleSend?: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
+  isEditingQueuedMessage?: boolean;
+  onSubmitMessage?: MouseEventHandler<HTMLButtonElement>;
+  onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   /**
-   * The ladder is armed: `onInterrupt`'s next call force-stops the session and
-   * asks the watchdog to resume the thread. Renders the second rung as a
-   * visibly different, destructive control so the escalation is neither
-   * undiscoverable nor triggerable by an impatient double-click that the user
-   * thinks is just "stop again".
+   * FORK Stop ladder. `armed`: the next press is the hard rung (it restarts the
+   * provider runtime), shown only while a press would take it. `forceStopping`:
+   * the hard rung was sent and the turn has not settled; presses do nothing.
    */
-  isStopEscalated: boolean;
-  /**
-   * Dedicated cooperative decline for a pending question — never arms the Stop
-   * escalation ladder. Distinct from `onInterrupt`, which is the ladder's entry
-   * point and whose second press force-stops the session.
-   */
-  onCancelQuestion: () => void;
+  stopRung?: StopRung;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -93,6 +109,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  canInterrupt,
+  followUpBehavior = "steer",
+  alternateShortcutLabel = null,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -102,61 +121,64 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isSendBlocked,
   isPreparingWorktree,
   hasSendableContent,
+  canResume = false,
   hideIdleSend = false,
   preserveComposerFocusOnPointerDown = false,
+  isEditingQueuedMessage = false,
+  onSubmitMessage,
+  onResume,
   onPreviousPendingQuestion,
   onInterrupt,
-  isStopEscalated,
-  onCancelQuestion,
+  stopRung = "idle",
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const shortcutModifiers = useShortcutModifierState();
+  const isQueuing =
+    !isEditingQueuedMessage &&
+    resolveComposerDispatchMode({
+      running: isRunning,
+      activeTurnDefault: followUpBehavior,
+      alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
+    }) === "queue";
+  const alternateAction = alternateComposerDispatchAction(followUpBehavior);
   const isSendDisabled = sendDisabledReason !== null;
-  const showSend = !hideIdleSend || hasSendableContent || isSendBusy;
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
   );
 
-  /**
-   * Both rungs of the Stop ladder render from here, so the armed styling cannot
-   * be applied to one entry point and forgotten on the other — the pending
-   * question row has its own Stop.
-   *
-   * The armed rung is distinguished by SHAPE (a stop-sign octagon) rather than
-   * colour alone: at 32px a fill-opacity shift does not read, and the button is
-   * already destructive-red at rest, so there is no colour headroom. The ring
-   * carries it at a glance. Deliberately static — a pulsing "armed" indicator
-   * is exactly the continuously repainting animation this repo bans.
-   */
-  const renderStopGenerationButton = (insidePendingAction: boolean) => {
-    const stopButton = (
-      <button
-        type="button"
-        className={cn(
-          "flex cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-2xs inset-shadow-white/16 transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-black/8 active:shadow-none",
-          // Standalone Stop sits beside Send while running, so it must match Send's
-          // footprint exactly (`h-9 w-9 sm:h-8 sm:w-8`). Sizing it `size-8` made it
-          // 32px against Send's 36px below `sm` — a visible mismatch on a phone, on
-          // the very change whose point is that the row stops moving.
-          insidePendingAction ? "size-8 sm:size-7" : "h-9 w-9 sm:h-8 sm:w-8",
-          isStopEscalated
-            ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
-            : "bg-destructive/90",
-        )}
-        {...pointerFocusProps}
-        onClick={onInterrupt}
-        data-stop-escalated={isStopEscalated ? "true" : "false"}
-        aria-label={isStopEscalated ? "Force stop the session" : "Stop generation"}
-        // The tooltip carries this on hover, but its popup is portalled and only
-        // mounts while open — so the explanation also rides on the accessible
-        // tree, where a screen reader (and a static render) can reach it.
-        aria-description={
-          isStopEscalated
-            ? "The cooperative stop was not honoured — this press force-stops the session and recovers the thread"
-            : undefined
+  // Both Stop sites render from here, so the armed rung cannot be styled on one
+  // and forgotten on the other. It is told apart by SHAPE (an octagon) and a
+  // ring, not colour: the button is already destructive red at rest. Static on
+  // purpose; a pulsing "armed" state is a continuously repainting animation.
+  const isStopEscalated = stopRung !== "idle";
+  const stopLabel =
+    stopRung === "armed"
+      ? "Force stop the provider session"
+      : stopRung === "forceStopping"
+        ? "Force-stopping the provider session"
+        : "Stop generation";
+  const renderStopGenerationButton = (insidePendingAction: boolean) => (
+    <Tooltip key="interrupt">
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className={cn(
+              "flex cursor-pointer items-center justify-center rounded-full text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-control-pressed active:shadow-none [&_svg]:pointer-events-none",
+              insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+              isStopEscalated
+                ? "bg-destructive ring-2 ring-destructive/40 ring-offset-1 ring-offset-background"
+                : "bg-destructive/90",
+            )}
+            {...pointerFocusProps}
+            onClick={onInterrupt}
+            data-stop-rung={stopRung}
+            aria-label={stopLabel}
+          />
         }
       >
         {isStopEscalated ? (
@@ -166,77 +188,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             <rect x="2" y="2" width="8" height="8" rx="1.5" />
           </svg>
         )}
-      </button>
-    );
-    // Only the armed rung explains itself: at rest the icon already says "stop",
-    // and a tooltip on every running turn would be noise.
-    if (!isStopEscalated) return stopButton;
-    return (
-      <Tooltip>
-        <TooltipTrigger render={stopButton} />
-        <TooltipPopup>
-          The cooperative stop was not honoured — this press force-stops the session and recovers
-          the thread
-        </TooltipPopup>
-      </Tooltip>
-    );
-  };
-
-  const sendButton = (
-    <button
-      type="submit"
-      className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-2xs enabled:inset-shadow-white/16 hover:scale-105 active:inset-shadow-black/8 active:shadow-none disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
-        stageBackdropVariant
-          ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
-          : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",
-      )}
-      {...pointerFocusProps}
-      // Note this checks `isSendBlocked`, NOT `isEnvironmentUnavailable`: a
-      // disconnected environment leaves the button live so the message can be
-      // queued for reconnect instead of being swallowed by a dead button.
-      disabled={
-        isSendBusy || isSendDisabled || isConnecting || isSendBlocked || !hasSendableContent
-      }
-      aria-label={
-        isEnvironmentUnavailable
-          ? "Queue message to send on reconnect"
-          : sendDisabledReason
-            ? sendDisabledReason
-            : isConnecting
-              ? "Connecting"
-              : isPreparingWorktree
-                ? "Preparing worktree"
-                : isSendBusy
-                  ? "Sending"
-                  : "Send message"
-      }
-    >
-      {stageBackdropVariant ? (
-        <span className="absolute inset-0 -z-10" aria-hidden="true">
-          <StageBackdropButtonArt variant={stageBackdropVariant} />
-        </span>
-      ) : null}
-      {isConnecting || isSendBusy ? (
-        <Spinner size="sm" aria-hidden="true" />
-      ) : (
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path
-            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      )}
-    </button>
+      </TooltipTrigger>
+      <TooltipPopup>
+        {stopRung === "armed"
+          ? "The turn has not stopped yet. Press again to force-stop the provider session"
+          : stopRung === "forceStopping"
+            ? "Force-stopping the provider session"
+            : "Interrupt"}
+      </TooltipPopup>
+    </Tooltip>
   );
 
   if (pendingAction) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {isRunning ? renderStopGenerationButton(true) : null}
+        {canInterrupt ? renderStopGenerationButton(true) : null}
         {pendingAction.questionIndex > 0 ? (
           compact ? (
             <Button
@@ -261,45 +227,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </Button>
           )
         ) : null}
-        {/*
-          Decline the question instead of being forced to answer it. Without
-          this the pending row can offer no exit at all: Stop only renders while
-          a turn is running, and Previous only past the first question.
-
-          Wired to the same `onInterrupt` as Stop, which the adapter turns into a
-          clean settle of the pending request (it registers an `abort` listener
-          on the AskUserQuestion the moment it is created).
-
-          The tripwire that used to sit here has FIRED. Stop regained its
-          escalation ladder, so sharing `onInterrupt` would have meant a Cancel
-          press arming the ladder and turning the NEXT Stop press into a session
-          kill — the bug fixed in f4af9398e, reintroduced. `onCancelQuestion` is
-          therefore back, exactly as it was, and dispatches the cooperative
-          interrupt without touching the ledger.
-        */}
-        {compact ? (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            {...pointerFocusProps}
-            onClick={onCancelQuestion}
-            disabled={pendingAction.isResponding}
-            aria-label="Cancel question"
-          >
-            <XIcon className="size-3.5" />
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="ghost"
-            {...pointerFocusProps}
-            onClick={onCancelQuestion}
-            disabled={pendingAction.isResponding}
-            aria-label="Cancel question"
-          >
-            Cancel
-          </Button>
-        )}
         <button
           type="submit"
           className={cn(messageActionPillClassName, "h-8 sm:h-7", compact ? "px-3" : "px-4")}
@@ -322,28 +249,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
-    // Send sits beside Stop rather than being replaced by it. `hideIdleSend`
-    // still hides it while there is nothing to send, so under that flag Stop can
-    // stand alone until a draft appears. Every adapter has a defined
-    // concurrent-send path — Claude queues the follow-up FIFO
-    // (`ClaudeAdapter.ts:4637`), Cursor/Grok/OpenCode hold it behind their
-    // prompt serialization permit and count it as the running turn — so this is
-    // not gated on the provider.
-    //
-    // Do NOT "simplify" this by deleting the branch and falling through to the
-    // default Send: `showPlanFollowUpPrompt` is only unreachable while running
-    // because this branch returns first, and falling through would start
-    // rendering Refine/Implement mid-run.
-    return (
-      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {renderStopGenerationButton(false)}
-        {showSend ? sendButton : null}
-      </div>
-    );
-  }
-
-  if (showPlanFollowUpPrompt) {
+  if (showPlanFollowUpPrompt && (promptHasText || !canResume)) {
     if (promptHasText) {
       return (
         <button
@@ -421,5 +327,101 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  return showSend ? sendButton : null;
+  if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
+    return renderStopGenerationButton(false);
+  }
+
+  const showResume = canResume && !hasSendableContent && !isEditingQueuedMessage;
+  const submitLabel = showResume
+    ? "Resume thread"
+    : isEditingQueuedMessage
+      ? "Update queued message"
+      : isQueuing
+        ? "Queue message"
+        : isRunning
+          ? "Steer message"
+          : "Submit message";
+  const submitStatus = isEnvironmentUnavailable
+    ? showResume
+      ? "Environment disconnected"
+      : "Queue message to send on reconnect"
+    : (sendDisabledReason ??
+      (isConnecting
+        ? "Connecting"
+        : isPreparingWorktree
+          ? "Preparing worktree"
+          : isSendBusy
+            ? isEditingQueuedMessage
+              ? "Updating queued message"
+              : "Submitting message"
+            : null));
+  const submitTooltip =
+    submitStatus ??
+    (isRunning && !isEditingQueuedMessage
+      ? `Click to ${followUpBehavior}, Ctrl/⌘-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction}`
+      : submitLabel);
+
+  const sendButton = (
+    <button
+      type={showResume ? "button" : "submit"}
+      className={cn(
+        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-control-highlight hover:scale-105 active:inset-shadow-control-pressed active:shadow-none disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8 [&_svg]:pointer-events-none",
+        stageBackdropVariant
+          ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
+          : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",
+      )}
+      {...pointerFocusProps}
+      onClick={showResume ? onResume : onSubmitMessage}
+      // FORK (inv 4b): checks `isSendBlocked`, not `isEnvironmentUnavailable`: a
+      // disconnected environment leaves Send live so the message is queued for
+      // reconnect instead of being swallowed by a dead button.
+      disabled={
+        isSendBusy ||
+        isSendDisabled ||
+        isConnecting ||
+        isSendBlocked ||
+        (showResume && isEnvironmentUnavailable) ||
+        (!hasSendableContent && !showResume)
+      }
+      aria-label={submitStatus ?? submitLabel}
+    >
+      {stageBackdropVariant ? (
+        <span className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+          <StageBackdropButtonArt variant={stageBackdropVariant} />
+        </span>
+      ) : null}
+      {isConnecting || isSendBusy ? (
+        <Spinner size="sm" aria-hidden="true" />
+      ) : showResume ? (
+        <PlayIcon className="size-4 fill-current" aria-hidden="true" />
+      ) : isEditingQueuedMessage ? (
+        <CheckIcon className="size-4" aria-hidden="true" />
+      ) : isQueuing ? (
+        <ListPlusIcon className="size-4" aria-hidden="true" />
+      ) : isRunning ? (
+        <CornerUpRightIcon className="size-4" aria-hidden="true" />
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path
+            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
+
+  if (hideIdleSend && !hasSendableContent && !isSendBusy && !showResume) {
+    return null;
+  }
+
+  return (
+    <Tooltip key="submit">
+      <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
+      <TooltipPopup>{submitTooltip}</TooltipPopup>
+    </Tooltip>
+  );
 });

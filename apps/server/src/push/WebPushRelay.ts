@@ -1,47 +1,54 @@
 /**
- * WebPushRelay — sends VAPID Web Push notifications for two thread edges (a turn
- * finishing; a thread starting to ask the user a question) to the browser PWA, so
- * they arrive with the tab frozen (screen off) — the case the WebSocket-driven
- * foreground notifier (`apps/web/src/lib/notifier.ts`) structurally cannot cover.
+ * WebPushRelay - sends VAPID Web Push notifications for two thread edges (a run
+ * finishing; an agent asking the user a question) to the browser PWA, so they
+ * arrive with the tab frozen (screen off). The WebSocket-driven foreground notifier
+ * (`apps/web/src/lib/notifier.ts`) cannot cover that case.
  *
- * Structurally mirrors `relay/AgentAwarenessRelay.ts` (which does the same edge
- * selection for the mobile/APNs path): subscribe to `streamDomainEvents`, queue
- * per-thread work through a serial `DrainableWorker`, read the current
- * `OrchestrationThreadShell`, and fan out. (The worker serialises, it does not
- * coalesce — fire-once is enforced by the prev-state comparison in `processThread`,
- * not the queue.) It differs in transport (VAPID → FCM via `web-push`) and — critically —
- * in dedup: it is an EDGE detector (fire once on a specific transition), not a
- * change detector, and it stores the specific previous fields per thread rather than
- * a coarse state-identity string.
+ * Edges are classified from the orchestrator v2 domain event itself, by positive
+ * match: a `run.updated` whose run reached a terminal status, or a
+ * `runtime-request.updated` that opened a pending `user_input` request. The stream
+ * handler is O(1) and only enqueues the edge (invariant 18: the domain-event hub is
+ * unbounded, so an internal reader must take promptly); reads and HTTP sends run on
+ * a `DrainableWorker`.
  *
  * @module WebPushRelay
  */
-import { DEFAULT_SERVER_SETTINGS, isInterimBackgroundLiveness } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  isCrewBranch,
+  isInterimBackgroundLiveness,
+} from "@t3tools/contracts";
 import type {
+  CrewRole,
   NotificationCategorySettings,
-  OrchestrationEvent,
-  OrchestrationLatestTurnState,
-  OrchestrationThreadShell,
+  OrchestrationV2DomainEvent,
+  OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import webpush from "web-push";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CrewRoles } from "../crew/CrewRoles.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { PushSubscriptionRepository } from "../persistence/Services/PushSubscription.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  PushSubscriptionRepository,
+  type PushSubscriptionRecord,
+} from "../persistence/Services/PushSubscription.ts";
+import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 // ---------------------------------------------------------------------------
@@ -82,9 +89,8 @@ const readVapidKeyPair = Effect.fn("readVapidKeyPair")(function* (
 
 /**
  * Read the persisted VAPID key pair, generating and persisting one on first use.
- * TOCTOU-safe (create + catch AlreadyExists → re-read), so two concurrent boots
- * converge on a single key pair rather than racing into two. Exported so both the
- * relay and the `ServerConfig` assembler can obtain the public key.
+ * TOCTOU-safe (create + catch AlreadyExists -> re-read), so two concurrent boots
+ * converge on a single key pair rather than racing into two.
  */
 export const getOrCreateVapidKeys = Effect.fn("getOrCreateVapidKeys")(function* (
   secrets: ServerSecretStore.ServerSecretStore["Service"],
@@ -127,71 +133,82 @@ export const getOrCreateVapidKeys = Effect.fn("getOrCreateVapidKeys")(function* 
 // Pure edge classification (unit-tested)
 // ---------------------------------------------------------------------------
 
-/** The subset of thread-shell state the notification edges are computed from. */
-export interface ThreadNotifyState {
-  readonly latestTurnState: OrchestrationLatestTurnState | null;
-  readonly hasPendingUserInput: boolean;
-}
-
 export type ThreadNotifyEdge =
   | { readonly kind: "finished"; readonly outcome: "completed" | "error" | "interrupted" }
   | { readonly kind: "asking" };
 
-function isTerminalTurnState(
-  state: OrchestrationLatestTurnState,
-): state is "completed" | "error" | "interrupted" {
-  return state !== "running";
+export interface PushEdge {
+  readonly threadId: ThreadId;
+  /** One push per key: a run id or a runtime-request id. */
+  readonly key: string;
+  readonly edge: ThreadNotifyEdge;
 }
 
 /**
- * Compute which notification edges to fire given the PREVIOUSLY observed state and
- * the current state. Mirrors the shipped foreground `classifyThreadCompletion`:
- * "finished" fires only on a `running` → terminal transition; "asking" fires only on
- * an explicit `hasPendingUserInput` `false` → `true` transition.
+ * The push edge a domain event raises, or `null`.
  *
- * On first sight of a thread (`previous === null`) this returns no edges — the caller
- * records the current state as the baseline WITHOUT notifying, so a thread that was
- * already terminal or already asking when the server (re)started never emits a stale
- * push.
+ * Positive match only; every other event type and every unlisted status is `null`:
+ * - `run.updated` with status `completed` -> finished/completed, `failed` ->
+ *   finished/error, `interrupted` or `cancelled` -> finished/interrupted. A run
+ *   that never started (a withdrawn or restart-cancelled queued message) does not
+ *   "finish", except a failure, which is the alert people keep. A run completed
+ *   before `notBefore` (this relay's start) is history being re-written, not news.
+ * - `runtime-request.updated` opening a `pending` `user_input` request -> asking.
+ *   Approvals are not "asking", matching the fork's V1 `hasPendingUserInput` edge.
  */
-export function classifyThreadNotifyEdges(
-  previous: ThreadNotifyState | null,
-  current: ThreadNotifyState,
-): ReadonlyArray<ThreadNotifyEdge> {
-  if (previous === null) {
-    return [];
+export function classifyPushEdge(
+  event: OrchestrationV2DomainEvent,
+  notBefore: DateTime.Utc,
+): PushEdge | null {
+  switch (event.type) {
+    case "run.updated": {
+      const run = event.payload;
+      if (run.completedAt !== null && DateTime.isLessThan(run.completedAt, notBefore)) {
+        return null;
+      }
+      const started = run.startedAt !== null;
+      const finished = (outcome: "completed" | "error" | "interrupted"): PushEdge => ({
+        threadId: run.threadId,
+        key: `run:${run.id}`,
+        edge: { kind: "finished", outcome },
+      });
+      switch (run.status) {
+        case "completed":
+          return started ? finished("completed") : null;
+        case "failed":
+          return finished("error");
+        case "interrupted":
+        case "cancelled":
+          return started ? finished("interrupted") : null;
+        default:
+          return null;
+      }
+    }
+    case "runtime-request.updated": {
+      const request = event.payload;
+      return request.kind === "user_input" && request.status === "pending"
+        ? { threadId: event.threadId, key: `request:${request.id}`, edge: { kind: "asking" } }
+        : null;
+    }
+    default:
+      return null;
   }
+}
 
-  const edges: ThreadNotifyEdge[] = [];
-
-  if (
-    previous.latestTurnState === "running" &&
-    current.latestTurnState !== null &&
-    isTerminalTurnState(current.latestTurnState)
-  ) {
-    edges.push({ kind: "finished", outcome: current.latestTurnState });
-  }
-
-  if (previous.hasPendingUserInput === false && current.hasPendingUserInput === true) {
-    edges.push({ kind: "asking" });
-  }
-
-  return edges;
+/** Post-settlement background work, as the web notifier derives it from the same shell. */
+function backgroundLivenessOf(shell: OrchestrationV2ThreadShell): "monitoring" | null {
+  return (shell.pendingBackgroundTasks?.length ?? 0) > 0 ? "monitoring" : null;
 }
 
 /**
- * Which category an edge belongs to, given the thread's background liveness
- * when the turn settled.
- *
- * A finish splits on live background work rather than on what started the turn:
- * an agent that fans out to subagents settles its turn once per wake-up, and the
- * LAST of those is the genuinely-final completion. Keying off the originating
- * message would silence exactly that one. A failure never becomes an interim
- * finish — it is the alert people keep when they silence everything else.
+ * Which category an edge belongs to. A finish splits on live background work: an
+ * agent that fans out to subagents settles once per wake-up, and the last of those
+ * is the genuinely final completion. A failure never becomes an interim finish.
+ * Mirrored by `categoryForCompletion` in the web notifier.
  */
 function categoryForEdge(
   edge: ThreadNotifyEdge,
-  backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"],
+  backgroundLiveness: "working" | "monitoring" | null,
 ): keyof NotificationCategorySettings {
   if (edge.kind === "asking") {
     return "needsInput";
@@ -202,15 +219,11 @@ function categoryForEdge(
   return isInterimBackgroundLiveness(backgroundLiveness) ? "finishedBackground" : "finished";
 }
 
-/**
- * Drop the edges whose category the user has switched off. Pure so the mapping
- * is testable without standing up the relay; `processThread` keeps ownership of
- * when the settings are read and when the baseline advances.
- */
+/** Drop the edges whose category the user has switched off. */
 export function filterEdgesByCategory(
   edges: ReadonlyArray<ThreadNotifyEdge>,
   categories: NotificationCategorySettings,
-  backgroundLiveness: OrchestrationThreadShell["backgroundLiveness"],
+  backgroundLiveness: "working" | "monitoring" | null,
 ): ReadonlyArray<ThreadNotifyEdge> {
   return edges.filter((edge) => categories[categoryForEdge(edge, backgroundLiveness)]);
 }
@@ -236,9 +249,8 @@ export function buildPushPayload(input: {
     // `tag` coalesces same-thread notifications on the device.
     tag: input.threadId,
     url: input.url,
-    // The SW uses this to decide suppression: a "finished" push is redundant when a
-    // visible tab exists (the foreground notifier covers it), but an "asking" push
-    // has no foreground counterpart and must always show.
+    // The SW suppresses a "finished" push while a tab is visible (the foreground
+    // notifier covers it); an "asking" push has no foreground counterpart.
     kind: input.edge.kind,
   });
 }
@@ -268,9 +280,8 @@ function isPrivateOrLoopbackIp(host: string): boolean {
 /**
  * Trust-boundary guard on a client-supplied push endpoint: the server will POST to
  * this URL on every thread edge, so reject anything that isn't a plausible public
- * push service — non-HTTPS, loopback/private IPs, or single-label/`.local` hosts —
- * to blunt blind-SSRF via `pushSubscriptions.register`. Real push services (FCM,
- * Mozilla, WNS, Apple) are public HTTPS DNS names and pass.
+ * push service - non-HTTPS, loopback/private IPs, or single-label/`.local` hosts -
+ * to blunt blind SSRF via `pushSubscriptions.register`.
  */
 export function isAllowedPushEndpoint(endpoint: string): boolean {
   let url: URL;
@@ -293,119 +304,156 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
   return host.includes(".");
 }
 
-/** Events that can change `latestTurn.state` or `hasPendingUserInput`. */
-function isPushRelevantEvent(event: OrchestrationEvent): boolean {
-  switch (event.type) {
-    case "thread.session-set":
-    case "thread.turn-diff-completed":
-    case "thread.reverted":
-      return true;
-    case "thread.activity-appended":
-      return (
-        event.payload.activity.kind === "user-input.requested" ||
-        event.payload.activity.kind === "user-input.resolved"
-      );
-    default:
-      return false;
-  }
-}
-
-function eventThreadId(event: OrchestrationEvent): ThreadId | null {
-  const payload = event.payload as { readonly threadId?: unknown };
-  if (typeof payload.threadId === "string") {
-    return payload.threadId as ThreadId;
-  }
-  if (event.aggregateKind === "thread" && typeof event.aggregateId === "string") {
-    return event.aggregateId as ThreadId;
-  }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
-/** Typed error carrying the push service's HTTP status (drives 404/410 pruning). */
-class WebPushSendError extends Data.TaggedError("WebPushSendError")<{
-  readonly statusCode: number | null;
-}> {}
+/**
+ * Remembered push keys; a run or request re-written later must not push twice.
+ * In memory and bounded: a rewrite of a run more than this many edges old pushes
+ * again. Accepted: terminal runs are not normally re-written, and a duplicate
+ * notification is cheaper than an unbounded set or a table for it.
+ */
+export const MAX_REMEMBERED_PUSH_KEYS = 1_000;
+const SEND_TIMEOUT = "15 seconds";
 
 export interface WebPushRelayShape {
   /** The VAPID public key (base64url) clients feed to `PushManager.subscribe`. */
   readonly vapidPublicKey: string;
+  /** The stream handler: classify and enqueue, never wait. */
+  readonly handleEvent: (event: OrchestrationV2DomainEvent) => Effect.Effect<void>;
+  readonly drain: Effect.Effect<void>;
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  /**
+   * Take no new edges for the rest of this process. Server shutdown calls it before
+   * it cancels the runs still in flight, which are not the user's work ending; edges
+   * already queued (work that really finished) still send.
+   *
+   * Not covered: Ctrl-C in a terminal signals the whole process group, so provider
+   * CLIs can exit before this finalizer runs, and the runs they leave may be marked
+   * failed or interrupted and push. Desktop and the service launcher send SIGTERM to
+   * the server only, so they take the clean path.
+   */
+  readonly stop: Effect.Effect<void>;
 }
 
 export class WebPushRelay extends Context.Service<WebPushRelay, WebPushRelayShape>()(
   "t3/push/WebPushRelay",
 ) {}
 
-const make = Effect.gen(function* () {
+/**
+ * The push-service origin only. A subscription endpoint's path is its bearer token,
+ * so it must not reach logs or spans.
+ */
+function endpointOrigin(endpoint: string): string {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return "<invalid endpoint>";
+  }
+}
+
+/** Any tagged failure; the relay logs it and moves on. */
+type TaggedFailure = { readonly _tag: string };
+
+/** The two orchestrator reads the relay needs; `ThreadManagementService` in production. */
+export interface WebPushRelayThreads {
+  /** Live tail of domain events (the unbounded internal-worker form, invariant 18). */
+  readonly streamDomainEvents: Stream.Stream<OrchestrationV2DomainEvent, TaggedFailure>;
+  readonly getThreadShell: (
+    threadId: ThreadId,
+  ) => Effect.Effect<OrchestrationV2ThreadShell | null, TaggedFailure>;
+}
+
+/**
+ * A thread's crew role, or null when it is not crew; `CrewRoles.roleOf` in production. Must
+ * not fail: an unreadable crew table reads as "not crew", which notifies as before.
+ */
+export type WebPushRelayCrewRoleOf = (threadId: ThreadId) => Effect.Effect<CrewRole | null>;
+
+export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
+  threads: WebPushRelayThreads,
+  crewRoleOf: WebPushRelayCrewRoleOf = () => Effect.succeed(null),
+) {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const snapshotQuery = yield* ProjectionSnapshotQuery;
-  const orchestrationEngine = yield* OrchestrationEngineService;
   const serverEnvironment = yield* ServerEnvironment;
   const pushRepo = yield* PushSubscriptionRepository;
   const serverSettings = yield* ServerSettingsService;
+  // No trace context to a third-party push service, and no span: its url.full would
+  // carry the subscription token. TracerDisabledWhen alone does both (the client skips
+  // the span and its header injection); TracerPropagationEnabled is a second guard that
+  // no test can tell apart while the first holds.
+  const httpClient = (yield* HttpClient.HttpClient).pipe(
+    HttpClient.transform((effect) =>
+      effect.pipe(
+        Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      ),
+    ),
+  );
 
   const vapidKeys = yield* getOrCreateVapidKeys(secrets);
-  webpush.setVapidDetails(VAPID_SUBJECT, vapidKeys.publicKey, vapidKeys.privateKey);
+  const notBefore = yield* DateTime.now;
+  const rememberedKeys = new Set<string>();
+  let stopped = false;
 
-  const previousStateByThreadRef = yield* Ref.make(new Map<ThreadId, ThreadNotifyState>());
-
-  // Send one push to one subscription. Bounded by a socket timeout so a hung FCM
-  // connection can never wedge the worker; prunes the subscription on 404/410 (gone),
-  // logs and swallows everything else so one bad endpoint never aborts the batch.
-  const sendToSubscription = (
-    subscription: { readonly endpoint: string; readonly p256dh: string; readonly auth: string },
-    payload: string,
-  ) =>
-    Effect.tryPromise({
-      try: () =>
-        webpush.sendNotification(
-          {
-            endpoint: subscription.endpoint,
-            keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-          },
-          payload,
-          { TTL: 120, urgency: "high", timeout: 10_000 },
-        ),
-      catch: (error) =>
-        new WebPushSendError({
-          statusCode: (error as { statusCode?: number } | null)?.statusCode ?? null,
-        }),
-    }).pipe(
-      Effect.timeout("15 seconds"),
-      Effect.asVoid,
-      Effect.catchTag("WebPushSendError", (error) =>
-        error.statusCode === 404 || error.statusCode === 410
-          ? Effect.logInfo("pruning gone push subscription", {
-              endpoint: subscription.endpoint,
-              statusCode: error.statusCode,
-            }).pipe(
-              Effect.andThen(pushRepo.deleteByEndpoint({ endpoint: subscription.endpoint })),
-              Effect.catchCause(() => Effect.void),
-            )
-          : Effect.logWarning("web push send failed", {
-              endpoint: subscription.endpoint,
-              statusCode: error.statusCode,
-            }),
-      ),
-      // Anything left (e.g. the socket timeout) — log and move on.
-      Effect.catchCause((cause) =>
-        Effect.logWarning("web push send timed out or errored", {
+  // Prunes the subscription on 404/410 (gone); logs and swallows everything else so
+  // one bad or hung endpoint never aborts the fan-out to the others.
+  const sendToSubscription = (subscription: PushSubscriptionRecord, payload: string) =>
+    Effect.gen(function* () {
+      const details = webpush.generateRequestDetails(
+        {
           endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+        },
+        payload,
+        {
+          TTL: 120,
+          urgency: "high",
+          vapidDetails: {
+            subject: VAPID_SUBJECT,
+            publicKey: vapidKeys.publicKey,
+            privateKey: vapidKeys.privateKey,
+          },
+        },
+      );
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(details.headers)) {
+        // fetch computes the length itself.
+        if (name.toLowerCase() !== "content-length") headers[name] = String(value);
+      }
+      const request = HttpClientRequest.post(details.endpoint).pipe(
+        HttpClientRequest.setHeaders(headers),
+        HttpClientRequest.bodyUint8Array(
+          new Uint8Array(details.body ?? new Uint8Array()),
+          "application/octet-stream",
+        ),
+      );
+      const response = yield* httpClient.execute(request).pipe(Effect.timeout(SEND_TIMEOUT));
+      if (response.status === 404 || response.status === 410) {
+        yield* Effect.logInfo("pruning gone push subscription", {
+          endpoint: endpointOrigin(subscription.endpoint),
+          statusCode: response.status,
+        });
+        yield* pushRepo.deleteByEndpoint({ endpoint: subscription.endpoint });
+        return;
+      }
+      if (response.status < 200 || response.status >= 300) {
+        yield* Effect.logWarning("web push send failed", {
+          endpoint: endpointOrigin(subscription.endpoint),
+          statusCode: response.status,
+        });
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("web push send errored", {
+          endpoint: endpointOrigin(subscription.endpoint),
           cause: Cause.pretty(cause),
         }),
       ),
     );
 
-  // Fail OPEN: an unreadable settings file must not silence notifications. This is
-  // `catchCause`, not `orElseSucceed`, because `getRawSettings` is backed by a Cache
-  // whose lookup can die with a defect rather than a typed error — and a defect
-  // escaping here would skip `advanceBaseline` and drop the edge for good. The cache
-  // also never retries a failed lookup, so without the warning below a single
-  // transient read error would ignore every category for the rest of the process.
+  // Fail OPEN: an unreadable settings file must not silence notifications.
   const readNotificationCategories = serverSettings.getRawSettings.pipe(
     Effect.map((settings) => settings.notificationCategories),
     Effect.catchCause((cause) =>
@@ -415,118 +463,122 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const processThread = (threadId: ThreadId) =>
+  const processEdge = ({ threadId, key, edge }: PushEdge) =>
     Effect.gen(function* () {
-      const shellOption = yield* snapshotQuery.getThreadShellById(threadId);
-      if (Option.isNone(shellOption)) {
-        yield* Ref.update(previousStateByThreadRef, (map) => {
-          const next = new Map(map);
-          next.delete(threadId);
-          return next;
+      const shell = yield* threads.getThreadShell(threadId);
+      if (shell === null || shell.deletedAt !== null) {
+        return;
+      }
+      // A delegated subagent's run and questions belong to its parent's turn; the
+      // web notifier and the thread list skip these threads too.
+      if (shell.lineage.relationshipToParent === "subagent") {
+        return;
+      }
+      // FORK: a crew thread's completion is crew's business, not the operator's phone —
+      // the lead hears from its crewmates through crew, and a crewmate reports to its
+      // lead. As on `personal`, ANY role counts, not only an open row: teardown closes the
+      // row before it archives the thread, and the interrupted run settles in between. A
+      // crewmate with no row (a shell from another server's database) is still caught by
+      // its exact `crew/<taskId>` branch, the marker the web notifier uses. The edge's key
+      // stays remembered, so it is consumed rather than re-fired once the thread stops
+      // being crew; the next edge after that notifies.
+      const crewRole = yield* crewRoleOf(threadId);
+      if (crewRole !== null || isCrewBranch(shell.branch)) {
+        yield* Effect.logInfo("crew.notification.suppressed.web-push", {
+          crewLogCode: "crew.notification.suppressed.web-push",
+          threadId,
+          crewRole: crewRole ?? "crewmate",
+          edge: edge.kind,
         });
         return;
       }
-
-      const shell = shellOption.value;
-      const current: ThreadNotifyState = {
-        latestTurnState: shell.latestTurn?.state ?? null,
-        hasPendingUserInput: shell.hasPendingUserInput,
-      };
-      const previousMap = yield* Ref.get(previousStateByThreadRef);
-      const previous = previousMap.get(threadId) ?? null;
-      const edges = classifyThreadNotifyEdges(previous, current);
-
-      // Advance the baseline only AFTER the send attempt below. The worker is a
-      // single serial fiber, so there is no concurrent re-process to guard against;
-      // advancing before the send would instead silently drop a screen-off alert if
-      // the shell/subscription read fails, since a terminal edge never re-emits.
-      const advanceBaseline = Ref.update(previousStateByThreadRef, (map) => {
-        const next = new Map(map);
-        next.set(threadId, current);
-        return next;
-      });
-
-      // A crew thread's completion is crew's business, not the operator's phone.
-      // Matched on ANY non-null role, not on an `open` row: teardown closes the
-      // row at step 1 and archives the thread at step 7, and `stopSession` sits
-      // between them — the projector settles the turn on any exit from `running`,
-      // so tearing down a mid-turn crewmate raises exactly the push this exists to
-      // suppress, in a window where a status-scoped predicate has already dropped
-      // the role.
-      //
-      // The baseline still advances below, so the edge is consumed rather than
-      // left to re-fire once the thread stops being crew.
-      if (edges.length > 0 && shell.crewRole !== undefined) {
-        yield* Effect.logInfo("crew.notification.suppressed.web-push", {
+      const categories = yield* readNotificationCategories;
+      const backgroundLiveness = backgroundLivenessOf(shell);
+      const allowed = filterEdgesByCategory([edge], categories, backgroundLiveness);
+      if (allowed.length === 0) {
+        yield* Effect.logDebug("web push edge suppressed by notification categories", {
           threadId,
-          crewRole: shell.crewRole,
-          suppressed: edges.length,
-          code: "crew.notification.suppressed.web-push",
+          edge: edge.kind,
+          backgroundLiveness,
         });
-      } else if (edges.length > 0) {
-        // Read the categories ONLY here. On the first-sight and no-edge paths this
-        // function does no I/O at all today, and putting a fallible read there
-        // would let a settings hiccup abort before `advanceBaseline` — losing an
-        // edge that never re-emits.
-        const categories = yield* readNotificationCategories;
-        const allowed = filterEdgesByCategory(edges, categories, shell.backgroundLiveness);
-        if (allowed.length < edges.length) {
-          yield* Effect.logDebug("web push edges suppressed by notification categories", {
-            threadId,
-            suppressed: edges.length - allowed.length,
-            categories,
-            backgroundLiveness: shell.backgroundLiveness ?? null,
-          });
-        }
-
-        // Deliberately NOT recovered to an empty list: swallowing the failure here
-        // reaches `advanceBaseline` below, which consumes the edge, and a terminal
-        // edge never re-emits — the exact silent drop the comment above forbids.
-        // Letting it fail skips the baseline advance and logs via the outer catch.
-        const subscriptions = allowed.length > 0 ? yield* pushRepo.list() : [];
-        if (subscriptions.length > 0) {
-          const environmentId = yield* serverEnvironment.getEnvironmentId;
-          const url = `/${environmentId}/${threadId}`;
-          for (const edge of allowed) {
-            const payload = buildPushPayload({ edge, title: shell.title, url, threadId });
-            yield* Effect.forEach(
-              subscriptions,
-              (subscription) => sendToSubscription(subscription, payload),
-              { concurrency: 8, discard: true },
-            );
-          }
-        }
+        return;
       }
-
-      yield* advanceBaseline;
+      const subscriptions = yield* pushRepo.list();
+      if (subscriptions.length === 0) {
+        return;
+      }
+      const environmentId = yield* serverEnvironment.getEnvironmentId;
+      const payload = buildPushPayload({
+        edge,
+        title: shell.title,
+        url: `/${environmentId}/${threadId}`,
+        threadId,
+      });
+      yield* Effect.forEach(
+        subscriptions,
+        (subscription) => sendToSubscription(subscription, payload),
+        { concurrency: 8, discard: true },
+      );
     }).pipe(
+      // Reads failed before anything was sent: forget the key so a later rewrite of
+      // the same run or request can still push. Individual sends never fail here.
       Effect.catchCause((cause) =>
-        Effect.logWarning("web push relay failed for thread", {
-          threadId,
-          cause: Cause.pretty(cause),
-        }),
+        Effect.sync(() => rememberedKeys.delete(key)).pipe(
+          Effect.andThen(
+            Effect.logWarning("web push relay failed for thread", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
       ),
     );
 
-  const worker = yield* makeDrainableWorker(processThread);
+  const worker = yield* makeDrainableWorker(processEdge);
+
+  const handleEvent: WebPushRelayShape["handleEvent"] = (event) =>
+    Effect.suspend(() => {
+      if (stopped) return Effect.void;
+      const edge = classifyPushEdge(event, notBefore);
+      if (edge === null || rememberedKeys.has(edge.key)) {
+        return Effect.void;
+      }
+      rememberedKeys.add(edge.key);
+      if (rememberedKeys.size > MAX_REMEMBERED_PUSH_KEYS) {
+        const oldest = rememberedKeys.values().next().value;
+        if (oldest !== undefined) rememberedKeys.delete(oldest);
+      }
+      return worker.enqueue(edge).pipe(
+        Effect.andThen(
+          Effect.logDebug("web push edge queued", {
+            threadId: edge.threadId,
+            key: edge.key,
+            edge: edge.edge.kind,
+          }),
+        ),
+      );
+    });
 
   const start: WebPushRelayShape["start"] = Effect.fn("WebPushRelay.start")(function* () {
     yield* Effect.logInfo("web push relay enabled");
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        const threadId = eventThreadId(event);
-        if (threadId === null || !isPushRelevantEvent(event)) {
-          return Effect.void;
-        }
-        return worker.enqueue(threadId).pipe(Effect.asVoid);
-      }),
-    );
+    yield* forkParked(Stream.runForEach(threads.streamDomainEvents, handleEvent));
   });
 
-  return {
+  return WebPushRelay.of({
     vapidPublicKey: vapidKeys.publicKey,
+    handleEvent,
+    drain: worker.drain,
     start,
-  } satisfies WebPushRelayShape;
+    stop: Effect.sync(() => {
+      stopped = true;
+    }),
+  });
 });
 
-export const layer = Layer.effect(WebPushRelay, make);
+export const make = Effect.gen(function* () {
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const crewRoles = yield* CrewRoles;
+  return yield* makeWebPushRelay(threads, crewRoles.roleOf);
+});
+
+export const layer = Layer.effect(WebPushRelay, make).pipe(Layer.provide(FetchHttpClient.layer));

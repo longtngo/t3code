@@ -7,9 +7,9 @@ import {
   expireQueuedTurns,
   flushOutbox,
   getQueuedTurns,
-  hasQueuedTurnForThread,
   sanitizeRehydratedQueue,
   removeQueuedTurn,
+  useCommandOutbox,
 } from "./commandOutbox";
 
 function queuedTurn(
@@ -268,11 +268,27 @@ describe("flushOutbox revalidation", () => {
   });
 });
 
-describe("hasQueuedTurnForThread", () => {
-  it("reports whether a thread already has a turn waiting", () => {
-    expect(hasQueuedTurnForThread("t1" as never)).toBe(false);
-    enqueueTurn(queuedTurn("a", "t1"));
-    expect(hasQueuedTurnForThread("t1" as never)).toBe(true);
-    expect(hasQueuedTurnForThread("t2" as never)).toBe(false);
+describe("upgrade from the V1 outbox", () => {
+  it("keeps a message queued before orchestrator v2 and tells its replay to queue", async () => {
+    const storage = useCommandOutbox.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("outbox has no storage");
+    const legacy = queuedTurn("legacy");
+    expect(legacy.input.dispatchMode).toBeUndefined();
+    await storage.setItem("t3code:command-outbox", { state: { queue: [legacy] }, version: 1 });
+    await useCommandOutbox.persist.rehydrate();
+    expect(getQueuedTurns().map((turn) => [turn.commandId, turn.input.dispatchMode])).toEqual([
+      ["legacy", "queue"],
+    ]);
+  });
+
+  it("drops entries of a version it does not know", async () => {
+    const storage = useCommandOutbox.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("outbox has no storage");
+    await storage.setItem("t3code:command-outbox", {
+      state: { queue: [queuedTurn("future")] },
+      version: 99,
+    });
+    await useCommandOutbox.persist.rehydrate();
+    expect(getQueuedTurns()).toEqual([]);
   });
 });

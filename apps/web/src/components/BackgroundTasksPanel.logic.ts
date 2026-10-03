@@ -1,94 +1,47 @@
-import type { OrchestrationBackgroundTask, OrchestrationThreadActivity } from "@t3tools/contracts";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
-import { formatRelativeTimeLabel } from "../timestampFormat";
-
-const TASK_LIFECYCLE_KINDS: ReadonlySet<string> = new Set([
-  "task.started",
-  "task.updated",
-  "task.completed",
-]);
+const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["preparing", "starting", "running"]);
 
 /**
- * The Background read's refetch key. Every background task start or end appends a lifecycle
- * activity, which always lands in the live window; a session that dies clears the live count
- * without one; a revert can delete rows outside the window but always moves the latest turn.
+ * The Background tab's rows: provider-owned work that outlives (or may outlive) the turn that
+ * started it.
+ *
+ * Once the latest run settles, the rows are exactly `settledTasks`, the list the composer's
+ * background-work banner shows and Stop ends, so the tab and the banner cannot disagree. While a
+ * run is still working that list is empty by design (the turn's own Stop covers it), so the tab
+ * reads the active provider thread's roster instead: a background shell launched mid-turn is
+ * listed as soon as the provider reports it.
  */
-export function backgroundTasksRefreshKey(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  liveCount: number,
-  latestTurnId: string | null,
-): string {
-  let newest = "";
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
-    if (
-      activity &&
-      TASK_LIFECYCLE_KINDS.has(activity.kind) &&
-      typeof activity.payload === "object" &&
-      activity.payload !== null &&
-      (activity.payload as Record<string, unknown>).agentKind === "background"
-    ) {
-      newest = activity.id;
-      break;
+export function backgroundPanelTasks(input: {
+  readonly projection: OrchestrationV2ThreadProjection | null;
+  readonly settledTasks: ReadonlyArray<PendingBackgroundWorkTask>;
+}): ReadonlyArray<PendingBackgroundWorkTask> {
+  const { projection } = input;
+  if (projection === null) return input.settledTasks;
+  const runActive = projection.runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status));
+  if (!runActive) return input.settledTasks;
+  const activeProviderThreadId = projection.thread.activeProviderThreadId;
+  const byTaskId = new Map<string, PendingBackgroundWorkTask>();
+  for (const providerThread of projection.providerThreads) {
+    if (activeProviderThreadId !== null && providerThread.id !== activeProviderThreadId) continue;
+    for (const task of providerThread.pendingBackgroundTasks ?? []) {
+      if (!byTaskId.has(task.taskId)) byTaskId.set(task.taskId, task);
     }
   }
-  return `${newest}|${liveCount}|${latestTurnId ?? ""}`;
+  return [...byTaskId.values()];
 }
 
-function taskTypeLabel(taskType: string | null): string {
-  switch (taskType) {
-    case "local_bash":
-    case "shell":
+/** The row's kind label. Work the adapter cannot name reads as a plain task. */
+export function backgroundTaskKindLabel(kind: PendingBackgroundWorkTask["kind"]): string {
+  switch (kind) {
+    case "subagent":
+      return "Subagent";
+    case "command":
       return "Shell";
     case "monitor":
-    case "monitor_mcp":
       return "Monitor";
-    default:
+    case "background_task":
       return "Task";
-  }
-}
-
-/** The row's second line: kind, when it started, and how long it ran. */
-export function backgroundTaskDetail(task: OrchestrationBackgroundTask, nowMs: number): string {
-  const parts = [
-    taskTypeLabel(task.taskType),
-    `started ${formatRelativeTimeLabel(task.startedAt, nowMs)}`,
-  ];
-  if (task.endedAt !== null) {
-    parts.push(`ran ${formatDuration(Date.parse(task.endedAt) - Date.parse(task.startedAt))}`);
-  } else if (task.status === "stopped") {
-    parts.push("ended without a result");
-  }
-  return parts.join(" · ");
-}
-
-export type BackgroundTasksReadStatus = "unsupported" | "pending" | "ready" | "error";
-
-export type BackgroundTasksPanelState =
-  | { readonly kind: "unavailable"; readonly canRetry: boolean }
-  | { readonly kind: "loading" }
-  | { readonly kind: "empty" }
-  | { readonly kind: "list"; readonly failed: boolean };
-
-/** What the panel body shows. A landed list stays on screen while a refetch runs or fails. */
-export function backgroundTasksPanelState(
-  tasks: ReadonlyArray<OrchestrationBackgroundTask> | null,
-  status: BackgroundTasksReadStatus,
-): BackgroundTasksPanelState {
-  if (tasks !== null) {
-    return tasks.length === 0 && status !== "error"
-      ? { kind: "empty" }
-      : { kind: "list", failed: status === "error" };
-  }
-  switch (status) {
-    case "unsupported":
-      return { kind: "unavailable", canRetry: false };
-    case "error":
-      return { kind: "unavailable", canRetry: true };
-    case "pending":
-      return { kind: "loading" };
-    case "ready":
-      return { kind: "empty" };
   }
 }

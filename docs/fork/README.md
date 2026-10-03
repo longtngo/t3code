@@ -25,12 +25,16 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-10-02 (43rd reconcile, 55 commits), against upstream `e0db2a5e58`, the commit just
-before #2829 "introduce new orchestrator" (`de34391427`). That commit replaces the server core and
-deletes 88 files the fork had changed, so it is being ported as its own project rather than merged
-here. Upstream's beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block
-renders above it, and its resting-section rule keeps `sidebarRestingSection` with Working as the
-inbox's fold. Upstream's Expo 58 upgrade dropped two native race fixes; see invariant 2.
+As of 2026-10-03 the fork runs on upstream's orchestrator v2 (#2829, `de34391427`), ported in
+units rather than merged. The server core is `apps/server/src/orchestration-v2/`;
+`apps/server/src/orchestration/` and the V1 provider adapters no longer exist. Where v2 already did
+what a fork feature did, upstream's version was adopted and the entry below is marked RETIRED with
+what superseded it. Every probe below was re-run against the ported tree.
+
+The 43rd reconcile (2026-10-02, 55 commits) stopped at `e0db2a5e58`, just before #2829. Upstream's
+beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block renders above it,
+and its resting-section rule keeps `sidebarRestingSection` with Working as the inbox's fold.
+Upstream's Expo 58 upgrade dropped two native race fixes; see invariant 2.
 
 The 41st (2026-09-25, 57 commits), against `origin/main`. Upstream turned on four
 more web lint errors (invariant 59), added migration 054 (applied id 63, invariant 1), and shipped
@@ -75,49 +79,32 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Verified 2026-09-08 (32nd reconcile): 57 entries, all ids unique, monotonic, max 58; upstream's
-`049_ProjectionThreadsActiveOrderKey` took applied id **58** (49-57 were already spent), and the
-fork's `052_ProjectionThreadActivityKindIndex` holds 57. Filename numbers double up on `033`,
-`037`, `038`, `039`, `041` and `042`. Id `34` is intentionally burned (an earlier fork DB applied
-a since-renamed `034_PushSubscriptions`).
-
-The 32nd reconcile is a worked example of the test half below: upstream's
-`049_ProjectionThreadsActiveOrderKey.test.ts` ran `toMigrationInclusive: 48` then `49` - its
-filename numbers - and was retargeted to `57`/`58`, with a `pragma_table_info` control asserting
-`active_order_key` is ABSENT at 57. Without that control the test passes whether or not the
-renumbering is right, because a column added earlier than intended is indistinguishable from one
-added on time.
+Current (orchestrator-v2 port): 65 entries, ids 1-65, unique and monotonic. Upstream's v2 schema
+`055_OrchestrationV2` is applied id **64** and `056_RemoveRedundantProjectionIndexes` is **65**.
+Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
+`PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
+registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
+report the database's history as divergent.
 
 The manifest is a list of **positional tuples** (`[1, "OrchestrationEvents", Migration0001]`), not
 object literals. A probe grepping for `id:` matches only the doc comment and reports nothing.
 
-A migration's **test** carries this too. Upstream's `041_AuthSessionClientConnection.test.ts`
-ran `toMigrationInclusive: 40` then `41` — its filename numbers — and found no columns, which is
-how the 19th reconcile noticed. Retarget such a test to the fork's applied ids rather than
-deleting it, and give it a control asserting the column is absent at the previous id, or it
-passes whether or not the renumbering is right.
+```sh
+F=apps/server/src/persistence/Migrations.ts
+grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
+  | awk 'NR>1 && $1<=p {bad=1} {p=$1} END {print NR, p, bad ? "NOT-MONOTONIC" : "ok"}'
+grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
+```
 
-The 34th reconcile repeated it once more: upstream's `050_ProjectionThreadPullRequests` became
-applied id **59**, and its test ran `toMigrationInclusive: 49` then `50` — the fork's
-`ProjectionThreadLinkedPullRequest` and `ProjectionThreadsUnsettledAt`, nowhere near the table it
-asserts. Retargeted to 58/59 with a `sqlite_master` control asserting
-`projection_thread_pull_requests` is ABSENT at 58. The tell that this is due: any arriving
-migration whose test names an id below the fork's current maximum.
+Expect `65 65 ok` and `1`.
 
-The 36th reconcile made it three in a row: upstream's `051_ProjectionThreadMessageContext`
-(the composer context records) became applied id **60**, and its test ran
-`toMigrationInclusive: 50` then `51`. Retargeted to 59/60 with a `PRAGMA table_info` control
-asserting `projection_thread_messages.context_json` is ABSENT at 59. The manifest now holds 59
-entries, ids unique and monotonic, max 60.
-
-The 37th reconcile added upstream's `052_ProjectionThreadTitleState` (#10720) as applied id **61**.
-It arrived with no migration test, so nothing needed retargeting. Manifest: 60 entries, max 61.
-
-The 38th reconcile added upstream's `053_PullRequestFilesViewed` (#7721) as applied id **62**, also
-without a test. Manifest: 61 entries, max 62. The 41st added `054_ProjectionThreadsAutoSettleDisabledAt` (#11846) as
-applied id **63**; its test ran 53/54 and is retargeted to 62/63 with a `pragma_table_info`
-control asserting `auto_settle_disabled_at` is ABSENT at 62. Manifest: 62 entries, max 63. The same reconcile's effect bump removed
-`NodeSqliteClient.layerMemory()`; migration and crew tests use `layer({ filename: ":memory:" })`.
+A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
+their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
+test finds nothing or the wrong table. Retarget it to the applied ids rather than deleting it, and
+give it a control asserting the column or table is ABSENT at the previous id; without that control
+it passes whether or not the renumbering is right. The tell: an arriving migration whose test names
+an id below the fork's current maximum. Migration and crew tests use
+`NodeSqliteClient.layer({ filename: ":memory:" })`; effect removed `layerMemory()`.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
 arriving migration the next free id and leave its filename alone.** Each divergence is explained
@@ -180,7 +167,7 @@ comm -23 <(git show "$MB:$f" | sort -u) <(git show "personal:$f" | sort -u) \
 This is what caught the ClaudeAdapter steering test below, which the conflict presented as an
 ordinary upstream addition.
 
-Two of the three deletions counted in Surface above are the fork's largest one: upstream's
+The fork's largest deletion: upstream's
 `ContextWindowMeter.tsx` and its `ContextWindowMeter.test.tsx` are gone, replaced by the fork's
 composer vitals gauge. The `.logic.ts` sibling survives for a reason of its own — see invariant 10. They come back only if upstream _modifies_ one of them: git then raises a
 modify/delete conflict, and the resolution is a delete. `ChatComposer.tsx` carries a comment at
@@ -189,41 +176,11 @@ the former call site recording why.
 Two more in-file deletions, each with a comment where the code used to sit, both re-presented as
 ordinary upstream additions by the 17th reconcile:
 
-- `MessagesTimeline.tsx` drops `buildToolCallExpandedBody`, `workEntryRawCommand` and
-  `stopRowToggle`. The fork opens a work-entry's detail in a modal instead of an inline expanded
-  body, so all three would be unused. Upstream still has them and still calls them.
-
-  **Widened 2026-09-02 (27th reconcile).** Upstream #9106/#9267 rebuilt that inline expansion
-  around a `WorkGroupViewCtx` (per-entry `expandedEntries` set, an `onToggleEntry` callback
-  threaded through `TimelineRowCtx`) and a `resolveWorkEntryToolPresentation`-driven row label.
-  Roughly half of it merged **outside every conflict marker**, so rejecting only the marked
-  hunks left a file that referenced a context nothing consumed. The whole per-entry expansion
-  is rejected and its scaffolding removed: `WorkGroupViewCtx`, `expandedEntries`,
-  `onToggleWorkEntry`. What is KEPT from the same commits, because it is about the group list
-  rather than the row: `resolveWorkGroupScrollAnchor` + `workGroupViewState.scrollPositions`,
-  and upstream's `ExpandedWorkGroupEntries` virtualized component — which now mounts the fork's
-  `WorkEntryDetailDialog` itself, since its rows open detail the same way.
-
-  **30th reconcile.** Upstream re-landed the same per-entry expansion (`WorkGroupViewCtx`,
-  `expandedEntries`, `onToggleWorkEntry`, `PlainWorkEntryRow`'s `expanded`/`toggleExpanded` and
-  its inline `expandedBody`) and this time brought a test with it:
-  `MessagesTimeline.test.tsx`'s "restores the composer after closing $toolLifecycleStatus tool
-  output only at the end", which drives the row through `findByProps({ "aria-expanded": false })`.
-  The test is upstream-only (absent from the merge-base) and describes the rejected feature, so it
-  is rejected with it. Two of its four cases pass against the fork's row by accident - do not read
-  that as partial support.
-
-  Also from this reconcile, unrelated to the feature: `@base-ui/react` 1.5.0 calls floating-ui's
-  `isElement` on mount, so any react-test-renderer suite that stubs `window` now needs an `Element`
-  constructor both as a global and on the stubbed window. Stub ONLY `Element`; defining
-  `HTMLElement` or `Node` makes `@pierre/trees` register its web components at import time and
-  fail on the missing `customElements`.
-
-  Also relocated, not lost: `commandProgramName` / `tokenizeShellCommand` / the
-  `COMMAND_WRAPPER_*` tables moved to `packages/client-runtime/src/work-log/commandLabel.ts`
-  (upstream's copy is a superset — it also unwraps `sh -c`), and `liveWorkEntryLabel` moved to
-  `MessagesTimeline.logic.ts`. The local copies are gone; a sweep reports ~92 fork-loss lines
-  for this file and every one of them is that move.
+- **RETIRED with orchestrator v2:** the fork's `MessagesTimeline.tsx` deletion of upstream's
+  in-row work-entry expansion. Upstream's v2 row expands in place into `V2ItemInspector`, which
+  already shows what the fork's detail dialog did (question answers, command and exit code, the
+  file with an "Open diff" to the turn diff), so the expansion is upstream's again. See
+  invariant 41.
 
 - `ComposerPendingUserInputPanel.tsx` drops upstream's `Collapsible` wrapper (fork commit
   `a02c9e405`) for a bounded, kept-mounted options list that survives a collapse with its scroll
@@ -231,49 +188,42 @@ ordinary upstream additions by the 17th reconcile:
   file conflicts on every reconcile that touches it; the resolution is the fork's — **but re-graft
   genuine fixes**: the 28th reconcile's conflict here was upstream's `optionLabel` → `optionValue`
   migration, half of which had already merged outside the markers. Taking the fork's side untouched
-  would have left the file half-migrated.
+  would have left the file half-migrated. Probe:
+  `grep -cE '<Collapsible|ui/collapsible' apps/web/src/components/chat/ComposerPendingUserInputPanel.tsx`
+  is `0` (upstream's copy gives 4).
 
-- **Codex feedback is a composer banner, not thread messages (32nd reconcile).** The fork carried
-  upstream's `codexFeedbackMessage` and rendered `/feedback` and its reply as ordinary user and
-  assistant bubbles. Upstream #10398 **deleted that builder outright** and replaced it with
-  `ComposerFeedback` / `codexFeedbackNotice` banners. It was never a fork feature - the merge-base
-  has it and upstream removed its own code - so the deletion is adopted on every surface: the
-  `localMessages` spread in `ChatView.tsx`, the `localFeedbackMessages` memo in mobile's
-  `use-thread-composer-state.ts`, and the two `MessagesTimeline` tests that asserted the bubbles
-  (upstream deleted its own copies of those in the same commit). What survives from the fork's
-  side of those two files is unrelated and must not be dropped with it: the offline-outbox
-  pending bubbles (`queuedMessages`) and the held-message strip filter.
+- **RETIRED with orchestrator v2:** the Codex feedback bubbles. Upstream's v2 `ChatView` renders
+  `/feedback` and its reply as anchored timeline messages again (`codexFeedbackMessage` in
+  `client-runtime/state/threadFeedback.ts`), so that is upstream's code, not a resurrection.
+  `timelineLocalMessages` beside it is the fork's offline outbox (invariant 4b) and stays.
 
-- `ComposerPrimaryActions` has no `showSendWhileRunning` prop. Upstream gates Send behind it while a
-  turn runs; here Send is always mounted beside Stop because a mid-turn send queues (invariant 5).
-  Upstream re-adds the prop and passes it from `ChatComposer.tsx`; both sides of that are rejected.
-  Only `ComposerPrimaryActions.test.tsx` recorded the removal before the 28th reconcile.
+- **RETIRED with orchestrator v2:** the `showSendWhileRunning` rejection. v2 has no such prop on
+  either side; upstream's Stop-or-send model (queue or steer, invariant 5) is adopted.
 
 ### 4b. Send-blocked and environment-unavailable are different states
 
 `ComposerPrimaryActions` takes both `isEnvironmentUnavailable` and `isSendBlocked`. Upstream has
 only the first and folds the second into it. They are not the same: unavailable means the send is
-**queued** and the button stays live ("Queue message to send on reconnect"), while blocked (no
-provider, no project) is a hard stop. A merge that takes upstream's combined
-`isEnvironmentUnavailable={environmentUnavailable !== null || noProviderAvailable || projectSelectionRequired}`
-compiles only until the required `isSendBlocked` prop is noticed missing, and would make a merely
-disconnected composer read as permanently dead. All three call sites in `ChatComposer.tsx` need
-the split, plus the prop pass-through above them (four `isSendBlocked=` occurrences in total).
-The 17th reconcile lost it and the line sweep caught it, not the type checker.
+**queued** by the web offline outbox (`rpc/commandOutbox.ts`, replayed by
+`OutboxFlushCoordinator`) and Send stays live ("Queue message to send on reconnect"), while
+blocked (no provider, no project) is a hard stop. All three `ComposerPrimaryActions` sites in
+`ChatComposer.tsx` pass `isEnvironmentUnavailable={environmentUnavailable !== null}` plus
+`isSendBlocked`, and the collapsed phone button (`collapsedComposerPrimaryActionDisabled`) leaves
+the disconnect out too: on a phone it is the only submit path. In `ChatView.onSend` the early
+guard is `shouldAbortSendBeforeOfflineQueue`, which must never abort on a disconnect alone; the
+queue branch sits below it. A merge that takes upstream's combined prop, or re-adds
+`activeEnvironmentUnavailable` to that guard, makes the outbox unreachable while its own tests
+stay green. Mobile has upstream's own outbox (`apps/mobile/src/state/thread-outbox*`).
+There is no one-message-per-thread limit on v2: replays dispatch with `queue`
+(`queue_after_active`), so each becomes its own run, in order. Storage version 2 migrates v1
+entries (same shape) by adding `dispatchMode: "queue"`; any other version is dropped.
 
-### 5. A mid-turn send queues; it does not steer
+### 5. RETIRED with orchestrator v2: a mid-turn send queues by default, upstream's way
 
-Upstream's Claude adapter treats a second `sendTurn` while a turn is running as a **steer** — the
-message joins the live agent loop and the turn id does not change. The fork replaced that with
-**FIFO queued follow-ups**: the message waits and then opens its **own** turn. That is what backs
-the composer's Send-beside-Stop button ("Queue message"), and the fork carries its own tests for
-the queue (drain order, interrupt discards the queue, model re-set on drain).
-
-So upstream's `ClaudeAdapter.test.ts` test _"steers a running turn instead of opening a new one on
-mid-turn sendTurn"_ asserts a behaviour this adapter no longer has, and fails against it
-(`steeredTurn.turnId !== turn.turnId`). It is deliberately absent, with a comment where it used to
-sit. A reconcile that "restores" it — it reads exactly like an upstream addition inside a
-conflict — reintroduces a guaranteed red test.
+The fork's FIFO queue replaced upstream's steer-on-send. v2 queues server-side itself
+(`dispatchMode` `queue_after_active`, held/edit/cancel/reorder) and adds steer as an explicit
+choice; its client setting `followUpBehavior` defaults to `"queue"`. Upstream's model is adopted
+whole, including that setting and its keybindings (invariants 50 and 52 are retired with this).
 
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
@@ -288,59 +238,18 @@ the menu would have hidden them on the settings page, which is the one surface u
 upward and anchor on the row's bottom edge. Upstream #9563 wrapped `T3ConnectSidebarSignIn` in a
 `Suspense` beside it — that is kept, the alignment is not.
 
-`sidebarChromeFooter.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
+`sidebarChromeFooter.dom.test.tsx` covers this, and it mocks `@tanstack/react-router` — so a new
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
 with anything about panels. Add the export; the test's subject still applies.
 
-### 5c. Boot reconciliation is the fork's, and it owns the directory binding too
+Probe: `grep -cE '<Sidebar(SubagentBackend|LocalModels|ResourceQueue|Crew)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
+is `4`.
 
-Upstream `#7719` added `reconcileProviderSessions` — a `provider-sessions.reconcile` startup phase
-that settles a restart-orphaned session to **`error`** and cleans its `ProviderSessionDirectory`
-binding. The fork already had `reconcileInterruptedTurnsOnBoot` (`BootTurnReconciler.ts`), running
-in an **earlier** phase, which settles the same sessions to **`stopped`** — the same clean resting
-state the reactor's stop path produces — and also dispatches `thread.turn.interrupt` for history.
+### 5c. RETIRED with orchestrator v2: boot reconciliation
 
-Measured on the 18th reconcile: with both present the fork's phase ran first and its `stopped` won,
-so upstream's status decision never took effect while its binding cleanup did. Two halves of one
-concern split across two phases, with the visible half silently dead.
-
-Resolved by **porting upstream's binding cleanup into the fork's reconciler and deleting
-`reconcileProviderSessions`** (a `FORK:` note sits where it was, and its startup phase is gone).
-The fork's version is now the superset: it covers `idle`/`ready` as well as `starting`/`running`,
-interrupts the turn, settles to `stopped`, and clears the binding's `status` /
-`runtimePayload.activeTurnId` while `upsert`'s merge preserves `resumeCursor` and every other
-payload key.
-
-Upstream's `serverRuntimeStartup.reconcile.test.ts` was deleted with it — its two remaining cases
-tested upstream's `listSessions()` gate, which this fork does not have (its phase runs before any
-session is live, so it assumes zero). The behaviour is covered end-to-end by
-`orphanedProviderSessionStartup.integration.test.ts`, whose two `sessionStatus` expectations are
-retargeted to `stopped` with a comment. That test is the guard: disabling the binding block leaves
-`bindingStatus: "running"` and a stale `activeTurnId`, verified 2026-08-21.
-
-**Updated 2026-09-02 (27th reconcile). The phase is back, narrowed.** Upstream #9167 turned
-`reconcileProviderSessions` from a dead orphan-settler into the engine for "continue active
-threads across a server restart": `ServerSelfUpdate` marks every running thread's directory
-binding with `continueAfterServerUpdate` before the update, and this phase resumes them
-afterwards. That is a real feature, and `ws.ts` / `ServerRuntimeStartup`'s interface / the
-`serverUpdateThreadContinuation` capability all merged cleanly around it, so rejecting it was
-no longer free.
-
-It is adopted **verbatim**, and made reachable by one change on the fork's side:
-`reconcileInterruptedTurnsOnBoot` now reads each candidate thread's binding and **skips the
-continuation-marked ones**. Without that skip the fork's earlier phase settles them to
-`stopped`, upstream's filter (`starting`/`running`/`activeTurnId !== null`) matches zero, and
-the resume silently never fires — the exact dead-phase shape this entry used to describe.
-`SERVER_UPDATE_CONTINUATION_KEY` and `hasServerUpdateContinuationMarker` moved to
-`ProviderSessionDirectory.ts` so both reconcilers can read them without a module cycle.
-
-Upstream's `serverRuntimeStartup.reconcile.test.ts` is **restored** with it (the fork had
-deleted it); its `ProviderService` / `OrchestrationEngine` stubs needed the fork's
-`withdrawQueuedTurn` / `refreshAccountUsage` / `appendSessionNote` / `hubBacklog` members added.
-
-**Still true: every thread that is NOT continuation-marked keeps the fork's `stopped` resting
-state, not upstream's `error`.** A reconcile that widens this phase back over ordinary restart
-orphans, or drops the skip in `BootTurnReconciler`, is reverting a deliberate decision.
+`BootTurnReconciler` and `reconcileProviderSessions` are gone. v2's
+`ProviderRuntimeRecoveryService` settles restart-orphaned work, and `RestartContinuation` /
+`RestartBackgroundNote` resume a continuation-marked thread or tell its next turn.
 
 ### 6. The workspace-repositories editor lives in upstream's project settings page
 
@@ -349,9 +258,10 @@ sidebar's project-settings dialog with a `/projects/$projectKey` route. The fork
 **workspace member repositories** — attaching one, choosing its integration branch, removing it —
 had been mounted in that dialog, so the 8th reconcile restored the deleted dialog behind a second
 ellipsis button rather than porting the editor. That arrangement is over: the editor is now a
-`SettingsRow` titled **Workspace repositories** in the **Checkout** section of
+`SettingsSection` titled **Workspace repositories** in
 `apps/web/src/components/settings/ProjectSettingsPanel.tsx`, and `Sidebar.tsx` carries only
-upstream's gear.
+upstream's gear. Probe: `grep -c 'SettingsSection title="Workspace repositories"'` on that file is
+`1` (upstream's copy gives 0).
 
 **What a reconcile must protect.** `ProjectSettingsPanel.tsx` is upstream-owned and churns — 27
 commits on `origin/main` since it was created — and it now holds the fork's only multi-repo mount on the
@@ -378,55 +288,50 @@ Per-member project **renaming** ended with the dialog on the default sidebar —
 group-level by design, and the per-member inputs were upstream's own deleted code. It still exists
 in the legacy sidebar's context menu.
 
-### 7. `interruptTurn` is the COOPERATIVE rung; `stopSession` is the hard one
+### 7. Stop is two rungs: `run.interrupt` `mode: "cooperative"`, then `"hard"`
 
-Upstream `#5891` replaced Claude's `interruptTurn` body with `stopSessionInternal(context)` — one
-hard kill, on the reasoning that `interrupt()` can acknowledge while resumed background tasks keep
-the CLI alive. This fork keeps the two rungs apart, because the Stop button is a **client-side
-ladder** (`ChatView.logic.ts` `nextStopAction`): the first press sends a cooperative
-`thread.turn.interrupt`, and a deliberate second press inside a 500ms–10s band escalates to a hard
-`thread.session.stop`. Collapsing rung 1 into rung 2 makes that band vestigial for the
-most-used provider and charges every "stop to redirect" a cold subprocess restart.
+Upstream v2 makes every user Stop a hard runtime restart (`requestRuntimeRestart: true` in every
+adapter). The fork keeps the cheap "stop to redirect": the client ladder
+(`packages/client-runtime/src/state/stopLadder.ts`, `nextStopAction`) sends `run.interrupt` with
+`mode: "cooperative"` on the first press and `mode: "hard"` on a deliberate second press inside
+the 500 ms - 10 s band. Absent `mode` is upstream's hard Stop, so the MCP and other callers are
+unchanged.
 
-Neither side was a superset, so the 20th reconcile took a hybrid:
+- `Orchestrator.dispatchRunInterrupt` passes `cooperative: true` on the `provider-turn.interrupt`
+  effect only while the provider turn is `running`; a Stop on a settled turn's background work
+  is always hard.
+- `ProviderTurnControlService.interrupt` runs the cooperative rung as `interruptTurn({
+cooperative: true })` and then waits for the projected turn to leave `running`, both bounded by
+  `COOPERATIVE_INTERRUPT_GRACE` (8 s, measured: 491 of 572 Claude cooperative interrupts on the
+  fork's V1 log settled within 5 s, 493 within 8 s, 4 more by 15 s). A rejected or late rung
+  falls through to the hard call itself, so a provider that cannot cooperate is handled
+  explicitly. A turn that ended on its own first (the projection no longer shows it running, or
+  the adapter says "is not active") is a finished Stop and never escalates. It returns which
+  rung ended the stop.
+- Effects run one at a time per thread, so a hard `run.interrupt` cancels any cooperative
+  interrupt effect still waiting out its grace (`supersedeCooperativeInterrupts`, filtered to
+  `cooperative: true` so an earlier hard stop mid-teardown is left alone). The cancelled fiber is
+  interrupted before it can escalate: exactly one hard stop runs, at once.
+- `EffectWorker` dispatches `thread.background-work.settle` only after the hard rung. The
+  cooperative rung keeps the process, which still reports on its background work.
+- Adapters: an interrupt without `requestRuntimeRestart` was already soft in Codex, Cursor,
+  OpenCode, OpenCode2, Pi and ACP (Grok, Antigravity), so they ignore the flag. Claude's
+  restart-steer interrupt closes its query, so `ClaudeAdapterV2.interruptTurn` reads
+  `cooperative` and only sends `query.interrupt`. A turn ended that way keeps the thread's
+  background roster and wake state (the CLI still runs those tasks); only a closed process
+  drops them. The hard rung skips a second interrupt request when the cooperative one already
+  asked, and goes straight to the close. The fork's V1 `stopTask` sweep is not ported:
+  background tasks surviving the first rung is the point, and the hard rung ends them.
+- Clients: after the hard press the Stop button shows "force-stopping" until the turn settles,
+  and presses in the next 10 s are no-ops (later ones re-send hard, never cooperative). The
+  armed look comes from `stopRungAt`, the same clock as `nextStopAction`, so it appears at
+  500 ms, not 0. Mobile shows the same rungs with an octagon icon.
 
-- **`interruptTurn` stays the fork's** — bounded `stopTask` fleet sweep (each task's
-  `task.completed` made authoritative), then `query.interrupt()` bounded by
-  `INTERRUPT_REQUEST_GRACE`. Both bounds exist because this runs on the single reactor command
-  worker, where an unbounded await head-of-line blocks every later command including the
-  watchdog's own `session.stop`.
-- **`stopSessionInternal` is upstream's, hardened** — `query.close()` moved to the very top
-  (before `context.stopped = true`, so a close failure leaves the session usable), a
-  `task.completed` sweep over `liveTaskIds` that does not need `stopTask` support, an
-  identity-guarded `sessions.delete`, and `stopSessions` collecting per-session failures for
-  `stopAll`. The fork's own contribution here — bounding `Fiber.interrupt(streamFiber)` with
-  `STOP_INTERRUPT_GRACE` — is kept on top of it.
+### 8. RETIRED with V1: the interrupt reactor's live-session gate
 
-Two consequences a later reconcile must not undo:
-
-- `ClaudeQueryRuntime.interrupt` and `.stopTask` were **removed by upstream outside any conflict
-  marker**, and restored here. If they vanish again, the fork's `interruptTurn` stops compiling —
-  which is the good case; the bad case is a resolution that also takes upstream's `interruptTurn`
-  and leaves nothing failing.
-- Upstream's four new tests are **retargeted, not deleted**. Three of them now drive
-  `stopSession`, whose semantics they actually describe here: the one about settling live tasks
-  and closing the provider session, the one about keeping the session available when the process
-  close fails, and the one about keeping a resumed replacement session during slow stop cleanup.
-  The fourth, covering `stopAll` when one close fails, needed no change.
-
-### 8. The interrupt reactor gates on the LIVE session, not the projection
-
-`processTurnInterruptRequested` asks `hasLiveSessionForThread` before forwarding. With no live
-session the interrupt's goal is already met, so it settles the thread to `stopped` (clearing the
-spinner) rather than appending a `provider.turn.interrupt.failed` activity — and deliberately does
-not resume a subprocess just to no-op it. Upstream reads `thread.session` from the projection
-instead.
-
-Upstream `#7412`'s `recoverInterruptFailure` (stop the session and record the detail when the
-provider's interrupt fails) is **adopted on top of** that gate. Its three tests set up a projected
-session only, so each needed `harness.runtimeSessions.push({...})` added to reach the path it
-tests; without it they pass through the fork's gate and assert `lastError: null`. A future
-upstream test about interrupt failure will need the same line.
+V1's `processTurnInterruptRequested` is gone. Upstream v2 already treats an interrupt with no
+live session as done (`ProviderTurnControlService` load, "treating as already stopped"), and
+`dispatchRunInterrupt` settles projected background work itself when no process is left.
 
 ### 9. `entrypoint.test.ts` realpaths its temp dir (macOS)
 
@@ -437,17 +342,18 @@ hold. It passes on upstream's Linux CI and fails on every macOS run. `makeTempDi
 temp root here; `isEntrypoint` itself is untouched, and production is unaffected (an
 npm-installed CLI symlink carries no such prefix indirection). Worth sending upstream.
 
-Two more fixtures realpath their roots for the same reason (28th reconcile): `CursorProvider.test.ts`
-skills discovery and `AntigravityInstallation.test.ts` override resolution, both upstream's, both
-comparing a raw temp path against the resolved one their subject returns.
+`CursorProvider.test.ts` skills discovery realpaths its roots for the same reason (a raw temp path
+compared against the resolved one its subject returns). Upstream's `AntigravityInstallation.test.ts`
+now realpaths its own root, so the fork's copy of that fix is gone. Probe:
+`grep -c 'realpathSync(NodeFS.mkdtempSync' apps/server/src/entrypoint.test.ts` is `1` (upstream's
+copy gives 0).
 
-Same prefix, second victim (28th reconcile): `AntigravityAdapter.resolveClientFilePath` realpathed
-the session roots but fell back to the **unresolved** parent when a write targeted a directory that
-did not exist yet, so under `/var/folders` every new nested file read as outside the workspace. The
-fork's `realPathNearestAncestor` realpaths the nearest existing ancestor and re-joins the missing
-tail. Not test-only: a symlinked project root hits the same branch in production. The adapter also
-carries the three fork-only `ProviderAdapterShape` members (`refreshAccountUsage`,
-`withdrawQueuedTurn`, `appendSessionNote`) as constant stubs, like the other ACP adapters.
+Same prefix, second victim: Antigravity's client-file resolution realpathed the session roots but
+fell back to the **unresolved** parent when a write targeted a directory that did not exist yet, so
+under `/var/folders` every new nested file read as outside the workspace. The fork's
+`realPathNearestAncestor` (`provider/acp/AntigravityClientFiles.ts`) realpaths the nearest existing
+ancestor and re-joins the missing tail. Not test-only: a symlinked project root hits the same
+branch in production.
 
 **Recurred at the 36th reconcile**, in a file byte-identical to upstream:
 `apps/server/src/usage/UsageService.test.ts` makes its home with `mkdtemp` and asserts against
@@ -490,52 +396,42 @@ is a capability answer ("does this driver emit usage at all", absent means yes) 
 `describeMissingContextUsage` uses it to explain an empty gauge. Keeping upstream's field costs a
 schema line and keeps its edits merging; dropping the fork's would blank that explanation.
 
-Upstream's `activeContextWindow: ContextWindowSnapshot | null` prop on `ChatComposer` is also
-rejected: the fork derives the snapshot **and** the account-usage view the Vitals gauge needs from
-`activeThreadActivities`, which stays the prop the parent passes. `compactDisabled` /
-`compactDisabledReason` / `onCompactContext` are adopted — `compactThreadContext` consumes them,
-so they are live, not vestigial.
+Upstream's `activeContextWindow` prop on `ChatComposer` is adopted since the v2 port (v1's
+activities, which the fork derived it from, are gone), and feeds the Vitals gauge.
+`compactDisabled` / `compactDisabledReason` / `onCompactContext` are adopted too.
 
 ### 12. The Claude adapter still calls `getContextUsage`; upstream deleted it
 
-Upstream #8610 removed `queryCurrentContextUsage` and `normalizeClaudeContextUsageApiSnapshot`
-outright, on the grounds that `getContextUsage`'s token-count fallback can make extra model
-requests. This fork keeps the call. It is the **only** source of the compaction facts —
-`compactsAutomatically`, `autoCompactThreshold`, `autoCompactSource` — that
-`packages/contracts/src/providerRuntime.ts` carries on the wire and that the Vitals gauge's
-compaction note and marker render from (`VitalsGauge.tsx`, `lib/contextWindow.ts`). Deleting it
-compiles, passes, and leaves the note permanently blank.
+On v2 (`orchestration-v2/Adapters/ClaudeAdapterV2.ts`, helpers in the fork-owned
+`ClaudeAdapterV2Fork.ts`) the adapter asks once per turn end, before `finalizeActiveTurn`, behind a
+one-second bound, with `detail: "summary"` (answers from the last response, so none of the
+token-count API calls upstream #8610 dropped the call over; it took 4-40 ms on CLI 2.1.288). It is
+skipped after an interrupted turn, and a slow or failed answer keeps the previous snapshot. The answer lands on the provider
+thread's `contextUsage` via `claudeContextUsageSnapshot`. It is the **only** source of
+`compactsAutomatically`, `autoCompactThreshold` and `autoCompactSource`, which the Vitals gauge's
+compaction note and marker render from; deleting it compiles, passes, and blanks the note.
 
-The adapter's own names differ from the wire's, and the difference matters when grepping:
-`isAutoCompactEnabled` and `autocompactSource` (lower-case `c`) are the **raw SDK response keys**
-read in `normalizeClaudeContextUsageApiSnapshot`, and the second one is absent from the SDK's
-declared type, so it is read off the raw object. Verified 2026-09-06.
+Three traps:
 
-Upstream's replacement is **adopted underneath it**, not instead of it. `latestAssistantUsage`
-is tracked per assistant frame and `compactedSinceLatestAssistantUsage` guards the
-post-compaction window, so the precedence reads
-`contextUsageSnapshot ?? latestAssistantSnapshot ?? …`. The fork's snapshot wins when the CLI
-answers; upstream's is the next-best fallback when it times out.
+- `autocompactSource` (lower-case `c`) is absent from the SDK's declared type and read off the raw
+  object. It, not `isAutoCompactEnabled`, says whether compaction is armed.
+- The snapshot's `maxTokens` is the MODEL's window (`claudeModelContextWindow`), never the
+  response's own `maxTokens`, which is the compaction budget ("541k / 600k, 90%" on a 1M thread).
+- The web prefers the live `providerTurn.tokenUsage` report, which has no compaction facts.
+  `lib/contextWindow.ts` carries them from the provider thread onto a live report only when both
+  name the same window: a threshold is an absolute count, so across a model switch it is dropped.
 
-Three things upstream removed **outside every conflict marker**, all restored, all of which
-break the build if lost again (the good case): `getContextUsage?` on `ClaudeQueryRuntime`, the
-`SDKControlGetContextUsageResponse` type import, and `import * as Option from "effect/Option"`.
+`getContextUsage` is optional on `ClaudeAgentSdkQuerySession`, so replay and test runners need not
+answer it; only the live runner does.
 
-Two of upstream's tests are **retargeted, not deleted**:
-
-- `completes with result usage without querying current context usage` asserts
-  `getContextUsageCalls === 0`. Renamed to
-  `completes with the latest assistant frame usage, not the result total`, with the stub and the
-  call-count assertion dropped; the behaviour it is really about still holds here.
-- `preserves compacted usage when completion follows an older assistant frame` expects
-  `lastUsedTokens: 200`, the PRE-compact figure. `compactBoundaryTokenUsageSnapshot` deliberately
-  resets it to `post_tokens`, because carrying the old value forward pins the meter at the usage
-  the compaction just cleared. Retargeted to `40`.
-
-Both also used a fixed `Stream.take(N)` sized to upstream's event count. This adapter emits a
-token-usage event per assistant frame, so a fixed count truncates before the result-driven
-update and the assertion silently reads an early event. They collect through `turn.completed`
-and read the **last** usage event instead.
+`claudeQueryAutoCompactWindow` is the other half: a percentage setting resolves against the
+window the CLI really runs at. A blank one hands unarmed models (`auto`: haiku-4-5, opus-4-5)
+their own window and every >= 1M window 1M, because the CLI refuses to compact a >= 1M window it
+has no default for (opus-4-6 at 1M on 2.1.288; every 1M model on 2.1.247). CLI 2.1.288 arms opus-5,
+fable-5, opus-4-8, opus-4-7 and sonnet-5 itself (`model-default`, 967,000), and 1M yields the same
+threshold there. Sending nothing for them was tried and reverted: the CLI on the user's PATH has
+no minimum version, and an older one would never compact. Upstream's
+`Number(autoCompactWindow)` sent `NaN` for a percentage, which the CLI drops silently.
 
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately
 
@@ -633,17 +529,12 @@ basename match, which only makes sense for a path inside the workspace.
 Upstream's `onOpenMedia` is adopted, and its new "Preview media" item joins `sharedFileMenuItems`
 rather than upstream's hand-written native menu — which is the whole point of the shared array.
 
-The two menus deliberately differ: the in-DOM one carries "View in side panel" and "Open in new
-tab", the native one carries "Open in integrated browser" and "Copy relative path". Everything
-else comes from one `sharedFileMenuItems` array, built at `ChatMarkdown.tsx:2063`, which both
-menus map — the native menu at `:2125`, the in-DOM menu at `:2314`. That sharing is the
-enforcement: a shared item cannot drift between the two, because there is only ever one of it.
-
-**Corrected 2026-08-29.** This section previously said the reveal item "uses `onReveal &&
-revealLabel` inline at both sites, and nothing enforces the pairing, so change both". There is
-**one** such site — `:2088`, inside `sharedFileMenuItems` — and the shared array is precisely what
-enforces the pairing. Change it once. (The substance was right: the reveal item does appear in
-both menus. Only the count and the "nothing enforces" claim were wrong.)
+The native right-click menu shows exactly `sharedFileMenuItems`; the in-DOM menu prepends its two
+web-route items ("View in side panel", "Open in new tab") and then maps the same array. That
+sharing is the enforcement: a shared item cannot drift between the two menus, because there is only
+ever one of it. The reveal item's `onReveal && revealLabel` condition sits once, inside the array.
+Probe: `grep -c 'sharedFileMenuItems.map' apps/web/src/components/ChatMarkdown.tsx` is `2`; a
+hand-written menu drops it to 1.
 
 Do not extract that condition into a shared `boolean` predicate. `ContextMenuItem.label` is a
 required `string` on the native side, and the inline truthiness test is what narrows
@@ -696,7 +587,7 @@ off for everyone, and nothing fails.**
 
 Upstream #9150's dead-code sweep removed `newCommandId` from `apps/web/src/lib/utils.ts` and
 `getProviderDisplayName` from `apps/web/src/providerModels.ts`. Both are dead upstream and live
-here — `ChatView` mints a command id for a queued follow-up turn (invariant 5), and the composer's
+here — `ChatView` mints a command id for a queued follow-up turn, and the composer's
 provider label reads through the other. Both carry a `FORK-ONLY` comment now. The failure mode is
 loud (typecheck), which is the good case; the point of the note is that upstream will keep
 deleting them.
@@ -759,35 +650,20 @@ from — not the project's name. The two differ exactly when a file is opened ou
 workspace member, which is the wrong-root confusion the fork's label fix exists to prevent; the
 merge dropped the only call site and left the label disagreeing with the `cwd` beside it.
 
-### 22. Claude adapter tests: synthetic catalog by default, bundled where the model IS the subject
+### 22. Claude adapter tests: real slugs with the bundled catalog where the model IS the subject
 
-Upstream replaced the fork's hardcoded context-window table with the manifest-driven
-`ClaudeModelCatalog`, and pointed `ClaudeAdapter.test.ts` at a **synthetic** catalog
-(`ClaudeModelCatalog.testFixtures.ts`) so transport tests stay independent of manifest contents.
-Keep that default.
+The fork's window and auto-compaction rules (`claudeCliContextWindow`,
+`CLAUDE_UNARMED_COMPACTION_MODELS`, `claudeQueryAutoCompactWindow` in
+`orchestration-v2/Adapters/ClaudeAdapterV2Fork.ts`) are keyed on **real slugs** (`claude-opus-4-8`,
+`claude-opus-4-6`, `claude-haiku-4-5`) and resolve through `BUNDLED_CLAUDE_MODEL_CATALOG`, which is
+what the v2 adapter uses in production. Their tests in `ClaudeAdapterV2Fork.test.ts` use those
+slugs; a made-up model resolves no window and tests nothing. Probe:
+`grep -cE '"claude-(opus-4-8|opus-4-6|haiku-4-5)"' apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2Fork.test.ts`
+is non-zero (9 today).
 
-But the fork's auto-compaction rules are keyed on **real slugs** (`claude-opus-4-8`,
-`claude-opus-4-6`) and on the real `[1m]` API suffix, and against a synthetic catalog they resolve
-no window at all — four wrong assertions, two hangs, and a percentage resolved against 200k instead
-of 1M. Those tests pass `modelCatalog: Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)` to
-`makeHarness`, because the bundled catalog is what the adapter resolves in production.
-
-No production behaviour moved: `model-manifest.json` carries `fixedContextWindowTokens: 1000000`
-for `opus-4-8`/`opus-4-7` and `contextWindowTokens` for every model with a window toggle, so the
-catalog lookup returns what the fork's switch used to. `claudeCliContextWindow`'s hardcoded
-native-1M switch and `CLAUDE_UNARMED_COMPACTION_MODELS` are still fork-owned and still real-slug
-keyed.
-
-Related: upstream's own new adapter tests may send a second turn while the first is running.
-**Running a queued turn after the current one is fork-only**, so such a turn never reaches the
-provider — the symptom is a test that _hangs_ on a prompt read rather than one that fails.
-Retarget by completing the running turn first, which is the fork's actual contract.
-
-Be precise about what "fork-only" covers here, because two upstream queues make the loose version
-of this claim false. `origin/main` has both `promptQueue` in `ClaudeAdapter.ts` and
-`threadHasQueuedTurnStart` in `ThreadSettlementPolicy.ts`. What it does not have is the adapter's
-follow-up drain: `drainNextPendingTurn` and `withdrawQueuedTurn` are 0 hits on `origin/main` and
-live across 18 fork files. Verified 2026-09-06.
+The native-1M switch is the CLI's number, not the catalog's: `claude-opus-4-8` has no
+`contextWindow` option in the catalog, so upstream's `claudeContextWindow` read it as 200,000 while
+the CLI ran it at 1M. **Re-verify the switch on a CLI upgrade**; nothing fails loudly if it moves.
 
 ### 23. Slow-by-design RPCs get the long leash, never the untracked set
 
@@ -865,64 +741,65 @@ existing ancestor so the key does not flip the first time Claude creates `projec
 dirs whose `projects` resolve to one directory share a key even with different HOME, because HOME
 does not locate the transcript once `CLAUDE_CONFIG_DIR` is set.
 
-A persisted resume cursor follows the thread across two instances that share a key
-(`sharesContinuation` in `apps/server/src/provider/Layers/ProviderService.ts`), not only across the same instance id.
+v2 compares instances by that key (`continuationKey` in
+`orchestration-v2/ProviderSessionTransitionPolicy.ts`), so a switch between two instances of one
+store keeps the conversation. Probe: `grep -c 'claude:store:' apps/server/src/provider/Drivers/ClaudeHome.ts`
+is `1` (upstream's copy gives 0).
 Mobile's model picker filters to the thread's continuation group (`filterThreadProviderGroups`,
 `apps/mobile/src/lib/modelOptions.ts`), ported from web's existing predicate
 (`ChatView.logic.ts`).
 
 A reconcile that restores the upstream HOME-only key, or any key built from the raw config-dir
 string instead of the resolved `projects` path, silently re-refuses a switch this fork means to
-allow. A reconcile that restores the old id-only cursor inheritance (dropping
-`sharesContinuation`) silently loses history on a stopped-session switch between two instances of
-the same store, because the switch itself is no longer refused but nothing hands the cursor over.
+allow.
 
-### 29. Two rate-limit events, one Codex notification
+### 29. The Vitals gauge reads the Limits tab's store, not a channel of its own
 
-Upstream #9507's Limits tab reads `account.rate-limits.updated`; the fork's composer Vitals
-gauge reads `account.usage.updated` with a `fetchedAt` stamp. Both are emitted from the single
-`account/rateLimits/updated` notification in `CodexAdapter.ts`, through two different
-normalizers (`codexRateLimitsToUpdate` and `normalizeCodexRateLimitsNotification`). A reconcile
-that keeps only upstream's branch silently blanks the gauge; one that keeps only the fork's
-leaves the Limits tab empty for Codex.
+On orchestrator v2 the gauge's usage arcs and rows come from `ServerProvider.usageLimits` for
+the thread's provider instance (`accountUsageFromLimits` in `apps/web/src/lib/vitals.ts`), the
+same snapshot upstream's Limits tab reads. The fork's `account.usage.updated` channel and its
+OAuth/Codex/Cursor pollers are gone, so there is one normalizer per provider and one poller per
+endpoint. Do not restore the fork's direct `GET /api/oauth/usage` poll: Claude's capabilities
+probe already reads the claude.ai usage endpoint through the CLI's `get_usage`, and a second
+poller doubles the rate-limited calls.
 
-### 30. A failed session stop: clear the spinner, unless a compaction was in flight
+Three fork deltas keep the gauge honest on top of upstream:
 
-Two rules meet in `processSessionStopRequested` (`ProviderCommandReactor.ts`) and a compaction
-in flight is the only thing that tells them apart.
+- `usageCheckedAt` on the Claude capabilities probe. The probe is cached for 5 minutes, so the
+  status check that publishes it must stamp the limits with when they were READ, or the gauge's
+  age label calls cached numbers fresh. `resolveUsageLimitsAfterProbe` then keeps a newer runtime
+  update over an older cached read.
+- `refreshProviders({ instanceId, fresh: true })` drops the instance's probe caches before
+  re-reading it. The gauge's refresh button sends it; without `fresh` a press inside the cache
+  window re-serves the last probe.
+- Cursor windows carry `windowDurationMins` from `billingCycleStart`, so they pace.
+- `claudeRateLimitEventToUpdate` reads `unifiedWindows`. The CLI's `rate_limit_event` carries the
+  5-hour usage only there (852 of 853 real events); the typed top-level `utilization` never
+  updated it.
+- `ServerProviderUsageLimits.spend` carries Claude's extra usage from `get_usage`'s `spend` block
+  (else `extra_usage`), and is carried across runtime updates like `resetCredits`.
 
-- FORK (`868ed1c02`): a provider that cannot be stopped — dead process, closed transport — must
-  still get the `stopped` session write, or the thread sits with a spinner nothing can clear.
-  Its test is "still clears the session, and says so, when the provider fails to stop".
-- UPSTREAM (#9293): when the stop interrupted a compaction, the failure path restores the
-  session itself, and a `stopped` write on top clobbers that fresher state. Its test is "does
-  not overwrite concurrent session state after compaction failure".
+Not carried: Codex credits, Cursor on-demand spend and request count.
 
-So the write is skipped exactly when this handler found the thread in `compactingThreadIds` on
-entry. Note the ordering trap: `restoreCompaction` returns without writing while the thread is
-in `stoppingThreadIds`, so the stopping mark has to come off before it is called.
+### 30. A failed hard stop still ends the turn (the compaction exception is retired)
 
-### 31. The live subscription is bounded by upstream's budget, not the fork's pump
+FORK `868ed1c02`: a provider that cannot be stopped must not leave a spinner. In v2 the hard
+paths of the adapters already end the turn locally when the provider does not answer. The one
+gap was Claude: `ClaudeAdapterV2.interruptTurn` yielded `query.interrupt` before closing, so a
+rejected request (dead transport) aborted the stop, and a CLI wedged in a tool never answered
+it. That call is now bounded at 8 s and its failure logged, so the close and the 10 s finalize
+fallback always run.
 
-**Superseded at the 30th reconcile.** The fork used to chain upstream's coalescer into a bounded
-`Queue.dropping` (`WS_LIVE_BUFFER_CAPACITY`, `pumpBoundedLiveBuffer`), and answered a
-`requestCompletionMarker` subscription with `offerAndWait` because the pump draining that queue
-raced upstream's `takeAll`.
+The V1 exception "unless a compaction was in flight" protected upstream #9293's
+`restoreCompaction` session write. v2 has no compaction-owned session state: `/compact` is an
+ordinary provider turn (`compactThread` = `startTurn("/compact")`), so a failed stop during it
+ends like any other turn. Test: "a hard Stop whose interrupt request fails still ends the
+compaction".
 
-Upstream #9521's follow-up made that chain unnecessary. `makeLiveStreamBudget`
-(`apps/server/src/orchestration/LiveStreamBudget.ts`) bounds a subscription by **retained items
-AND retained serialized bytes** (1,000 / 8 MiB) and _fails_ the stream on overflow, which the
-client transport treats exactly as the fork's dropping queue did: resubscribe with
-`afterSequence` and resync losslessly. Every offer into the coalescer's output queue goes through
-`budget.retain` / `budget.check`, so the queue being `Queue.unbounded` no longer means unbounded
-memory. That is a strictly stronger bound than the fork's row count, and it restores the single
-buffer the marker ordering needs — so `liveBuffer.offer({ kind: "synchronized" })` is safe again
-and there is no `takeAll` to race.
+### 31. RETIRED with orchestrator v2: the fork's live-subscription pump
 
-`boundedLiveBuffer.ts` and its test were deleted with the last caller. The discriminating test is
-still `server.test.ts`'s "buffers thread events published while the initial snapshot loads": if a
-future reconcile reintroduces a second buffer in front of the coalescer, that test is what catches
-the marker overtaking an in-flight event.
+Upstream's `LiveStreamBudget` (now `orchestration-v2/LiveStreamBudget.ts`) bounds every WebSocket
+reader; invariant 18 holds what must stay true.
 
 ### 33. The per-value failure-budget reset must not be a `Stream.tap`
 
@@ -942,95 +819,46 @@ The reset is therefore recorded synchronously (`producedValue`, set in a `Stream
 flushed inside `catchCause`, where an Effect boundary is free. Anything else added to that inner
 pipeline has to be synchronous for the same reason.
 
-### 32. Claude notifications are `runtime.notification`; only three subtypes warn
+### 32. Claude notices: only three subtypes reach the timeline
 
-Fork commit `e71c04825` deleted `emitRuntimeWarning` from the Claude adapter to stop the
-per-turn "Runtime warning" spam: every SDK message subtype the adapter does not model used to
-reach the user as a warning row, when `logNativeSdkMessage` had already captured it. The
-`default:` arm drops to `Effect.logDebug` instead, and `case "notification"` emits a dedicated
-`runtime.notification` event regardless of priority.
+v2 has no runtime-warning rows, so the per-turn "Runtime warning" spam the fork once removed
+cannot recur: unmodelled SDK subtypes are simply ignored. Exactly three subtypes become a
+`system_notice` turn item, because each tells the user something they need:
 
-The 30th reconcile put the helper back, deliberately and narrowly. Upstream added three subtypes
-that describe something a user genuinely needs to see, and none of them is the unmodelled-subtype
-spam the fork removed:
+- `model_refusal_fallback` - upstream's own arm.
+- `model_refusal_no_fallback` - the fork's, with `api_refusal_explanation` preferred over `content`.
+- `informational` with `level === "warning"` - the fork's (e.g. a Stop hook refusing continuation).
 
-- `model_refusal_fallback` - a safety fallback silently switched the model mid-session.
-- `model_refusal_no_fallback` - the model declined and nothing took over.
-- `informational` with `level === "warning"` - e.g. a Stop hook that refused continuation.
+`notification` frames and every other `informational` level stay out of the timeline. The fork's
+toast for `notification` (`apps/web/src/lib/notificationToast.ts`) has no v2 channel yet and is
+unmounted. `ClaudeAdapterV2Fork.test.ts` "shows a refusal and a warning note" pins the shape.
 
-What must stay: the `default:` arm logs at debug and never warns (it now also carries upstream's
-`message satisfies never` guard, so a new SDK subtype fails typecheck rather than slipping
-through), and notifications of every priority go to `runtime.notification`, never to a warning
-row. Upstream's `case "notification"` emitting a high-priority warning is dropped on sight - it
-would sit unreachable behind the fork's arm and re-open the spam if the arms were ever reordered.
-`ClaudeAdapter.test.ts`'s "consumes undeclared and UX-internal system subtypes without warning
-rows" pins the whole shape: exactly three warnings, two notifications.
+### 34. RETIRED with orchestrator v2: ingestion command ids and receipts
 
-### 34. Ingestion command ids: the fork skips the receipt, upstream only adds entropy
+v2's `ProviderEventIngestor` writes adapter events straight to the event sink, with no
+per-event orchestration command and so no receipt. `singleUseCommandId` is gone with V1.
 
-`apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` (the path in this entry used
-to say `apps/server/src/provider/`, which has never existed - corrected 2026-09-08) keeps a
-**synchronous** `providerCommandId` (a plain
-`provider:<eventId>:<tag>` name) and dispatches through the fork's `dispatchWithFreshCommandId`,
-which appends a UUID _and_ passes `{ singleUseCommandId: true }` so the engine writes no receipt.
-Ingestion receipts were 98.5% of a real 2.08M-row receipt table and none was ever read back.
+### 35. The Claude result classifier keeps the fork's rules on upstream's v2 failure path
 
-Upstream shipped a competing version at the 31st reconcile: it moved the UUID **into**
-`providerCommandId`, making it an Effect, and dispatches through plain `orchestrationEngine.dispatch`.
-That fixes replayable ids but still writes every receipt - `singleUseCommandId` does not exist
-upstream at all (it is fork-only across 8 files). The fork's version is strictly stronger, so keep it.
+`ClaudeAdapterV2.ts`'s `terminalStatusFromResult` delegates to the fork's
+`claudeResultTerminalStatus` (`ClaudeAdapterV2Fork.ts`). What it adds over upstream's v2
+classifier:
 
-**The tell after a merge:** a `yield* providerCommandId(...)` anywhere in this file. The fork's is
-not an Effect, so yielding it produces `undefined` where a `CommandId` is required. Count them:
-upstream has 11, the fork must have 0.
+- A result the CLI tags `success` with `is_error: true` is **failed** even with no hint and no
+  terminal reason. Upstream read it as completed and dropped the failure it had just built, so the
+  user saw a turn that ended with nothing.
+- `aborted_*` terminal reasons are an interruption; `CLAUDE_FAILED_TERMINAL_REASONS` (kept in step
+  with `terminalResultError`) outrank the `interrupt` / `cancel` substring heuristics, which read
+  diagnostics-free `errors[]` only.
+- `[ede_diagnostic]` is filtered trimmed, case-insensitively and per LINE of `result`
+  (`claudeResultProse`), and a non-string `result` is guarded: it reaches no string API.
 
-### 35. The Claude result classifier is the fork's pair, not upstream's `resultOutcome`
-
-Upstream #10296 folded `turnStatusFromResult` and `resultUserFacingError` into one `resultOutcome`
-that classifies from `terminal_reason` alone. Adopting it silently drops four things the fork's
-pair does: abort handling (`isAbortedResult`, so a user Stop is not recorded as a failure), the
-guard for a non-string `result` (the CLI runs ahead of the typed SDK and throwing here tears down
-the session), per-**line** diagnostic filtering (`[ede_diagnostic]` can sit on any line), and the
-529 `OVERLOADED_RESULT_MESSAGE` fallback. Keep the fork's two functions and its
-`FAILED_TERMINAL_REASONS` set, which upstream does not have.
-
-The 31st reconcile took upstream's _call site_ without its _declaration_, which typecheck caught.
-The dangerous version of this merge is the one that takes both.
-
-**Widened 2026-09-08 (32nd reconcile).** Upstream #10321 and #10549 gave `resultOutcome` something
-the fork's pair did not have: a `failureHint` assembled from evidence the turn recorded while it
-was failing - `authenticationFailureMessage` (set when the CLI reports `authentication_failed`,
-via `claudeSignedOutMessage`) and `rejectedRateLimitTypes` / `latestAssistantRateLimited`. Its
-point is that `terminal_reason: "api_error"` should name the expired login or the usage window
-instead of "Claude gave up after repeated API errors."
-
-That is adopted, on the fork's classifier rather than upstream's. `resultOutcome` and
-`terminalResultError` are still rejected; the hint is threaded into
-`resultUserFacingError(result, failureHint)` and `structuredResultFailureMessage(result, failureHint)`,
-which is where the shared `switch` already reads it. The three `ClaudeTurnState` fields and every
-site that writes them are upstream's, merged unchanged. Status classification did NOT move:
-`api_error` is already in the fork's `FAILED_TERMINAL_REASONS`, so `turnStatusFromResult` needs no
-hint.
-
-**Threading the hint is not the whole graft, and the first attempt at it was wrong twice** - nine
-upstream tests caught both. The message for a result the CLI tags `success` while setting
-`is_error` now has a strict order, in `successTaggedFailureMessage`:
-
-1. **The typed `errors[]` entry**, if any. The fork previously read that list only for
-   non-`success` subtypes, so a success-tagged failure carrying `Tool execution failed: EACCES`
-   reported the _hint_ instead - a rate-limit or expired-login line, describing the category while
-   throwing away the actual error.
-2. **The CLI's own prose**, per-line diagnostic filtering intact.
-3. **A structured fallback, and here the fork and upstream genuinely disagree.** The fork refuses
-   to build a message out of `terminal_reason`, because it reads `api_error` for every provider
-   HTTP failure and would claim a turn was abandoned after repeated retries when it was not.
-   Upstream's new tests require exactly that message. **The discriminator is whether the payload
-   HAS a `result` field**: present but unusable (blank, or not a string) means the CLI had a place
-   to say why and said nothing, so only the turn's recorded evidence may speak and the caller's
-   generic "Claude turn failed." otherwise stands; absent entirely is a different payload shape -
-   upstream's rate-limit results carry no `result` at all - where `terminal_reason` is the only
-   account of the failure there is. Both sides' tests pass on that split; picking either rule
-   outright reddens three tests belonging to the other.
+The failure MESSAGE order is upstream's v2 one and is adopted, not the fork's v1 order: typed
+`errors[]`, then the structured message (529, 429, or `terminal_reason` with the turn's
+auth/usage-limit hint), then the hint, then the filtered prose. The fork's v1 rule ("prose before
+`terminal_reason` when the CLI wrote any") is retired: on v2 the prose already reaches the user as
+the synthetic assistant message, and upstream's replay fixture `claude_result_is_error` pins the
+hint winning over it.
 
 ### 40. `homePath` and `configDirPath` are two settings here, and a blank one SCRUBS
 
@@ -1047,12 +875,8 @@ a different login than its own keys encode - it would resume, and be refused res
 wrong transcript store. `ClaudeHome.test.ts` pins all three cases, including that `homePath` alone
 leaves `CLAUDE_CONFIG_DIR` unset.
 
-Upstream's new `ClaudeAdapter` test "reports the same Claude config and cwd used by the spawned
-query" drives `homePath` and asserts the inherited value survives - true upstream, false here. The
-property it pins IS fork-relevant (the auth-failure message must name the config dir and cwd the
-query was _actually_ spawned with, JSON-quoted, not a re-derived guess), so its rows drive
-`configDirPath` instead, and the blank row asserts the scrub end to end: no config dir in the env,
-and none named in the message.
+Probe: `grep -c 'delete env.CLAUDE_CONFIG_DIR' apps/server/src/provider/Drivers/ClaudeHome.ts` is
+`1` (upstream's copy gives 0).
 
 **39th reconcile: upstream #12624 is rejected whole.** It makes `resolveClaudeHomePath` fall back
 to an inherited `CLAUDE_CONFIG_DIR`, then `~/.claude`, and threads `processEnv` into both keys.
@@ -1080,11 +904,12 @@ open: `--passWithNoTests` means a run that matches nothing still exits 0. A gate
 having never executed the dom project has happened twice; the only reliable signal is the **test
 count**, not the exit code.
 
-The fork also renamed several upstream test files to `.dom.test.tsx` (`MessagesTimeline`,
-`ChatMarkdown`, `ProviderStatusBanner`, `ComposerPrimaryActions`, `sidebarChromeFooter`). Git is
-rename-blind mid-merge, so upstream's edits to the old name arrive as a **new file** rather than a
-conflict. After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`,
-and port any tests upstream added to its copy.
+The fork also renamed several upstream test files to `.dom.test.tsx` (`ChatMarkdown`,
+`ProviderStatusBanner`, `ComposerPrimaryActions`, `sidebarChromeFooter`). Git is rename-blind
+mid-merge, so upstream's edits to the old name arrive as a **new file** rather than a conflict.
+After a merge, check that no `<name>.test.tsx` sits beside the fork's `<name>.dom.test.tsx`, and
+port any tests upstream added to its copy. (`MessagesTimeline` went back to upstream's
+`MessagesTimeline.test.tsx` at the v2 port; the fork's `.dom` copy is deleted.)
 
 **A fork-ORIGINAL `.dom.test.tsx` has no upstream ancestor, so nothing carries upstream's mock
 updates into it — and the sweeps cannot see the gap.** The 34th reconcile is the worked example.
@@ -1149,92 +974,51 @@ export as unused - the pressure is entirely one-way.
 
 ### 39. Two interrupts, and only one of them arms the Stop ladder
 
-Upstream #4308 added a keybinding command for stopping a thread, and its handler is a stable
-`useCallback` in `ChatView.tsx` fed by `interruptContextRef`. The fork already had an
-`onInterrupt` there: the two-press Stop ladder (invariant 7). They collided on the name only, and
-the merge produced two `const onInterrupt` in one scope.
+In `ChatView.tsx`, `onInterrupt` is the ladder (the Stop button and `Escape`, which
+`ChatComposer` routes through `nextEscapeAction`). Upstream's `thread.stop` keybinding calls
+`onInterruptRunningThread`, which sends a plain cooperative interrupt and neither reads nor arms
+the ladder, so a shortcut press can never make the next Stop click a force-stop. The background
+work strip's Stop (`handleStopBackgroundWork`) sends no `mode`, i.e. hard: ending background work
+is what it is for. v2 has no Cancel-question button; the pending-question row shows the same
+ladder Stop.
 
-Upstream's is renamed **`onInterruptRunningThread`** - it pairs with the
-`canInterruptRunningThread` predicate declared beside it - and the ladder keeps `onInterrupt`.
-The rename is not cosmetic: like Cancel, the keybinding dispatches the plain cooperative
-interrupt and neither reads nor advances the escalation ledger, so a shortcut press cannot arm a
-force-stop. A merge that unifies these two into one handler makes every keyboard interrupt a
-candidate first rung, and the next Stop click a force-stop.
+### 41. RETIRED: work-entry detail is upstream's in-row inspector again
 
-### 41. Work-entry detail is a dialog here, so upstream's in-row expansion has no fork surface
+Until orchestrator v2 the fork opened a work entry's detail in `WorkEntryDetailDialog` and
+rejected upstream's in-row expansion. Upstream's v2 timeline expands a row into
+`V2ItemInspector`, which covers the dialog's purpose-built views: AskUserQuestion answers
+(`QuestionAnswerHistory`), a command and its exit code, and a file change with "Open diff". The
+dialog was not restored and upstream's expansion is taken whole. Not covered: a command's
+**output**. The server strips it from the wire on purpose (`WireProjection.ts`
+`projectTurnItemForWire`), so showing it needs a per-item read, which does not exist yet. The
+fork's `×N` repeat count (in the row text and its accessible name) is also lost to users: it
+was already gone before this unit, at the v2 merge base (`coalesceRepeatedWorkLogEntries` had
+no caller), and U6 did not restore it.
 
-`PlainWorkEntryRow` in `apps/web/src/components/chat/MessagesTimeline.tsx` opens a purpose-built
-detail dialog (`hasWorkEntryDetail` / `onOpenDetail`). Upstream instead expands the row in place,
-and carries `previewText`, `canExpand`, `expandedBody`, `commandMatchesVisibleLabel` and a
-`stopRowToggle` handler for it. **The fork deleted all of that**, so every upstream commit that
-tunes the expansion arrives as a conflict against machinery that no longer exists here. #10981
-("allow expanding duplicate tool call commands") is the 34th reconcile's example: it rewrites
-`canExpand` and a `truncate` class, both fork-absent, and was rejected whole.
+### 42. Upstream's new test fixtures do not set `members`
 
-The count also lives in a different place: the fork folds `×N` into `displayText` so it reaches
-the accessible name, where upstream renders bare `previewText`. Taking upstream's `<span>` silently
-drops the count from screen readers.
-
-Reject the row-expansion half, but read the rest of such a commit: #11020 in the same batch was a
-genuine touch-device fix (`pointer-coarse:opacity-100`) that belonged in the fork's own
-`messageMetaVisibilityClasses` helper in `MessagesTimeline.logic.ts`. That helper auto-merged
-untouched, so the fix would have been lost on both call sites had only the marked hunks been read.
-
-That paragraph is about a **genuine** fix in the same commit that you would lose. The converse
-also happens, and the 35th reconcile hit it three times: the **rejected** feature's own lines land
-outside the markers and you keep them. #11014/#11017 left behind
-
-- `const accessiblePreview = [previewText, answerPreview]…`, referencing two variables the
-  rejection deletes — a typecheck error, so survivable;
-- `stopRowToggleWhileSelectingText`, a self-contained dead helper — **the gate is green with it
-  in**, measured;
-- a new test, "only withholds an expanded tool-call label click while text is selected", which
-  git's rename detection merged into the fork's `MessagesTimeline.dom.test.tsx`. It asserts a
-  `select-text` class the fork never renders, so it is a guaranteed red.
-
-The 36th reconcile hit the same shape from a new direction: #11433 turned the subagent spawn
-entry into an expandable row (`AgentSpawnRow`, `AgentSpawnMemberRow`, `AGENT_MEMBER_STATUS_LABEL`,
-`expandedSpawnEntryIds`, an `onToggleSpawnRow` handler). The fork's spawn entry is a
-call-to-action row (`AgentSpawnCtaRow`) that opens the Agents panel, so the whole thing was
-rejected — 112 lines on the sweep's DROPPED list, all deliberate. `AgentSpawnCtaRow`'s body had to
-be restored from `personal` afterwards: git had spliced upstream's component in over it.
-
-The 42nd reconcile: #12900 leads a question row with the question text. Its in-row expansion is
-rejected; the heading is grafted into `PlainWorkEntryRow`'s `rowText`.
-
-After rejecting these hunks, grep `MessagesTimeline.tsx` **and** `MessagesTimeline.dom.test.tsx`
-for the expansion's vocabulary — `previewText`, `answerPreview`, `accessiblePreview`, `canExpand`,
-`expandedBody`, `stopRowToggle*`, `select-text`. General rule and its measured detection coverage:
-"Rejecting an upstream feature" below.
-
-### 42. Upstream's new server test fixtures do not set `members`
-
-`OrchestrationProject` carries a fork-only required `members` array (migration id 39, workspace
-members). Every project fixture upstream adds needs `members: []` appended, and the only thing
-that names them is the **repo-wide** typecheck — five such fixtures arrived in the 34th reconcile
-(`linkCreatedPullRequest`, `pullRequests/handlers`, `PullRequestSyncReactor`,
-`decider.pullRequests`, `projector`), all in files that merged without a single conflict marker.
-`packages/client-runtime` has the same shape for `OrchestrationThreadShell.pullRequests`.
+`OrchestrationProjectShell` and `Project` (contracts) carry a fork-only required `members` array
+(workspace members, `projection_projects.members_json`, migration id 39; decodes absent as `[]`).
+Every project fixture upstream adds needs `members: []` appended, and the only thing that names
+them is the **repo-wide** typecheck: they land in files that merge without a single conflict
+marker (five in the 34th reconcile; over twenty across server, client-runtime and web at the orchestrator-v2
+port). v2's project store (`orchestration-v2/ProjectStore.ts`) reads and writes the same column;
+`grep -c members_json` on it is non-zero (upstream's copy gives 0). Members live only in that column:
+the baseline project events migration 64 (`OrchestrationV2`) writes carry no members, so a future
+change that rebuilds projects from events would silently drop every project's members.
 
 ### 43. The fork's revert prompt-restore is RETIRED; upstream's rewind owns it
 
-Until the 36th reconcile the fork carried its own revert affordance: `onArmRevertPromptRestore`,
-a `pendingRevertRestoreRef` latched before the await, and an effect that put the removed message's
-text back in the composer once it left the thread. Upstream's rewind (#11338/#11358) does the same
-job store-side — `isRevertingCheckpoint`, a `pendingRevert` confirm dialog, `waitForRevertedMessage`
-and `prepareRevertedMessageAttachments` — and it also restores **attachments**, which the fork's
-ref never did. **Upstream's was adopted whole and the fork's machinery deleted.**
+Upstream's rewind restores the message (text and attachments) to the composer, so the fork's own
+restore machinery is gone. Two fork pieces sit on top of it in `ChatView.tsx`:
 
-Two fork pieces were grafted onto it and must survive future merges:
-
-- the discarded-message count in the confirm dialog, computed from `resolveRevertRetention` and
-  rendered as "N messages and their turn diffs are discarded.";
-- `MessagesTimeline`'s control keeps the fork's "Edit from here" label and passes the message id
-  alongside the turn count (`onRevertToTurnCount(turnCount, messageId)`).
-
-`noopHeldRevert` is now `(_targetTurnCount: number, _messageId: MessageId) => {}` — a reworded
-signature, which is why the sweep lists it as BOTH-KEPT. Do not "restore" the deleted ref: an
-upstream commit touching the rewind will look like it is reverting a fork feature, and is not.
+- the confirm dialog states how many messages the rewind discards,
+  `countRevertDiscardedMessages` (every message of a run with an ordinal above the target turn
+  count that is not already `rolled_back`);
+- both rewind entry points (`onRevertToTurnCount`, `onRollbackCheckpoint`) claim the thread's
+  slot with `claimThreadRewind`, which reads the live store. Upstream's guard reads the render's
+  `isRevertingCheckpoint`, so a second click that lands before the re-render (a double click, or
+  one queued behind the confirm await) would dispatch a second rewind and restore the prompt twice.
 
 ### 44. Composer contexts travel as RECORDS, not as prose appended to the prompt
 
@@ -1261,10 +1045,8 @@ The change reaches the TIMELINE, not just the composer. A legacy `<review_commen
 renders as a reference chip naming the file and range (`contextWindow.test.ts L47 to L58`, a
 `lucide-message-circle`), not as a card with the comment body and its diff; a `@terminal-…`
 mention is substituted in place, inside the prompt's own paragraph, instead of being appended
-after it with a spacing span. Several fork assertions in `MessagesTimeline.dom.test.tsx` described
-the old layouts and had to be rewritten — upstream rewrote its own copies of the same two tests in
-the same commit, which is the confirmation that the new rendering is intended and not a merge
-defect. The whole render path (`reviewCommentContext.ts`, `lib/composerContextRecords.ts`,
+after it with a spacing span. This is upstream's intended rendering, not a merge defect. The whole
+render path (`reviewCommentContext.ts`, `lib/composerContextRecords.ts`,
 `composerContextPresentation.tsx`, `packages/shared/src/composerContextLegacy.ts`) is
 byte-identical to upstream; keep it that way.
 
@@ -1284,21 +1066,10 @@ Consequence for a future merge: an upstream commit that "fixes duplicate notific
 reasoning about one stack. Read which one before taking it, and check the fork's settings surface
 still exposes both toggles.
 
-### 50. Upstream's client-side message queue is rejected; the server queue owns mid-turn sends
+### 50. RETIRED with orchestrator v2: upstream's client-side message queue
 
-Upstream #11673 added `apps/web/src/queuedMessageStore.ts`: a mid-turn send is held in an
-in-memory per-tab store, shown as a dashed bubble, and dispatched at the next tool boundary or
-when the turn ends. On this fork a mid-turn send already queues **server-side** (invariant 5):
-durable, visible on every client, withdrawable, and opening its own turn. Keeping both would
-hold a message in the tab and then queue it again on the server, and the client intercept in
-`onSend` (`phase === "running"` -> `enqueue`) would bypass the fork's queue for every new send.
-
-Rejected whole at the 37th reconcile by reverse-applying `cc839c42b` to `ChatView.tsx`,
-`MessagesTimeline.tsx`, `MessagesTimeline.logic(.test).ts` and `docs/user/composer.md`, and
-deleting the store and its test. Most of it had merged OUTSIDE the conflict markers. The sweep
-shows ~500 DROPPED lines for this; all of them are the rejection. After a future upstream commit
-touching this queue, grep `apps/web` for `queuedMessageStore`, `QueuedComposerMessage`,
-`onSteerQueuedMessage`, `isQueuedMessageDue`: expect 0.
+v2 deleted `queuedMessageStore` itself; mid-turn sends queue server-side on both sides now
+(invariant 5).
 
 ### 51. The compact sidebar is gone upstream, and the fork's copies of its code went with it
 
@@ -1310,30 +1081,20 @@ places is unrelated and kept: the Queue drag-out (`fromQueue`, `leavingSection`,
 the footer panels' `items-end` row (5b), and `formatRelativeTime`'s `nowMs` parameter, which the
 fork's task panels pass.
 
-### 52. Upstream's queue-or-steer setting and its keybinding are rejected with the client queue
+### 52. RETIRED with orchestrator v2: upstream's queue-or-steer setting and keybindings
 
-Upstream #11964 added `followUpBehavior` ("queue" | "steer") and a `thread.steerQueuedMessage`
-keybinding (`mod+shift+enter`); #12075 turned `mod+Enter` while a turn runs into an `"alternate"`
-submission that flips that setting for one message. All three drive the client-side queue rejected
-in invariant 50, and this fork has no steer (invariant 5), so the 38th reconcile removed the
-setting (schema, patch, its contracts test, the General row, its search entry, its restore
-entries), the keybinding (contracts, shared defaults, `keybindings.test.ts`) and the docs that
-describe them. `sendShortcut` from #12075 is independent and kept. The `"alternate"` intent in
-`composer-logic.ts` is kept as upstream wrote it; `ChatView` treats it like `"foreground"`, which
-here means the send queues server-side like any mid-turn send.
+`followUpBehavior` (default `"queue"`), `thread.steerQueuedMessage` and `composer.sendAlternate`
+are upstream's v2 model and are adopted (invariant 5).
 
-After an upstream commit that touches this, grep `apps/web/src`, `packages/contracts/src` and
-`packages/shared/src` for `followUpBehavior` and `steerQueuedMessage`: expect 0.
+### 53. Workspace member states live on the v2 checkpoint payload
 
-### 53. `ProjectionCheckpointRepository` is fork-owned now; upstream deleted it as dead
-
-Upstream #9917 ("remove obsolete code") deleted `persistence/{Layers,Services}/ProjectionCheckpoints.ts`
-and inlined the checkpoint row schema into `ProjectionSnapshotQuery.ts`. The fork's copy carries
-`memberStates` (migration id 40), and `ProjectionSnapshotQuery` still decodes checkpoint rows
-through `ProjectionCheckpoint.mapFields`, so the files are kept (restored from `personal`) with the
-fork's schema. `ProjectionRepositories.test.ts` still exercises the legacy-NULL decode through the
-repository. A later upstream commit re-inlining the schema will conflict in `ProjectionSnapshotQuery`;
-keep `memberStates` in whichever schema survives.
+Since the orchestrator-v2 port, checkpoints are v2's (`orchestration_v2_projection_checkpoints`,
+JSON payload), and the fork's optional `memberStates` is a field of `OrchestrationV2Checkpoint`
+(contracts), recorded by `CheckpointCaptureService` through `WorkspaceMemberHooks` and read by the
+rollback guard at admission (`Orchestrator`) and execution (`CheckpointRollbackService`). The V1
+`ProjectionCheckpointRepository` and `checkpoint_member_states_json` (id 40) are no longer read;
+v2 imports no V1 checkpoints. An upstream rewrite of the checkpoint schema must keep `memberStates`
+optional, or every checkpoint captured without members stops decoding.
 
 ### 54. A folder opened from chat shows the fork's listing, not upstream's revealed tree
 
@@ -1392,7 +1153,7 @@ reconcile migrated the fork's 40 findings the way upstream migrated its own: a v
 (`ghost-destructive`, `font="mono"`, `padding="none"`), spacing moved to a wrapper, or a plain
 element where the look belongs to one feature (the sidebar footer controls share
 `SIDEBAR_FOOTER_CONTROL_CLASS` in `sidebarFooterBadge.ts`). A new className on a `components/ui`
-export now fails `pnpm verify` at lint, which cancels the test step (invariant 45).
+export now fails `pnpm verify` at lint, which cancels the test step.
 
 ### 59. Web classes come from theme tokens and scales, so fork UI does too
 
@@ -1404,15 +1165,10 @@ red / blue to `warning` / `success` / `destructive` / `info` (a `dark:` pair col
 `-foreground` token). Layout arbitrary values (`w-[calc(...)]`) stay legal. Class strings in `.ts`
 data (`Sidebar.logic.ts`, `vitals.ts`) are not linted, and upstream keeps raw colors there too.
 
-### 60. The thread list's fork columns correlate on `projection_threads`, so its query stays unaliased
+### 60. RETIRED with orchestrator v2: the unaliased V1 thread-list query
 
-`listActiveThreadRows` in `ProjectionSnapshotQuery.ts` selects two fork columns whose subqueries
-name the outer table: `CREW_ROLE_COLUMN` and `hasPendingBackgroundTask`, both
-`... = projection_threads.thread_id`. Upstream #13765 aliased that query's table
-(`FROM projection_threads threads`) for its shared `unsettledThreadsFilter`, which makes both
-references invalid: `SQLITE(1) SQL logic error` on every shell snapshot, 35 red server tests, and
-a clean typecheck. The 42nd reconcile keeps the table unaliased and passes the qualifier to the
-filter. An upstream edit that re-aliases it will fail the same way.
+`ProjectionSnapshotQuery.ts` is gone. v2's shell has no crew column; the web reads crew roles
+through `crew.list` (`apps/server/src/crew/CrewRoles.ts`).
 
 ### 61. The watch re-scan backstop is forked at startup and keeps all three steps
 
@@ -1420,22 +1176,41 @@ macOS fseventsd drops directory events under load and sets no drop flag, so the 
 keybindings and theme watchers can miss an edit indefinitely. `watchRescanBackstop.ts` re-checks
 each source every 30 s. It is forked in `serverRuntimeStartup.ts` beside the hub gauge, never inside
 a layer, for the TestClock reason under invariant 18. A reconcile must keep its three steps wired:
-`serverSettings.rescan`, `keybindings.rescan` and `environmentTheme.current`. The startup line
-`watch rescan backstop started` is asserted in
-`integration/orphanedProviderSessionStartup.integration.test.ts`; the steps themselves are not.
+`serverSettings.rescan`, `keybindings.rescan` and `environmentTheme.current`. No test asserts the
+wiring: the integration test that checked the startup line went with V1. Probe:
+`grep -cE '^ +(serverSettings|keybindings)\.rescan,|^ +environmentTheme\.current,' apps/server/src/serverRuntimeStartup.ts`
+is `3`.
 
-### 45. The manual-Effect-runner debt ceilings in `vite.config.ts` are merge-sensitive numbers
+### 62. A crewmate is marked by its branch, and every surface asks `isCrewBranch`
 
-`t3code/no-manual-effect-runtime-in-tests` permits no NET-NEW manual runners per file, via a
-per-file `maxOccurrences` ledger in `vite.config.ts`. When a merge keeps both sides' tests in one
-file, the count is the SUM and the ceiling has to be raised — the lint error names the file and
-the line, but nothing points at the ledger. The 36th reconcile: `CheckpointReactor.test.ts` went
-to 45 (fork 43 + upstream's two-arm cwd-fallback test), against upstream's ceiling of 42.
+v2's thread shell has no crew field, so a crewmate's thread is recognised by its branch,
+`crew/<taskId>` with a lowercase UUIDv4 task id. `isCrewBranch` (`packages/contracts/src/crew.ts`)
+is the one exact pattern; a user's own `crew/my-feature` does not match. Server and clients all call
+it: crew refusals (`CrewService`), push and notification silence (`WebPushRelay`,
+`useThreadCompletionNotifications`), and the checkout offers in `BranchToolbar.logic.ts` and mobile's
+`new-task-context-presentation.ts`. The last two, and their test files, are upstream's, so a
+rewrite there can drop the call and its fork-added test case together, with no conflict. Probe:
+`git grep -c 'isCrewBranch(' -- apps ':!*.test.*'` lists those 5 files, one call each, and
+`git grep -n '"crew/"' -- apps packages ':!*.test.*'` finds no ad-hoc prefix check.
 
-**This is the fork's cheapest false-red and its most expensive one to diagnose late**, because
-lint runs before tests in `pnpm verify`: a two-error lint failure cancels the entire test step, so
-the run tells you nothing about the other 10k tests. Front-load `pnpm run lint` after the last
-merge edit.
+### 63. The subagent dispatch instruction is fixed per conversation
+
+The Subagents toggle reaches a live Claude conversation only through the per-turn flag file, which
+the dispatch wrapper reads on every call (`prepareSubagentBackend` runs before the process-reuse
+check in `ClaudeAdapterV2.ts`). The dispatch INSTRUCTION is part of the system prompt, and the CLI
+replays the original prompt on `--resume` (measured 2026-10-03), so reopening the process on a
+toggle flip changes nothing. A backend key in the reuse check was tried and reverted: its mocked
+tests passed while the real CLI ignored it. Per-turn instruction delivery is an open follow-up.
+Probe: `grep -c subagentBackendKey apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts` is
+`0` (the reverted version, `e716ce3135`, gives 4).
+
+### 45. RETIRED with orchestrator v2: the manual-Effect-runner debt ceilings
+
+Upstream deleted its per-file `maxOccurrences` ledger with the V1 tests it listed. The fork's
+`vite.config.ts` still carries the block, but all 14 paths are dead (13 files no longer exist and
+`CursorProvider.test.ts` has no manual runner), so it guards nothing. What still applies: lint runs
+before tests in `pnpm verify`, and one lint error cancels the whole test step, so run
+`pnpm run lint` right after the last merge edit.
 
 ### 46. Run the gate on the PINNED Node (`^24.13.1`), not whatever `node` resolves to
 
@@ -1451,24 +1226,11 @@ test, upstream's `composerContextLegacy.test.ts` "does not replace terminal labe
 A red test in a file with a **zero-line diff against upstream** is the signature: baseline it
 against the pinned runtime before believing the merge caused it.
 
-### 48. `activitiesInOrder` memoizes by ARRAY IDENTITY; upstream's tests mutate one array
+### 48. RETIRED with orchestrator v2: the `activitiesInOrder` identity memo
 
-`apps/web/src/session-logic.ts` caches the sorted activity list in a `WeakMap` keyed by the input
-array. Its own comment states the contract: _"a caller that mutated an array and re-derived would
-see the previous order."_ Production always hands it a fresh list.
-
-Upstream's tests do not. #11433's new
-`deriveWorkLogEntries` test pushes into one array and re-derives after every push; under the fork's
-memo, every call after the first reads the FIRST snapshot, so the whole test sees one activity and
-returns zero rows. The failure reads like a broken derivation — `expected [] to have a length of
-1` — and points at fork code that is correct.
-
-When an arriving test re-derives from a mutated array, give each call its own copy
-(`deriveWorkLogEntries([...activities])`). Do not weaken the memo: it is what keeps a long
-thread's timeline from re-sorting on every render.
-
-The same shape will recur for any fork-added identity cache. The tell: a red assertion whose
-"received" value corresponds to an EARLIER state of the fixture.
+The V1 activity list and its `WeakMap` memo are gone. The lesson stays: when a fork-added identity
+cache meets an upstream test that mutates one array and re-derives, the red assertion's "received"
+value matches an EARLIER state of the fixture. Give each call its own copy; do not weaken the memo.
 
 ### 49. The General-panel catalog coverage check reads source, so a child mount looks missing
 
@@ -1482,107 +1244,62 @@ The check now also scans the sibling components the panel imports, one level dee
 negative control (`not-a-real-settings-anchor`) so a substring search over several whole files
 cannot silently start matching everything.
 
-### 18. The event hub is unbounded; every consumer of it must not be
+### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
-`apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
-**unbounded** `PubSub`. That is deliberate - the dispatch worker must never backpressure on a
-slow reader - and it is exactly why every consumer needs its own bound. Two confirmed OOM
-crash-loops came from this hub, and each fix is a separate piece that a merge can revert on its
-own:
+On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per
+filtered event type (`apps/server/src/orchestration-v2/EventSink.ts`), and
+`OrchestrationEventStore`'s `committedEvents`, which feeds the shell. Unbounded is deliberate:
+a write must never backpressure on a reader. Two OOM crash-loops on the old engine came from a
+reader that stopped taking, so each reader needs its own bound.
 
-- **There is exactly one eager accessor, `subscribeDomainEventsLossless`, and it is unbounded.**
-  A bounded sibling, `subscribeDomainEvents`, used to sit beside it for WebSocket callers, backed
-  by `boundedSubscriberStream` and `T3CODE_WS_SUBSCRIBER_BUFFER`. It was **removed in a standalone
-  cleanup after the 31st reconcile**: `ws.ts` had already moved to `makeLiveStreamBudget`
-  (invariant 31), leaving the bounded accessor with **zero production callers** while it went on
-  attracting reactors by mistake - `d2bb199d4` (the 112-commit merge) put `ProviderCommandReactor`
-  on it, and the 31st reconcile brought `ThreadPullRequestReactor` in on it. Both were caught by
-  review, neither by a test.
+- **WebSocket readers go through `LiveStreamBudget`.** `EventSink.stream({ bounded: true })` and
+  `streamProjectedApplicationEvents` subscribe, drain eagerly, and charge every retained event to
+  a 1,000-item / 8 MiB budget that fails the stream on overflow; the client resubscribes from its
+  last sequence. `subscribeThread` and `subscribeArchivedShell` reach the sink
+  through `OrchestratorV2.streamStoredEventsFrom`, which is the one place that passes
+  `bounded: true`; `subscribeShell` takes `streamProjectedApplicationEvents`. What must not come
+  back is a WS path on the plain `stream()` form, `streamStoredEventsFrom` without `bounded`, or
+  an offer into the thread coalescer that skips `budget.retain`. Probe:
+  `grep -c 'eventSink.stream({ ...input, bounded: true })' apps/server/src/orchestration-v2/Orchestrator.ts`
+  is `1`. Tests, each seen red under its mutant:
+  - `FoundationPersistence.test.ts` "drops a bounded subscriber that stops taking live events":
+    the sink's bounded form on a live hub, a subscriber that takes one event and never pulls again.
+  - `Orchestrator.control-reads.test.ts` "fails a streamStoredEventsFrom reader that stops taking
+    live events": the same stall through the orchestrator. Removing `bounded: true` fails it on an
+    assertion ("hub still holds 1001 events") rather than the test timeout.
+  - `LiveStreamBudget.test.ts`: the budget alone - a slow subscriber whose unacknowledged tail
+    fills, and replay batches counted toward the item and byte limits.
+- **Internal workers use the unbounded form on purpose** (`streamDomainEvents`, or
+  `stream({ eventType })`). A worker must not lose events, so it is not budgeted; instead its
+  handler must take promptly and hand work to a `DrainableWorker` carrying ids, never event
+  bodies. Today: PullRequestSyncReactor, ThreadPullRequestService, ThreadSettlementService,
+  AgentAwarenessRelay, StorageCleanup, WebPushRelay. WebPushRelay's handler classifies the event
+  and enqueues a run or request id; its sends (up to 15 s each) run on the worker. Test:
+  `push/WebPushRelay.test.ts` "keeps draining the domain-event hub while every push send is
+  stuck". The one inline-blocking reader is the Orchestrator's
+  terminal-run handler, which subscribes to `run.updated` only, so a wait backs up only those.
+  A new worker with a slow inline handler pins every event from its position on.
+- **`groupedWithin` is banned in new code** (`no-unsafe-stream-aggregate`). On the leaking
+  effect build its idle schedule loop pins continuation frames until the next element arrives
+  (beta.102: +3.5 MB in 4 s at 1,000 idle ticks/s; ~79 MB/h per idle 50 ms subscription). Three
+  upstream sites in `ws.ts` keep a suppression: measured flat on the pinned 4.0.0-rc.115
+  (+0.03 MB idle probe; a 50 ms window plateaus). Re-measure with `scripts/idle-aggregate-probe.ts`
+  on any effect bump. Use the idle probe: a bursty source hides the leak, because each element
+  releases the frames.
+- **The health gauge belongs to the running server, not the layer.** `EventSinkV2.liveBacklog`
+  sums `PubSub.size` over the main hub and every per-type hub (what the slowest unbounded reader
+  has not taken). It reaches startup as `ThreadManagementService.liveEventBacklog`, because
+  `EventSinkV2` is provided only inside `runtimeLayer.ts` and a second instance would gauge an
+  empty hub. `serverRuntimeStartup.ts` logs it with heap and RSS as `orchestration.hub.gauge`
+  (`T3CODE_HUB_GAUGE_MS`, default 60 s, `0` disables). An interval fiber built inside a layer
+  starts at the test clock's epoch and replays once per interval when a test warps the clock;
+  that wedged an auto-settle test for 120 s on the old engine. Test: `FoundationPersistence.test.ts`
+  "reports live events an unbounded subscriber has not taken yet", with a thread reader on the
+  main hub and an `eventType` reader on its own hub.
 
-  **The `Lossless` suffix is a live merge tripwire, not a leftover contrast.** Upstream has its own
-  `subscribeDomainEvents` **today**: `git show origin/main:apps/server/src/orchestration/Layers/OrchestrationEngine.ts`
-  defines it, upstream has no `Lossless` accessor at all, and upstream's `ProviderCommandReactor`
-  calls it. Every reconcile therefore arrives carrying call sites named `subscribeDomainEvents`.
-  Measured by replaying upstream's exact call site into both trees:
-
-  ```
-  PARENT (bounded sibling present) + upstream's line   typecheck exit 0, 0 errors
-  HEAD   (sibling deleted)         + upstream's line   typecheck exit 1
-    ProviderCommandReactor.ts: error TS2339: Property 'subscribeDomainEvents'
-      does not exist on type 'OrchestrationEngineShape'
-  ```
-
-  That is what the deletion buys: a merge that used to silently put a droppable buffer in front of
-  a reactor is now a compile error. Do **not** rename `Lossless` away to match upstream - that
-  re-opens exactly this door, and upstream's accessor is unbounded, so a later upstream change to
-  it would land unreviewed.
-
-  The 38th reconcile fired the tripwire as designed: upstream moved `ThreadSettlementReactor`,
-  `PullRequestSyncReactor` and the new `storageCleanup` onto `subscribeDomainEvents`, typecheck
-  named all three plus two test stubs, and each now takes `subscribeDomainEventsLossless`.
-
-  **Probing this invariant.** The compiler now enforces the half that mattered: there is no bounded
-  accessor left to bind to. For the rest, grep non-test server source for `subscribeDomainEvents`
-  without `Lossless`. On the tree this ships with it matches **exactly one line** - the comment in
-  `OrchestrationEngine.ts` that records why the name is a tripwire. Any _other_ hit is an upstream
-  call site that arrived in a merge.
-
-  Read the matched lines, never the count, and note that the expected count is one rather than
-  zero: an earlier wording here said it "should match nothing", which the fork's own comment
-  falsifies on every run. That is the same comment-matches-the-probe trap that made three
-  invariant probes flag a correct tree in reconcile 22. An earlier wording still ("only the
-  definition and the WS layer may match") had gone **stale, not vacuous**: it would still have
-  caught a mis-wired reactor, but `ws.ts` had stopped matching and two other files matched that
-  the wording did not permit.
-
-  **Known gap:** deleting `boundedSubscriberStream.test.ts` removed the only test that drove a
-  stalled consumer against a **live hub**. The unit-level bound is covered - the single test in
-  `LiveStreamBudget.test.ts` retains to `maxItems`, deliberately never resumes the consumer, and
-  asserts the next `retain` fails - but there is still no end-to-end `subscribeShell` /
-  `subscribeThread` overflow test. The accessor invariant is structural; the bound is covered in
-  isolation and not at the seam.
-
-  (An earlier version of this paragraph said that file held "two `it` blocks, neither of which is
-  overflow-under-stall". It has one, and that one is overflow-under-stall. Corrected after being
-  measured - in the section rewritten to remove exactly this kind of claim.)
-
-- **`ws.ts` bounds through `makeLiveStreamBudget`** (see invariant 31). Upstream's coalescer
-  (#8368) was `Queue.unbounded` at _both_ ends - the precise shape that OOM-ed this server - and
-  the fork chained it into a `Queue.dropping`. Upstream has since put every offer behind a budget
-  that caps retained items **and bytes** and fails the stream on overflow, so the fork's chain was
-  dropped at the 30th reconcile in favour of it. What must not come back is an offer path into the
-  coalescer that skips `budget.retain` / `budget.check`: the queue itself is still unbounded, and
-  the budget is the only thing standing between a stalled socket and the heap.
-- **`groupedWithin`/`aggregate`/`aggregateWithin`/`aggregateWithinEither` are banned in new
-  code** by `oxlint-plugin-t3code/rules/no-unsafe-stream-aggregate.ts`; the replacement is
-  `batchWithinStackSafe`. They lower to a non-stack-safe `stepToBuffer` schedule loop that pins
-  continuation frames on every _idle_ tick (~1.9 GB/hr, crash every 13-14h). That was the
-  confirmed heap burst - not the `Stream.take` recycle first blamed and later falsified. Note
-  what is NOT true: no patch in `patches/` touches `Stream` any more, so the two allowlisted
-  `ws.ts` shell-coalescing sites are safe by virtue of the **pinned effect version alone**.
-  Re-measure with `scripts/idle-aggregate-probe.ts` on any effect bump.
-
-- **Why reactors need the eager accessor at all.** Moving `ProviderCommandReactor` off
-  `streamDomainEvents` onto an eager accessor was a real fix - its subscription then exists before
-  `start()` returns; reverting it locally took the reactor suite from 3 failures to 18 and a 235s
-  run. The mistake was only _which_ eager accessor. Any new internal reactor takes
-  `subscribeDomainEventsLossless`.
-
-  A side effect worth knowing when writing tests: with the subscription eager but the _enqueue_
-  still happening on a separate stream fiber, `reactor.drain` is **not** a barrier for work
-  triggered by a `dispatch` that just returned - the drain can find an empty worker queue and
-  return before the event has been enqueued at all. Wait on the observable outcome first (the
-  `waitFor` yield-loop in `ProviderCommandReactor.test.ts`), then drain if the assertion also needs
-  the unit's follow-up dispatch to have landed.
-
-**The health gauge belongs to the running server, not to the layer.** It reads
-`OrchestrationEngineShape.hubBacklog` and is forked in `serverRuntimeStartup.ts`
-(`T3CODE_HUB_GAUGE_MS`, default 60s, `0` disables). It lived inside the engine layer for one
-release and had to move: an interval fiber constructed with the layer starts at the _test_ clock's
-epoch, so any test that warps the clock to a real timestamp replays the gauge once per interval
-across the whole span. That wedged upstream #8600's auto-settle test at the full 120s timeout
-while the same test passed in 78ms with the gauge disabled. Anything else that wants a timer
-inside this layer inherits the same trap.
+Known gap: WebSocket terminal events (`subscribeTerminalEvents`) use `Stream.callback`'s default
+unbounded buffer, so a socket that stops acknowledging pins terminal output. Upstream code, not
+a hub reader; unaddressed.
 
 ## Rejecting an upstream feature: its own lines land outside the markers too
 

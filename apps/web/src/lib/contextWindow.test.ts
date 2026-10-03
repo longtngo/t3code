@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
-
+import * as DateTime from "effect/DateTime";
 import {
   type ContextWindowSnapshot,
   deriveCompactionMarker,
@@ -9,101 +8,132 @@ import {
   formatContextWindowTokens,
 } from "./contextWindow";
 
-function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
-  return {
-    id: EventId.make(id),
-    tone: "info",
-    kind,
-    summary: kind,
-    payload,
-    turnId: TurnId.make("turn-1"),
-    createdAt: "2026-03-23T00:00:00.000Z",
-  };
-}
-
-describe("contextWindow", () => {
-  it("derives the latest valid context window snapshot", () => {
+describe("V2 context window presentation", () => {
+  it("uses retained compaction token data when available", () => {
     const snapshot = deriveLatestContextWindowSnapshot([
-      makeActivity("activity-1", "context-window.updated", {
-        usedTokens: 1000,
-      }),
-      makeActivity("activity-2", "tool.started", {}),
-      makeActivity("activity-3", "context-window.updated", {
-        usedTokens: 14_000,
-        maxTokens: 258_000,
-        compactsAutomatically: true,
-        autoCompactThreshold: 200_000,
-        // Carried because it is the only field that says whether compaction is
-        // ARMED - the provider reports "auto" for the windows it refuses to
-        // compact, while the two fields above read the same either way.
-        autoCompactSource: "settings",
-      }),
+      {
+        item: {
+          id: "compaction-1" as never,
+          threadId: "thread-1" as never,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:00.000Z"),
+          type: "compaction",
+          driver: null,
+          beforeTokenCount: 10_000,
+          afterTokenCount: 2_000,
+        },
+      },
     ]);
-
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.usedTokens).toBe(14_000);
-    expect(snapshot?.totalProcessedTokens).toBeNull();
-    expect(snapshot?.maxTokens).toBe(258_000);
-    expect(snapshot?.compactsAutomatically).toBe(true);
-    expect(snapshot?.autoCompactThreshold).toBe(200_000);
-    expect(snapshot?.autoCompactSource).toBe("settings");
+    expect(snapshot?.usedTokens).toBe(2_000);
+    expect(snapshot?.totalProcessedTokens).toBe(10_000);
   });
 
-  it("leaves the auto-compaction source unset when the provider omits it", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
-      makeActivity("activity-1", "context-window.updated", {
-        usedTokens: 14_000,
-        compactsAutomatically: true,
-      }),
-    ]);
-
-    expect(snapshot?.autoCompactSource).toBeNull();
-  });
-
-  it("ignores malformed payloads", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
-      makeActivity("activity-1", "context-window.updated", {}),
-    ]);
-
-    expect(snapshot).toBeNull();
-  });
-
-  it("keeps valid zero-usage snapshots", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
-      makeActivity("activity-1", "context-window.updated", {
-        usedTokens: 0,
-        maxTokens: 100_000,
-      }),
-    ]);
+  it("prefers current provider usage and preserves ACP cost", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([], undefined, {
+      contextUsage: {
+        usedTokens: 2_500,
+        maxTokens: 10_000,
+        cost: { amount: 0.42, currency: "USD" },
+      },
+      updatedAt: DateTime.makeUnsafe("2026-08-23T00:00:00.000Z"),
+    });
 
     expect(snapshot).toMatchObject({
-      usedTokens: 0,
-      maxTokens: 100_000,
-      remainingTokens: 100_000,
-      usedPercentage: 0,
-      remainingPercentage: 100,
+      usedTokens: 2_500,
+      maxTokens: 10_000,
+      remainingTokens: 7_500,
+      usedPercentage: 25,
+      cost: { amount: 0.42, currency: "USD" },
     });
   });
 
-  it("formats compact token counts", () => {
-    expect(formatContextWindowTokens(999)).toBe("999");
-    expect(formatContextWindowTokens(1400)).toBe("1.4k");
-    expect(formatContextWindowTokens(14_000)).toBe("14k");
-    expect(formatContextWindowTokens(258_000)).toBe("258k");
+  it("carries the provider's auto-compaction source, and leaves it unset when omitted", () => {
+    // FORK: the only field that says whether compaction is ARMED - the provider
+    // reports "auto" for the windows it refuses to compact.
+    const updatedAt = DateTime.makeUnsafe("2026-08-23T00:00:00.000Z");
+    const armed = deriveLatestContextWindowSnapshot([], undefined, {
+      contextUsage: { usedTokens: 14_000, maxTokens: 258_000, autoCompactSource: "settings" },
+      updatedAt,
+    });
+    expect(armed?.autoCompactSource).toBe("settings");
+    const silent = deriveLatestContextWindowSnapshot([], undefined, {
+      contextUsage: { usedTokens: 14_000 },
+      updatedAt,
+    });
+    expect(silent?.autoCompactSource).toBeNull();
   });
 
-  it("includes total processed tokens when available", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
-      makeActivity("activity-1", "context-window.updated", {
-        usedTokens: 81_659,
-        totalProcessedTokens: 748_126,
-        maxTokens: 258_400,
-        lastUsedTokens: 81_659,
-      }),
-    ]);
+  it("formats compact token values", () => {
+    expect(formatContextWindowTokens(1_500)).toBe("1.5k");
+  });
+});
 
-    expect(snapshot?.usedTokens).toBe(81_659);
-    expect(snapshot?.totalProcessedTokens).toBe(748_126);
+describe("live provider-turn usage (#8144)", () => {
+  it("prefers the provider's live report over compaction items", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([], {
+      usedTokens: 42_000,
+      maxTokens: 200_000,
+      inputTokens: 40_000,
+      outputTokens: 2_000,
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    });
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.usedTokens).toBe(42_000);
+    expect(snapshot?.maxTokens).toBe(200_000);
+    expect(snapshot?.remainingTokens).toBe(158_000);
+    expect(snapshot?.usedPercentage).toBe(21);
+  });
+
+  it("carries the thread's compaction facts onto a live report of the same window", () => {
+    // FORK (invariant 12): Claude's live report has no compaction facts; the
+    // turn-end getContextUsage snapshot on the provider thread does.
+    const providerThread = {
+      contextUsage: {
+        usedTokens: 500_000,
+        maxTokens: 1_000_000,
+        compactsAutomatically: true,
+        autoCompactThreshold: 967_000,
+        autoCompactSource: "settings",
+      },
+      updatedAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
+    };
+    const sameWindow = deriveLatestContextWindowSnapshot(
+      [],
+      { usedTokens: 541_000, maxTokens: 1_000_000, updatedAt: "2026-08-27T00:01:00.000Z" },
+      providerThread,
+    );
+    expect(sameWindow).toMatchObject({
+      usedTokens: 541_000,
+      autoCompactThreshold: 967_000,
+      autoCompactSource: "settings",
+    });
+    // A threshold is an absolute count for its window: after a model switch it
+    // would draw the marker for the wrong model, so it is dropped.
+    const otherWindow = deriveLatestContextWindowSnapshot(
+      [],
+      { usedTokens: 41_000, maxTokens: 200_000, updatedAt: "2026-08-27T00:02:00.000Z" },
+      providerThread,
+    );
+    expect(otherWindow).toMatchObject({ autoCompactThreshold: null, autoCompactSource: null });
+  });
+
+  it("handles a report without a known context window", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([], {
+      usedTokens: 42_000,
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    });
+    expect(snapshot?.maxTokens).toBeNull();
+    expect(snapshot?.usedPercentage).toBeNull();
   });
 });
 

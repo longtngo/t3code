@@ -1,19 +1,16 @@
 /**
  * Task list right-panel surface: the thread's primary task list expanded at the top, earlier
- * turns' lists collapsed below it. Reuses the composer drawer's step rows so the two readings
- * never disagree.
+ * runs' lists collapsed below it. Reuses the composer drawer's step rows so the two readings
+ * never disagree. Data comes from `deriveTaskListView` over the thread's v2 plans.
  *
- * Props arrive separately rather than as one `TaskListState`, which is a new object every render
- * and would defeat `memo`. Relative times follow the minute clock; nothing animates continuously.
+ * Relative times follow the minute clock; nothing animates continuously.
  */
 import { ChevronRightIcon, ListTodoIcon } from "lucide-react";
 import { memo } from "react";
 
-import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { cn } from "~/lib/utils";
-import type { TaskListState } from "../hooks/useTaskList";
 import { useNowMinute } from "../hooks/useNowMinute";
 import type { ActivePlanState } from "../session-logic";
 import { formatRelativeTimeLabel } from "../timestampFormat";
@@ -22,8 +19,8 @@ import { TaskSegments, TaskStepList } from "./chat/TaskStepList";
 import {
   taskListCurrentStep,
   taskListHeaderState,
-  taskListPanelState,
   type TaskListHeaderChip,
+  type TaskListView,
 } from "./TaskListPanel.logic";
 
 /**
@@ -57,25 +54,12 @@ function StepList({ plan }: { plan: ActivePlanState }) {
   );
 }
 
-function PanelMessage({
-  title,
-  detail,
-  onRetry,
-}: {
-  title: string;
-  detail?: string;
-  onRetry?: (() => void) | undefined;
-}) {
+function PanelMessage({ title, detail }: { title: string; detail?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
       <ListTodoIcon aria-hidden className="size-6 text-muted-foreground/60" />
       <p className="text-sm font-medium">{title}</p>
       {detail ? <p className="max-w-56 text-xs text-muted-foreground">{detail}</p> : null}
-      {onRetry ? (
-        <Button size="xs" variant="outline" onClick={onRetry}>
-          Retry
-        </Button>
-      ) : null}
     </div>
   );
 }
@@ -123,7 +107,7 @@ function TaskListHeader({
   );
 }
 
-/** One earlier turn's task list, collapsed to its first step, final fraction, and age. */
+/** One earlier run's task list, collapsed to its first step, final fraction, and age. */
 const TaskHistoryGroup = memo(function TaskHistoryGroup({
   group,
   nowMs,
@@ -164,35 +148,18 @@ export const TaskListPanel = memo(function TaskListPanel({
   primary,
   primaryKind,
   history,
-  historyStatus,
-  onRetry,
-  latestTurnRunning,
+  latestRunActive,
 }: {
-  primary: TaskListState["primary"];
-  primaryKind: TaskListState["primaryKind"];
-  history: TaskListState["history"];
-  historyStatus: TaskListState["historyStatus"];
-  onRetry: () => void;
-  /** Whether the thread's latest turn is still running; only the latest turn's plan can be live. */
-  latestTurnRunning: boolean;
+  primary: TaskListView["primary"];
+  primaryKind: TaskListView["primaryKind"];
+  history: TaskListView["history"];
+  /** Whether the thread's latest run is still working; only its own list can be live. */
+  latestRunActive: boolean;
 }) {
   const nowMinute = useNowMinute();
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
-  const state = taskListPanelState(primary, historyStatus);
 
-  if (state.kind === "unavailable") {
-    return (
-      <PanelMessage
-        title="Task history unavailable"
-        detail="This thread's task lists could not be loaded."
-        onRetry={state.canRetry ? onRetry : undefined}
-      />
-    );
-  }
-  if (state.kind === "loading") {
-    return <PanelMessage title="Loading task lists…" />;
-  }
-  if (state.kind === "empty" || primary === null) {
+  if (primary === null) {
     return (
       <PanelMessage
         title="No task list yet"
@@ -201,7 +168,7 @@ export const TaskListPanel = memo(function TaskListPanel({
     );
   }
 
-  const chip = taskListHeaderState(primary, primaryKind, latestTurnRunning, nowMs);
+  const chip = taskListHeaderState(primary, primaryKind, latestRunActive, nowMs);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TaskListHeader primary={primary} chip={chip} />
@@ -215,23 +182,12 @@ export const TaskListPanel = memo(function TaskListPanel({
               </div>
               {history.map((group) => (
                 <TaskHistoryGroup
-                  key={group.turnId ?? group.createdAt}
+                  key={group.runId ?? group.createdAt}
                   group={group}
                   nowMs={nowMs}
                 />
               ))}
-              <p className="px-1.5 pt-1 text-2xs text-muted-foreground/70">
-                Earlier turns are kept for 3 hours.
-              </p>
             </section>
-          ) : null}
-          {state.historyFailed ? (
-            <div className="flex items-center gap-2 px-1.5 pt-2 text-xs text-muted-foreground">
-              <span className="min-w-0 flex-1">Couldn't load earlier task lists</span>
-              <Button size="xs" variant="outline" onClick={onRetry}>
-                Retry
-              </Button>
-            </div>
           ) : null}
         </div>
       </ScrollArea>

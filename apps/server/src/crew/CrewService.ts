@@ -4,12 +4,18 @@
  * The authority checks live here rather than in the MCP tools, because every one
  * of them keys on `McpInvocationContext.threadId` — server-resolved and absent
  * from every tool schema — and on rows, not on anything the caller supplies. The
- * tools are a thin schema-and-message layer over these five methods.
+ * tools are a thin schema-and-message layer over these methods.
  *
- * None of this is a security boundary. A crewmate runs `bypassPermissions` with
- * Bash and direct write access to `state.sqlite`, so the cap is enforced by a
- * table its own subject can edit. These are controls against crew's own code and
- * honest mistakes.
+ * On orchestrator v2 crew owns only its rows and its policy. The machinery under
+ * it is upstream's: a crewmate is launched by `ThreadLaunchService` (worktree,
+ * setup script, first message), reports travel as ordinary v2 messages through
+ * `ThreadManagementService` (see `CrewSweep`), and teardown is upstream operations
+ * in a fixed order (see `CrewTeardown`).
+ *
+ * None of this is a security boundary. A crewmate runs with full access, Bash and
+ * direct write access to the state database, so the cap is enforced by a table its
+ * own subject can edit. These are controls against crew's own code and honest
+ * mistakes.
  *
  * @module crew/CrewService
  */
@@ -25,7 +31,6 @@ import {
   CrewReportRefusedError,
   CrewTaskId,
   CrewTaskNotFoundError,
-  CrewTaskNotFoundError as CrewTaskNotFound,
   MessageId,
   ProviderInstanceId,
   ThreadId,
@@ -33,33 +38,33 @@ import {
   type CrewReportState,
   type CrewTask,
   type CrewTaskView,
-  type ModelSelection,
-  type OrchestrationThreadShell,
+  crewBranchFor,
+  isCrewBranch,
+  type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
-import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerConfig } from "../config.ts";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CrewLog } from "./CrewLog.ts";
 import { CrewRepository } from "./CrewRepository.ts";
 import {
   byteLength,
   crewEnabled,
-  destinationOf,
   isNoteWithinBound,
   isPromptWithinBound,
   isWritableReportState,
   normalizeNote,
   resolveCrewMaxConcurrentTasks,
 } from "./CrewPolicy.ts";
+import { makeCrewTeardown } from "./CrewTeardown.ts";
 import { derive } from "./derive.ts";
 
 export interface CrewDispatchInput {
@@ -83,10 +88,8 @@ export interface CrewStatusInput {
 /**
  * Every method takes the calling thread explicitly.
  *
- * It used to be read once from a `CrewCallerThread` context service at
- * construction, which pinned a `CrewService` instance to a single thread. That
- * is unmountable: an MCP tool call's thread comes from `McpInvocationContext`
- * and differs per invocation, so one registration-time instance would attribute
+ * An MCP tool call's thread comes from `McpInvocationContext` and differs per
+ * invocation, so a service pinned to one thread at construction would attribute
  * every crew call to whichever thread happened to build it.
  *
  * Deliberately a separate argument rather than a field on the tool input types:
@@ -128,108 +131,79 @@ export interface CrewServiceShape {
     CrewTaskNotFoundError | CrewAlreadyAnsweredError | CrewAnswerRefusedError
   >;
 
-  /** Slots currently held. Exposed so the acceptance run can read it directly. */
-  readonly openSlots: (
-    callerThreadId: ThreadId,
-  ) => Effect.Effect<{ readonly open: number; readonly limit: number }>;
+  /** Slots currently held. */
+  readonly openSlots: () => Effect.Effect<{ readonly open: number; readonly limit: number }>;
 }
 
 export class CrewService extends Context.Service<CrewService, CrewServiceShape>()(
   "t3/crew/CrewService",
 ) {}
 
-/**
- * Why a hook's failure has to be expressible.
- *
- * The caller wraps every teardown step in a `catchCause` that records
- * `crew.teardown.step-failed.<n>`. With an uninhabited error channel those codes
- * are unreachable by construction, so §9 would promise log records no path could
- * emit — and a hook that swallows its own failure is indistinguishable from one
- * that worked, which is the state teardown most needs to be able to report.
- *
- * Crew's own error type rather than the terminal and provider error unions, so
- * this interface does not have to name types from the layers it deliberately
- * cannot depend on.
- */
-export class CrewTeardownHookError extends Schema.TaggedError<CrewTeardownHookError>()(
-  "CrewTeardownHookError",
-  { step: Schema.Number, threadId: Schema.String },
-) {
-  override get message() {
-    return `Crew teardown step ${this.step} failed for thread ${this.threadId}.`;
-  }
-}
-
-/** Teardown hooks the service cannot reach directly without a dependency cycle. */
-export interface CrewTeardownHooks {
-  readonly clearRecoveryRecord: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
-  readonly revokeActiveMcpThread: (
-    threadId: ThreadId,
-  ) => Effect.Effect<void, CrewTeardownHookError>;
-  readonly closeTerminals: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
-  readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, CrewTeardownHookError>;
-}
-
-export class CrewTeardownHooksService extends Context.Service<
-  CrewTeardownHooksService,
-  CrewTeardownHooks
->()("t3/crew/CrewService/CrewTeardownHooksService") {}
-
-/** Hooks that do nothing, for wiring that has no provider attached yet. */
-export const CrewTeardownHooksNoop = Layer.succeed(CrewTeardownHooksService, {
-  clearRecoveryRecord: () => Effect.void,
-  revokeActiveMcpThread: () => Effect.void,
-  closeTerminals: () => Effect.void,
-  stopSession: () => Effect.void,
-});
-
 export interface CrewServiceOptions {
   readonly env?: Record<string, string | undefined>;
-  /** Directory worktrees are created under. Defaults beside the workspace root. */
-  readonly worktreeRoot?: string;
 }
 
-const threadIsDeliverable = (
-  shell: OrchestrationThreadShell | undefined,
-): { readonly ok: true } | { readonly ok: false; readonly detail: string } => {
-  if (shell === undefined) {
-    return { ok: false, detail: "missing" };
-  }
-  if (shell.archivedAt !== null) {
-    return { ok: false, detail: "archived" };
-  }
-  return { ok: true };
+/** Missing, deleted and archived threads cannot receive a crew report. */
+export const deliverabilityOf = (
+  shell: OrchestrationV2ThreadShell | null,
+): { readonly ok: true } | { readonly ok: false; readonly detail: string } =>
+  shell === null
+    ? { ok: false, detail: "missing" }
+    : shell.deletedAt !== null
+      ? { ok: false, detail: "deleted" }
+      : shell.archivedAt !== null
+        ? { ok: false, detail: "archived" }
+        : { ok: true };
+
+/** The panel's and `crew_status`'s row, from a task, its reports and its thread shell. */
+export const crewTaskView = (
+  task: CrewTask,
+  reports: ReadonlyArray<CrewReport>,
+  shell: OrchestrationV2ThreadShell | null,
+): CrewTaskView => {
+  // The sublabel skips `answer` rows: those are the bridge's replies, not the
+  // crewmate's output, and showing one as the task's latest state would report
+  // the operator's own words back to them.
+  const lastReport = reports.toReversed().find((report) => report.state !== "answer");
+  return {
+    taskId: task.taskId,
+    parentThreadId: task.parentThreadId,
+    crewThreadId: task.crewThreadId,
+    projectId: task.projectId,
+    branch: task.branch,
+    worktreePath: task.worktreePath,
+    provider: task.provider,
+    status: task.status,
+    rendering: derive(task, {
+      status: shell?.status ?? null,
+      hasPendingRuntimeRequest: shell !== null && shell.pendingRuntimeRequest !== null,
+      hasActionableProposedPlan: shell?.hasActionableProposedPlan === true,
+    }),
+    lastReportState: (lastReport?.state ?? null) as CrewReportState | null,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    reports,
+  };
 };
+
+/** Ancestors `crew_dispatch` walks looking for a crewmate; real chains are a few deep. */
+const MAX_LINEAGE_DEPTH = 32;
 
 const makeCrewService = (options?: CrewServiceOptions) =>
   Effect.gen(function* () {
     const repository = yield* CrewRepository;
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const orchestrationEngine = yield* OrchestrationEngineService;
-    const gitWorkflow = yield* GitWorkflowService;
+    const threads = yield* ThreadManagementService;
+    const launches = yield* ThreadLaunchService;
     const serverSettings = yield* ServerSettingsService;
+    const { worktreesDir } = yield* ServerConfig;
     const crewLog = yield* CrewLog;
-    const hooks = yield* CrewTeardownHooksService;
-    const crypto = yield* Crypto.Crypto;
+    const runTeardown = yield* makeCrewTeardown;
 
     const limit = resolveCrewMaxConcurrentTasks(options?.env ?? process.env);
-
     const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-    /**
-     * `randomUUIDv4` carries a `PlatformError`. Crew has no useful recovery from a
-     * failed UUID draw, and widening four public error unions for it would push
-     * that non-choice onto every caller — so it dies here instead.
-     */
-    const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
-
-    const commandId = (tag: string) =>
-      uuid.pipe(Effect.map((value) => CommandId.make(`crew:${tag}:${value}`)));
 
     const shellOf = (threadId: ThreadId) =>
-      projectionSnapshotQuery.getThreadShellById(threadId).pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      );
+      threads.getThreadShell(threadId).pipe(Effect.catchCause(() => Effect.succeed(null)));
 
     /**
      * `nested` is computed over rows of **every** status, not just open ones.
@@ -240,6 +214,48 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         Effect.map(Option.isSome),
         Effect.catchCause(() => Effect.succeed(false)),
       );
+
+    /** The branch is a crewmate's: the exact `crew/<taskId>` shape AND a crew row has it. */
+    const isCrewmateBranch = (branch: string | null) =>
+      isCrewBranch(branch)
+        ? repository.listAllTasks().pipe(
+            Effect.map((tasks) => tasks.some((task) => task.branch === branch)),
+            Effect.catchCause(() => Effect.succeed(false)),
+          )
+        : Effect.succeed(false);
+
+    /**
+     * A thread a crewmate created through upstream's own tools (`delegate_task`,
+     * `create_threads`, a fork) has no crew row of its own, so the row check alone lets it
+     * dispatch. Every one of those copies the creator's branch, and delegated and forked
+     * threads also record their parent in `lineage`; either, confirmed by a crew row,
+     * marks the caller as inside a crewmate. A user's own `crew/my-feature` is not refused.
+     *
+     * Accepted evasions, not closed: a chain deeper than `MAX_LINEAGE_DEPTH`, and a thread
+     * a crewmate created with no lineage whose branch was then changed — both need an agent
+     * deliberately working around crew, and crew's cap still bounds what it can start.
+     */
+    const descendsFromCrewmate = (caller: OrchestrationV2ThreadShell) =>
+      Effect.gen(function* () {
+        if (yield* isCrewmateBranch(caller.branch)) {
+          return true;
+        }
+        let parentId = caller.lineage.parentThreadId;
+        for (let depth = 0; parentId !== null && depth < MAX_LINEAGE_DEPTH; depth += 1) {
+          if (yield* isCrewmate(parentId)) {
+            return true;
+          }
+          const parent = yield* shellOf(parentId);
+          if (parent === null) {
+            return false;
+          }
+          if (yield* isCrewmateBranch(parent.branch)) {
+            return true;
+          }
+          parentId = parent.lineage.parentThreadId;
+        }
+        return false;
+      });
 
     const refuseDispatch = (error: CrewDispatchRefusedError, callerThreadId: ThreadId) =>
       crewLog
@@ -254,20 +270,9 @@ const makeCrewService = (options?: CrewServiceOptions) =>
       Effect.gen(function* () {
         yield* crewLog.record("crew.tool.invoked.crew_dispatch", { threadId: callerThreadId });
 
-        /**
-         * Both settings this dispatch needs, in one read.
-         *
-         * Read per call rather than at construction, so the Settings toggle
-         * takes effect on the next dispatch with no restart. `getRawSettings`
-         * because both fields are plain booleans — `getSettings` materializes a
-         * secret-store read per sensitive provider env var, and its own doc says
-         * not to call it on a hot path.
-         *
-         * Fails closed as a pair. A settings read that fails now refuses with
-         * `disabled` rather than `browser-access`, because the master switch is
-         * checked first; either way the dispatch is refused and nothing is
-         * created.
-         */
+        // Both settings in one read, per call, so the Settings toggle takes effect on
+        // the next dispatch with no restart. Fails closed as a pair; the master switch
+        // is checked first so a failed read refuses as `disabled`.
         const settings = yield* serverSettings.getRawSettings.pipe(
           Effect.map((value) => ({
             enabled: crewEnabled(value),
@@ -276,8 +281,6 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           Effect.catchCause(() => Effect.succeed({ enabled: false, browserAccess: false })),
         );
 
-        // The master switch, checked first so nothing else in dispatch runs
-        // while crew is off.
         if (!settings.enabled) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "disabled" }),
@@ -303,15 +306,24 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         }
 
         const caller = yield* shellOf(callerThreadId);
-        const deliverable = threadIsDeliverable(caller);
-        if (!deliverable.ok) {
+        if (caller !== null && (yield* descendsFromCrewmate(caller))) {
           return yield* refuseDispatch(
-            new CrewDispatchRefusedError({ reason: "thread", detail: deliverable.detail }),
+            new CrewDispatchRefusedError({ reason: "nested" }),
+            callerThreadId,
+          );
+        }
+        const deliverable = deliverabilityOf(caller);
+        if (caller === null || !deliverable.ok) {
+          return yield* refuseDispatch(
+            new CrewDispatchRefusedError({
+              reason: "thread",
+              detail: deliverable.ok ? "missing" : deliverable.detail,
+            }),
             callerThreadId,
           );
         }
 
-        const provider = input.provider ?? caller!.modelSelection.instanceId;
+        const provider = input.provider ?? caller.modelSelection.instanceId;
         if (CREW_UNSUPPORTED_PROVIDERS.some((name) => provider.includes(name))) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "provider" }),
@@ -319,9 +331,8 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           );
         }
 
-        // Fail closed, matching ProviderService: an explicit "off" silently
-        // becoming "on" would violate the operator's stated choice. Checked here
-        // rather than at the read above so the refusal precedence is unchanged.
+        // Fail closed: an explicit "off" silently becoming "on" would violate the
+        // operator's stated choice. Checked here so the refusal precedence holds.
         if (!settings.browserAccess) {
           return yield* refuseDispatch(
             new CrewDispatchRefusedError({ reason: "browser-access" }),
@@ -339,33 +350,22 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           );
         }
 
-        const taskId = CrewTaskId.make(yield* uuid);
-        const crewThreadId = ThreadId.make(yield* uuid);
-        // The branch is derived from the task id, never from the prompt, so no
-        // prompt-derived text reaches a path, the panel, or a log line.
-        const branch = `crew/${taskId}`;
-        const project = yield* projectionSnapshotQuery.getProjectShellById(caller!.projectId).pipe(
-          Effect.map(Option.getOrUndefined),
-          Effect.catchCause(() => Effect.succeed(undefined)),
-        );
-        const workspaceRoot = project?.workspaceRoot ?? process.cwd();
-        const worktreePath =
-          options?.worktreeRoot === undefined
-            ? `${workspaceRoot}/.t3/crew/${taskId}`
-            : `${options.worktreeRoot}/${taskId}`;
-
+        const taskId = CrewTaskId.make(yield* randomUuidV4);
+        const crewThreadId = ThreadId.make(yield* randomUuidV4);
+        // Derived from the task id, never from the prompt, so no prompt-derived text
+        // reaches a path, the panel, or a log line. Unique by construction.
+        const branch = crewBranchFor(taskId);
+        const worktreePath = `${worktreesDir}/crew/${taskId}`;
         const createdAt = yield* nowIso;
 
-        // Reserve in a short crew_tasks-only transaction and commit before taking
-        // any other lock. crew knows the thread id first, so the row can be
-        // written before `createWorktree` — which is what makes the slot
-        // observable to a concurrent dispatch.
+        // Reserve before the launch: the row is what makes the slot observable to a
+        // concurrent dispatch, and crew knows the thread id first.
         yield* repository
           .insertTask({
             taskId,
             parentThreadId: callerThreadId,
             crewThreadId,
-            projectId: caller!.projectId,
+            projectId: caller.projectId,
             baseRef: input.baseRef ?? null,
             branch,
             worktreePath,
@@ -376,57 +376,43 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           })
           .pipe(Effect.catchCause(() => Effect.void));
 
-        // Crew never deletes a file, a directory, or a branch — not on dispatch
-        // failure, not at boot, not on teardown. A failed dispatch closes its row
-        // and leaves whatever git created for the operator to look at.
-        const setup = yield* Effect.result(
-          Effect.gen(function* () {
-            yield* gitWorkflow.pruneWorktrees({ cwd: workspaceRoot });
-            yield* gitWorkflow.createWorktree({
-              cwd: workspaceRoot,
-              refName: branch,
-              newRefName: branch,
-              ...(input.baseRef === undefined ? {} : { baseRefName: input.baseRef }),
-              path: worktreePath,
-            });
-
-            yield* orchestrationEngine.dispatch({
-              type: "thread.create",
-              commandId: yield* commandId("thread-create"),
-              threadId: crewThreadId,
-              projectId: caller!.projectId,
-              title: `Crew ${taskId.slice(0, 8)}`,
-              modelSelection: {
-                ...caller!.modelSelection,
-                ...(input.provider === undefined
-                  ? {}
-                  : { instanceId: ProviderInstanceId.make(input.provider) }),
-              } as ModelSelection,
-              runtimeMode: caller!.runtimeMode,
-              interactionMode: caller!.interactionMode,
+        // Upstream's launch provisions the worktree, runs the setup script and starts
+        // the crewmate's first run. Crew never deletes a file, a directory, or a branch:
+        // a failed launch closes its row and leaves whatever git created.
+        const launched = yield* Effect.result(
+          launches.launch({
+            commandId: CommandId.make(`crew:dispatch:${taskId}`),
+            threadId: crewThreadId,
+            projectId: caller.projectId,
+            title: `Crew ${taskId.slice(0, 8)}`,
+            modelSelection:
+              input.provider === undefined
+                ? caller.modelSelection
+                : {
+                    ...caller.modelSelection,
+                    instanceId: ProviderInstanceId.make(input.provider),
+                  },
+            runtimeMode: caller.runtimeMode,
+            interactionMode: caller.interactionMode,
+            workspaceStrategy: {
+              type: "worktree",
+              // The project's HEAD unless the bridge names a ref.
+              baseRef: input.baseRef ?? "HEAD",
               branch,
-              worktreePath,
-              createdAt,
-            });
-
-            yield* orchestrationEngine.dispatch({
-              type: "thread.turn.start",
-              commandId: yield* commandId("turn-start"),
-              threadId: crewThreadId,
-              message: {
-                messageId: MessageId.make(yield* uuid),
-                role: "user",
-                text: input.prompt,
-                attachments: [],
-              },
-              runtimeMode: caller!.runtimeMode,
-              interactionMode: caller!.interactionMode,
-              createdAt: yield* nowIso,
-            });
+              path: worktreePath,
+            },
+            initialMessage: {
+              messageId: MessageId.make(`crew:dispatch:${taskId}`),
+              senderThreadId: callerThreadId,
+              text: input.prompt,
+              attachments: [],
+            },
+            createdBy: "agent",
+            creationSource: "mcp",
           }),
         );
 
-        if (setup._tag === "Failure") {
+        if (launched._tag === "Failure") {
           yield* repository
             .closeTask({ taskId, updatedAt: yield* nowIso })
             .pipe(Effect.catchCause(() => Effect.void));
@@ -434,43 +420,16 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             taskId,
             threadId: crewThreadId,
           });
-          return yield* Effect.fail(
-            new CrewDispatchRefusedError({ reason: "thread", detail: "setup failed" }),
-          );
+          return yield* new CrewDispatchRefusedError({ reason: "thread", detail: "setup failed" });
         }
 
         return { taskId, crewThreadId, branch, worktreePath };
       });
 
-    const viewOf = (task: CrewTask, reports: ReadonlyArray<CrewReport>) =>
-      Effect.gen(function* () {
-        const shell = yield* shellOf(task.crewThreadId);
-        const lastReport = reports.toReversed().find((report) => report.state !== "answer");
-        return {
-          taskId: task.taskId,
-          parentThreadId: task.parentThreadId,
-          crewThreadId: task.crewThreadId,
-          projectId: task.projectId,
-          branch: task.branch,
-          worktreePath: task.worktreePath,
-          provider: task.provider,
-          status: task.status,
-          rendering: derive(task, {
-            session: shell?.session ?? null,
-            ...(shell === undefined
-              ? {}
-              : {
-                  hasPendingApprovals: shell.hasPendingApprovals,
-                  hasPendingUserInput: shell.hasPendingUserInput,
-                  hasActionableProposedPlan: shell.hasActionableProposedPlan,
-                }),
-          }),
-          lastReportState: (lastReport?.state ?? null) as CrewReportState | null,
-          createdAt: task.createdAt,
-          updatedAt: task.updatedAt,
-          reports,
-        } satisfies CrewTaskView;
-      });
+    const readReports = (taskId: CrewTaskId) =>
+      repository
+        .listReportsByTaskId({ taskId })
+        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
 
     const status: CrewServiceShape["status"] = (input, callerThreadId) =>
       Effect.gen(function* () {
@@ -481,45 +440,38 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
 
         // The other direction: a crewmate reading its own task and the answers
-        // addressed to it. Without this the delivery nudge is unreadable to the
-        // thread the answer was written for.
+        // addressed to it.
         const own = yield* repository
           .getTaskByCrewThreadId({ crewThreadId: callerThreadId })
           .pipe(Effect.catchCause(() => Effect.succeed(Option.none<CrewTask>())));
 
         const tasks = [...rows, ...Option.toArray(own)];
-        // Bounded output. Unbounded this returns 4 x 200 x 1 KiB = 0.78 MiB, the
-        // magnitude the coalesced wake payload was deleted for, one hop
-        // downstream.
+        // Bounded output: unbounded this is 4 x 200 x 1 KiB = 0.78 MiB per call.
         const perTask = Math.min(
           input.limit ?? CREW_STATUS_ROWS_PER_TASK,
           CREW_STATUS_ROWS_PER_TASK,
         );
 
-        const unnoted = yield* repository
-          .selectUnnoted()
-          .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
         const unnotedByTask = new Map<string, ReadonlyArray<CrewReport>>();
-        for (const report of unnoted) {
-          unnotedByTask.set(report.taskId, [...(unnotedByTask.get(report.taskId) ?? []), report]);
+        if (input.unreadOnly === true) {
+          const unnoted = yield* repository
+            .selectUnnoted()
+            .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
+          for (const report of unnoted) {
+            unnotedByTask.set(report.taskId, [...(unnotedByTask.get(report.taskId) ?? []), report]);
+          }
         }
 
         return yield* Effect.forEach(tasks, (task) =>
           Effect.gen(function* () {
-            const all = input.unreadOnly === true ? (unnotedByTask.get(task.taskId) ?? []) : [];
             const reports =
               input.unreadOnly === true
-                ? all.slice(-perTask)
+                ? (unnotedByTask.get(task.taskId) ?? []).slice(-perTask)
                 : (yield* readReports(task.taskId)).slice(-perTask);
-            return yield* viewOf(task, reports);
+            return crewTaskView(task, reports, yield* shellOf(task.crewThreadId));
           }),
         );
       });
-
-    const readReports = (taskId: CrewTaskId) =>
-      repository
-        .listReportsByTaskId({ taskId })
-        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
 
     const teardown: CrewServiceShape["teardown"] = (input, callerThreadId) =>
       Effect.gen(function* () {
@@ -539,63 +491,9 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             threadId: callerThreadId,
             taskId: input.taskId,
           });
-          return yield* Effect.fail(
-            new CrewTaskNotFound({ direction: "parent", taskId: input.taskId }),
-          );
+          return yield* new CrewTaskNotFoundError({ direction: "parent", taskId: input.taskId });
         }
-
-        /**
-         * Seven steps, close first, none latching. Steps 3-7 commute; the one
-         * ordering constraint is that step 1 runs first and step 2 precedes step
-         * 5.
-         *
-         * Step 2 does not *arm* a resurrection, it *completes* one the watchdog
-         * already armed: step 5 makes `activeTurnId` null, and the watchdog's
-         * resume branch has no archival check, so a stop already pending fires
-         * against the torn-down thread on the next sweep.
-         *
-         * Holding the slot on a `stopSession` error is what revision 11 did, and
-         * that call fails deterministically — Retry re-ran it forever and the cap
-         * reached zero. So every step is best-effort and only logs.
-         */
-        const step = <A, E>(index: number, effect: Effect.Effect<A, E>) =>
-          effect.pipe(
-            Effect.catchCause(() =>
-              crewLog.record(`crew.teardown.step-failed.${index}` as never, {
-                taskId: task.taskId,
-                threadId: task.crewThreadId,
-                step: index,
-              }),
-            ),
-          );
-
-        yield* step(1, repository.closeTask({ taskId: task.taskId, updatedAt: yield* nowIso }));
-        yield* step(2, hooks.clearRecoveryRecord(task.crewThreadId));
-        yield* step(3, hooks.revokeActiveMcpThread(task.crewThreadId));
-        yield* step(4, hooks.closeTerminals(task.crewThreadId));
-        yield* step(5, hooks.stopSession(task.crewThreadId));
-        yield* step(
-          6,
-          orchestrationEngine.dispatch({
-            type: "thread.meta.update",
-            commandId: yield* commandId("teardown-meta"),
-            threadId: task.crewThreadId,
-            branch: null,
-            worktreePath: null,
-          }),
-        );
-
-        const shell = yield* shellOf(task.crewThreadId);
-        if (shell !== undefined && shell.archivedAt === null) {
-          yield* step(
-            7,
-            orchestrationEngine.dispatch({
-              type: "thread.archive",
-              commandId: yield* commandId("teardown-archive"),
-              threadId: task.crewThreadId,
-            }),
-          );
-        }
+        yield* runTeardown(task);
       });
 
     const report: CrewServiceShape["report"] = (input, callerThreadId) =>
@@ -610,7 +508,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
           yield* crewLog.record("crew.tool.refused.crew_report.no-row", {
             threadId: callerThreadId,
           });
-          return yield* Effect.fail(new CrewTaskNotFound({ direction: "crew" }));
+          return yield* new CrewTaskNotFoundError({ direction: "crew" });
         }
 
         if (!isWritableReportState(input.state)) {
@@ -619,12 +517,12 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             taskId: task.taskId,
             state: input.state,
           });
-          return yield* Effect.fail(new CrewReportRefusedError({ reason: "bad-state" }));
+          return yield* new CrewReportRefusedError({ reason: "bad-state" });
         }
 
         const note = normalizeNote(input.note);
         if (!isNoteWithinBound(note)) {
-          return yield* Effect.fail(new CrewReportRefusedError({ reason: "note-too-large" }));
+          return yield* new CrewReportRefusedError({ reason: "note-too-large" });
         }
 
         const count = yield* repository
@@ -636,10 +534,10 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             taskId: task.taskId,
             count,
           });
-          return yield* Effect.fail(new CrewReportRefusedError({ reason: "cap", count }));
+          return yield* new CrewReportRefusedError({ reason: "cap", count });
         }
 
-        const reportId = CrewReportId.make(yield* uuid);
+        const reportId = CrewReportId.make(yield* randomUuidV4);
         yield* repository
           .insertReport({
             reportId,
@@ -663,7 +561,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
 
         const text = normalizeNote(input.text);
         if (!isNoteWithinBound(text)) {
-          return yield* Effect.fail(new CrewAnswerRefusedError({ reason: "text-too-large" }));
+          return yield* new CrewAnswerRefusedError({ reason: "text-too-large" });
         }
 
         const tasks = yield* repository
@@ -682,7 +580,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             threadId: callerThreadId,
             reportId: input.reportId,
           });
-          return yield* Effect.fail(new CrewTaskNotFound({ direction: "parent" }));
+          return yield* new CrewTaskNotFoundError({ direction: "parent" });
         }
 
         if (all.some((candidate) => candidate.replyTo === input.reportId)) {
@@ -690,10 +588,10 @@ const makeCrewService = (options?: CrewServiceOptions) =>
             threadId: callerThreadId,
             reportId: input.reportId,
           });
-          return yield* Effect.fail(new CrewAlreadyAnsweredError({ reportId: input.reportId }));
+          return yield* new CrewAlreadyAnsweredError({ reportId: input.reportId });
         }
 
-        const reportId = CrewReportId.make(yield* uuid);
+        const reportId = CrewReportId.make(yield* randomUuidV4);
         yield* repository
           .insertReport({
             reportId,
@@ -708,7 +606,7 @@ const makeCrewService = (options?: CrewServiceOptions) =>
         return reportId;
       });
 
-    const openSlots: CrewServiceShape["openSlots"] = (callerThreadId) =>
+    const openSlots: CrewServiceShape["openSlots"] = () =>
       repository.countOpenTasks().pipe(
         Effect.map((open) => ({ open, limit })),
         Effect.catchCause(() => Effect.succeed({ open: 0, limit })),
@@ -719,5 +617,3 @@ const makeCrewService = (options?: CrewServiceOptions) =>
 
 export const CrewServiceLive = (options?: CrewServiceOptions) =>
   Layer.effect(CrewService)(makeCrewService(options));
-
-export { destinationOf };

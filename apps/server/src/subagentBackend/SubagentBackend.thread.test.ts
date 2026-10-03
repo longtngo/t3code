@@ -1,19 +1,33 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds a real tmpdir HOME so the fixed on-disk flag-file path is exercised for real.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { ProviderInstanceId, type ServerSettings, ThreadId } from "@t3tools/contracts";
+import {
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import { ServerConfig, layerTest as serverConfigLayerTest } from "../config.ts";
-import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService, layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import {
+  CREDIT_BLOCK_RECONCILED,
+  MASTER_OFF_REASON,
   OFF,
   type PersistedBackend,
   readBackendFile,
@@ -25,7 +39,9 @@ import {
   writeBackendFile,
   writeThreadBackendFile,
   writeThreadBackendForSession,
+  prepareThreadBackend,
 } from "./SubagentBackend.ts";
+import { layer as liveThreadsSetLayer, SubagentLiveThreads } from "./SubagentLiveThreads.ts";
 import { threadBackendFileName } from "./ThreadBackendPath.ts";
 
 let home: string;
@@ -237,35 +253,32 @@ describe("resolveThreadBackend", () => {
   });
 });
 
-/** Registry double: every listed instance answers `listSessions` with the given thread ids,
- * except an instance whose id starts with "dead", which dies — the adapter crash the
- * per-adapter isolation exists for. */
-function registryLayer(sessions: Record<string, ReadonlyArray<string>>) {
-  const ids = Object.keys(sessions).map((id) => ProviderInstanceId.make(id));
-  return Layer.mock(ProviderAdapterRegistry)({
-    listInstances: () => Effect.succeed(ids),
-    getByInstance: (id) =>
-      Effect.succeed({
-        listSessions: () =>
-          id.startsWith("dead")
-            ? Effect.die(new Error("adapter binding mismatch"))
-            : Effect.succeed(
-                (sessions[id] ?? []).map((threadId) => ({ threadId: ThreadId.make(threadId) })),
-              ),
-      } as never),
+/** No provider publishes usage, so the credit block never applies here. */
+const noProvidersLayer = Layer.mock(ProviderRegistry)({
+  getProviders: Effect.succeed([]),
+  streamChanges: Stream.empty,
+});
+
+/** Live-thread double: the threads whose Claude process opened in this server process. */
+function liveThreadsLayer(threadIds: ReadonlyArray<string>) {
+  return Layer.mock(SubagentLiveThreads)({
+    list: Effect.succeed(threadIds.map((threadId) => ThreadId.make(threadId))),
   });
 }
 
-/** Registry double whose very first step dies — the thread fan-out crashing after the
- * global file has already been written. */
-const dyingRegistryLayer = Layer.mock(ProviderAdapterRegistry)({
-  listInstances: () => Effect.die(new Error("registry is down")),
+/** Live-thread double whose read dies — the thread fan-out crashing after the global file
+ * has already been written. */
+const dyingLiveThreadsLayer = Layer.mock(SubagentLiveThreads)({
+  list: Effect.die(new Error("live thread set is gone")),
 });
 
 /** `ServerSettingsService` double whose settings read dies, to fail a write from inside. */
 const dyingSettingsLayer = Layer.mock(ServerSettingsService)({
   getRawSettings: Effect.die(new Error("settings are unreadable")),
 });
+
+/** Base64url of 183 chars is 244 + ".json" = 249, one past the writable name length. */
+const LONG = "x".repeat(183);
 
 const cursorSettings = {
   providerInstances: {
@@ -281,13 +294,14 @@ const cursorSettings = {
 describe("thread flag files", () => {
   it.layer(NodeServices.layer)("thread flag files", (it) => {
     const withLayers = (
-      sessions: Record<string, ReadonlyArray<string>>,
+      threadIds: ReadonlyArray<string>,
       overrides: Parameters<typeof serverSettingsLayerTest>[0],
     ) =>
       Layer.mergeAll(
-        registryLayer(sessions),
+        liveThreadsLayer(threadIds),
         serverConfigLayerTest("/tmp", { prefix: "sbt-thread-" }),
         serverSettingsLayerTest(overrides),
+        noProvidersLayer,
       );
 
     it.effect("writes a 0600 file inside the threads dir, and reads it back", () =>
@@ -300,7 +314,7 @@ describe("thread flag files", () => {
         const back = yield* readThreadBackendFile(subagentThreadsDir, t1);
         expect(back.backend).toBe("cursor");
         expect(back.instanceId).toBe("cursor");
-      }).pipe(Effect.provide(withLayers({}, {}))),
+      }).pipe(Effect.provide(withLayers([], {}))),
     );
 
     it.effect("an unreadable file degrades with a reason, not a clean Off", () =>
@@ -316,7 +330,7 @@ describe("thread flag files", () => {
         yield* fs.chmod(filePath, 0o600);
         expect(back.backend).toBe("default");
         expect(back.degraded).toContain("could not be read");
-      }).pipe(Effect.provide(withLayers({}, {}))),
+      }).pipe(Effect.provide(withLayers([], {}))),
     );
 
     it.effect("refuses an over-long name instead of failing inside mkdtemp", () =>
@@ -327,34 +341,32 @@ describe("thread flag files", () => {
         );
         expect(Exit.isFailure(exit)).toBe(true);
         expect(String(exit)).toContain("ThreadBackendNameTooLongError");
-      }).pipe(Effect.provide(withLayers({}, {}))),
+      }).pipe(Effect.provide(withLayers([], {}))),
     );
 
-    it.effect("reconcileAllBackends writes every live thread and survives a dying adapter", () =>
+    it.effect("reconcileAllBackends writes every live thread and survives an unwritable one", () =>
       Effect.gen(function* () {
         yield* writeBackendFile(CURSOR);
         const { subagentThreadsDir } = yield* ServerConfig;
         yield* reconcileAllBackends();
         const a = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("a"));
         const b = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("b"));
+        const c = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("c"));
         expect(a.backend).toBe("cursor");
         expect(b.backend).toBe("default");
-        // The dying adapter's thread is the fail-open the isolation buys: never enumerated,
-        // so never written. Asserted so "survives" cannot quietly mean "wrote everything".
-        // Must assert the ABSENCE reason specifically, not merely a non-null `degraded`:
-        // this pass leaves a non-null `degraded` on the files it does write (the global's
-        // unresolvable binary propagates into them), so `not.toBeNull()` would hold either
-        // way. `updatedAt` pins it further — every written file carries a timestamp.
-        const dead = yield* readThreadBackendFile(
-          subagentThreadsDir,
-          ThreadId.make("never-written"),
-        );
-        expect(dead.degraded).toBe("No thread flag file.");
-        expect(dead.updatedAt).toBeNull();
+        // The thread listed AFTER the failing one is the multi-unit case: a fan-out that
+        // stopped at the first failure would leave it unwritten.
+        expect(c.backend).toBe("cursor");
+        // The over-long id cannot be written at all. Asserted as the ABSENCE reason, not
+        // merely a non-null `degraded`: the files this pass does write carry the global's
+        // unresolvable-binary reason too, so `not.toBeNull()` would hold either way.
+        const tooLong = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make(LONG));
+        expect(tooLong.degraded).toBe("No thread flag file.");
+        expect(tooLong.updatedAt).toBeNull();
       }).pipe(
         Effect.provide(
           withLayers(
-            { cursor: ["a"], deadClaude: ["never-written"], claude: ["b"] },
+            ["a", LONG, "b", "c"],
             // Computed key, not `{ b: ... }`: `subagentBackendThreadModes` is keyed by the
             // branded `ThreadId`, which a plain string literal key does not satisfy.
             { ...cursorSettings, subagentBackendThreadModes: { [ThreadId.make("b")]: "off" } },
@@ -375,9 +387,7 @@ describe("thread flag files", () => {
         // pointed at thread files from a T3 session, and the user's global choice survives.
         expect((yield* readBackendFile()).backend).toBe("cursor");
       }).pipe(
-        Effect.provide(
-          withLayers({ cursor: ["a"] }, { ...cursorSettings, subagentBackendEnabled: false }),
-        ),
+        Effect.provide(withLayers(["a"], { ...cursorSettings, subagentBackendEnabled: false })),
       ),
     );
 
@@ -389,7 +399,7 @@ describe("thread flag files", () => {
         const back = yield* readThreadBackendFile(subagentThreadsDir, t1);
         expect(back.backend).toBe("cursor");
         expect(back.model).toBe("sonnet");
-      }).pipe(Effect.provide(withLayers({}, cursorSettings))),
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
     );
 
     it.effect("removes the thread's file when the session write fails", () =>
@@ -403,7 +413,7 @@ describe("thread flag files", () => {
         const back = yield* readThreadBackendFile(subagentThreadsDir, t1);
         expect(back.degraded).toBe("No thread flag file.");
         expect(back.backend).toBe("default");
-      }).pipe(Effect.provide(withLayers({}, cursorSettings))),
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
     );
 
     it.effect("removeOnFailure:false keeps the file a previous good write left behind", () =>
@@ -419,7 +429,7 @@ describe("thread flag files", () => {
         const back = yield* readThreadBackendFile(subagentThreadsDir, t1);
         expect(back.backend).toBe("cursor");
         expect(back.instanceId).toBe("cursor");
-      }).pipe(Effect.provide(withLayers({}, cursorSettings))),
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
     );
 
     it.effect("setBackend fans the new global out to every live thread file", () =>
@@ -433,7 +443,7 @@ describe("thread flag files", () => {
         expect((yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("a"))).backend).toBe(
           "default",
         );
-      }).pipe(Effect.provide(withLayers({ cursor: ["a"] }, cursorSettings))),
+      }).pipe(Effect.provide(withLayers(["a"], cursorSettings))),
     );
 
     it.effect("master off writes no thread files from setBackend", () =>
@@ -447,9 +457,7 @@ describe("thread flag files", () => {
         expect(a.degraded).toBe("No thread flag file.");
         expect(a.updatedAt).toBeNull();
       }).pipe(
-        Effect.provide(
-          withLayers({ cursor: ["a"] }, { ...cursorSettings, subagentBackendEnabled: false }),
-        ),
+        Effect.provide(withLayers(["a"], { ...cursorSettings, subagentBackendEnabled: false })),
       ),
     );
 
@@ -466,9 +474,10 @@ describe("thread flag files", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            dyingRegistryLayer,
+            dyingLiveThreadsLayer,
             serverConfigLayerTest("/tmp", { prefix: "sbt-thread-" }),
             serverSettingsLayerTest(cursorSettings),
+            noProvidersLayer,
           ),
         ),
       ),
@@ -481,7 +490,7 @@ describe("thread flag files", () => {
         yield* subagentBackendReconciler;
         const a = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("a"));
         expect(a.backend).toBe("cursor");
-      }).pipe(Effect.provide(withLayers({ cursor: ["a"] }, cursorSettings))),
+      }).pipe(Effect.provide(withLayers(["a"], cursorSettings))),
     );
 
     it.effect("300 concurrent thread writes across 4 threads leave every file parseable", () =>
@@ -499,7 +508,193 @@ describe("thread flag files", () => {
           expect(back.degraded).toBeNull();
           expect(back.backend).toBe("cursor");
         }
-      }).pipe(Effect.provide(withLayers({}, cursorSettings))),
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
+    );
+  });
+});
+
+describe("prepareThreadBackend", () => {
+  it.layer(NodeServices.layer)("prepareThreadBackend", (it) => {
+    it.effect("registers the thread, so a later settings change rewrites its file", () =>
+      Effect.gen(function* () {
+        const { subagentThreadsDir } = yield* ServerConfig;
+        const prepared = yield* prepareThreadBackend(t1);
+        expect(prepared.backend).toBe("default");
+        expect(prepared.statePath).toBe(`${subagentThreadsDir}/${threadBackendFileName(t1)}`);
+        expect(yield* SubagentLiveThreads.use((live) => live.list)).toEqual([t1]);
+        // The global flips to Cursor after the process spawned; the reconcile must reach
+        // this thread, because nothing else rewrites the file its process reads.
+        yield* writeBackendFile(CURSOR);
+        yield* reconcileAllBackends();
+        expect((yield* readThreadBackendFile(subagentThreadsDir, t1)).backend).toBe("cursor");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            liveThreadsSetLayer,
+            serverConfigLayerTest("/tmp", { prefix: "sbt-prepare-" }),
+            serverSettingsLayerTest(cursorSettings),
+            noProvidersLayer,
+          ),
+        ),
+      ),
+    );
+  });
+});
+
+describe("credit block on live threads", () => {
+  it.layer(NodeServices.layer)("credit block on live threads", (it) => {
+    const cursorAt = (nowMs: number, usedPercent: number) =>
+      ({
+        instanceId: "cursor",
+        driver: "cursor",
+        enabled: true,
+        installed: true,
+        usageLimits: {
+          checkedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+          windows: [
+            {
+              id: "totalPercentUsed",
+              kind: "monthly",
+              label: "Overall",
+              usedPercent,
+              resetsAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs + 3_600_000)),
+            },
+          ],
+        },
+      }) as unknown as ServerProvider;
+
+    /**
+     * Forks the real reconciler over live thread "a", with settings that publish changes
+     * and a registry read through `getProviders`. `next` is the receipt: the reconciler
+     * logs once the files reflect a changed credit block, and a reconciler that died
+     * fails it rather than hanging.
+     */
+    const startReconciler = Effect.fn(function* (
+      getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>,
+      providerChanges: Queue.Queue<ReadonlyArray<ServerProvider>>,
+    ) {
+      const initial = yield* ServerSettingsService.use((service) => service.getRawSettings);
+      const settings = yield* Ref.make(initial);
+      const settingsChanges = yield* Queue.unbounded<ServerSettings>();
+      const reconciled = yield* Queue.unbounded<unknown>();
+      const logger = Logger.make(({ message }) => {
+        const parts = Array.isArray(message) ? message : [message];
+        if (parts[0] === CREDIT_BLOCK_RECONCILED) {
+          Queue.offerUnsafe(reconciled, (parts[1] as { blocked: unknown }).blocked);
+        }
+      });
+      const counter = { reconciles: 0 };
+      const { subagentThreadsDir } = yield* ServerConfig;
+      yield* writeBackendFile(CURSOR);
+      const fiber = yield* subagentBackendReconciler.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(SubagentLiveThreads)({
+              list: Effect.sync(() => {
+                counter.reconciles += 1;
+                return [ThreadId.make("a")];
+              }),
+            }),
+            Layer.mock(ProviderRegistry)({
+              getProviders,
+              streamChanges: Stream.fromQueue(providerChanges),
+            }),
+            Layer.mock(ServerSettingsService)({
+              getSettings: Ref.get(settings),
+              getRawSettings: Ref.get(settings),
+              streamChanges: Stream.fromQueue(settingsChanges),
+              subscribeChanges: Effect.succeed(Stream.fromQueue(settingsChanges)),
+            }),
+            Logger.layer([logger], { mergeWithExisting: true }),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      return {
+        counter,
+        next: Effect.raceFirst(
+          Queue.take(reconciled),
+          Fiber.join(fiber).pipe(Effect.andThen(Effect.die("the reconciler ended"))),
+        ),
+        fileOfA: readThreadBackendFile(subagentThreadsDir, ThreadId.make("a")),
+        changeSettings: (patch: Partial<ServerSettings>) =>
+          Ref.updateAndGet(settings, (current) => ({ ...current, ...patch })).pipe(
+            Effect.flatMap((next) => Queue.offer(settingsChanges, next)),
+          ),
+      };
+    });
+
+    const creditLayers = Layer.mergeAll(
+      serverConfigLayerTest("/tmp", { prefix: "sbt-credit-" }),
+      serverSettingsLayerTest({ ...cursorSettings, allowSpendingCredits: false }),
+    );
+
+    // A Cursor reading that crosses 100% must rewrite live threads' files with no settings
+    // change, as the fork's credit guard did; every other provider change must not.
+    it.effect("a Cursor usage flip rewrites live threads' files, and nothing else does", () =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([cursorAt(nowMs, 50)]);
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const publish = (usedPercent: number) =>
+          Ref.set(providers, [cursorAt(nowMs, usedPercent)]).pipe(
+            Effect.andThen(Queue.offer(changes, [cursorAt(nowMs, usedPercent)])),
+          );
+        const run = yield* startReconciler(Ref.get(providers), changes);
+
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+
+        // Below the cap, then at it: only the second crosses, so only it reconciles.
+        yield* publish(70);
+        yield* publish(100);
+        expect(yield* run.next).toBe(true);
+        const blocked = yield* run.fileOfA;
+        expect(blocked.backend).toBe("default");
+        expect(blocked.degraded).toContain("Cursor has used 100%");
+        expect(run.counter.reconciles).toBe(2);
+
+        // A new cycle's reading releases it the same way.
+        yield* publish(0);
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+        expect(run.counter.reconciles).toBe(3);
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
+    );
+
+    it.effect("turning spending on releases the block through the real seam", () =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const run = yield* startReconciler(Effect.succeed([cursorAt(nowMs, 100)]), changes);
+
+        expect(yield* run.next).toBe(true);
+        expect((yield* run.fileOfA).backend).toBe("default");
+
+        yield* run.changeSettings({ allowSpendingCredits: true });
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
+    );
+
+    it.effect("a registry read that dies does not end the reconciler", () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const run = yield* startReconciler(
+          Effect.suspend(() =>
+            reads++ === 0 ? Effect.die(new Error("registry gone")) : Effect.succeed([]),
+          ),
+          changes,
+        );
+
+        // The startup read died; a later settings change must still be applied.
+        yield* run.changeSettings({ subagentBackendEnabled: false });
+        expect(yield* run.next).toBe(false);
+        const a = yield* run.fileOfA;
+        expect(a.backend).toBe("default");
+        expect(a.degraded).toBe(MASTER_OFF_REASON);
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
     );
   });
 });

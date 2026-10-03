@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
 import {
+  accountUsageFromLimits,
   arcPathD,
   billingMonthWindow,
   clampPct,
   computeWindowPace,
   cycleWindow,
   daysInUtcMonth,
-  deriveLatestAccountUsage,
+  extraUsageWindow,
   formatSnapshotAge,
   segmentBoundariesBackground,
   FIVE_HOUR_MS,
@@ -20,22 +20,6 @@ import {
   vitalsLevel,
   windowSeverity,
 } from "./vitals";
-
-// Fixed so the derived billing-month anchor is deterministic. 2026-08-15 UTC is
-// mid-month in a 31-day month, clear of either boundary.
-const NOW_MS = Date.UTC(2026, 7, 15, 12, 0, 0);
-
-function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
-  return {
-    id: EventId.make(id),
-    tone: "info",
-    kind,
-    summary: kind,
-    payload,
-    turnId: TurnId.make("turn-1"),
-    createdAt: "2026-07-27T00:00:00.000Z",
-  };
-}
 
 describe("vitalsLevel", () => {
   it("uses the ≤50 / ≤75 / ≤90 / >90 ramp", () => {
@@ -81,205 +65,88 @@ describe("clampPct", () => {
   });
 });
 
-describe("deriveLatestAccountUsage", () => {
-  it("returns null when no usage activity is present", () => {
-    expect(deriveLatestAccountUsage([], NOW_MS)).toBeNull();
+describe("accountUsageFromLimits", () => {
+  const checkedAt = "2026-08-15T11:58:00.000Z";
+
+  it("has nothing to draw without windows", () => {
+    expect(accountUsageFromLimits(undefined)).toBeNull();
+    expect(accountUsageFromLimits({ checkedAt, windows: [] })).toBeNull();
     expect(
-      deriveLatestAccountUsage(
-        [makeActivity("a", "context-window.updated", { usedTokens: 1 })],
-        NOW_MS,
-      ),
+      accountUsageFromLimits({
+        checkedAt,
+        windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 10 }],
+        unavailable: { reason: "unsupported" },
+      }),
     ).toBeNull();
   });
 
-  it("reads the latest usage snapshot with both windows", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("old", "account.usage.updated", {
-          fiveHour: { utilization: 10, resetsAt: "2026-07-27T01:00:00.000Z" },
-          sevenDay: { utilization: 5, resetsAt: null },
-        }),
-        makeActivity("new", "account.usage.updated", {
-          fiveHour: { utilization: 88, resetsAt: "2026-07-27T02:00:00.000Z" },
-          sevenDay: { utilization: 41, resetsAt: "2026-08-01T00:00:00.000Z" },
-        }),
+  it("puts Claude's 5h/7d on the ring and stamps freshness from the snapshot", () => {
+    const view = accountUsageFromLimits({
+      checkedAt,
+      windows: [
+        {
+          id: "five_hour",
+          kind: "session",
+          label: "Session",
+          usedPercent: 42,
+          windowDurationMins: 300,
+          resetsAt: "2026-08-15T14:00:00.000Z",
+        },
+        { id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 17 },
+        {
+          id: "seven_day_fable",
+          kind: "weekly",
+          label: "Weekly · Fable",
+          usedPercent: 60,
+          windowDurationMins: 10_080,
+        },
       ],
-      NOW_MS,
-    );
-    expect(view).toEqual({
-      fiveHour: { utilization: 88, resetsAt: "2026-07-27T02:00:00.000Z" },
-      sevenDay: { utilization: 41, resetsAt: "2026-08-01T00:00:00.000Z" },
-      extraUsage: null,
-      fetchedAt: null,
-      extraWindows: [],
-      balances: [],
     });
-  });
-
-  it("defensively parses malformed windows to null", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("bad", "account.usage.updated", {
-          fiveHour: { resetsAt: "2026-07-27T02:00:00.000Z" }, // missing utilization
-          sevenDay: "nonsense",
-        }),
-      ],
-      NOW_MS,
-    );
-    expect(view).toEqual({
-      fiveHour: null,
-      sevenDay: null,
-      extraUsage: null,
-      fetchedAt: null,
-      extraWindows: [],
-      balances: [],
-    });
-  });
-
-  it("coerces a non-string resetsAt to null but keeps utilization", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("x", "account.usage.updated", {
-          fiveHour: { utilization: 33, resetsAt: 12345 },
-          sevenDay: null,
-        }),
-      ],
-      NOW_MS,
-    );
-    expect(view).toEqual({
-      fiveHour: { utilization: 33, resetsAt: null },
-      sevenDay: null,
-      extraUsage: null,
-      fetchedAt: null,
-      extraWindows: [],
-      balances: [],
-    });
-  });
-
-  it("skips activities whose payload is not an object", () => {
-    expect(
-      deriveLatestAccountUsage([makeActivity("x", "account.usage.updated", null)], NOW_MS),
-    ).toBeNull();
-  });
-
-  it("surfaces Codex primary/secondary windows, labelled by window length", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("codex", "account.usage.updated", {
-          fiveHour: null,
-          sevenDay: null,
-          codex: {
-            primary: {
-              utilization: 60,
-              resetsAt: "2026-07-27T02:00:00.000Z",
-              windowDurationMins: 300,
-            },
-            secondary: { utilization: 12, resetsAt: null, windowDurationMins: 10080 },
-          },
-        }),
-      ],
-      NOW_MS,
-    );
-    expect(view?.fiveHour).toBeNull();
+    expect(view?.fiveHour).toEqual({ utilization: 42, resetsAt: "2026-08-15T14:00:00.000Z" });
+    expect(view?.sevenDay).toEqual({ utilization: 17, resetsAt: null });
+    expect(view?.fetchedAt).toBe(checkedAt);
     expect(view?.extraWindows).toEqual([
       {
-        label: "Codex 5h",
+        id: "seven_day_fable",
+        label: "Weekly · Fable",
         utilization: 60,
-        resetsAt: "2026-07-27T02:00:00.000Z",
-        windowMs: 300 * 60_000,
-      },
-      { label: "Codex 7d", utilization: 12, resetsAt: null, windowMs: 10080 * 60_000 },
-    ]);
-  });
-
-  it("falls back to a generic Codex label when the window length is missing", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("codex", "account.usage.updated", {
-          codex: { primary: { utilization: 5, resetsAt: null }, secondary: null },
-        }),
-      ],
-      NOW_MS,
-    );
-    expect(view?.extraWindows).toEqual([
-      { label: "Codex primary", utilization: 5, resetsAt: null, windowMs: null },
-    ]);
-  });
-
-  it("surfaces Cursor windows with no fixed duration when cycleStartsAt is absent", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("cursor", "account.usage.updated", {
-          cursor: {
-            auto: { utilization: 25, resetsAt: null },
-            api: null,
-            total: { utilization: 40, resetsAt: "2026-08-01T00:00:00.000Z" },
-          },
-        }),
-      ],
-      NOW_MS,
-    );
-    expect(view?.extraWindows).toEqual([
-      { label: "Cursor auto", utilization: 25, resetsAt: null, windowMs: null },
-      {
-        label: "Cursor total",
-        utilization: 40,
-        resetsAt: "2026-08-01T00:00:00.000Z",
-        windowMs: null,
+        resetsAt: null,
+        windowMs: SEVEN_DAY_MS,
+        segmentCount: 7,
       },
     ]);
   });
 
-  it("paces Cursor windows when cycleStartsAt is present", () => {
-    const view = deriveLatestAccountUsage(
-      [
-        makeActivity("cursor", "account.usage.updated", {
-          cursor: {
-            auto: null,
-            api: null,
-            total: { utilization: 40, resetsAt: "2026-10-03T00:14:56.000Z" },
-            cycleStartsAt: "2026-09-03T00:14:56.000Z",
-          },
-        }),
+  it("shows other providers' windows as rows, paced only when they carry a length", () => {
+    const view = accountUsageFromLimits({
+      checkedAt,
+      windows: [
+        {
+          id: "primary",
+          kind: "session",
+          label: "Session",
+          usedPercent: 8,
+          windowDurationMins: 300,
+        },
+        { id: "totalPercentUsed", kind: "monthly", label: "Overall", usedPercent: 72 },
+        {
+          id: "autoPercentUsed",
+          kind: "monthly",
+          label: "Cursor Models",
+          usedPercent: 50,
+          windowDurationMins: 43_200,
+        },
       ],
-      NOW_MS,
-    );
-    expect(view?.extraWindows).toEqual([
-      {
-        label: "Cursor total",
-        utilization: 40,
-        resetsAt: "2026-10-03T00:14:56.000Z",
-        windowMs: 30 * 24 * 60 * 60 * 1000,
-        segmentCount: 30,
-      },
-    ]);
-  });
-});
-
-describe("cycleWindow", () => {
-  const start = "2026-09-03T00:14:56.000Z";
-  const end = "2026-10-03T00:14:56.000Z";
-
-  it("derives a 30-day window from the billing cycle", () => {
-    expect(cycleWindow(start, end)).toEqual({
-      windowMs: 30 * 24 * 60 * 60 * 1000,
-      segmentCount: 30,
     });
-  });
-
-  it("returns null when the start is missing", () => {
-    expect(cycleWindow(null, end)).toBeNull();
-    expect(cycleWindow(undefined, end)).toBeNull();
-  });
-
-  it("returns null when the reset is missing or inverted", () => {
-    expect(cycleWindow(start, null)).toBeNull();
-    expect(cycleWindow(start, start)).toBeNull();
-    expect(cycleWindow(end, start)).toBeNull();
-  });
-
-  it("returns null for an unparseable start", () => {
-    expect(cycleWindow("not-a-date", end)).toBeNull();
+    expect(view?.fiveHour).toBeNull();
+    expect(view?.sevenDay).toBeNull();
+    expect(
+      view?.extraWindows.map(({ id, windowMs, segmentCount }) => ({ id, windowMs, segmentCount })),
+    ).toEqual([
+      { id: "primary", windowMs: FIVE_HOUR_MS, segmentCount: 5 },
+      { id: "totalPercentUsed", windowMs: null, segmentCount: undefined },
+      { id: "autoPercentUsed", windowMs: 30 * 24 * 60 * 60 * 1000, segmentCount: 30 },
+    ]);
   });
 });
 
@@ -384,263 +251,6 @@ describe("rightHalfArc", () => {
 
   it("floors a tiny sweep so a rounded cap still renders", () => {
     expect(rightHalfArc(18.5, 0.01).fillD).not.toBeNull();
-  });
-});
-
-describe("deriveLatestAccountUsage balances", () => {
-  const usageActivity = (payload: unknown) => [makeActivity("a", "account.usage.updated", payload)];
-
-  it("surfaces Claude extra credits as a paced billing-month window", () => {
-    // A real account's payload, over its monthly limit. Amounts are cents.
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        fiveHour: { utilization: 1, resetsAt: "2026-08-20T21:39:59.563953+00:00" },
-        sevenDay: { utilization: 59, resetsAt: "2026-08-24T08:59:59.563973+00:00" },
-        extra: {
-          isEnabled: true,
-          usedCredits: 20166,
-          monthlyLimit: 20000,
-          utilization: 100,
-          currency: "CAD",
-        },
-      }),
-      NOW_MS,
-    );
-
-    // NOW_MS is mid-August, so the derived month is the 31-day August window
-    // ending at the first instant of September, UTC. Nothing in the payload
-    // says any of that — see `billingMonthWindow`.
-    expect(view?.extraUsage).toEqual({
-      label: "Extra usage",
-      detail: "CAD 201.66 of CAD 200.00",
-      utilization: 100,
-      resetsAt: "2026-09-01T00:00:00.000Z",
-      windowMs: 31 * 24 * 60 * 60 * 1000,
-      segmentCount: 31,
-    });
-    // And it is no longer duplicated as a balance.
-    expect(view?.balances).toEqual([]);
-  });
-
-  it("omits extra credits for an account that has not turned them on", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        fiveHour: { utilization: 1, resetsAt: null },
-        sevenDay: null,
-        extra: {
-          isEnabled: false,
-          usedCredits: 0,
-          monthlyLimit: 0,
-          utilization: 0,
-          currency: null,
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage).toBeNull();
-  });
-
-  it("omits an enabled-but-empty account, which isEnabled alone does not catch", () => {
-    // `OAuthUsage` maps an `extra_usage` carrying only `is_enabled` to this
-    // all-zeros record, asserted by its own test. Gating on `isEnabled` renders
-    // "$0.00 of $0.00" in green, and that row alone opens the limits block on
-    // an account with nothing else in it.
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        extra: { isEnabled: true, usedCredits: 0, monthlyLimit: 0, utilization: 0, currency: null },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage).toBeNull();
-  });
-
-  it("drops the row when the payload omits utilization, rather than pacing a 0%", () => {
-    // A window row has no neutral rendering — it must place a bar somewhere —
-    // so unlike a balance it cannot show "unknown". Defaulting to 0 would paint
-    // a healthy green reading nobody sent, so the row is dropped instead.
-    const view = deriveLatestAccountUsage(
-      usageActivity({ extra: { isEnabled: true, usedCredits: 4354, monthlyLimit: 200000 } }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage).toBeNull();
-  });
-
-  it("treats a missing used amount as zero spent against the limit", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({ extra: { isEnabled: true, monthlyLimit: 200000, utilization: 0 } }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage?.detail).toBe("$0.00 of $2000.00");
-  });
-
-  it("ignores an empty currency instead of printing it as a prefix", () => {
-    // `formatSpend` builds "<currency> <amount>", so an empty string renders a
-    // leading space and a doubled one before the limit.
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        extra: {
-          isEnabled: true,
-          usedCredits: 43540,
-          monthlyLimit: 200000,
-          utilization: 21.77,
-          currency: "",
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage?.detail).toBe("$435.40 of $2000.00");
-  });
-
-  it("falls back to dollars when the payload names no currency", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        extra: { isEnabled: true, usedCredits: 4354, monthlyLimit: 20000, utilization: 21 },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.extraUsage?.detail).toBe("$43.54 of $200.00");
-  });
-
-  it("surfaces Cursor on-demand spend as a balance, not a window", () => {
-    // A window implies a reset time and therefore a pace. Spend has neither, and
-    // rendering it with a pace bar would claim a deadline that does not exist.
-    //
-    // `onDemand` carries the wire shape the server actually sends — an
-    // `AccountUsageExtra`, in cents. An earlier fixture invented a
-    // `{ used, limit }` record that no server has ever produced, so it agreed
-    // with a parser that could never render this row against real data.
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        cursor: {
-          auto: null,
-          api: null,
-          total: null,
-          onDemand: {
-            isEnabled: true,
-            usedCredits: 1250,
-            monthlyLimit: 5000,
-            utilization: 25,
-            currency: "USD",
-          },
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.extraWindows).toEqual([]);
-    expect(view?.balances).toEqual([
-      { label: "Cursor on-demand", detail: "$12.50 of $50.00", utilization: 25 },
-    ]);
-  });
-
-  it("renders a team on-demand budget from the payload CursorUsage really emits", () => {
-    // The exact `cursor.onDemand` that `normalizeCurrentPeriodUsage` builds from
-    // the recorded live team account (`pooledUsed: 391993` of `pooledLimit:
-    // 800000`). A team spend ceiling of $8,000.00 is the reading that makes
-    // sense of those figures; $800,000.00 is not.
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        cursor: {
-          auto: null,
-          api: null,
-          total: null,
-          onDemand: {
-            isEnabled: true,
-            usedCredits: 391993,
-            monthlyLimit: 800000,
-            utilization: 48.999125,
-            currency: "USD",
-          },
-          onDemandScope: "team",
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.balances).toEqual([
-      {
-        label: "Cursor on-demand (team)",
-        detail: "$3919.93 of $8000.00",
-        utilization: 48.999125,
-      },
-    ]);
-  });
-
-  it("surfaces the enterprise request bucket", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        cursor: {
-          auto: null,
-          api: null,
-          total: null,
-          onDemand: null,
-          requests: { used: 120, limit: 500, utilization: 24 },
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.balances).toEqual([
-      { label: "Cursor requests", detail: "120 of 500", utilization: 24 },
-    ]);
-  });
-
-  it("shows a Codex credits balance exactly as the server formatted it", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({
-        codex: {
-          primary: null,
-          secondary: null,
-          credits: { balance: "$4.20", hasCredits: true, unlimited: false },
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(view?.balances).toEqual([
-      { label: "Codex credits", detail: "$4.20", utilization: null },
-    ]);
-  });
-
-  it("distinguishes an unlimited plan from an exhausted one", () => {
-    const unlimited = deriveLatestAccountUsage(
-      usageActivity({
-        codex: {
-          primary: null,
-          secondary: null,
-          credits: { hasCredits: true, unlimited: true },
-        },
-      }),
-      NOW_MS,
-    );
-    const exhausted = deriveLatestAccountUsage(
-      usageActivity({
-        codex: {
-          primary: null,
-          secondary: null,
-          credits: { hasCredits: false, unlimited: false },
-        },
-      }),
-      NOW_MS,
-    );
-
-    expect(unlimited?.balances[0]?.detail).toBe("Unlimited");
-    expect(exhausted?.balances[0]?.detail).toBe("None remaining");
-  });
-
-  it("leaves a Claude account with no balance rows at all", () => {
-    const view = deriveLatestAccountUsage(
-      usageActivity({ fiveHour: { utilization: 10, resetsAt: null }, sevenDay: null }),
-      NOW_MS,
-    );
-
-    expect(view?.balances).toEqual([]);
   });
 });
 
@@ -779,5 +389,79 @@ describe("formatSnapshotAge", () => {
   it("has nothing to say without a timestamp", () => {
     expect(formatSnapshotAge(null, base)).toBeNull();
     expect(formatSnapshotAge("not-a-date", base)).toBeNull();
+  });
+});
+
+describe("extraUsageWindow", () => {
+  // Mid-August 2026, clear of either month boundary.
+  const nowMs = Date.UTC(2026, 7, 15, 12, 0, 0);
+
+  it("paces the real CAD 200 extra-usage cap as a billing-month row", () => {
+    // `spend` as `claudeUsageResponseToLimits` maps the real team account.
+    const window = extraUsageWindow(
+      { used: 150.5, limit: 200, currency: "CAD", usedPercent: 75.25 },
+      nowMs,
+    );
+    expect(window).toEqual({
+      label: "Extra usage",
+      detail: "CAD 150.50 of CAD 200.00",
+      utilization: 75.25,
+      resetsAt: "2026-09-01T00:00:00.000Z",
+      windowMs: 31 * 24 * 60 * 60 * 1000,
+      segmentCount: 31,
+    });
+  });
+
+  it("has no row until spending has started", () => {
+    // The real team account today: extra usage enabled, CAD 200 cap, nothing spent.
+    expect(
+      extraUsageWindow({ used: 0, limit: 200, currency: "CAD", usedPercent: 0 }, nowMs),
+    ).toBeNull();
+    expect(
+      extraUsageWindow({ used: 0.01, limit: 200, currency: "CAD", usedPercent: 0.005 }, nowMs),
+    ).not.toBeNull();
+  });
+
+  it("has no row without spending or without a percentage to pace", () => {
+    expect(extraUsageWindow(null, nowMs)).toBeNull();
+    expect(extraUsageWindow({ used: 3, currency: "USD" }, nowMs)).toBeNull();
+  });
+
+  it("carries the snapshot's spend into the gauge view", () => {
+    const spend = { used: 0, limit: 200, currency: "CAD", usedPercent: 0 };
+    expect(
+      accountUsageFromLimits({
+        checkedAt: "2026-10-03T07:13:37.215Z",
+        windows: [{ id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 99 }],
+        spend,
+      })?.spend,
+    ).toBe(spend);
+  });
+});
+
+describe("cycleWindow", () => {
+  const start = "2026-09-03T00:14:56.000Z";
+  const end = "2026-10-03T00:14:56.000Z";
+
+  it("derives a 30-day window from the billing cycle", () => {
+    expect(cycleWindow(start, end)).toEqual({
+      windowMs: 30 * 24 * 60 * 60 * 1000,
+      segmentCount: 30,
+    });
+  });
+
+  it("returns null when the start is missing", () => {
+    expect(cycleWindow(null, end)).toBeNull();
+    expect(cycleWindow(undefined, end)).toBeNull();
+  });
+
+  it("returns null when the reset is missing or inverted", () => {
+    expect(cycleWindow(start, null)).toBeNull();
+    expect(cycleWindow(start, start)).toBeNull();
+    expect(cycleWindow(end, start)).toBeNull();
+  });
+
+  it("returns null for an unparseable start", () => {
+    expect(cycleWindow("not-a-date", end)).toBeNull();
   });
 });

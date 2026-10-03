@@ -62,18 +62,22 @@ export type ThreadQueueAction =
   | { readonly kind: "claim"; readonly key: string }
   | { readonly kind: "clear-in-flight"; readonly claimId: string };
 
-/** The provider instance a thread occupies: the running session's, else the one it is set to. */
+/** The provider instance a thread occupies: the running run's, else the one it is set to. */
 function threadInstanceId(thread: EnvironmentThreadShell): string {
-  const session = thread.session;
-  return session?.status === "running" && session.providerInstanceId
-    ? session.providerInstanceId
+  const runtime = thread.runtime;
+  return runtime?.status === "running"
+    ? runtime.providerInstanceId
     : thread.modelSelection.instanceId;
 }
 
-/** Working, monitoring, or holding an accepted message no session has picked up yet. */
+/**
+ * Working, waiting on post-settlement background work, or holding an accepted
+ * message no run has picked up yet. v2's "waiting" status is what the fork's
+ * V1 "monitoring" was: the runtime parks at idle while background tasks remain.
+ */
 export function isQueueBusy(thread: EnvironmentThreadShell, now: string): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  return status === "working" || status === "monitoring" || hasQueuedTurnStart(thread, { now });
+  return status === "working" || status === "waiting" || hasQueuedTurnStart(thread, { now });
 }
 
 const shellKey = (thread: EnvironmentThreadShell) =>
@@ -108,16 +112,18 @@ export function nextThreadQueueAction(input: {
     const sentKey = threadQueueEntryKey(inFlight.entry);
     const sentThread = input.threads.find((thread) => shellKey(thread) === sentKey);
     // The message showing up is not enough: until the thread reads busy, failed, or on
-    // a new turn, the busy count has not caught up and a second send would overshoot.
-    // A failure only counts once the session changed: a thread whose previous turn failed
+    // a new run, the busy count has not caught up and a second send would overshoot.
+    // A failure only counts once the runtime changed: a thread whose previous run failed
     // still reads failed when the re-sent message lands, before the server starts it.
+    // (`priorTurnId` / `priorSessionUpdatedAt` keep their V1 names because the claim is
+    // persisted; they now hold the latest run id and the runtime's `updatedAt`.)
     const landed =
       sentThread !== undefined &&
       (sentThread.latestUserMessageAt ?? null) !== inFlight.priorUserMessageAt &&
       (isQueueBusy(sentThread, now) ||
         (resolveSidebarThreadStatus(sentThread) === "failed" &&
-          (sentThread.session?.updatedAt ?? null) !== inFlight.priorSessionUpdatedAt) ||
-        (sentThread.latestTurn?.turnId ?? null) !== inFlight.priorTurnId);
+          (sentThread.runtime?.updatedAt ?? null) !== inFlight.priorSessionUpdatedAt) ||
+        (sentThread.latestRun?.runId ?? null) !== inFlight.priorTurnId);
     return landed || nowMs - inFlight.sentAt > QUEUE_SENT_LANDING_CAP_MS
       ? { kind: "clear-in-flight", claimId: inFlight.claimId }
       : { kind: "wait" };

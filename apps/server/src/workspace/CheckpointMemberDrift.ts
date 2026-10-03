@@ -1,4 +1,4 @@
-import type { OrchestrationCheckpointMemberState } from "@t3tools/contracts";
+import type { CheckpointMemberState } from "@t3tools/contracts";
 
 import type { MemberBranchState } from "./MemberBranches.ts";
 
@@ -21,7 +21,7 @@ import type { MemberBranchState } from "./MemberBranches.ts";
  * Detaching that member does not clear the record, and detaching it does not have
  * to: this comparison walks the RECORDED list, so a member that is gone from the
  * live workspace is still drift. But the caller only consults this at all while
- * the live workspace still has at least one member (`CheckpointReactor`), so
+ * the live workspace still has at least one member (`WorkspaceMemberHooks`), so
  * detaching every member skips the check rather than passing it.
  */
 export type CheckpointDriftReason = "changed" | "unobserved";
@@ -47,8 +47,8 @@ export interface CheckpointDrift {
 }
 
 export function resolveCheckpointDrift(
-  recorded: ReadonlyArray<OrchestrationCheckpointMemberState> | undefined,
-  current: ReadonlyArray<OrchestrationCheckpointMemberState>,
+  recorded: ReadonlyArray<CheckpointMemberState> | undefined,
+  current: ReadonlyArray<CheckpointMemberState>,
 ): CheckpointDrift {
   // A checkpoint captured before members were recorded, and one that recorded an
   // empty list, both read as complete - each matching the behaviour it was

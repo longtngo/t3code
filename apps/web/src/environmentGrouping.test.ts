@@ -502,11 +502,6 @@ describe("resolveSidebarProjectGroupByRef", () => {
     expect(resolved?.memberProjects.map((member) => member.id)).toEqual([primary.id, remote.id]);
   });
 
-  // The regression this exists for: the project settings dialog used to hold
-  // the snapshot it was opened with. Attaching a workspace member dispatched
-  // the update, but the dialog kept rendering the pre-attach member list, so
-  // the SECOND attach was computed from the empty list and dropped the first.
-  // Re-deriving from live state on each render is what makes both survive.
   it("re-derives members after the project is updated", () => {
     const memberA = {
       id: "member-a",

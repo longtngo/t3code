@@ -57,6 +57,13 @@ export function makeUnavailableUsageLimits(input: {
  * An `unsupported` snapshot stays unsupported: an account that cannot have
  * subscription windows will not start reporting them mid-turn.
  */
+/**
+ * How stale a confirmed-unchanged reading may get before a runtime update re-stamps it.
+ * Kept well under the credit guard's 60 s re-read age, so a turn that keeps reporting
+ * the same numbers never looks stale to it.
+ */
+export const RESTAMP_INTERVAL_MS = 30_000;
+
 export function applyUsageLimitsUpdate(input: {
   readonly previous: ServerProviderUsageLimits | undefined;
   readonly update: ProviderUsageLimitsUpdate;
@@ -89,11 +96,23 @@ export function applyUsageLimitsUpdate(input: {
     }
   }
   if (!changed && previous !== undefined && previous.unavailable === undefined) {
-    return previous;
+    // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
+    // but only when the update names every window (Claude reports one window per event, and
+    // a 5-hour confirmation says nothing about the weekly), and at most every
+    // RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and each new snapshot
+    // is published to every client.
+    const coversEveryWindow = previous.windows.every((window) =>
+      update.windows.some((candidate) => candidate.id === window.id),
+    );
+    return coversEveryWindow &&
+      Date.parse(input.checkedAt) - Date.parse(previous.checkedAt) >= RESTAMP_INTERVAL_MS
+      ? { ...previous, checkedAt: input.checkedAt }
+      : previous;
   }
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
+    ...(previous?.spend !== undefined ? { spend: previous.spend } : {}),
   };
 }
 
@@ -121,6 +140,13 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
  * per-window epoch bookkeeping needed to reconcile the two was more code
  * than the sub-second regression it prevented. The next runtime event
  * corrects it.
+ *
+ * FORK: a probe can serve a cached read (Claude caches its capabilities
+ * probe for minutes), so a successful probe whose windows were read BEFORE
+ * the published ones keeps the published windows rather than reverting a
+ * newer runtime update to older numbers. Everything else comes from the
+ * probe: reset credits are re-read on every check, and spend is never older
+ * than the probe that last published it.
  */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
@@ -129,6 +155,15 @@ export function resolveUsageLimitsAfterProbe(input: {
   const { published, probed } = input;
   if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
     return published;
+  }
+  if (
+    probed &&
+    published &&
+    !probed.unavailable &&
+    !published.unavailable &&
+    Date.parse(probed.checkedAt) < Date.parse(published.checkedAt)
+  ) {
+    return { ...probed, checkedAt: published.checkedAt, windows: published.windows };
   }
   return probed;
 }

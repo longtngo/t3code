@@ -4,6 +4,7 @@ import { ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { creditSpendBlockedReason, cursorOffloadBlockedReason } from "./creditSpendGuard.ts";
 
 const instanceId = ProviderInstanceId.make("claude-1");
+const NOW_MS = Date.parse("2026-09-14T01:00:00.000Z");
 
 const provider = (usedPercent: number | null): ServerProvider =>
   ({
@@ -29,6 +30,7 @@ describe("creditSpendBlockedReason", () => {
     // works even when everything else is broken; this pins the outcome, not the ordering.
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: true,
         providers: [provider(100)],
         instanceId,
@@ -38,6 +40,7 @@ describe("creditSpendBlockedReason", () => {
 
   it("blocks an instance whose window is at the cap", () => {
     const reason = creditSpendBlockedReason({
+      nowMs: NOW_MS,
       allowSpendingCredits: false,
       providers: [provider(100)],
       instanceId,
@@ -51,6 +54,7 @@ describe("creditSpendBlockedReason", () => {
     for (const percent of [0, 99.999]) {
       expect(
         creditSpendBlockedReason({
+          nowMs: NOW_MS,
           allowSpendingCredits: false,
           providers: [provider(percent)],
           instanceId,
@@ -59,6 +63,7 @@ describe("creditSpendBlockedReason", () => {
     }
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: [provider(null)],
         instanceId,
@@ -78,7 +83,12 @@ describe("creditSpendBlockedReason", () => {
       },
     } as unknown as ServerProvider;
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [stale], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [stale],
+        instanceId,
+      }),
     ).toBeNull();
   });
 
@@ -87,10 +97,16 @@ describe("creditSpendBlockedReason", () => {
     const other = ProviderInstanceId.make("claude-2");
     const siblings = [provider(100), { ...provider(10), instanceId: other } as ServerProvider];
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: siblings, instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: siblings,
+        instanceId,
+      }),
     ).not.toBeNull();
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: siblings,
         instanceId: other,
@@ -100,10 +116,16 @@ describe("creditSpendBlockedReason", () => {
 
   it("does not block an instance it cannot find, or an absent instance id", () => {
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [],
+        instanceId,
+      }),
     ).toBeNull();
     expect(
       creditSpendBlockedReason({
+        nowMs: NOW_MS,
         allowSpendingCredits: false,
         providers: [provider(100)],
         instanceId: undefined,
@@ -114,31 +136,76 @@ describe("creditSpendBlockedReason", () => {
   it("falls back to the driver name when the provider has no display name", () => {
     const unnamed = { ...provider(100), displayName: undefined } as ServerProvider;
     expect(
-      creditSpendBlockedReason({ allowSpendingCredits: false, providers: [unnamed], instanceId }),
+      creditSpendBlockedReason({
+        nowMs: NOW_MS,
+        allowSpendingCredits: false,
+        providers: [unnamed],
+        instanceId,
+      }),
     ).toContain("claudeAgent");
   });
 });
 
 describe("cursorOffloadBlockedReason", () => {
+  const cursorLimits = (usedPercent: number, resetsAt?: string) => ({
+    checkedAt: "2026-09-14T00:00:00.000Z",
+    windows: [
+      {
+        id: "totalPercentUsed",
+        kind: "monthly" as const,
+        label: "Overall",
+        usedPercent,
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+      },
+    ],
+  });
+
   it("never blocks while spending is allowed", () => {
     expect(
-      cursorOffloadBlockedReason({ allowSpendingCredits: true, cursorUsedPercent: 100 }),
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: true,
+        cursorLimits: cursorLimits(100),
+        nowMs: NOW_MS,
+      }),
     ).toBeNull();
   });
 
   it("blocks at the cap and allows below it", () => {
     expect(
-      cursorOffloadBlockedReason({ allowSpendingCredits: false, cursorUsedPercent: 100 }),
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(100),
+        nowMs: NOW_MS,
+      }),
     ).not.toBeNull();
     expect(
-      cursorOffloadBlockedReason({ allowSpendingCredits: false, cursorUsedPercent: 99 }),
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(99),
+        nowMs: NOW_MS,
+      }),
     ).toBeNull();
+  });
+
+  it("stops blocking once the window's reset has passed", () => {
+    const blocked = (resetsAt: string) =>
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(100, resetsAt),
+        nowMs: NOW_MS,
+      });
+    expect(blocked("2026-09-14T02:00:00.000Z")).not.toBeNull();
+    expect(blocked("2026-09-14T01:00:00.000Z")).toBeNull();
   });
 
   it("does not block when the usage could not be read", () => {
     // A failed Cursor read is null, never an error (design P9). Absence is not 100%.
     expect(
-      cursorOffloadBlockedReason({ allowSpendingCredits: false, cursorUsedPercent: null }),
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: undefined,
+        nowMs: NOW_MS,
+      }),
     ).toBeNull();
   });
 });

@@ -1,87 +1,30 @@
 /**
- * Background right-panel surface: the thread's shells and monitors, running ones first, finished
- * ones kept for 3 hours. Answers "what is it monitoring?" when the thread shows Monitoring.
+ * Background right-panel surface: the provider work still running for this thread (background
+ * shells, monitors, subagents). Answers "what is it waiting on?" when the thread reads Waiting.
  *
- * Times follow the minute clock; the only animation is the shared running glyph.
+ * Rows come from `backgroundPanelTasks`; nothing here animates. The fork's "started X ago" and
+ * duration are not shown: the v2 background roster carries no timestamps.
  */
-import type { OrchestrationBackgroundTask } from "@t3tools/contracts";
+import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { ActivityIcon } from "lucide-react";
 import { memo } from "react";
 
-import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
-import { cn } from "~/lib/utils";
-import { useNowMinute } from "../hooks/useNowMinute";
-import {
-  backgroundTaskDetail,
-  backgroundTasksPanelState,
-  type BackgroundTasksReadStatus,
-} from "./BackgroundTasksPanel.logic";
-import { statusGlyph, type StatusGlyphTone } from "./SidebarSection";
+import { backgroundTaskKindLabel } from "./BackgroundTasksPanel.logic";
 
-const GLYPH_TONE = {
-  running: "running",
-  completed: "completed",
-  failed: "failed",
-  stopped: "idle",
-} satisfies Record<OrchestrationBackgroundTask["status"], StatusGlyphTone>;
-
-const STATUS_LABEL = {
-  running: "Running",
-  completed: "Completed",
-  failed: "Failed",
-  stopped: "Stopped",
-} satisfies Record<OrchestrationBackgroundTask["status"], string>;
-
-function PanelMessage({
-  title,
-  detail,
-  onRetry,
-}: {
-  title: string;
-  detail?: string;
-  onRetry?: (() => void) | undefined;
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <ActivityIcon aria-hidden className="size-6 text-muted-foreground/60" />
-      <p className="text-sm font-medium">{title}</p>
-      {detail ? <p className="max-w-56 text-xs text-muted-foreground">{detail}</p> : null}
-      {onRetry ? (
-        <Button size="xs" variant="outline" onClick={onRetry}>
-          Retry
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-function BackgroundTaskRow({ task, nowMs }: { task: OrchestrationBackgroundTask; nowMs: number }) {
-  const finished = task.status !== "running";
+function BackgroundTaskRow({ task }: { task: PendingBackgroundWorkTask }) {
+  const title = task.description ?? task.taskId;
+  const kind = backgroundTaskKindLabel(task.kind);
   return (
     <li
       className="flex min-w-0 items-start gap-2.5 rounded-lg px-2.5 py-2"
-      aria-label={`${task.title}, ${STATUS_LABEL[task.status]}`}
+      aria-label={`${title}, ${kind}, running`}
     >
-      <span className="shrink-0">{statusGlyph(GLYPH_TONE[task.status])}</span>
+      <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-info" />
       <span className="min-w-0 flex-1">
-        <span
-          className={cn(
-            // Wraps rather than truncates: the title is the answer to "what is running?".
-            "block break-words text-sm leading-snug",
-            finished ? "text-muted-foreground/70" : "text-foreground/90",
-          )}
-        >
-          {task.title}
-        </span>
-        <span className="block truncate text-2xs text-muted-foreground/60">
-          {backgroundTaskDetail(task, nowMs)}
-        </span>
-        {task.status !== "completed" && task.summary ? (
-          <span className="block break-words text-2xs text-muted-foreground/60">
-            {task.summary}
-          </span>
-        ) : null}
+        {/* Wraps rather than truncates: the title is the answer to "what is running?". */}
+        <span className="block break-words text-sm leading-snug text-foreground/90">{title}</span>
+        <span className="block truncate text-2xs text-muted-foreground/60">{kind} · running</span>
       </span>
     </li>
   );
@@ -89,71 +32,35 @@ function BackgroundTaskRow({ task, nowMs }: { task: OrchestrationBackgroundTask;
 
 export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
   tasks,
-  status,
-  onRetry,
 }: {
-  tasks: ReadonlyArray<OrchestrationBackgroundTask> | null;
-  status: BackgroundTasksReadStatus;
-  onRetry: () => void;
+  tasks: ReadonlyArray<PendingBackgroundWorkTask>;
 }) {
-  const nowMinute = useNowMinute();
-  const nowMs = Date.parse(`${nowMinute}:00.000Z`);
-  const state = backgroundTasksPanelState(tasks, status);
-
-  if (state.kind === "unavailable") {
+  if (tasks.length === 0) {
     return (
-      <PanelMessage
-        title="Background tasks unavailable"
-        detail={
-          state.canRetry
-            ? "This thread's background tasks could not be loaded."
-            : "This server is too old to list background tasks."
-        }
-        onRetry={state.canRetry ? onRetry : undefined}
-      />
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <ActivityIcon aria-hidden className="size-6 text-muted-foreground/60" />
+        <p className="text-sm font-medium">No background tasks</p>
+        <p className="max-w-56 text-xs text-muted-foreground">
+          Nothing is running in the background for this thread.
+        </p>
+      </div>
     );
   }
-  if (state.kind === "loading") {
-    return <PanelMessage title="Loading background tasks…" />;
-  }
-  if (state.kind === "empty" || tasks === null) {
-    return (
-      <PanelMessage
-        title="No background tasks"
-        detail="Nothing has run in the background here in the last 3 hours."
-      />
-    );
-  }
-
-  const running = tasks.filter((task) => task.status === "running").length;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2">
         <ActivityIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Background</span>
         <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
-          {running} running
+          {tasks.length} running
         </span>
       </header>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-1 p-2">
-          <ul className="flex flex-col gap-0.5">
-            {tasks.map((task) => (
-              <BackgroundTaskRow key={task.taskId} task={task} nowMs={nowMs} />
-            ))}
-          </ul>
-          <p className="px-2.5 pt-1 text-2xs text-muted-foreground/70">
-            Finished tasks are kept for 3 hours.
-          </p>
-          {state.failed ? (
-            <div className="flex items-center gap-2 px-2.5 pt-2 text-xs text-muted-foreground">
-              <span className="min-w-0 flex-1">Couldn't refresh background tasks</span>
-              <Button size="xs" variant="outline" onClick={onRetry}>
-                Retry
-              </Button>
-            </div>
-          ) : null}
-        </div>
+        <ul className="flex flex-col gap-0.5 p-2">
+          {tasks.map((task) => (
+            <BackgroundTaskRow key={task.taskId} task={task} />
+          ))}
+        </ul>
       </ScrollArea>
     </div>
   );

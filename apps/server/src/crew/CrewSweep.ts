@@ -1,303 +1,223 @@
 /**
- * The delivery sweep: gets a crewmate's report into the bridge's transcript, and
- * the bridge's answer into the crewmate's, without starting a turn where it can
- * avoid one.
+ * The delivery sweep: gets a crewmate's report to the bridge, and the bridge's answer to
+ * the crewmate, as ordinary v2 messages.
  *
- * Runs every 60s. `runOnce` is also the seam the tests drive directly.
+ * On `personal` this guarded turn starts itself (busy, pending turn-start, a per-pass woken
+ * set) and placed `progress` text into a live Claude session with `appendSessionNote`. V2's
+ * server-native queue makes all of that upstream's job: a message sent with mode `queue`
+ * starts a run on an idle thread and waits behind active work on a busy one, durably, and
+ * `steer` places text into a run already in progress without starting a turn (upstream
+ * turns a steer that arrives just after its run ended into a new turn, and then
+ * `no-turn` is not logged). So per pass and per destination thread:
+ *
+ *  - any report that must be read (`needs-decision`, `done`, `failed`, `answer`) → ONE
+ *    `queue` message carrying every unnoted report for that destination;
+ *  - only `progress` reports → ONE `steer` message if the destination has a steerable run
+ *    (no turn started, `crew.deliver.no-turn`), otherwise nothing: the rows stay unnoted
+ *    and ride the next message to that thread, and `crew_status` and the panel show them.
+ *
+ * `notedAt` is stamped only after the send was accepted, so an undelivered row is
+ * re-selected next pass. The command and message ids derive from the report ids in the
+ * message plus an attempt number: a retry of the same set replays an accepted receipt
+ * instead of sending twice, and moves past a rejected one, which v2 never re-runs.
+ *
+ * Each pass first settles tasks whose worktree setup failed (`settleFailedSetups`).
+ *
+ * Runs every 60s; `runOnce` is also the seam the tests drive directly.
  *
  * @module crew/CrewSweep
  */
-import { CommandId, MessageId, ThreadId, type CrewReport, type CrewTask } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+
+import {
+  CommandId,
+  CrewReportId,
+  MessageId,
+  ThreadId,
+  type CrewReport,
+  type CrewTask,
+  type OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
+import {
+  OrchestratorCommandPreviouslyRejectedError,
+  WORKSPACE_PREPARATION_INPUT,
+} from "../orchestration-v2/Orchestrator.ts";
+import {
+  ThreadManagementNoSteerableRunError,
+  ThreadManagementService,
+} from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../serverActivation.ts";
-import { CrewLog } from "./CrewLog.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { CrewLog } from "./CrewLog.ts";
 import { CrewRepository } from "./CrewRepository.ts";
 import { boundNoteBytes, crewEnabled, destinationOf, requiresTurn } from "./CrewPolicy.ts";
+import { deliverabilityOf } from "./CrewService.ts";
 
 export const CREW_SWEEP_INTERVAL_MS = 60_000;
 
-/** Attempts to stop one zombie per boot before crew gives up and just logs. */
-export const CREW_ZOMBIE_STOP_ATTEMPTS = 3;
-
 /**
- * Consecutive `listSessions()` failures after which the zombie fiber stops.
- *
- * The disagreement that kills that call does not heal while the offending
- * session lives, so an unbounded log would be 1,440 identical lines a day.
+ * Bytes of report text one delivery message quotes. Each note is already bounded to
+ * 1 KiB at insert; past this, further reports are named rather than quoted and the
+ * destination reads them with `crew_status`.
  */
-export const CREW_ZOMBIE_SCAN_FAILURE_LIMIT = 3;
-
-/** Bytes of prefix a wake payload spends before any note text. */
-const WAKE_PREFIX = "Crew report: ";
+export const CREW_DELIVERY_QUOTED_BYTE_LIMIT = 8 * 1024;
 
 export interface CrewSweepShape {
-  /** Runs one pass. The 60s schedule is its only production caller. */
+  /** Runs one delivery pass. The 60s schedule is its only production caller. */
   readonly runOnce: () => Effect.Effect<void>;
-  /** Forks the 60s loop and the zombie fiber into the caller's scope. */
+  /** Closes `open` rows whose crew thread is gone. Boot only; see `start`. */
+  readonly reapOrphans: () => Effect.Effect<void>;
+  /** Reaps once, then forks the 60s loop into the caller's scope, after activation. */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export class CrewSweep extends Context.Service<CrewSweep, CrewSweepShape>()("t3/crew/CrewSweep") {}
 
+const isNoSteerableRun = Schema.is(ThreadManagementNoSteerableRunError);
+
+type DeliveryRow = { readonly report: CrewReport; readonly task: CrewTask };
+
+/** Task ids the tail names before it stops listing. */
+const TAIL_TASK_LIMIT = 10;
+
+/**
+ * One block per report, quoted in order until the byte budget is spent. A report that does
+ * not fit is NOT in this message: it is left out of `quoted`, stays unnoted, and goes out
+ * in the next pass. The tail names the tasks still waiting so the reader knows more is
+ * coming.
+ */
+export function renderDelivery(rows: ReadonlyArray<DeliveryRow>): {
+  readonly text: string;
+  readonly quoted: ReadonlyArray<DeliveryRow>;
+} {
+  const encoder = new TextEncoder();
+  const lines: Array<string> = [];
+  const quoted: Array<DeliveryRow> = [];
+  const waiting: Array<DeliveryRow> = [];
+  let spent = 0;
+  for (const row of rows) {
+    const { report, task } = row;
+    const label =
+      report.state === "answer"
+        ? `Crew answer to report ${report.replyTo ?? "?"}`
+        : `Crew report (${report.state}) from task ${task.taskId}, report ${report.reportId}`;
+    const line = `${label}:\n${boundNoteBytes(report.note, 1024)}`;
+    const cost = encoder.encode(line).length;
+    if (spent + cost > CREW_DELIVERY_QUOTED_BYTE_LIMIT) {
+      waiting.push(row);
+      continue;
+    }
+    spent += cost;
+    lines.push(line);
+    quoted.push(row);
+  }
+  if (waiting.length > 0) {
+    const taskIds = [...new Set(waiting.map(({ task }) => task.taskId as string))];
+    const named = taskIds.slice(0, TAIL_TASK_LIMIT).join(", ");
+    const more =
+      taskIds.length > TAIL_TASK_LIMIT ? ` and ${taskIds.length - TAIL_TASK_LIMIT} more` : "";
+    lines.push(
+      `…${waiting.length} more crew ${waiting.length === 1 ? "report is" : "reports are"} waiting (task ${named}${more}) and will arrive in the next message.`,
+    );
+  }
+  return { text: lines.join("\n\n"), quoted };
+}
+
+/** Stable for a given set of reports, so a retried send replays instead of repeating. */
+const deliveryKey = (reportIds: ReadonlyArray<string>) =>
+  NodeCrypto.createHash("sha256").update(reportIds.join("\n")).digest("hex").slice(0, 32);
+
+/**
+ * The command and message id of one delivery attempt. Attempt 0 is the bare key; a later
+ * attempt exists only because every earlier id holds a REJECTED receipt, which v2 never
+ * re-runs, so retrying under the same id could not deliver.
+ */
+export const deliveryId = (key: string, attempt: number) =>
+  attempt === 0 ? `crew:deliver:${key}` : `crew:deliver:${key}:${attempt}`;
+
+const isPreviouslyRejected = Schema.is(OrchestratorCommandPreviouslyRejectedError);
+
+/**
+ * How the latest run's "Preparing workspace" item ends when setup never finished, and what
+ * the bridge is told. `interrupted` is a user Stop during setup: that crewmate will not
+ * start either.
+ */
+const SETTLED_PREPARATION_NOTES: ReadonlyMap<string, (output: string) => string> = new Map([
+  [
+    "failed",
+    (output: string) =>
+      `Worktree setup failed, so the crewmate never started and its slot is free. ${output}`,
+  ],
+  [
+    "cancelled",
+    () =>
+      "Worktree setup was cancelled (the server stopped during it), so the crewmate never started and its slot is free.",
+  ],
+  [
+    "interrupted",
+    () =>
+      "Worktree setup did not complete (it was stopped), so the crewmate never started and its slot is free.",
+  ],
+]);
+
+/** One setup-failure report per task, however many passes retry the settle step. */
+export const setupFailedReportId = (taskId: string) =>
+  CrewReportId.make(`crew:setup-failed:${taskId}`);
+
+/** Rejected receipts one pass walks past for one delivery before giving up until the next. */
+const MAX_ATTEMPTS_PER_PASS = 64;
+
 const makeCrewSweep = Effect.gen(function* () {
   const repository = yield* CrewRepository;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-  const projectionTurnRepository = yield* ProjectionTurnRepository;
-  const orchestrationEngine = yield* OrchestrationEngineService;
-  const providerService = yield* ProviderService;
+  const threads = yield* ThreadManagementService;
   const crewLog = yield* CrewLog;
-  const crypto = yield* Crypto.Crypto;
   const serverSettings = yield* ServerSettingsService;
+  const bootIso = DateTime.formatIso(yield* DateTime.now);
 
-  const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  const shellOf = (threadId: ThreadId) =>
+    threads.getThreadShell(threadId).pipe(Effect.catchCause(() => Effect.succeed(null)));
 
   /**
-   * Crew's own turn guard. Deliberately **not** the in-repo guard's
-   * `session.status === "ready"` conjunct, which is anti-correlated with the case
-   * a wake exists for: a `stopped` or absent session is exactly when a turn is
-   * required.
-   *
-   * There is no fourth "already woken this pass" conjunct. The projector runs
-   * inside the append transaction, serially, before the dispatch returns, so the
-   * instant a wake returns `getPendingTurnStartByThreadId` is `Some` and these
-   * three conjuncts already serialise the pass.
+   * Destinations whose last send failed. A failure is logged once per unbroken run, not
+   * once per pass: a destination that keeps refusing would otherwise write 1,440 identical
+   * lines a day.
    */
-  const canStartTurn = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      );
-      if (shell === undefined) {
-        return false;
-      }
-      if (shell.session?.activeTurnId != null) {
-        return false;
-      }
-      if (shell.hasPendingApprovals || shell.hasPendingUserInput) {
-        return false;
-      }
-      const pending = yield* projectionTurnRepository
-        .getPendingTurnStartByThreadId({ threadId })
-        .pipe(Effect.catchCause(() => Effect.succeed(Option.none())));
-      return Option.isNone(pending);
-    });
+  const failingDestinations = new Set<string>();
 
   /**
-   * The three reasons a destination is undeliverable-to. All three terminate the
-   * row on the first sweep — there is no grace period, because nothing in the
-   * schema can count sweeps and both implementable substitutes are wrong in a
-   * named way (an in-memory counter resets on restart; a `createdAt` window gives
-   * zero grace to any row older than the window).
+   * The attempt to start from per delivery key, so a destination that keeps rejecting does
+   * not re-walk its rejected receipts every pass. Lost on restart, when the walk below
+   * finds the first id without a rejected receipt again.
    */
-  const deliverability = (threadId: ThreadId) =>
-    projectionSnapshotQuery.getThreadShellById(threadId).pipe(
-      Effect.map(Option.getOrUndefined),
-      Effect.catchCause(() => Effect.succeed(undefined)),
-      Effect.map((shell) =>
-        shell === undefined
-          ? ({ ok: false, reason: "missing" } as const)
-          : shell.archivedAt !== null
-            ? ({ ok: false, reason: "archived" } as const)
-            : ({ ok: true } as const),
-      ),
-    );
+  const nextAttempt = new Map<string, number>();
+  /** Keys a pass attempted; any other `nextAttempt` entry is dropped when the pass ends. */
+  let keysThisPass = new Set<string>();
 
-  const wake = (threadId: ThreadId, payload: string | null) =>
-    Effect.gen(function* () {
-      yield* orchestrationEngine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make(`crew:wake:${yield* uuid}`),
-        threadId,
-        message: {
-          messageId: MessageId.make(yield* uuid),
-          role: "user",
-          text:
-            payload === null
-              ? "A crew report is waiting. Read it with crew_status."
-              : `${WAKE_PREFIX}${payload}`,
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        createdAt: yield* nowIso,
-      });
-    }).pipe(
-      Effect.catchCause(() => Effect.succeed(false)),
-      Effect.as(true),
-    );
-
-  const runOnce: CrewSweepShape["runOnce"] = () =>
-    Effect.gen(function* () {
-      // Checked per pass, not at start-up, so turning crew off in Settings takes
-      // effect within one cycle instead of at the next restart. `getRawSettings`
-      // rather than `getSettings`: this runs every 60s and needs one plain
-      // boolean, and `getSettings` materializes a secret-store read per
-      // sensitive provider env var.
-      const enabled = yield* serverSettings.getRawSettings.pipe(
-        Effect.map(crewEnabled),
-        Effect.catchCause(() => Effect.succeed(false)),
-      );
-
-      const unnoted = yield* repository
-        .selectUnnoted()
-        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
-
-      /**
-       * While the switch is off the sweep still delivers **answers**, and only
-       * answers.
-       *
-       * An answer travels operator -> crewmate and can only close a door that is
-       * already open: some crewmate is blocked on `needs-decision`, holding a
-       * slot and a worktree, and this is the reply that frees it. Withholding it
-       * strands exactly the work the operator is trying to wind down, and the
-       * panel offers no retry — `crew.answer` writes a row carrying `replyTo`,
-       * which is what makes the Answer button disappear, so a swallowed answer
-       * is swallowed for good.
-       *
-       * Everything else travels crewmate -> bridge and *starts a turn* on the
-       * operator's own thread. That is the noise a master switch is expected to
-       * stop, and stopping it costs nothing: those rows stay unnoted and deliver
-       * when crew is turned back on, and the Crew panel reads the database
-       * directly, so the operator can still see every pending report while off.
-       */
-      const reports = enabled ? unnoted : unnoted.filter((report) => report.state === "answer");
-      if (reports.length === 0) {
-        return;
-      }
-
-      const tasks = yield* repository
-        .listAllTasks()
-        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
-      const taskById = new Map(tasks.map((task) => [task.taskId, task]));
-
-      /**
-       * Once a wake has been dispatched for a destination in this pass, the
-       * remaining rows for that same destination append and stamp without
-       * re-evaluating the guard — they ride the turn already coming.
-       *
-       * Keyed on the **destination**, not the bridge. Keyed on the bridge, an
-       * answer sorts into the same pass as a report on the same task, rides the
-       * turn that report dispatched to a *different* thread, appends `false` on a
-       * non-Claude crewmate, and is stamped handled — the operator's answer
-       * silently lost while the crewmate stays blocked holding a slot.
-       */
-      const wokenDestinations = new Set<string>();
-
-      for (const report of reports) {
-        const task = taskById.get(report.taskId);
-        if (task === undefined) {
-          yield* stamp(report, "crew.deliver.abandoned", "missing-task");
-          continue;
-        }
-
-        const isAnswer = report.state === "answer";
-        const destination = ThreadId.make(destinationOf(report, task));
-        const family = isAnswer ? "crew.answer" : "crew.deliver";
-
-        // Step 1: thread guard. Precedes everything because `appendSessionNote`
-        // checks none of it.
-        const reachable = yield* deliverability(destination);
-        if (!reachable.ok) {
-          yield* stamp(report, "crew.deliver.abandoned", reachable.reason);
-          continue;
-        }
-
-        const rides = wokenDestinations.has(destination);
-        const needsTurn = requiresTurn(report.state);
-
-        // Step 2: turn guard, before the append, for a report that must be read.
-        // Appending before you know you can wake buys nothing — a note is read on
-        // the next turn or not at all.
-        if (needsTurn && !rides) {
-          const ready = yield* canStartTurn(destination);
-          if (!ready) {
-            yield* crewLog.record(`${family}.deferred.busy` as never, {
-              taskId: task.taskId,
-              reportId: report.reportId,
-              destinationThreadId: destination,
-              state: report.state,
-            });
-            continue;
-          }
-        }
-
-        // Step 3: append.
-        const appended = yield* providerService
-          .appendSessionNote({
-            threadId: destination,
-            text: boundNoteBytes(report.note, 1024),
-          })
-          .pipe(Effect.catchCause(() => Effect.succeed(false)));
-
-        if (!appended && !needsTurn && !rides) {
-          // A `progress` report on a non-Claude bridge, or a Claude session that
-          // is stopped or closed. Run the turn guard now.
-          const ready = yield* canStartTurn(destination);
-          if (!ready) {
-            yield* crewLog.record("crew.deliver.deferred.no-session", {
-              taskId: task.taskId,
-              reportId: report.reportId,
-              destinationThreadId: destination,
-              state: report.state,
-            });
-            continue;
-          }
-        }
-
-        // Step 4: wake, if the report must be read or the append did not land.
-        let dispatched = rides;
-        if (!rides && (needsTurn || !appended)) {
-          // A wake carries a payload only for a report the append did not place.
-          // Attaching one to text already in the transcript makes the destination
-          // read the same report twice in one turn, unable to tell that from two
-          // reports.
-          dispatched = yield* wake(destination, appended ? null : report.note);
-          if (dispatched) {
-            wokenDestinations.add(destination);
-          }
-        } else if (!rides && appended && !needsTurn) {
-          yield* crewLog.record("crew.deliver.no-turn", {
-            taskId: task.taskId,
-            reportId: report.reportId,
-            destinationThreadId: destination,
-            state: report.state,
-          });
-        }
-
-        // Step 5: stamp last, and only once the work it records has succeeded —
-        // the append on the no-wake path, the dispatch on the wake path, and the
-        // already-dispatched wake for a report that rode one. Naming only the
-        // dispatch leaves a `progress` report appended to a live Claude bridge
-        // never stamped, re-selecting and re-appending every 60s forever.
-        if (appended || dispatched) {
+  const stampAll = (reports: ReadonlyArray<CrewReport>) =>
+    Effect.forEach(
+      reports,
+      (report) =>
+        Effect.gen(function* () {
           yield* repository
             .stampNoted({ reportId: report.reportId, notedAt: yield* nowIso })
             .pipe(Effect.catchCause(() => Effect.succeed(false)));
-        }
-      }
-    });
+        }),
+      { discard: true },
+    );
 
-  const stamp = (report: CrewReport, code: "crew.deliver.abandoned", reason: string) =>
+  const abandon = (report: CrewReport, reason: string) =>
     Effect.gen(function* () {
-      yield* repository
-        .stampNoted({ reportId: report.reportId, notedAt: yield* nowIso })
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      yield* crewLog.record(code, {
+      yield* stampAll([report]);
+      yield* crewLog.record("crew.deliver.abandoned", {
         reportId: report.reportId,
         taskId: report.taskId,
         state: report.state,
@@ -305,92 +225,292 @@ const makeCrewSweep = Effect.gen(function* () {
       });
     });
 
-  /**
-   * The zombie scan, in a fiber of its own.
-   *
-   * `listSessions()` has a `never` error channel hiding three `die` paths, so an
-   * ordinary catch does not rescue it and one unguarded call would take delivery
-   * down for the rest of the boot — every report undelivered, silently.
-   */
-  const zombieScan = Effect.gen(function* () {
-    const attemptsByThread = new Map<string, number>();
-    let consecutiveFailures = 0;
-
-    const pass = Effect.gen(function* () {
-      /**
-       * Tasks first, sessions second, and the order is load-bearing.
-       *
-       * This fiber is deliberately not gated on the master switch — stopping a
-       * zombie is cleanup of a task that is already closed, the same "way out"
-       * argument that keeps `teardown` open. But it runs on every server every
-       * 60s forever, including for the majority who never turn crew on, and
-       * `listSessions()` fans out across every provider adapter plus a directory
-       * read per live session. With no closed crew tasks there is nothing it
-       * could ever stop, so the cheap query answers that first and the expensive
-       * enumeration never runs.
-       */
-      const tasks = yield* repository
-        .listAllTasks()
-        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
-      const closedCrewThreads = new Set(
-        tasks.filter((task) => task.status === "closed").map((task) => task.crewThreadId),
+  const deliverTo = (
+    destination: ThreadId,
+    shell: OrchestrationV2ThreadShell,
+    candidates: ReadonlyArray<DeliveryRow>,
+  ) =>
+    Effect.gen(function* () {
+      // Only the rows the message quotes are in it: everything below — mode, ids, sender,
+      // stamping — is about those rows. The rest stay unnoted for the next pass.
+      const { text, quoted: rows } = renderDelivery(candidates);
+      const needsTurn = rows.some(({ report }) => requiresTurn(report.state));
+      const reportIds = rows.map(({ report }) => report.reportId);
+      const key = deliveryKey(reportIds);
+      keysThisPass.add(key);
+      const senders = new Set(
+        rows.map(({ report, task }) =>
+          report.state === "answer" ? task.parentThreadId : task.crewThreadId,
+        ),
       );
-      if (closedCrewThreads.size === 0) {
-        attemptsByThread.clear();
-        return true;
+      const send = (attempt: number) =>
+        threads.sendToThread({
+          projectId: shell.projectId,
+          commandId: CommandId.make(deliveryId(key, attempt)),
+          threadId: destination,
+          messageId: MessageId.make(deliveryId(key, attempt)),
+          text,
+          attachments: [],
+          mode: needsTurn ? "queue" : "steer",
+          ...(senders.size === 1 ? { senderThreadId: [...senders][0]! } : {}),
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      // An accepted receipt replays as success, so a lost stamp is re-stamped without a
+      // second message. A rejected receipt is final for its id: move to the next attempt.
+      // Bounded per pass in case a fresh id is ever reported as previously rejected; the
+      // walk resumes from `nextAttempt` on the next pass.
+      let attempt = nextAttempt.get(key) ?? 0;
+      const lastAttempt = attempt + MAX_ATTEMPTS_PER_PASS;
+      let sent = yield* Effect.result(send(attempt));
+      while (
+        sent._tag === "Failure" &&
+        isPreviouslyRejected(sent.failure) &&
+        attempt < lastAttempt
+      ) {
+        attempt += 1;
+        nextAttempt.set(key, attempt);
+        sent = yield* Effect.result(send(attempt));
       }
 
-      const sessions = yield* providerService
-        .listSessions()
-        .pipe(Effect.catchCause(() => Effect.succeed(null)));
-      if (sessions === null) {
-        consecutiveFailures += 1;
-        if (consecutiveFailures === 1) {
-          // Once per unbroken run of failures, not once per pass.
-          yield* crewLog.record("crew.sweep.zombie-scan-failed", {
-            count: consecutiveFailures,
-          });
+      if (sent._tag === "Success") {
+        nextAttempt.delete(key);
+        failingDestinations.delete(destination);
+        yield* stampAll(rows.map(({ report }) => report));
+        // Upstream turns a steer that arrives after its run finished into a new turn, so
+        // `no-turn` is logged only for a delivery that actually steered.
+        if (!needsTurn && sent.success.delivery === "steered") {
+          yield* Effect.forEach(
+            rows,
+            ({ report }) =>
+              crewLog.record("crew.deliver.no-turn", {
+                taskId: report.taskId,
+                reportId: report.reportId,
+                destinationThreadId: destination,
+                state: report.state,
+              }),
+            { discard: true },
+          );
         }
-        return consecutiveFailures < CREW_ZOMBIE_SCAN_FAILURE_LIMIT;
+        return;
       }
-      consecutiveFailures = 0;
 
-      for (const session of sessions) {
-        const threadId = session.threadId;
-        if (!closedCrewThreads.has(threadId)) {
-          attemptsByThread.delete(threadId);
-          continue;
-        }
-        const attempts = attemptsByThread.get(threadId) ?? 0;
-        if (attempts >= CREW_ZOMBIE_STOP_ATTEMPTS) {
-          continue;
-        }
-        attemptsByThread.set(threadId, attempts + 1);
-        yield* providerService.stopSession({ threadId }).pipe(Effect.catchCause(() => Effect.void));
-        yield* crewLog.record("crew.zombie.stopped", {
-          threadId,
-          attempt: attempts + 1,
+      // Positively classified: only "no run to steer" on a progress-only send means
+      // "not now". Every other failure is a failed delivery, retried next pass.
+      if (!needsTurn && isNoSteerableRun(sent.failure)) {
+        return;
+      }
+      if (!failingDestinations.has(destination)) {
+        failingDestinations.add(destination);
+        yield* crewLog.record("crew.deliver.failed", {
+          destinationThreadId: destination,
+          count: rows.length,
+          reason: sent.failure._tag,
         });
       }
-      return true;
     });
 
-    yield* pass.pipe(
-      Effect.flatMap((keepGoing) => (keepGoing ? Effect.void : Effect.interrupt)),
-      Effect.repeat(Schedule.spaced(`${CREW_SWEEP_INTERVAL_MS} millis`)),
-      Effect.catchCause(() => Effect.void),
-    );
+  /**
+   * Closes open tasks whose worktree setup never finished. Launch provisions in the
+   * background, so dispatch has already returned success; upstream records the outcome on
+   * the "Preparing workspace" item of the crewmate's run. Settled, positively, when that
+   * item in the thread's LATEST run ended `failed` (setup failed), `cancelled` (startup
+   * recovery cancels a preparation the server died during) or `interrupted` (a user Stop
+   * during setup) — being in the latest run means no run started after it. The latest run
+   * is re-read before each write, so a run that starts meanwhile wins; one starting between
+   * the report and the close leaves the report filed and the row open. An old failed item
+   * followed by later runs settles nothing.
+   *
+   * The slot is freed and the bridge is told through an ordinary `failed` report. The report
+   * goes in first, under an id derived from the task, insert-or-ignore, and the row closes
+   * second: whichever step fails, the task is still open next pass and the retry ends with
+   * exactly one report. Read from durable state, so a failure that landed while the server
+   * was down is caught.
+   */
+  const settleFailedSetups = Effect.gen(function* () {
+    const open = yield* repository
+      .listOpenTasks()
+      .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
+    for (const task of open) {
+      const latestRunId = (yield* shellOf(task.crewThreadId))?.latestRunId ?? null;
+      if (latestRunId === null) {
+        continue;
+      }
+      const records = yield* threads
+        .getThreadRecords(task.crewThreadId, ["turnItems"], {
+          turnItemTypes: ["command_execution"],
+          turnItemRunId: latestRunId,
+        })
+        .pipe(Effect.catchCause(() => Effect.succeed(null)));
+      const preparation = records?.turnItems.find(
+        (item) =>
+          item.type === "command_execution" &&
+          item.runId === latestRunId &&
+          item.input === WORKSPACE_PREPARATION_INPUT,
+      );
+      if (
+        preparation === undefined ||
+        preparation.type !== "command_execution" ||
+        !SETTLED_PREPARATION_NOTES.has(preparation.status)
+      ) {
+        continue;
+      }
+      // A run that started after the read above (a user's Retry, a new message) makes this
+      // setup history, not the crewmate's outcome. Checked again before each write.
+      const stillLatest = Effect.map(
+        shellOf(task.crewThreadId),
+        (shell) => (shell?.latestRunId ?? null) === latestRunId,
+      );
+      if (!(yield* stillLatest)) {
+        continue;
+      }
+      const now = yield* nowIso;
+      const filed = yield* repository
+        .insertReportIfAbsent({
+          reportId: setupFailedReportId(task.taskId),
+          taskId: task.taskId,
+          state: "failed",
+          note: boundNoteBytes(
+            SETTLED_PREPARATION_NOTES.get(preparation.status)!(preparation.output ?? "").trim(),
+            1024,
+          ),
+          createdAt: now,
+          notedAt: null,
+          replyTo: null,
+        })
+        .pipe(Effect.result);
+      if (filed._tag === "Failure" || !(yield* stillLatest)) {
+        continue;
+      }
+      const closed = yield* repository
+        .closeTask({ taskId: task.taskId, updatedAt: now })
+        .pipe(Effect.result);
+      if (closed._tag === "Failure") {
+        continue;
+      }
+      yield* crewLog.record("crew.dispatch.compensate.skipped", {
+        taskId: task.taskId,
+        threadId: task.crewThreadId,
+        reason: `setup-${preparation.status}`,
+      });
+    }
   });
 
-  const start: CrewSweepShape["start"] = () =>
+  const runOnce: CrewSweepShape["runOnce"] = () =>
     Effect.gen(function* () {
-      yield* forkParked(
-        runOnce().pipe(Effect.repeat(Schedule.spaced(`${CREW_SWEEP_INTERVAL_MS} millis`))),
-      );
-      yield* forkParked(zombieScan);
+      keysThisPass = new Set();
+      yield* deliverPass;
+      // A key no pass sends any more (its rows were stamped, abandoned or regrouped) will
+      // never be looked up again.
+      for (const key of nextAttempt.keys()) {
+        if (!keysThisPass.has(key)) nextAttempt.delete(key);
+      }
     });
 
-  return { runOnce, start } satisfies CrewSweepShape;
+  const deliverPass = Effect.gen(function* () {
+    // Before delivery, so the failure report it files goes out in this pass. Cleanup,
+    // like teardown: it runs whatever the master switch says.
+    yield* settleFailedSetups;
+
+    // Per pass, not at start-up, so turning crew off takes effect within one cycle.
+    const enabled = yield* serverSettings.getRawSettings.pipe(
+      Effect.map(crewEnabled),
+      Effect.catchCause(() => Effect.succeed(false)),
+    );
+
+    const unnoted = yield* repository
+      .selectUnnoted()
+      .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewReport>)));
+
+    // While off the sweep still delivers answers, and only answers: an answer frees a
+    // crewmate already blocked holding a slot, and the panel offers no retry once the
+    // row is written. Everything else starts work on the operator's own thread; it
+    // stays unnoted and delivers when crew is turned back on.
+    const reports = enabled ? unnoted : unnoted.filter((report) => report.state === "answer");
+    if (reports.length === 0) {
+      return;
+    }
+
+    const tasks = yield* repository
+      .listAllTasks()
+      .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
+    const taskById = new Map(tasks.map((task) => [task.taskId, task]));
+
+    // Grouped by DESTINATION, not by bridge: an answer and a report on the same task
+    // go to two different threads, and keying on the bridge would send the answer to
+    // the bridge while the crewmate stays blocked.
+    const byDestination = new Map<
+      string,
+      Array<{ readonly report: CrewReport; readonly task: CrewTask }>
+    >();
+    for (const report of reports) {
+      const task = taskById.get(report.taskId);
+      if (task === undefined) {
+        yield* abandon(report, "missing-task");
+        continue;
+      }
+      const destination = destinationOf(report, task);
+      byDestination.set(destination, [...(byDestination.get(destination) ?? []), { report, task }]);
+    }
+
+    for (const [destinationId, rows] of byDestination) {
+      const destination = ThreadId.make(destinationId);
+      const shell = yield* shellOf(destination);
+      const deliverable = deliverabilityOf(shell);
+      // Every undeliverable reason terminates the row on the first pass; nothing in
+      // the schema can count passes, so there is no grace period.
+      if (shell === null || !deliverable.ok) {
+        yield* Effect.forEach(
+          rows,
+          ({ report }) => abandon(report, deliverable.ok ? "missing" : deliverable.detail),
+          { discard: true },
+        );
+        continue;
+      }
+      yield* deliverTo(destination, shell, rows);
+    }
+  });
+
+  const reapOrphans: CrewSweepShape["reapOrphans"] = () =>
+    Effect.gen(function* () {
+      const open = yield* repository
+        .listOpenTasks()
+        .pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<CrewTask>)));
+      for (const task of open) {
+        // Only rows that predate this process: a dispatch in flight has reserved its row
+        // before the launch creates the thread, and must not read as an orphan.
+        if (task.createdAt >= bootIso) {
+          continue;
+        }
+        const shell = yield* shellOf(task.crewThreadId);
+        if (shell !== null && shell.deletedAt === null) {
+          continue;
+        }
+        yield* repository
+          .closeTask({ taskId: task.taskId, updatedAt: yield* nowIso })
+          .pipe(Effect.catchCause(() => Effect.void));
+        yield* crewLog.record("crew.reap.orphan", {
+          taskId: task.taskId,
+          threadId: task.crewThreadId,
+          reason: shell === null ? "missing" : "deleted",
+        });
+      }
+    });
+
+  const start: CrewSweepShape["start"] = () =>
+    forkParked(
+      reapOrphans().pipe(
+        Effect.andThen(
+          runOnce().pipe(
+            // A defect in one pass must not end delivery for the rest of the boot.
+            Effect.catchCause((cause) => Effect.logWarning("crew.sweep pass failed", { cause })),
+            Effect.repeat(Schedule.spaced(`${CREW_SWEEP_INTERVAL_MS} millis`)),
+          ),
+        ),
+      ),
+    );
+
+  return { runOnce, reapOrphans, start } satisfies CrewSweepShape;
 });
 
 export const CrewSweepLive = Layer.effect(CrewSweep)(makeCrewSweep);

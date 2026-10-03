@@ -174,7 +174,7 @@ describe("CrewRepository", () => {
     ),
   );
 
-  it.effect("selectUnnoted puts blocked crewmates ahead of chatty ones", () =>
+  it.effect("selectUnnoted puts blocking and terminal reports ahead of progress", () =>
     withRepository(
       Effect.gen(function* () {
         const repository = yield* CrewRepository;
@@ -204,7 +204,7 @@ describe("CrewRepository", () => {
         const unnoted = yield* repository.selectUnnoted();
         assert.deepStrictEqual(
           unnoted.map((report) => report.reportId),
-          ["report-decision", "report-progress", "report-done", "report-answer"],
+          ["report-decision", "report-done", "report-answer", "report-progress"],
         );
       }),
     ),

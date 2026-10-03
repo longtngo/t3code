@@ -37,7 +37,7 @@ export const CREW_MAX_CONCURRENT_TASKS_ENV = "T3CODE_CREW_MAX_CONCURRENT_TASKS";
  *   it is worse than refusing it: the panel drops the retry affordance the
  *   moment the row is written, so the operator's reply is swallowed for good and
  *   the crewmate stays blocked. See `CrewSweep.runOnce`.
- * - **The zombie scan.** Stopping a session for an already-closed task is
+ * - **The boot orphan reap.** Closing a row whose crew thread is gone is
  *   cleanup, not new work.
  *
  * Distinct from `T3CODE_CREW_MAX_CONCURRENT_TASKS=0`, which refuses new

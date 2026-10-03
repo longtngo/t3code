@@ -19,10 +19,12 @@
  *
  * @module SubagentBackend
  */
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -46,10 +48,15 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import { cursorOffloadBlockedReason } from "../provider/creditSpendGuard.ts";
-import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
-import { readCursorUsage } from "./cursorUsageRead.ts";
+import { cursorTotalUsageLimits } from "./cursorUsageRead.ts";
+import {
+  layer as SubagentLiveThreadsLayer,
+  registerActiveSubagentThreadBackend,
+  SubagentLiveThreads,
+} from "./SubagentLiveThreads.ts";
 import {
   THREAD_BACKEND_MAX_FILE_NAME_LENGTH,
   threadBackendFileName,
@@ -179,7 +186,7 @@ export const readBackendFile = Effect.fn("subagentBackend.read")(function* () {
  * exactly the hole reconciliation exists to close. Atomicity alone does not fix it;
  * the writes are individually atomic and still arrive in the wrong order.
  */
-export const backendWriteSemaphore = Effect.runSync(Semaphore.make(1));
+export const backendWriteSemaphore = Semaphore.makeUnsafe(1);
 
 /** The exact plain shape `parsePersistedBackend` and the wrapper's jq filter read. Shared by
  * the global file and every per-thread file, so the wrapper needs no second parser. */
@@ -242,10 +249,12 @@ function decodeCursorInstanceConfig(config: unknown): CursorSettings | null {
   }
 }
 
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+
 /** Narrows a flag-file instance id to the branded slug, or null when it does not conform. */
 function validInstanceIdOrNull(value: string | null): ProviderInstanceId | null {
   if (value === null) return null;
-  return Schema.is(ProviderInstanceId)(value) ? value : null;
+  return isProviderInstanceId(value) ? value : null;
 }
 
 /** Enabled Cursor instances this machine can dispatch subagents to. */
@@ -298,6 +307,18 @@ export function validateCursorInstance(
 }
 
 /**
+ * The Cursor CLI the wrapper execs. V2's Cursor provider runs on the Cursor SDK, so its
+ * settings keep `binaryPath` only as an optional, hidden V1 carry-over with no default; the
+ * wrapper still needs a CLI, and `cursor-agent` is the name the CLI installs under.
+ */
+export const CURSOR_CLI_DEFAULT_BINARY = "cursor-agent";
+
+export const cursorCliBinaryPath = (config: CursorSettings): string =>
+  config.binaryPath !== undefined && config.binaryPath.length > 0
+    ? config.binaryPath
+    : CURSOR_CLI_DEFAULT_BINARY;
+
+/**
  * Turns a validated Cursor instance into the record the flag file stores. Resolves the
  * binary on the server's PATH (`resolveCommandPath` never spawns a subprocess: it stats
  * an explicit path on every call, and memoises only bare command names, for 30s) and
@@ -309,10 +330,11 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
   model: string,
 ) {
   const { config } = validated;
-  const resolution = yield* Effect.result(resolveCommandPath(config.binaryPath));
-  const binaryPath = Result.isSuccess(resolution) ? resolution.success : config.binaryPath;
+  const configured = cursorCliBinaryPath(config);
+  const resolution = yield* Effect.result(resolveCommandPath(configured));
+  const binaryPath = Result.isSuccess(resolution) ? resolution.success : configured;
   const degraded = Result.isFailure(resolution)
-    ? `Could not resolve "${config.binaryPath}" on the server's PATH; wrote it as-is ` +
+    ? `Could not resolve "${configured}" on the server's PATH; wrote it as-is ` +
       `because the wrapper's own shell PATH may still find it.`
     : null;
   return {
@@ -321,7 +343,7 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
     instanceId: validated.instanceId,
     model,
     binaryPath,
-    apiEndpoint: config.apiEndpoint,
+    apiEndpoint: config.apiEndpoint ?? "",
     updatedAt: null,
     degraded,
   } satisfies PersistedBackend;
@@ -329,14 +351,22 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
 
 export const MASTER_OFF_REASON = "Subagent offload is switched off in Settings.";
 
-/** Reads Cursor's usage (cached 60s, never fails) and asks whether offload is blocked. */
+/**
+ * Why Cursor offload is withheld for spending, or `null` when it is not: "Allow to spend
+ * credits" is off and Cursor's overall window reads 100% with its reset still ahead.
+ *
+ * Read live from the provider registry, as on the fork. That adds no layer edge between
+ * the registry and this module: Claude adapters reach `prepareThreadBackend` through the
+ * module-level registration in `SubagentLiveThreads`, not through the layer graph.
+ */
 const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(function* (
   settings: ServerSettings,
 ) {
-  const usage = yield* readCursorUsage().pipe(Effect.orElseSucceed(() => null));
+  const registry = yield* ProviderRegistry;
   return cursorOffloadBlockedReason({
     allowSpendingCredits: settings.allowSpendingCredits,
-    cursorUsedPercent: usage?.usedPercent ?? null,
+    cursorLimits: cursorTotalUsageLimits(yield* registry.getProviders),
+    nowMs: yield* Clock.currentTimeMillis,
   });
 });
 
@@ -434,36 +464,19 @@ export const readThreadBackendFile = Effect.fn("subagentBackend.readThread")(fun
 
 /**
  * Rewrites every live thread's file from `settings` and the global record. No locking —
- * callers hold the permit. Sessions are enumerated per adapter, each under `Effect.catchCause`,
- * because `registry.getByInstance` fails with `ProviderUnsupportedError` for an instance
- * removed between `listInstances()` and this lookup, and one such instance must not stop the
- * other providers' threads from being reconciled. Each write is likewise isolated: one
- * over-long or unwritable thread id is logged, not fatal.
- *
- * The cost of that isolation is a fail-open: a skipped adapter's threads are not rewritten
- * in this pass, so a live session under it keeps whatever its flag file last said — including
- * a Cursor target after the master switch was turned off. Such a thread only catches up at
- * its next session start, when `writeThreadBackendForSession` rewrites the file.
+ * callers hold the permit. The threads are the ones whose Claude process opened in this
+ * server process (`SubagentLiveThreads`, fed by `prepareThreadBackend`): those are the only
+ * subprocesses whose `SUBAGENT_BACKEND_STATE` points into this directory. Each write is
+ * isolated: one over-long or unwritable thread id is logged, not fatal, so it cannot stop the
+ * other threads from being reconciled.
  */
 const reconcileThreadBackendsBody = Effect.fn("subagentBackend.reconcileThreads")(function* (
   settings: ServerSettings,
   global: PersistedBackend,
 ) {
-  const registry = yield* ProviderAdapterRegistry;
+  const liveThreads = yield* SubagentLiveThreads;
   const { subagentThreadsDir } = yield* ServerConfig;
-  const threadIds = new Set<ThreadId>();
-  for (const instanceId of yield* registry.listInstances()) {
-    const sessions = yield* registry.getByInstance(instanceId).pipe(
-      Effect.flatMap((adapter) => adapter.listSessions()),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("subagentBackend.reconcileThreads: listSessions failed", {
-          instanceId,
-          cause,
-        }).pipe(Effect.as([])),
-      ),
-    );
-    for (const session of sessions) threadIds.add(session.threadId);
-  }
+  const threadIds = new Set<ThreadId>(yield* liveThreads.list);
   yield* ensureThreadsDir(subagentThreadsDir);
   const creditsBlockedReason = yield* readCreditsBlockedReason(settings);
   yield* Effect.forEach(
@@ -496,23 +509,19 @@ export const reconcileAllBackends = Effect.fn("subagentBackend.reconcileAll")(fu
 });
 
 /**
- * Called by `ProviderService` around every `adapter.startSession` — once immediately
- * before it, so the file the new subprocess's `SUBAGENT_BACKEND_STATE` points at exists
- * before the first subagent could be dispatched, and once immediately after, because a
- * settings change landing while the adapter starts up enumerates only sessions already
- * registered and so cannot see this one.
+ * Resolves and writes one thread's flag file for the current settings. Called by
+ * `prepareThreadBackend` immediately before a Claude process is spawned, so the file the
+ * new subprocess's `SUBAGENT_BACKEND_STATE` points at exists before the first subagent
+ * could be dispatched.
  *
- * `removeOnFailure` (default true) is for the PRE-start call: a failure there is logged
- * and the thread's file REMOVED rather than left alone, because nothing else ever deletes
- * one, so the previous session's record — possibly a Cursor target this call could no
- * longer confirm — would otherwise be what the new subprocess dispatches on. An absent
- * file makes the wrapper refuse, which is the safe direction, and a session must never be
- * blocked from starting over this.
+ * `removeOnFailure` (default true): a failure is logged and the thread's file REMOVED
+ * rather than left alone, because nothing else ever deletes one, so the previous process's
+ * record — possibly a Cursor target this call could no longer confirm — would otherwise be
+ * what the new subprocess dispatches on. An absent file makes the wrapper refuse, which is
+ * the safe direction, and a session must never be blocked from starting over this.
  *
- * The POST-start call passes `false`: by then the pre-start write has already put a file
- * this same session resolved for the current settings, and deleting it on a transient
- * failure would strand a live subprocess with no file at all — strictly worse than the
- * one it is holding.
+ * `false` keeps a file an earlier good write left, for a caller rewriting the file of a
+ * process that is already running on it.
  */
 export const writeThreadBackendForSession = Effect.fn("subagentBackend.writeForSession")(function* (
   threadId: ThreadId,
@@ -560,6 +569,38 @@ export const writeThreadBackendForSession = Effect.fn("subagentBackend.writeForS
       ),
     ),
   );
+});
+
+/** What a Claude process is told about subagent offload when it is spawned. */
+export interface PreparedThreadBackend {
+  /** Absolute path the process's `SUBAGENT_BACKEND_STATE` points at. */
+  readonly statePath: string;
+  /** The resolved backend written there: `cursor` or `default`. */
+  readonly backend: string;
+}
+
+/**
+ * The one call a Claude adapter makes before it spawns a process for `threadId`: registers
+ * the thread as live (so later settings changes rewrite its file), writes its file for the
+ * current settings, and reads back what was written. Never fails — every failure reads as
+ * `default` through `readThreadBackendFile`'s fail-safe parse, which appends no instruction.
+ *
+ * Writing and reading in the same call that spawns the process is what closes the window
+ * the v1 provider service needed a second, post-start write for: a reconcile that runs
+ * after this call already sees the thread in `SubagentLiveThreads`.
+ */
+export const prepareThreadBackend = Effect.fn("subagentBackend.prepareThread")(function* (
+  threadId: ThreadId,
+) {
+  const liveThreads = yield* SubagentLiveThreads;
+  const { subagentThreadsDir } = yield* ServerConfig;
+  yield* liveThreads.register(threadId);
+  yield* writeThreadBackendForSession(threadId);
+  const written = yield* readThreadBackendFile(subagentThreadsDir, threadId);
+  return {
+    statePath: threadBackendFilePath(subagentThreadsDir, threadId),
+    backend: written.backend,
+  } satisfies PreparedThreadBackend;
 });
 
 /**
@@ -721,6 +762,9 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
   return next;
 });
 
+/** Logged once the files are rewritten for a changed credit block, startup included. */
+export const CREDIT_BLOCK_RECONCILED = "subagentBackend.credit-block-reconciled";
+
 /**
  * Subscriber body meant to be forked once at server startup: reconciles the flag
  * file once against whatever settings are current, then keeps reconciling for the
@@ -738,18 +782,73 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
  * unrelated settings write happened to occur. `subscribeChanges` acquires the
  * subscription synchronously in this fiber before the explicit startup reconcile
  * below reads a snapshot, so nothing in between can be missed either.
+ *
+ * Provider changes are watched too, for the credit block (see `onProvidersChanged`). The
+ * registry only offers `streamChanges`, so a flip landing between the startup reconcile and
+ * that stream's first pull waits for the next provider change; probes refresh periodically.
  */
 export const subagentBackendReconciler = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
+  const registry = yield* ProviderRegistry;
   const changes = yield* serverSettings.subscribeChanges;
+
+  // Whether Cursor offload was withheld for spending at the last reconcile. `undefined`
+  // when that could not be read, so the next provider change reconciles.
+  let creditsBlocked: boolean | undefined;
+  const readCreditsBlocked = serverSettings.getRawSettings.pipe(
+    Effect.flatMap(readCreditsBlockedReason),
+    Effect.map((reason) => reason !== null),
+    // Defects too: this runs outside the reconcile's own catch, so anything escaping here
+    // would end the reconciler for the life of the process.
+    Effect.catchCause((cause) =>
+      Effect.logWarning("subagentBackend.creditsBlocked read failed", { cause }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
 
   // The stream payload is ignored on purpose: `reconcileAllBackends` re-reads settings
   // inside the write permit, so the global file and every thread file come from one
   // snapshot no concurrent settings write can split.
-  const reconcileLogged = reconcileAllBackends().pipe(
-    Effect.catchCause((cause) => Effect.logWarning("subagentBackend.reconcile failed", { cause })),
-  );
+  const reconcileLogged = Effect.gen(function* () {
+    const previous = creditsBlocked;
+    creditsBlocked = yield* readCreditsBlocked;
+    yield* reconcileAllBackends().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("subagentBackend.reconcile failed", { cause }),
+      ),
+    );
+    if (creditsBlocked !== previous) {
+      yield* Effect.logInfo(CREDIT_BLOCK_RECONCILED, { blocked: creditsBlocked ?? "unknown" });
+    }
+  });
+
+  // A provider change reconciles only when it flips the credit block, as the fork's
+  // credit guard did: Cursor reaching 100% (or resetting) must rewrite live threads'
+  // files without a settings change, and every other probe must not.
+  const onProvidersChanged = Effect.gen(function* () {
+    const next = yield* readCreditsBlocked;
+    if (next === undefined || next !== creditsBlocked) yield* reconcileLogged;
+  });
 
   yield* reconcileLogged;
-  yield* changes.pipe(Stream.runForEach(() => reconcileLogged));
+  yield* Stream.merge(
+    changes.pipe(Stream.map(() => reconcileLogged)),
+    registry.streamChanges.pipe(Stream.map(() => onProvidersChanged)),
+  ).pipe(Stream.runForEach((run) => run));
 });
+
+/**
+ * The production wiring: the live-thread set, plus the preparer Claude adapters reach
+ * through `prepareActiveSubagentThreadBackend`. The preparer is closed over this layer's
+ * context because an adapter calls it with none (see `SubagentLiveThreads`).
+ */
+export const SubagentBackendLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const context =
+      yield* Effect.context<Effect.Services<ReturnType<typeof prepareThreadBackend>>>();
+    yield* registerActiveSubagentThreadBackend((threadId) =>
+      prepareThreadBackend(threadId).pipe(Effect.provide(context)),
+    );
+  }),
+).pipe(Layer.provideMerge(SubagentLiveThreadsLayer));

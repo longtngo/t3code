@@ -34,6 +34,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { makeTransientGitRetryPolicy, resolveGitRetryAttempts } from "./gitRetry.ts";
 import {
@@ -41,7 +42,7 @@ import {
   parseRemoteNamesInGitOrder,
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -868,7 +869,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const { worktreesDir } = yield* ServerConfig;
+  const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const crypto = yield* Crypto.Crypto;
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
@@ -1790,7 +1791,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
-  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (cwd: string) {
+  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (
+    cwd: string,
+    options?: GitVcsDriver.GitLocalStatusOptions,
+  ) {
+    const includeDivergence = options?.includeDivergence !== false;
+    const statusArgs = [
+      "status",
+      "--porcelain=2",
+      "--branch",
+      ...(includeDivergence ? [] : ["--no-ahead-behind"]),
+    ];
     const indexResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.indexPath",
       cwd,
@@ -1830,7 +1841,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      ["status", "--porcelain=2", "--branch"],
+      statusArgs,
       {
         allowNonZeroExit: true,
       },
@@ -1853,7 +1864,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...gitCommandContext({
           operation: "GitVcsDriver.statusDetails.status",
           cwd,
-          args: ["status", "--porcelain=2", "--branch"],
+          args: statusArgs,
         }),
         detail: "Git status failed.",
         exitCode: statusResult.exitCode,
@@ -1953,7 +1964,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         upstreamRef = value.length > 0 ? value : null;
         continue;
       }
-      if (line.startsWith("# branch.ab ")) {
+      if (includeDivergence && line.startsWith("# branch.ab ")) {
         const value = line.slice("# branch.ab ".length).trim();
         const parsed = parseBranchAb(value);
         aheadCount = parsed.ahead;
@@ -1968,7 +1979,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const fallbackAheadCount =
-      !upstreamRef && refName
+      includeDivergence && !upstreamRef && refName
         ? yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0))
         : null;
 
@@ -1981,7 +1992,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       refName !== null &&
       (refName === defaultBranch ||
         (defaultBranch === null && (refName === "main" || refName === "master")));
-    if (refName && !isDefaultBranch) {
+    if (includeDivergence && refName && !isDefaultBranch) {
       aheadOfDefaultCount =
         fallbackAheadCount !== null
           ? fallbackAheadCount
@@ -2031,8 +2042,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const statusDetailsLocal: GitVcsDriver.GitVcsDriver["Service"]["statusDetailsLocal"] = Effect.fn(
     "statusDetailsLocal",
-  )(function* (cwd) {
-    return yield* readStatusDetailsLocal(cwd);
+  )(function* (cwd, options) {
+    return yield* readStatusDetailsLocal(cwd, options);
   });
 
   const statusDetails: GitVcsDriver.GitVcsDriver["Service"]["statusDetails"] = Effect.fn(
@@ -3224,6 +3235,61 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  // Git records real paths, so resolve the deepest existing ancestor the same
+  // way (/tmp and /private/tmp match) and keep the missing tail as given.
+  const realPathOfMaybeMissing = Effect.fn("realPathOfMaybeMissing")(function* (target: string) {
+    const missingTail: Array<string> = [];
+    let current = path.resolve(target);
+    while (true) {
+      const real = yield* fileSystem.realPath(current).pipe(Effect.option);
+      if (Option.isSome(real)) return path.join(real.value, ...missingTail.toReversed());
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      missingTail.push(path.basename(current));
+      current = parent;
+    }
+  });
+  // `git worktree add` refuses a path git still has an admin entry for, even
+  // when its directory is gone. `reuseRegisteredPath` drops exactly that entry
+  // (`<common-dir>/worktrees/<id>`, whose `gitdir` names `<path>/.git`) and
+  // then adds normally, so git still refuses an existing path or a branch in
+  // use elsewhere. It never touches a working tree or another prunable entry,
+  // unlike `add --force`, `worktree remove` or `worktree prune`. A locked entry
+  // is left for git to refuse; git also holds one `locked` while its own add is
+  // in flight, and a finished add has its directory. Callers hold the
+  // workspace lease for the resolved path across this and the add: without it
+  // a second caller can pass its checks, stall, then delete the first caller's
+  // fresh entry. That only covers this process. Two servers on one repo can
+  // still race, and git itself is not safe with two concurrent adds of one path.
+  const releaseMissingWorktreeRegistration = Effect.fn("releaseMissingWorktreeRegistration")(
+    function* (cwd: string, worktreePath: string, target: string) {
+      const isPresent = (target: string) =>
+        fileSystem.exists(target).pipe(Effect.orElseSucceed(() => true));
+      const repository = yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null));
+      if (repository === null) return;
+      const adminRoot = path.join(repository.gitCommonDir, "worktrees");
+      const ids = yield* fileSystem
+        .readDirectory(adminRoot)
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      for (const id of ids) {
+        const adminDir = path.join(adminRoot, id);
+        const gitdir = yield* fileSystem.readFileString(path.join(adminDir, "gitdir")).pipe(
+          Effect.map((content) => content.trim()),
+          Effect.orElseSucceed(() => ""),
+        );
+        if (gitdir === "") continue;
+        // `worktree.useRelativePaths` stores it relative to the admin entry.
+        const registered = yield* realPathOfMaybeMissing(path.resolve(adminDir, gitdir));
+        if (path.dirname(registered) !== target) continue;
+        if (yield* isPresent(path.join(adminDir, "locked"))) return;
+        // Checked last, right before the delete.
+        if (yield* isPresent(worktreePath)) return;
+        yield* fileSystem.remove(adminDir, { recursive: true }).pipe(Effect.ignore);
+        return;
+      }
+    },
+  );
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -3231,19 +3297,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    // `--force` here means only "the path is registered but its directory is
-    // gone, take it over" — the exact situation git's own error points at
-    // ("use 'add -f' to override, or 'prune' or 'remove' to clear"). It cannot
-    // clobber a live worktree: git refuses `add` on an existing path either way.
-    const force = input.reuseRegisteredPath === true ? ["--force"] : [];
     const args = input.newRefName
-      ? ["worktree", "add", ...force, "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", ...force, worktreePath, input.refName];
+      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGit(
+    const addWorktree = executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
       ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
@@ -3265,6 +3326,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
       },
     );
+    if (input.reuseRegisteredPath === true) {
+      const target = yield* realPathOfMaybeMissing(worktreePath);
+      yield* withWorkspaceLease(
+        target,
+        releaseMissingWorktreeRegistration(input.cwd, worktreePath, target).pipe(
+          Effect.andThen(addWorktree),
+        ),
+      );
+    } else {
+      yield* addWorktree;
+    }
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);
@@ -3661,13 +3733,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     });
   });
 
+  const deleteLocalBranch: GitVcsDriver.GitVcsDriver["Service"]["deleteLocalBranch"] = Effect.fn(
+    "deleteLocalBranch",
+  )(function* (input) {
+    yield* executeGit(
+      "GitVcsDriver.deleteLocalBranch",
+      input.cwd,
+      ["branch", input.force === true ? "-D" : "-d", "--", input.refName],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorDetail: "git branch delete failed",
+      },
+    );
+  });
+
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
     "renameBranch",
   )(function* (input) {
     if (input.oldBranch === input.newBranch) {
       return { branch: input.newBranch };
     }
-    const targetBranch = yield* resolveAvailableBranchName(input.cwd, input.newBranch);
+    const targetBranch = input.exactName
+      ? input.newBranch
+      : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
     yield* executeGit(
       "GitVcsDriver.renameBranch",
@@ -3845,7 +3933,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // becomes a fetch storm.
     status: (input) => retryTransientRead(status(input)),
     statusDetails: (cwd) => retryTransientRead(statusDetails(cwd)),
-    statusDetailsLocal: (cwd) => retryTransientRead(statusDetailsLocal(cwd)),
+    statusDetailsLocal: (cwd, options) => retryTransientRead(statusDetailsLocal(cwd, options)),
     statusDetailsRemote,
     prepareCommitContext,
     commit: (cwd, subject, body, options) =>
@@ -3885,6 +3973,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
     pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),
+    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),

@@ -13,6 +13,7 @@ import {
   subscribeToCrossTabOutboxUpdates,
   useCommandOutbox,
 } from "~/rpc/commandOutbox";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
 import { readThreadShell } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
 import { threadEnvironment } from "~/state/threads";
@@ -93,7 +94,7 @@ export function OutboxFlushCoordinator() {
           // than the enqueue-time value. (The server canonicalizes it to its own
           // receive time anyway — see canonicalizeClientCommandTimestamps — so
           // this only keeps the payload honest; dedupe keys on `commandId`.)
-          input: { ...turn.input, createdAt: new Date().toISOString() } as never,
+          input: { ...turn.input, createdAt: new Date().toISOString() },
         });
         if (result._tag === "Failure") {
           // An interrupted command never reached a verdict — retry it later
@@ -164,9 +165,9 @@ export function OutboxFlushCoordinator() {
 }
 
 /** A short quote of the dropped message so the toast names what was lost. */
-function describeQueuedText(input: Record<string, unknown>): string {
-  const text = (input.message as { text?: unknown } | undefined)?.text;
-  if (typeof text !== "string" || text.length === 0) return "A queued message";
+function describeQueuedText(input: StartThreadTurnInput): string {
+  const text = input.message.text;
+  if (text.length === 0) return "A queued message";
   // Split by code point so a surrogate pair cannot become a replacement glyph.
   const points = [...text];
   return `"${points.length > 60 ? `${points.slice(0, 60).join("")}…` : text}"`;

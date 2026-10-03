@@ -14,9 +14,10 @@ import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
 import { layerTest as serverConfigLayerTest } from "../config.ts";
-import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels } from "./cursorModels.ts";
+import { SubagentLiveThreads } from "./SubagentLiveThreads.ts";
 import {
   backendWriteSemaphore,
   MASTER_OFF_REASON,
@@ -88,46 +89,44 @@ const settings = {
 /** Fixed-value `ServerSettingsService` test double: `getRawSettings` always
  * returns the same snapshot, for tests that don't care about settings drift. */
 const staticSettingsLayer = (fixed: ServerSettings) =>
-  Layer.succeed(
-    ServerSettingsService,
-    ServerSettingsService.of({
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings: Effect.succeed(fixed),
-      getRawSettings: Effect.succeed(fixed),
-      updateSettings: () => Effect.die("updateSettings unused in this test"),
-      rescan: Effect.void,
-      streamChanges: Stream.empty,
-      subscribeChanges: Effect.succeed(Stream.empty),
-    }),
-  );
+  Layer.mock(ServerSettingsService)({
+    start: Effect.void,
+    ready: Effect.void,
+    getSettings: Effect.succeed(fixed),
+    getRawSettings: Effect.succeed(fixed),
+    updateSettings: () => Effect.die("updateSettings unused in this test"),
+    rescan: Effect.void,
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.succeed(Stream.empty),
+  });
 
 /** `Ref`-backed `ServerSettingsService` test double: `getRawSettings` returns
  * whatever the `Ref` currently holds, so a test can change it mid-call. */
 const refBackedSettingsLayer = (ref: Ref.Ref<ServerSettings>) =>
-  Layer.succeed(
-    ServerSettingsService,
-    ServerSettingsService.of({
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings: Ref.get(ref),
-      getRawSettings: Ref.get(ref),
-      updateSettings: () => Effect.die("updateSettings unused in this test"),
-      rescan: Effect.void,
-      streamChanges: Stream.empty,
-      subscribeChanges: Effect.succeed(Stream.empty),
-    }),
-  );
+  Layer.mock(ServerSettingsService)({
+    start: Effect.void,
+    ready: Effect.void,
+    getSettings: Ref.get(ref),
+    getRawSettings: Ref.get(ref),
+    updateSettings: () => Effect.die("updateSettings unused in this test"),
+    rescan: Effect.void,
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.succeed(Stream.empty),
+  });
 
-/** `setBackend` now fans its result out to every live thread, so it needs the session
- * registry and the threads dir. No instances here: the fan-out is covered in
+/** `setBackend` fans its result out to every live thread, so it needs the live-thread set
+ * and the threads dir. No threads here: the fan-out is covered in
  * `SubagentBackend.thread.test.ts`; these tests are about the global record. */
-const emptyRegistryLayer = Layer.mock(ProviderAdapterRegistry)({
-  listInstances: () => Effect.succeed([]),
+const noLiveThreadsLayer = Layer.mock(SubagentLiveThreads)({ list: Effect.succeed([]) });
+/** No provider publishes usage, so the credit block never applies here. */
+const noProvidersLayer = Layer.mock(ProviderRegistry)({
+  getProviders: Effect.succeed([]),
+  streamChanges: Stream.empty,
 });
 const supportLayer = Layer.mergeAll(
-  emptyRegistryLayer,
+  noLiveThreadsLayer,
   serverConfigLayerTest("/tmp", { prefix: "sbt-set-" }),
+  noProvidersLayer,
 );
 
 describe("setBackend", () => {

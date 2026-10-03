@@ -13,7 +13,6 @@ import {
   type ServerProviderSlashCommand,
   isProviderAvailable,
   type ServerProvider,
-  type OrchestrationThreadActivity,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceSnapshots,
@@ -26,32 +25,9 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
-const CHATGPT_USAGE_LIMIT_CODE = "subscription_sharing_usage_limit_exceeded";
 
 export function usesChatGptSharing(provider: ServerProvider | null | undefined): boolean {
   return provider?.auth.status === "authenticated" && provider.auth.subscriptionSharing === true;
-}
-
-/** A historical limit must not turn an unrelated current failure into a usage notice. */
-export function isChatGptUsageLimitError(
-  activities: readonly OrchestrationThreadActivity[],
-  error: string | null | undefined,
-): boolean {
-  if (!error) return false;
-  for (let index = activities.length - 1; index >= 0; index--) {
-    const activity = activities[index]!;
-    if (activity.kind !== "runtime.error") continue;
-    const payload = activity.payload;
-    return (
-      typeof payload === "object" &&
-      payload !== null &&
-      "code" in payload &&
-      payload.code === CHATGPT_USAGE_LIMIT_CODE &&
-      "message" in payload &&
-      payload.message === error
-    );
-  }
-  return false;
 }
 
 export const CURSOR_USAGE_WINDOWS = [
@@ -499,16 +475,23 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
 }
 
 /**
- * The windows this snapshot reports at or over their cap.
+ * The windows this snapshot reports at or over their cap as of `nowMs`.
  *
  * Empty for a provider that reports no limits and for an `unavailable` snapshot: absence of
- * a reading is not a reading of 100%, and most drivers never report limits at all.
+ * a reading is not a reading of 100%, and most drivers never report limits at all. A window
+ * counts only while its reset is still ahead (or unknown): a 100% read before a reset that
+ * has since passed describes a window that no longer exists.
  */
 export function exhaustedUsageWindows(
   limits: ServerProviderUsageLimits | undefined,
+  nowMs: number,
 ): readonly ServerProviderUsageWindow[] {
   if (!limits || limits.unavailable) return [];
-  return limits.windows.filter((window) => window.usedPercent >= 100);
+  return limits.windows.filter(
+    (window) =>
+      window.usedPercent >= 100 &&
+      (window.resetsAt === undefined || Date.parse(window.resetsAt) > nowMs),
+  );
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */

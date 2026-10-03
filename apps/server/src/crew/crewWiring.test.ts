@@ -7,7 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 /**
  * Phase 1 shipped `CrewToolkitLayer` and `CrewSweepLive` with **no importer
- * anywhere**. Both typechecked, both had passing unit tests, and neither ran:
+ * anywhere** (crew "mounted 1 of 3 surfaces"). Both typechecked, both had passing unit tests, and neither ran:
  * the five MCP tools were advertised to nobody and no crewmate report was ever
  * delivered. Only the panel's read path was mounted, which is exactly the third
  * that got verified end to end.
@@ -34,10 +34,23 @@ const importersOf = (symbol: string, definedIn: string): ReadonlyArray<string> =
 describe("crew is actually composed into the server", () => {
   it.each([
     ["CrewToolkitLayer", "mcp/toolkits/crew"],
-    ["CrewSweepLive", "crew"],
-    ["CrewDirectoryLive", "crew"],
+    ["CrewToolkitRegistrationLive", "mcp/toolkits/crew"],
+    ["CrewLayerLive", "crew"],
   ])("%s is referenced outside its own module", (symbol, definedIn) => {
     expect(importersOf(symbol, definedIn)).not.toEqual([]);
+  });
+
+  it("the crew layer composes the sweep, the panel read and the MCP service", () => {
+    const crewLayer = NodeFS.readFileSync(NodePath.join(SERVER_SRC, "crew/CrewLayer.ts"), "utf8");
+    for (const symbol of ["CrewSweepLive", "CrewDirectoryLive", "CrewServiceLive("]) {
+      expect(crewLayer).toContain(symbol);
+    }
+  });
+
+  it("the MCP server mounts the crew toolkit registration", () => {
+    const mcp = NodeFS.readFileSync(NodePath.join(SERVER_SRC, "mcp/McpHttpServer.ts"), "utf8");
+    const mounted = mcp.slice(mcp.indexOf("export const layer = Layer.mergeAll("));
+    expect(mounted).toContain("CrewToolkitRegistrationLive");
   });
 
   it("the sweep is started, not merely constructed", () => {
@@ -45,8 +58,8 @@ describe("crew is actually composed into the server", () => {
       NodePath.join(SERVER_SRC, "serverRuntimeStartup.ts"),
       "utf8",
     );
-    // Building the layer costs nothing and delivers nothing; only start() forks
-    // the delivery and zombie-scan fibers.
+    // Building the layer costs nothing and delivers nothing; only start() forks the
+    // orphan reap and the delivery loop.
     expect(startup).toContain("crewSweep.start()");
   });
 });

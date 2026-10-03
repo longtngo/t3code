@@ -8,7 +8,7 @@ const refA = scopeThreadRef(EnvironmentId.make("env-1"), ThreadId.make("thread-A
 const refB = scopeThreadRef(EnvironmentId.make("env-1"), ThreadId.make("thread-B"));
 const files = closedTabFor({ id: "files", kind: "files" }, null);
 const diff = closedTabFor({ id: "diff", kind: "diff" }, null);
-const agents = closedTabFor({ id: "agents", kind: "agents" }, null);
+const background = closedTabFor({ id: "background", kind: "background" }, null);
 
 describe("closedTabsStore", () => {
   beforeEach(() => {
@@ -18,20 +18,20 @@ describe("closedTabsStore", () => {
   it("reopens the most recently closed tab first, per thread", () => {
     const store = useClosedTabsStore.getState();
     store.push(refA, [files, diff], 10);
-    store.push(refB, [agents], 10);
+    store.push(refB, [background], 10);
 
     expect(store.pop(refA)).toEqual(diff);
     expect(store.pop(refA)).toEqual(files);
     expect(store.pop(refA)).toBeNull();
-    expect(store.pop(refB)).toEqual(agents);
+    expect(store.pop(refB)).toEqual(background);
   });
 
   it("keeps only the newest tabs up to the limit", () => {
     const store = useClosedTabsStore.getState();
     store.push(refA, [files, diff], 2);
-    store.push(refA, [agents], 2);
+    store.push(refA, [background], 2);
 
-    expect(useClosedTabsStore.getState().byThreadKey["env-1:thread-A"]).toEqual([diff, agents]);
+    expect(useClosedTabsStore.getState().byThreadKey["env-1:thread-A"]).toEqual([diff, background]);
   });
 
   it("keeps stacks only for the most recently closed-in threads", () => {

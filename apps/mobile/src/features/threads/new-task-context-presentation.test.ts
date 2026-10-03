@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  canStartNewThreadOnBranch,
   filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskBranchLabel,
@@ -148,5 +149,15 @@ describe("filterNewTaskBranches", () => {
 
   it("matches a typed space against the dash a branch name uses", () => {
     expect(search("  login page ")).toEqual(["Feature/Login-Page"]);
+  });
+});
+
+describe("canStartNewThreadOnBranch", () => {
+  it("offers a user's branch, including their own crew/ branch, but not a crewmate's", () => {
+    expect(canStartNewThreadOnBranch("feature/login")).toBe(true);
+    expect(canStartNewThreadOnBranch("crew/my-feature")).toBe(true);
+    expect(canStartNewThreadOnBranch("crew/3f2b8c1e-9a4d-4e7f-b6a1-0c5d2e8f9a7b")).toBe(false);
+    expect(canStartNewThreadOnBranch(null)).toBe(false);
+    expect(canStartNewThreadOnBranch("")).toBe(false);
   });
 });

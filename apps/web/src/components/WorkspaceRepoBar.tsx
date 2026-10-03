@@ -9,7 +9,7 @@ import { useEffect, useMemo } from "react";
 import type { WorkspaceRepo } from "~/hooks/useWorkspaceRepos";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { useEnvironmentSupportsLocalOnlyStatus, useThread } from "~/state/entities";
+import { useEnvironmentSupportsLocalOnlyStatus, useThreadShell } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentQuery } from "~/state/query";
 import { vcsEnvironment } from "~/state/vcs";
@@ -37,7 +37,7 @@ export default function WorkspaceRepoBar({
   selectedId,
   threadRef,
 }: WorkspaceRepoBarProps) {
-  const thread = useThread(threadRef);
+  const thread = useThreadShell(threadRef);
   const projectId = thread?.projectId ?? null;
   const hasMembers = repos.some((repo) => repo.kind === "member");
   const branchesQuery = useEnvironmentQuery(

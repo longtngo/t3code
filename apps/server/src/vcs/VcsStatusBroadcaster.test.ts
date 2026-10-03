@@ -27,8 +27,8 @@ import { GitManagerError } from "@t3tools/contracts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { PersistenceSqlError } from "../persistence/Errors.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
@@ -1265,36 +1265,43 @@ describe("auto-pull idle guard", () => {
 
 describe("autoPullPolicyLayer.isIdle", () => {
   const ROOT = "/repo";
-  const project = { id: "project-1", workspaceRoot: ROOT } as never;
+  const OTHER_ROOT = "/other";
+  const projects = [
+    { id: "project-1", workspaceRoot: ROOT },
+    { id: "project-2", workspaceRoot: OTHER_ROOT },
+  ] as never;
   const quietThread = {
     id: "thread-1",
     projectId: "project-1",
     archivedAt: null,
     worktreePath: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    session: null,
-    backgroundLiveness: null,
+    status: "completed",
+    activityRunStatus: null,
+    pendingRuntimeRequest: null,
+    pendingBackgroundTasks: [],
     latestUserMessageAt: null,
-    latestTurn: null,
+    latestRunId: null,
+    latestRunRequestedAt: null,
+    latestRunStartedAt: null,
+    latestRunCompletedAt: null,
   };
+
+  const policyLayer = (
+    getShellSnapshot: ProjectionStore.ProjectionStoreV2["Service"]["getShellSnapshot"],
+  ) =>
+    VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+      Layer.provide(
+        Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed(projects) }),
+      ),
+      Layer.provide(Layer.mock(ProjectionStore.ProjectionStoreV2)({ getShellSnapshot })),
+      Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, {} as never)),
+    );
 
   const isIdle = (threads: ReadonlyArray<unknown>, cwds: ReadonlyArray<string> = [ROOT]) =>
     Effect.gen(function* () {
       const policy = yield* VcsStatusBroadcaster.VcsAutoPullPolicy;
       return yield* policy.isIdle(cwds);
-    }).pipe(
-      Effect.provide(
-        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
-          Layer.provide(
-            Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-              getShellSnapshot: () => Effect.succeed({ projects: [project], threads } as never),
-            }),
-          ),
-          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, {} as never)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(policyLayer(() => Effect.succeed({ threads } as never))));
 
   it.effect("is idle when no thread in the checkout is doing anything", () =>
     Effect.gen(function* () {
@@ -1303,19 +1310,38 @@ describe("autoPullPolicyLayer.isIdle", () => {
   );
 
   it.effect.each([
-    { name: "a running session", patch: { session: { status: "running" } } },
-    { name: "a starting session", patch: { session: { status: "starting" } } },
-    { name: "a pending approval", patch: { hasPendingApprovals: true } },
-    { name: "pending user input", patch: { hasPendingUserInput: true } },
-    // The case `latestTurn.state` alone misses: the turn is over, and a background
+    { name: "a running run", patch: { status: "running", activityRunStatus: "running" } },
+    { name: "a starting run", patch: { status: "starting", activityRunStatus: "starting" } },
+    { name: "a run being prepared", patch: { status: "preparing" } },
+    // No run is active yet, but one is next in line and will start here.
+    { name: "a queued run", patch: { status: "queued" } },
+    { name: "a run waiting on the user", patch: { status: "waiting" } },
+    // The shell's status already reads terminal while the active run is still
+    // live; only activityRunStatus sees it.
+    {
+      name: "an active run behind a completed status",
+      patch: { status: "completed", activityRunStatus: "running" },
+    },
+    {
+      name: "a pending runtime request",
+      patch: { pendingRuntimeRequest: { id: "request-1", kind: "approval" } },
+    },
+    // The case the run status alone misses: the run is over, and a background
     // task is still running git in this checkout.
     {
-      name: "background work after the turn completed",
-      patch: { latestTurn: { state: "completed" }, backgroundLiveness: { kind: "shell" } },
+      name: "background work after the run completed",
+      patch: { pendingBackgroundTasks: [{ id: "task-1" }] },
     },
   ])("is busy while a thread in the checkout has $name", ({ patch }) =>
     Effect.gen(function* () {
       assert.isFalse(yield* isIdle([{ ...quietThread, ...patch }]));
+    }),
+  );
+
+  it.effect("is busy while a just-sent message has not been adopted by a run", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      assert.isFalse(yield* isIdle([{ ...quietThread, latestUserMessageAt: now }]));
     }),
   );
 
@@ -1324,9 +1350,22 @@ describe("autoPullPolicyLayer.isIdle", () => {
       const inWorktree = {
         ...quietThread,
         worktreePath: "/repo/.worktrees/feature",
-        session: { status: "running" },
+        status: "running",
+        activityRunStatus: "running",
       };
       assert.isTrue(yield* isIdle([inWorktree]));
+    }),
+  );
+
+  it.effect("ignores a busy thread rooted in another project", () =>
+    Effect.gen(function* () {
+      const elsewhere = {
+        ...quietThread,
+        projectId: "project-2",
+        status: "running",
+        activityRunStatus: "running",
+      };
+      assert.isTrue(yield* isIdle([elsewhere]));
     }),
   );
 
@@ -1334,16 +1373,30 @@ describe("autoPullPolicyLayer.isIdle", () => {
     Effect.gen(function* () {
       const archived = {
         ...quietThread,
-        archivedAt: "2026-09-01T00:00:00.000Z",
-        session: { status: "running" },
+        archivedAt: DateTime.makeUnsafe("2026-09-01T00:00:00.000Z"),
+        status: "running",
+        activityRunStatus: "running",
       };
       assert.isTrue(yield* isIdle([archived]));
     }),
   );
 
+  it.effect("finds one busy thread among several quiet ones", () =>
+    Effect.gen(function* () {
+      const busy = { ...quietThread, id: "thread-3", status: "running" };
+      assert.isFalse(
+        yield* isIdle([
+          quietThread,
+          { ...quietThread, id: "thread-2", projectId: "project-2" },
+          busy,
+        ]),
+      );
+    }),
+  );
+
   it.effect("matches on any of the names it is asked about", () =>
     Effect.gen(function* () {
-      const busy = { ...quietThread, session: { status: "running" } };
+      const busy = { ...quietThread, status: "running", activityRunStatus: "running" };
       // Asked in realpath space alone, the raw-recorded root is missed...
       assert.isTrue(yield* isIdle([busy], ["/private/repo"]));
       // ...asked about both, the thread is found.
@@ -1357,16 +1410,8 @@ describe("autoPullPolicyLayer.isIdle", () => {
       assert.isFalse(yield* policy.isIdle([ROOT]));
     }).pipe(
       Effect.provide(
-        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
-          Layer.provide(
-            Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-              getShellSnapshot: () =>
-                Effect.fail(
-                  new PersistenceSqlError({ operation: "getShellSnapshot", detail: "locked" }),
-                ),
-            }),
-          ),
-          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, {} as never)),
+        policyLayer(() =>
+          Effect.fail(new ProjectionStore.ProjectionStoreSetupError({ cause: "locked" })),
         ),
       ),
     ),
