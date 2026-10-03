@@ -217,11 +217,16 @@ it is named here rather than left implied.
 
 ## Known limitation
 
-A system prompt is frozen for a session's lifetime. Flipping the toggle mid-thread updates the
-flag file immediately — so a running agent that _does_ consult the wrapper is routed correctly —
-but the **instruction** only reaches that thread at its next session start. This is deliberate:
-the alternative is restarting live sessions, which the user ruled out. Same self-healing shape as
-the flag file itself.
+A system prompt is frozen for a **conversation's** lifetime, not just a process's. On
+orchestrator v2 the flag file is rewritten on every turn, so the dispatch wrapper — which reads
+it on every call — follows a mid-thread flip at once, and refuses when the thread is off. The
+**instruction** does not follow: it is fixed when the conversation is created, and reopening the
+process does not change it, because `--resume` replays the conversation's original system
+prompt. Measured on the real CLI (2026-10-03): a conversation started with one append, resumed
+with a different append, answered from the first. So a thread that started with offload off has
+no instruction until a new conversation starts, and one that started with it on keeps the
+instruction but has its dispatches refused once it is turned off. Delivering the instruction per
+turn is a separate follow-up.
 
 ## Test plan
 

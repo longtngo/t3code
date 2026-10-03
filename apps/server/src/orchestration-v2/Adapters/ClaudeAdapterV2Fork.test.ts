@@ -969,82 +969,31 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
   );
 });
 
-describe("ClaudeAdapterV2 subagent toggle flipped mid-session", () => {
-  const appendOf = (options: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined) =>
-    (options?.systemPrompt as { readonly append?: string } | undefined)?.append ?? "";
-  // The thread's backend as the live preparer would report it, turn by turn.
-  const flips = (backends: ReadonlyArray<string>) => {
-    let turn = 0;
-    return () =>
-      Effect.sync(() => ({
-        statePath: "/tmp/t3-sbt-flip/thread.json",
-        backend: backends[Math.min(turn++, backends.length - 1)]!,
-      }));
-  };
-
-  it.effect("off, on, off: each flip reopens the process on the next turn", () =>
+describe("ClaudeAdapterV2 subagent flag file follows the toggle", () => {
+  it.effect("prepares the thread's backend on every turn, not only at spawn", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        // The dispatch wrapper reads the flag file on every call, so a toggle flip reaches
+        // it on the next turn even though the live process (and its prompt) is reused.
+        const prepared: Array<string> = [];
         const harness = yield* makeHarness({
-          prepareSubagentBackend: flips(["default", "cursor", "default"]),
+          prepareSubagentBackend: (threadId) =>
+            Effect.sync(() => {
+              prepared.push(threadId);
+              return { statePath: "/tmp/t3-sbt-flip/thread.json", backend: "cursor" };
+            }),
         });
         for (let turn = 0; turn < 3; turn += 1) {
           yield* harness.startTurn();
           yield* harness.offer(result({ result: `turn ${turn}` }));
           assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
         }
-        assert.lengthOf(harness.allOpenedOptions, 3);
-        assert.deepStrictEqual(
-          harness.allOpenedOptions.map((options) =>
-            appendOf(options).includes("subagent_dispatch"),
-          ),
-          [false, true, false],
-        );
-      }).pipe(provide),
-    ),
-  );
-
-  it.effect("an unchanged backend keeps the live process", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const harness = yield* makeHarness({ prepareSubagentBackend: flips(["cursor"]) });
-        for (let turn = 0; turn < 2; turn += 1) {
-          yield* harness.startTurn();
-          yield* harness.offer(result({ result: `turn ${turn}` }));
-          assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
-        }
         assert.lengthOf(harness.allOpenedOptions, 1);
-      }).pipe(provide),
-    ),
-  );
-
-  it.effect("a flip while a background subagent runs keeps the process, without an error", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const harness = yield* makeHarness({
-          prepareSubagentBackend: flips(["default", "cursor"]),
-        });
-        yield* harness.startTurn();
-        yield* harness.offer(
-          {
-            type: "system",
-            subtype: "task_started",
-            task_id: "task-background",
-            tool_use_id: "toolu_background",
-            description: "Background research",
-            subagent_type: "general-purpose",
-            task_type: "local_agent",
-            prompt: "Research, then report.",
-            uuid: nextUuid(),
-            session_id: NATIVE_SESSION,
-          },
-          result({ result: "Spawned the subagent." }),
-        );
-        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
-        yield* harness.startTurn();
-        yield* harness.offer(result({ result: "still here" }));
-        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
-        assert.lengthOf(harness.allOpenedOptions, 1);
+        assert.deepStrictEqual(prepared, [
+          "thread-claude-fork",
+          "thread-claude-fork",
+          "thread-claude-fork",
+        ]);
       }).pipe(provide),
     ),
   );
