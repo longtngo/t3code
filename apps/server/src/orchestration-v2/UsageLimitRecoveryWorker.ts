@@ -77,6 +77,9 @@ export function limitRecoveryCommand(
   };
 }
 
+/** Sweeps in a row a resume waits out an unknown fresh read before it is sent anyway. */
+export const MAX_INCONCLUSIVE_SKIPS = 3;
+
 export const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -92,17 +95,36 @@ export const makeSweep = Effect.gen(function* () {
   // would refuse. Its fresh read publishes what it found, so a refusal there returns the
   // following sweeps to the cheap published check. Cost: at most one shared fresh read per
   // instance per sweep, and only while the published reading allows and the fresh one does
-  // not; a fresh read that fails keeps the published reading, which allows, so the resume
-  // goes out.
+  // not.
+  //
+  // A fresh read that fails or times out leaves the answer unknown, and the start gate's
+  // own read could still refuse (a slow read it joins, or the next read succeeding). So
+  // wait for a later sweep, up to MAX_INCONCLUSIVE_SKIPS in a row per thread; after that
+  // the resume goes out on the published reading, as the start gate itself fails open.
   const refusedThreads = new Set<ThreadId>();
+  const inconclusiveSkips = new Map<ThreadId, number>();
   const resumeRefused = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
       if (shell === null) return false;
-      const reason =
-        (yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId)) ??
-        (yield* creditSpendGuard.refusalFor(shell.providerInstanceId));
-      if (reason === null) {
+      const cached = yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId);
+      const check =
+        cached === null
+          ? yield* creditSpendGuard.resumeCheck(shell.providerInstanceId)
+          : { refusal: cached, inconclusive: false };
+      if (check.refusal === null && check.inconclusive) {
+        const skips = (inconclusiveSkips.get(threadId) ?? 0) + 1;
+        if (skips <= MAX_INCONCLUSIVE_SKIPS) {
+          inconclusiveSkips.set(threadId, skips);
+          yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-unverified", {
+            threadId,
+            skips,
+          });
+          return true;
+        }
+      }
+      inconclusiveSkips.delete(threadId);
+      if (check.refusal === null) {
         refusedThreads.delete(threadId);
         return false;
       }
@@ -111,7 +133,7 @@ export const makeSweep = Effect.gen(function* () {
         refusedThreads.add(threadId);
         yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-refused", {
           threadId,
-          reason,
+          reason: check.refusal,
         });
       }
       return true;
@@ -127,6 +149,9 @@ export const makeSweep = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(now);
     for (const threadId of refusedThreads) {
       if (!candidates.some((thread) => thread.id === threadId)) refusedThreads.delete(threadId);
+    }
+    for (const threadId of inconclusiveSkips.keys()) {
+      if (!candidates.some((thread) => thread.id === threadId)) inconclusiveSkips.delete(threadId);
     }
     for (const thread of candidates) {
       const command = limitRecoveryCommand(

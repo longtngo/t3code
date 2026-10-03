@@ -17,6 +17,18 @@ export interface CreditSpendGuardShape {
    * the authority that re-reads.
    */
   readonly cachedRefusalFor: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
+  /**
+   * `refusalFor`, plus whether its answer rests on a reading it wanted to refresh and
+   * could not: a near-limit reading too old to trust whose fresh read failed or timed
+   * out. For callers that can wait and ask again (limit recovery) instead of sending a
+   * turn the start gate may refuse once the read lands.
+   */
+  readonly resumeCheck: (instanceId: ProviderInstanceId) => Effect.Effect<CreditSpendCheck>;
+}
+
+export interface CreditSpendCheck {
+  readonly refusal: string | null;
+  readonly inconclusive: boolean;
 }
 
 export class CreditSpendGuard extends Context.Service<CreditSpendGuard, CreditSpendGuardShape>()(

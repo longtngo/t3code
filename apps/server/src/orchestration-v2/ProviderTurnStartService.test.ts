@@ -39,7 +39,10 @@ import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
-import { creditSpendGuardAllowAll } from "./ProviderTurnStartService.testkit.ts";
+import {
+  conclusiveResumeCheck,
+  creditSpendGuardAllowAll,
+} from "./ProviderTurnStartService.testkit.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -573,7 +576,11 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.succeed(
           CreditSpendGuard,
-          CreditSpendGuard.of({ refusalFor, cachedRefusalFor: refusalFor }),
+          CreditSpendGuard.of({
+            refusalFor,
+            cachedRefusalFor: refusalFor,
+            resumeCheck: conclusiveResumeCheck(refusalFor),
+          }),
         ),
       ),
     ),

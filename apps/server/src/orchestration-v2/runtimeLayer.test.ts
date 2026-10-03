@@ -5,7 +5,10 @@ import * as NodeCryptoForCredit from "@effect/platform-node/NodeCrypto";
 import * as SchedulerForCredit from "../scheduling/Scheduler.ts";
 import { runCreditSpendSweep } from "../provider/Layers/CreditSpendGuardLive.ts";
 import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
-import { creditSpendGuardAllowAll } from "./ProviderTurnStartService.testkit.ts";
+import {
+  conclusiveResumeCheck,
+  creditSpendGuardAllowAll,
+} from "./ProviderTurnStartService.testkit.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -257,6 +260,7 @@ const CreditGateTestLayer = makeTestLayer(
     CreditSpendGuard.of({
       refusalFor: creditGateForTest,
       cachedRefusalFor: creditGateForTest,
+      resumeCheck: conclusiveResumeCheck(creditGateForTest),
     }),
   ),
 );
@@ -4539,6 +4543,7 @@ const CreditGateSendersLayer = Layer.provideMerge(
         CreditSpendGuard.of({
           refusalFor: creditGateForTest,
           cachedRefusalFor: creditGateForTest,
+          resumeCheck: conclusiveResumeCheck(creditGateForTest),
         }),
       ),
     ),

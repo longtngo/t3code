@@ -221,13 +221,14 @@ it.effect("retries a limit resume the credit gate refused once spending is allow
       Layer.succeed(
         CreditSpendGuard,
         CreditSpendGuard.of({
+          refusalFor: () => Effect.die("recovery must use resumeCheck"),
           // While the published reading blocks, the poller must not reach the re-reading gate.
-          refusalFor: () =>
+          resumeCheck: () =>
             Ref.get(blocked).pipe(
               Effect.flatMap((isBlocked) =>
                 isBlocked
                   ? Effect.die("blocked resume reached the full gate")
-                  : Effect.succeed(null),
+                  : Effect.succeed({ refusal: null, inconclusive: false }),
               ),
             ),
           cachedRefusalFor: () =>
@@ -384,6 +385,8 @@ it.effect(
             refusalFor: (id) =>
               Ref.update(refusalCalls, (n) => n + 1).pipe(Effect.andThen(inner.refusalFor(id))),
             cachedRefusalFor: inner.cachedRefusalFor,
+            resumeCheck: (id) =>
+              Ref.update(refusalCalls, (n) => n + 1).pipe(Effect.andThen(inner.resumeCheck(id))),
           });
         }),
       ).pipe(Layer.provide(guardLayer));
@@ -480,8 +483,11 @@ const recoveryHarness = (input: {
   published: (nowIso: string) => ServerProvider;
   truth: (nowIso: string) => ServerProvider;
   dispatchFails?: Ref.Ref<boolean>;
-  /** Every fresh read fails instead of returning `truth`. */
-  readFails?: boolean;
+  /**
+   * Per fresh read, in order (the last repeats): "ok" returns `truth` at once, "fail"
+   * dies, and a number waits that many ms before returning `truth`. Default "ok".
+   */
+  reads?: ReadonlyArray<"ok" | "fail" | number>;
 }) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -498,9 +504,11 @@ const recoveryHarness = (input: {
       getProviders: Ref.get(published),
       refreshInstance: () =>
         Effect.gen(function* () {
-          yield* Ref.update(freshReads, (n) => n + 1);
+          const n = yield* Ref.updateAndGet(freshReads, (k) => k + 1);
+          const plan = input.reads?.[Math.min(n - 1, input.reads.length - 1)] ?? "ok";
+          if (typeof plan === "number") yield* Effect.sleep(Duration.millis(plan));
           yield* Effect.yieldNow;
-          if (input.readFails === true) return yield* Effect.die("probe failed");
+          if (plan === "fail") return yield* Effect.die("probe failed");
           const next = [input.truth(yield* nowIso)];
           yield* Ref.set(published, next);
           return next;
@@ -527,6 +535,10 @@ const recoveryHarness = (input: {
           cachedRefusalFor: (id) =>
             Ref.update(gateCalls, (c) => ({ ...c, cached: c.cached + 1 })).pipe(
               Effect.andThen(inner.cachedRefusalFor(id)),
+            ),
+          resumeCheck: (id) =>
+            Ref.update(gateCalls, (c) => ({ ...c, full: c.full + 1 })).pipe(
+              Effect.andThen(inner.resumeCheck(id)),
             ),
         });
       }),
@@ -583,6 +595,7 @@ const snapshot = (h: Effect.Success<ReturnType<typeof recoveryHarness>>) =>
       gate: yield* Ref.get(h.gateCalls),
       outcomes: yield* Ref.get(h.outcomes),
       creditRefusedLogs: h.logs.filter((l) => l.includes("credit-refused")).length,
+      unverifiedLogs: h.logs.filter((l) => l.includes("credit-unverified")).length,
       turnRefusedLogs: h.logs.filter((l) => l.includes("turn-refused")).length,
     };
   });
@@ -651,21 +664,105 @@ it.effect("logs a credit refusal once per blocked spell", () =>
   }),
 );
 
-it.effect("does not hold a resume on a fresh read that keeps failing", () =>
+const stepSeconds = (seconds: number) =>
+  Effect.gen(function* () {
+    // 1 s steps, so a forked fresh read runs before its 5 s timeout comes due.
+    for (let second = 0; second < seconds; second++) yield* TestClock.adjust("1 second");
+  });
+
+// Published 4 h ago at 97%, really at 100%, and the pre-send fresh read is inconclusive:
+// G outlasts the 5 s wait (the turn start would join it and see 100%), F fails once and
+// the next read succeeds. Either way the resume must wait, not be sent and dropped.
+it.effect.each([
+  { name: "G: the first read takes 7 s", reads: [7_000, "ok"] as const },
+  { name: "F: the first read fails, the next succeeds", reads: ["fail", "ok"] as const },
+])("holds a resume whose pre-send read is inconclusive ($name)", ({ reads }) =>
   Effect.gen(function* () {
     const h = yield* recoveryHarness({
       threads: ["a", "b"],
       published: () => reading("1969-12-31T20:00:00.000Z", 97, FAR),
       truth: (t) => reading(t, 100, FAR),
-      readFails: true,
+      reads,
     });
     yield* Effect.gen(function* () {
-      for (let second = 0; second < 120; second++) yield* TestClock.adjust("1 second");
-      const after = yield* snapshot(h);
-      // Fail-open: the published 97% stands, so both resumes go out on their first due
-      // sweep. Reads are bounded by the sends, not by the sweeps: no read loop.
-      assert.deepEqual([...after.outcomes].sort(), ["a:started", "b:started"]);
-      assert.isAtMost(after.freshReads, 4);
+      yield* stepSeconds(180);
+      const blocked = yield* snapshot(h);
+      assert.deepEqual(blocked.outcomes, []);
+      assert.lengthOf(yield* Ref.get(h.candidates), 2);
+      assert.equal(blocked.unverifiedLogs, 1);
+      yield* Ref.set(h.allow, true);
+      yield* stepSeconds(10);
+      assert.deepEqual([...(yield* snapshot(h)).outcomes].sort(), ["a:started", "b:started"]);
     }).pipe(Effect.provide(h.worker));
+  }),
+);
+
+it.effect("sends a resume after 3 inconclusive pre-send reads in a row", () =>
+  Effect.gen(function* () {
+    const h = yield* recoveryHarness({
+      threads: ["a", "b"],
+      published: () => reading("1969-12-31T20:00:00.000Z", 97, FAR),
+      truth: (t) => reading(t, 100, FAR),
+      reads: ["fail"],
+    });
+    yield* Effect.gen(function* () {
+      // Due at 60 s; sweeps at 60, 65 and 70 s wait, the 4th (75 s) sends.
+      yield* stepSeconds(74);
+      const held = yield* snapshot(h);
+      assert.deepEqual(held.outcomes, []);
+      assert.equal(held.unverifiedLogs, 6);
+      yield* stepSeconds(46);
+      const after = yield* snapshot(h);
+      // Fail-open after the bound: the published 97% stands.
+      assert.deepEqual([...after.outcomes].sort(), ["a:started", "b:started"]);
+      assert.equal(after.unverifiedLogs, 6);
+      // One read per thread per due sweep (4 each) plus each turn start's own: no loop.
+      assert.equal(after.freshReads, 10);
+    }).pipe(Effect.provide(h.worker));
+  }),
+);
+
+it.effect("restarts the inconclusive count after a conclusive answer", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const shell = shellFor("a", now, DateTime.formatIso(DateTime.add(now, { seconds: 60 })));
+    const unknown = { refusal: null, inconclusive: true };
+    // Two inconclusive checks, a conclusive refusal, then inconclusive from there on.
+    const script = [unknown, unknown, { refusal: "Claude is at 100%.", inconclusive: false }];
+    const checks = yield* Ref.make(0);
+    const sentAt = yield* Ref.make<number | null>(null);
+    const deps = Layer.mergeAll(
+      Layer.succeed(
+        CreditSpendGuard,
+        CreditSpendGuard.of({
+          refusalFor: () => Effect.die("recovery must use resumeCheck"),
+          cachedRefusalFor: () => Effect.succeed(null),
+          resumeCheck: () =>
+            Ref.updateAndGet(checks, (n) => n + 1).pipe(
+              Effect.map((n) => script[n - 1] ?? unknown),
+            ),
+        }),
+      ),
+      Layer.mock(ServerSettings.ServerSettingsService)({
+        getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, allowSpendingCredits: false }),
+      }),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(shell),
+        dispatch: () =>
+          Ref.get(checks).pipe(
+            Effect.flatMap((n) => Ref.set(sentAt, n)),
+            Effect.as({ sequence: 1, storedEvents: [] }),
+          ),
+      }),
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({
+        getLimitRecoveryCandidates: () =>
+          Ref.get(sentAt).pipe(Effect.map((sent) => (sent === null ? [shell] : []))),
+      }),
+    );
+    const sweep = yield* UsageLimitRecoveryWorker.makeSweep.pipe(Effect.provide(deps));
+    yield* TestClock.adjust("61 seconds");
+    for (let round = 0; round < 10; round++) yield* sweep().pipe(Effect.provide(deps));
+    // Checks 4-6 wait again after the refusal at check 3; check 7 sends.
+    assert.equal(yield* Ref.get(sentAt), 7);
   }),
 );
