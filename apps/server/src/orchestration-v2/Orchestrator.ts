@@ -9683,11 +9683,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       ),
+    liveEventBacklog: eventSink.liveBacklog,
     // Live tail only. eventSink.stream() with no cursor replays the whole
     // store from genesis first; domain-event subscribers (the awareness relay)
     // react to new activity, and startup replay made them grind through the
     // entire event history doing per-event work after every boot.
-    liveEventBacklog: eventSink.liveBacklog,
     streamDomainEvents: Stream.unwrap(
       eventSink
         .latestSequence()

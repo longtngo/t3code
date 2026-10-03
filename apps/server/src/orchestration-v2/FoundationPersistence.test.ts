@@ -619,6 +619,19 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         assert.equal(yield* sink.liveBacklog, 3);
         assert.lengthOf(yield* pull, 3);
         assert.equal(yield* sink.liveBacklog, 0);
+
+        // A worker on stream({ eventType }) reads its own per-type hub; the gauge counts it too.
+        const typed = yield* Stream.toPull(
+          sink.stream({ eventType: "thread.metadata-updated", afterSequence: created!.sequence }),
+        );
+        assert.lengthOf(yield* typed, 4);
+        yield* sink.write({ events: [4, 5].map(metadataEvent) });
+        // Two on the per-type hub, two on the main hub for the thread subscriber.
+        assert.equal(yield* sink.liveBacklog, 4);
+        assert.lengthOf(yield* pull, 2);
+        assert.equal(yield* sink.liveBacklog, 2);
+        assert.lengthOf(yield* typed, 2);
+        assert.equal(yield* sink.liveBacklog, 0);
       }),
     ),
   );

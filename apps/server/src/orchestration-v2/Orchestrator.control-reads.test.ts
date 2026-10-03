@@ -18,11 +18,18 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
+import { LIVE_STREAM_MAX_ITEMS, LiveStreamBufferError } from "./LiveStreamBudget.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -534,3 +541,88 @@ it.effect("settles only the stopped run's background work, once", () =>
     ]);
   }).pipe(Effect.provide(testLayer)),
 );
+
+// subscribeThread and subscribeArchivedShell read through streamStoredEventsFrom, so a
+// socket that stops acknowledging must hit the live-stream budget instead of pinning the hub.
+it.live("fails a streamStoredEventsFrom reader that stops taking live events", () => {
+  const overflowed = Deferred.makeUnsafe<void>();
+  const overflowLogger = Logger.make(({ message }) => {
+    const text = Array.isArray(message) ? message[0] : message;
+    if (text === "orchestration live event buffer is full") {
+      Deferred.doneUnsafe(overflowed, Effect.void);
+    }
+  });
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("thread:stalled-stored-events");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-stalled-stored-events"),
+        threadId,
+        projectId: ProjectId.make("project:stalled-stored-events"),
+        title: "Stalled",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const { thread } = yield* projections.getThreadProjection(threadId);
+      const now = yield* DateTime.now;
+      const metadataEvent = (index: number) => ({
+        id: EventId.make(`event:stalled-stored-events:${index}`),
+        type: "thread.metadata-updated" as const,
+        threadId,
+        occurredAt: now,
+        payload: { ...thread, title: `Updated ${index}` },
+      });
+      const pull = yield* Stream.toPull(
+        orchestrator.streamStoredEventsFrom({
+          threadId,
+          afterSequence: yield* orchestrator.getThreadEventSequence(threadId),
+        }),
+      );
+      // Live: take one event, then never ask for the next batch.
+      const [first] = yield* sink.write({ events: [metadataEvent(0)] });
+      assert.deepEqual(
+        (yield* pull).map((stored) => stored.sequence),
+        [first!.sequence],
+      );
+      yield* sink.write({
+        events: Array.from({ length: LIVE_STREAM_MAX_ITEMS + 1 }, (_, index) =>
+          metadataEvent(index + 1),
+        ),
+      });
+      // The overflow log is the pass signal. The deadline only turns an unbounded
+      // reader (which never overflows) into an assertion instead of a test timeout.
+      const signal = yield* Deferred.await(overflowed).pipe(Effect.timeoutOption("30 seconds"));
+      if (Option.isNone(signal)) {
+        assert.fail(
+          `reader never overflowed; hub still holds ${yield* orchestrator.liveEventBacklog} events`,
+        );
+      }
+      const result = yield* Effect.result(pull);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "OrchestratorDomainEventStreamError");
+        if (result.failure._tag === "OrchestratorDomainEventStreamError") {
+          const sinkError = result.failure.cause;
+          assert.isTrue(
+            Schema.is(EventSink.EventSinkStreamError)(sinkError) &&
+              Schema.is(LiveStreamBufferError)(sinkError.cause),
+          );
+        }
+      }
+      assert.equal(yield* orchestrator.liveEventBacklog, 0);
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(testLayer, Logger.layer([overflowLogger], { mergeWithExisting: true })),
+    ),
+  );
+});
