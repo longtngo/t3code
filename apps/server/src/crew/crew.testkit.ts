@@ -98,6 +98,12 @@ export interface CrewHarnessOptions {
   readonly send?: (input: ThreadManagementSendInput) => SendBehaviour;
   /** Teardown steps whose upstream call fails. */
   readonly failSteps?: ReadonlySet<number>;
+  /** Called on every `getThreadShell`, before it answers; may change `shells`. */
+  readonly onShellRead?: (
+    threadId: string,
+    reads: number,
+    shells: Map<string, OrchestrationV2ThreadShell>,
+  ) => void;
   /** `command_execution` turn items per thread, for the setup-failure check. */
   readonly turnItems?: Map<string, ReadonlyArray<unknown>>;
   /**
@@ -125,6 +131,7 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
   const commands: Array<Record<string, unknown>> = [];
   const shells = options.shells ?? new Map<string, OrchestrationV2ThreadShell>();
   const fails = (step: number) => options.failSteps?.has(step) === true;
+  const shellReads = new Map<string, number>();
   /** Command ids holding a rejected receipt. */
   const rejectedIds = new Set<string>();
   const previouslyRejected = (commandId: string, commandType: string) =>
@@ -135,7 +142,13 @@ export const makeCrewHarness = (options: CrewHarnessOptions = {}) => {
     });
 
   const threads = Layer.mock(ThreadManagementService)({
-    getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
+    getThreadShell: (threadId) =>
+      Effect.sync(() => {
+        const reads = (shellReads.get(threadId) ?? 0) + 1;
+        shellReads.set(threadId, reads);
+        options.onShellRead?.(threadId, reads, shells);
+        return shells.get(threadId) ?? null;
+      }),
     sendToThread: (input) =>
       Effect.suspend((): Effect.Effect<never, ThreadManagementError | OrchestratorV2Error> => {
         attempts.push(input);

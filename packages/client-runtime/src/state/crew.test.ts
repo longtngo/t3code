@@ -107,7 +107,9 @@ describe("crew list query", () => {
       yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10));
       const first = executions;
       expect(first).toBeGreaterThan(0);
-      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(CREW_LIST_REFRESH_MS * 3 + 10));
+      // The literal cadence the server's sweep runs at, not the constant under test.
+      expect(CREW_LIST_REFRESH_MS).toBe(60_000);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(3 * 60_000 + 10));
       expect(executions - first).toBe(3);
     }).pipe(Effect.scoped),
   );

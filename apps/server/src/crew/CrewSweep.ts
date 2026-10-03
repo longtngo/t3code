@@ -146,7 +146,28 @@ export const deliveryId = (key: string, attempt: number) =>
 const isPreviouslyRejected = Schema.is(OrchestratorCommandPreviouslyRejectedError);
 
 /** How the latest run's "Preparing workspace" item ends when setup never finished. */
-const SETTLED_PREPARATION_STATUSES: ReadonlySet<string> = new Set(["failed", "cancelled"]);
+/**
+ * How the latest run's "Preparing workspace" item ends when setup never finished, and what
+ * the bridge is told. `interrupted` is a user Stop during setup: that crewmate will not
+ * start either.
+ */
+const SETTLED_PREPARATION_NOTES: ReadonlyMap<string, (output: string) => string> = new Map([
+  [
+    "failed",
+    (output: string) =>
+      `Worktree setup failed, so the crewmate never started and its slot is free. ${output}`,
+  ],
+  [
+    "cancelled",
+    () =>
+      "Worktree setup was cancelled (the server stopped during it), so the crewmate never started and its slot is free.",
+  ],
+  [
+    "interrupted",
+    () =>
+      "Worktree setup did not complete (it was stopped), so the crewmate never started and its slot is free.",
+  ],
+]);
 
 /** One setup-failure report per task, however many passes retry the settle step. */
 export const setupFailedReportId = (taskId: string) =>
@@ -294,9 +315,10 @@ const makeCrewSweep = Effect.gen(function* () {
    * Closes open tasks whose worktree setup never finished. Launch provisions in the
    * background, so dispatch has already returned success; upstream records the outcome on
    * the "Preparing workspace" item of the crewmate's run. Settled, positively, when that
-   * item in the thread's LATEST run ended `failed` (setup failed) or `cancelled` (startup
-   * recovery cancels a preparation the server died during) — being in the latest run means
-   * no run started after it. An old failed item followed by later runs settles nothing.
+   * item in the thread's LATEST run ended `failed` (setup failed), `cancelled` (startup
+   * recovery cancels a preparation the server died during) or `interrupted` (a user Stop
+   * during setup) — being in the latest run means no run started after it; the latest run
+   * is re-read before each write so a run that starts meanwhile wins. An old failed item followed by later runs settles nothing.
    *
    * The slot is freed and the bridge is told through an ordinary `failed` report. The report
    * goes in first, under an id derived from the task, insert-or-ignore, and the row closes
@@ -328,8 +350,17 @@ const makeCrewSweep = Effect.gen(function* () {
       if (
         preparation === undefined ||
         preparation.type !== "command_execution" ||
-        !SETTLED_PREPARATION_STATUSES.has(preparation.status)
+        !SETTLED_PREPARATION_NOTES.has(preparation.status)
       ) {
+        continue;
+      }
+      // A run that started after the read above (a user's Retry, a new message) makes this
+      // setup history, not the crewmate's outcome. Checked again before each write.
+      const stillLatest = Effect.map(
+        shellOf(task.crewThreadId),
+        (shell) => (shell?.latestRunId ?? null) === latestRunId,
+      );
+      if (!(yield* stillLatest)) {
         continue;
       }
       const now = yield* nowIso;
@@ -339,10 +370,7 @@ const makeCrewSweep = Effect.gen(function* () {
           taskId: task.taskId,
           state: "failed",
           note: boundNoteBytes(
-            (preparation.status === "cancelled"
-              ? "Worktree setup was cancelled (the server stopped during it), so the crewmate never started and its slot is free."
-              : `Worktree setup failed, so the crewmate never started and its slot is free. ${preparation.output ?? ""}`
-            ).trim(),
+            SETTLED_PREPARATION_NOTES.get(preparation.status)!(preparation.output ?? "").trim(),
             1024,
           ),
           createdAt: now,
@@ -350,7 +378,7 @@ const makeCrewSweep = Effect.gen(function* () {
           replyTo: null,
         })
         .pipe(Effect.result);
-      if (filed._tag === "Failure") {
+      if (filed._tag === "Failure" || !(yield* stillLatest)) {
         continue;
       }
       const closed = yield* repository

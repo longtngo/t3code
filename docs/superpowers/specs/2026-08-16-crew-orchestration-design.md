@@ -591,8 +591,10 @@ operator.
 **A dispatch whose worktree setup never finishes is settled by the sweep.** Launch
 provisions in the background, so `crew_dispatch` has already returned. Each pass reads
 the "Preparing workspace" item of each open crewmate's **latest** run: `failed` (setup
-failed) or `cancelled` (startup recovery cancels a preparation the server died during)
-settles the task; an older failed item followed by later runs does not. The sweep files
+failed), `cancelled` (startup recovery cancels a preparation the server died during) or
+`interrupted` (a user Stop during setup) settles the task; a `running` item, or an older
+failed item followed by later runs, does not. The latest run is re-read before each write,
+so a run that starts meanwhile wins. The sweep files
 one `failed` report under an id derived from the task (insert-or-ignore), then closes
 the row; a failure in either step leaves the task open, and the next pass retries with
 exactly one report in the end. The report goes out in the same pass.

@@ -17,6 +17,9 @@ describe("isCrewBranch", () => {
     `feature/crew/${TASK_ID}`,
     `crew/${TASK_ID.toUpperCase()}`,
     "crew/3f2b8c1e-9a4d-1e7f-b6a1-0c5d2e8f9a7b",
+    // The variant nibble must be 8, 9, a or b.
+    "crew/3f2b8c1e-9a4d-4e7f-c6a1-0c5d2e8f9a7b",
+    "crew/3f2b8c1e-9a4d-4e7f-76a1-0c5d2e8f9a7b",
     "crew/",
     "",
   ])("rejects %s", (branch) => {

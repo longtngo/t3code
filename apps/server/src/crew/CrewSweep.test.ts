@@ -438,6 +438,66 @@ describe("crew delivery on orchestrator v2", () => {
     },
   );
 
+  it.effect("settles a setup a user stopped, and never a preparation still running", () => {
+    const { harness, seed, state } = settleFixture([
+      { latestRunId: "run-1", items: [preparing("run-1", "interrupted")] },
+      { latestRunId: "run-1", items: [preparing("run-1", "running")] },
+    ]);
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        yield* seed;
+        yield* (yield* sweep).runOnce();
+        assert.deepStrictEqual(
+          (yield* state).map((task) => [task.taskId, task.status, task.failedReports]),
+          [
+            ["task-1", "closed", 1],
+            ["task-2", "open", 0],
+          ],
+        );
+        assert.include(harness.sends[0]?.text ?? "", "did not complete");
+      }),
+    );
+  });
+
+  it.effect.each([
+    ["before the report is filed", 2, 0],
+    ["between the report and the close", 3, 1],
+  ] as const)(
+    "a run that starts %s wins: the task is not closed",
+    ([_label, raceAtRead, reports]) => {
+      // Multi-unit: task-1's crewmate starts a new run while the sweep settles; task-2 does
+      // not and settles normally.
+      const { harness, seed, state } = settleFixture(
+        [
+          { latestRunId: "run-1", items: [preparing("run-1", "failed")] },
+          { latestRunId: "run-1", items: [preparing("run-1", "failed")] },
+        ],
+        {
+          onShellRead: (threadId, reads, shells) => {
+            if (threadId === "crew-1" && reads === raceAtRead) {
+              shells.set(
+                threadId,
+                shellOf(ThreadId.make(threadId), { latestRunId: "run-2" } as never),
+              );
+            }
+          },
+        },
+      );
+      return withCrew(
+        harness,
+        Effect.gen(function* () {
+          yield* seed;
+          yield* (yield* sweep).runOnce();
+          const [first, second] = yield* state;
+          assert.strictEqual(first?.status, "open");
+          assert.strictEqual(first?.failedReports, reports);
+          assert.strictEqual(second?.status, "closed");
+        }),
+      );
+    },
+  );
+
   it.effect.each(["insertReportIfAbsent", "closeTask"] as const)(
     "a one-shot %s failure is retried next pass and ends with exactly one report",
     (failing) => {
@@ -477,6 +537,52 @@ describe("crew delivery on orchestrator v2", () => {
       );
     },
   );
+
+  it.effect("the delivery id follows the quoted rows, not the waiting tail", () => {
+    // Pass 1 fails after quoting r0-r6 of nine; before pass 2 a tenth report arrives that
+    // only changes the tail. The quoted rows are the same, so the retry is the same command.
+    let failNext = true;
+    const shells = new Map([[BRIDGE as string, shellOf(BRIDGE)]]);
+    for (let index = 0; index < 10; index += 1) {
+      shells.set(`crew-${index}`, shellOf(ThreadId.make(`crew-${index}`)));
+    }
+    const harness = makeCrewHarness({
+      shells,
+      send: () => {
+        const behaviour = failNext ? "fail" : "ok";
+        failNext = false;
+        return behaviour;
+      },
+    });
+    const file = (index: number) =>
+      Effect.gen(function* () {
+        const repository = yield* CrewRepository;
+        const taskId = CrewTaskId.make(`task-${index}`);
+        yield* repository.insertTask(
+          makeTask({ taskId, crewThreadId: ThreadId.make(`crew-${index}`) }),
+        );
+        yield* repository.insertReport(
+          report(`done-${index}`, {
+            taskId,
+            note: `note-${index} ${"x".repeat(990)}`,
+            createdAt: `2026-10-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+          }),
+        );
+      });
+    return withCrew(
+      harness,
+      Effect.gen(function* () {
+        for (let index = 0; index < 9; index += 1) yield* file(index);
+        const crewSweep = yield* sweep;
+        yield* crewSweep.runOnce();
+        yield* file(9);
+        yield* crewSweep.runOnce();
+        assert.strictEqual(harness.attempts.length, 2);
+        assert.notStrictEqual(harness.attempts[0]?.text, harness.attempts[1]?.text);
+        assert.strictEqual(harness.attempts[0]?.commandId, harness.attempts[1]?.commandId);
+      }),
+    );
+  });
 
   it.effect("reports that do not fit stay unnoted and go out, named, in the next pass", () => {
     // Nine crewmates each file a 1 KiB terminal report to one lead in one pass.
