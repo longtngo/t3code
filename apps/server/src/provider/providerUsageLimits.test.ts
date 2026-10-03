@@ -62,10 +62,11 @@ describe("applyUsageLimitsUpdate", () => {
     ).toBe(published);
   });
 
-  it("preserves reset credits when a streamed window update changes usage", () => {
+  it("preserves reset credits and spend when a streamed window update changes usage", () => {
     const resetCredits = { availableCount: 2, nextExpiresAt: "2026-10-01T00:00:00.000Z" };
+    const spend = { used: 0, limit: 200, currency: "CAD", usedPercent: 0 };
     const next = applyUsageLimitsUpdate({
-      previous: { ...published, resetCredits },
+      previous: { ...published, resetCredits, spend },
       checkedAt: "2026-09-03T12:00:05.000Z",
       update: { windows: [{ ...session, usedPercent: 55 }] },
     });
@@ -74,6 +75,7 @@ describe("applyUsageLimitsUpdate", () => {
       checkedAt: "2026-09-03T12:00:05.000Z",
       windows: [{ ...session, usedPercent: 55 }, weekly],
       resetCredits,
+      spend,
     });
   });
 });
@@ -91,7 +93,24 @@ describe("resolveUsageLimitsAfterProbe", () => {
     const runtime = { checkedAt: "2026-09-03T12:04:00.000Z", windows: [session] };
     const cached = { checkedAt: "2026-09-03T12:01:00.000Z", windows: [] };
     const fresh = { checkedAt: "2026-09-03T12:05:00.000Z", windows: [] };
-    expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: cached })).toBe(runtime);
+    expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: cached })).toEqual(runtime);
     expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: fresh })).toBe(fresh);
+  });
+
+  it("keeps the probe's reset credits and spend when it keeps the runtime windows", () => {
+    // The status check re-reads reset credits live while serving cached usage.
+    const runtime = { checkedAt: "2026-09-03T12:04:00.000Z", windows: [session] };
+    const cached = {
+      checkedAt: "2026-09-03T12:01:00.000Z",
+      windows: [weekly],
+      resetCredits: { availableCount: 1, nextCreditId: "credit-1" },
+      spend: { used: 12.5, limit: 200, currency: "CAD", usedPercent: 6.25 },
+    };
+    expect(resolveUsageLimitsAfterProbe({ published: runtime, probed: cached })).toEqual({
+      checkedAt: runtime.checkedAt,
+      windows: [session],
+      resetCredits: cached.resetCredits,
+      spend: cached.spend,
+    });
   });
 });

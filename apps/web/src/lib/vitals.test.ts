@@ -3,8 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   accountUsageFromLimits,
   arcPathD,
+  billingMonthWindow,
   clampPct,
   computeWindowPace,
+  daysInUtcMonth,
+  extraUsageWindow,
   formatSnapshotAge,
   segmentBoundariesBackground,
   FIVE_HOUR_MS,
@@ -336,6 +339,35 @@ describe("segmentBoundariesBackground", () => {
   });
 });
 
+describe("billingMonthWindow", () => {
+  it("spans the first instant of this UTC month to the first of the next", () => {
+    const august = billingMonthWindow(Date.UTC(2026, 7, 15, 12));
+    expect(august.resetsAt).toBe("2026-09-01T00:00:00.000Z");
+    expect(august.windowMs).toBe(31 * 24 * 60 * 60 * 1000);
+  });
+
+  it("rolls into January across a year boundary", () => {
+    const december = billingMonthWindow(Date.UTC(2026, 11, 31, 23, 59));
+    expect(december.resetsAt).toBe("2027-01-01T00:00:00.000Z");
+    expect(december.windowMs).toBe(31 * 24 * 60 * 60 * 1000);
+  });
+
+  it("measures February from its own boundaries, not a 30-day assumption", () => {
+    expect(billingMonthWindow(Date.UTC(2026, 1, 10)).windowMs).toBe(28 * 24 * 60 * 60 * 1000);
+    // 2028 is a leap year.
+    expect(billingMonthWindow(Date.UTC(2028, 1, 10)).windowMs).toBe(29 * 24 * 60 * 60 * 1000);
+  });
+
+  it("anchors in UTC, so the boundary is one instant for every reader", () => {
+    // Derived locally, a UTC+14 reader crosses into the next month 14 hours
+    // before the provider's counter resets — long enough to read "+98% over
+    // pace" in the most severe colour on an account behaving normally.
+    const justBeforeMidnightUtc = Date.UTC(2026, 7, 31, 23, 0);
+    expect(billingMonthWindow(justBeforeMidnightUtc).resetsAt).toBe("2026-09-01T00:00:00.000Z");
+    expect(daysInUtcMonth(justBeforeMidnightUtc)).toBe(31);
+  });
+});
+
 describe("formatSnapshotAge", () => {
   const at = "2026-08-15T12:00:00.000Z";
   const base = Date.parse(at);
@@ -356,5 +388,42 @@ describe("formatSnapshotAge", () => {
   it("has nothing to say without a timestamp", () => {
     expect(formatSnapshotAge(null, base)).toBeNull();
     expect(formatSnapshotAge("not-a-date", base)).toBeNull();
+  });
+});
+
+describe("extraUsageWindow", () => {
+  // Mid-August 2026, clear of either month boundary.
+  const nowMs = Date.UTC(2026, 7, 15, 12, 0, 0);
+
+  it("paces the real CAD 200 extra-usage cap as a billing-month row", () => {
+    // `spend` as `claudeUsageResponseToLimits` maps the real team account.
+    const window = extraUsageWindow(
+      { used: 150.5, limit: 200, currency: "CAD", usedPercent: 75.25 },
+      nowMs,
+    );
+    expect(window).toEqual({
+      label: "Extra usage",
+      detail: "CAD 150.50 of CAD 200.00",
+      utilization: 75.25,
+      resetsAt: "2026-09-01T00:00:00.000Z",
+      windowMs: 31 * 24 * 60 * 60 * 1000,
+      segmentCount: 31,
+    });
+  });
+
+  it("has no row without spending or without a percentage to pace", () => {
+    expect(extraUsageWindow(null, nowMs)).toBeNull();
+    expect(extraUsageWindow({ used: 3, currency: "USD" }, nowMs)).toBeNull();
+  });
+
+  it("carries the snapshot's spend into the gauge view", () => {
+    const spend = { used: 0, limit: 200, currency: "CAD", usedPercent: 0 };
+    expect(
+      accountUsageFromLimits({
+        checkedAt: "2026-10-03T07:13:37.215Z",
+        windows: [{ id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 99 }],
+        spend,
+      })?.spend,
+    ).toBe(spend);
   });
 });

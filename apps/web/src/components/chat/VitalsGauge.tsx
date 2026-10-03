@@ -23,6 +23,7 @@ import {
   type UsageWindowView,
   clampPct,
   computeWindowPace,
+  extraUsageWindow,
   formatSnapshotAge,
   formatWindowReset,
   segmentBoundariesBackground,
@@ -232,6 +233,8 @@ export function WindowRow(props: {
   timestampFormat: TimestampFormat;
   /** Unit boundaries to draw across the bar: 5 for the 5-hour, 7 for the 7-day. */
   segmentCount?: number | undefined;
+  /** Trailing figure for rows whose headline is money rather than a percentage. */
+  detail?: string | undefined;
 }) {
   const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   const pace: WindowPace = computeWindowPace(props.window, props.windowMs, props.now);
@@ -293,7 +296,15 @@ export function WindowRow(props: {
           <span className="font-semibold text-muted-foreground">{pace.usage}% used</span>
           {pace.projection !== null ? ` · pace ${pace.projection}%` : null}
         </span>
-        {resetAt !== null ? <span className="whitespace-nowrap">resets {resetAt}</span> : null}
+        {/*
+          `detail` before the reset time: a spend row's headline is its money
+          figure, and the derived month reset says nothing the bar does not.
+        */}
+        {props.detail !== undefined ? (
+          <span className="whitespace-nowrap">{props.detail}</span>
+        ) : resetAt !== null ? (
+          <span className="whitespace-nowrap">resets {resetAt}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -307,6 +318,7 @@ function LimitsBlock(props: {
 }) {
   const { usage, now, timestampFormat, refresh } = props;
   const age = formatSnapshotAge(usage.fetchedAt, now);
+  const extraUsage = extraUsageWindow(usage.spend, now);
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
@@ -373,6 +385,17 @@ function LimitsBlock(props: {
             now={now}
             timestampFormat={timestampFormat}
             segmentCount={7}
+          />
+        ) : null}
+        {extraUsage ? (
+          <WindowRow
+            label={extraUsage.label}
+            window={extraUsage}
+            windowMs={extraUsage.windowMs}
+            now={now}
+            timestampFormat={timestampFormat}
+            segmentCount={extraUsage.segmentCount}
+            detail={extraUsage.detail}
           />
         ) : null}
         {usage.extraWindows.map((window) => (
@@ -644,7 +667,10 @@ export function VitalsDetail(props: {
     ? null
     : describeMissingContextUsage(props.sessionProvider, props.reportsContextUsage);
   const hasWindows = Boolean(
-    accountUsage?.fiveHour || accountUsage?.sevenDay || accountUsage?.extraWindows.length,
+    accountUsage?.fiveHour ||
+    accountUsage?.sevenDay ||
+    extraUsageWindow(accountUsage?.spend ?? null, now) ||
+    accountUsage?.extraWindows.length,
   );
   return (
     <div className="flex flex-col">

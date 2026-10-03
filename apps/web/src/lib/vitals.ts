@@ -1,4 +1,4 @@
-import type { ServerProviderUsageLimits } from "@t3tools/contracts";
+import type { ServerProviderUsageLimits, ServerProviderUsageSpend } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 
 import { formatShortTimestamp } from "../timestampFormat";
@@ -96,9 +96,27 @@ export interface LabeledUsageWindowView extends UsageWindowView {
   readonly segmentCount?: number | undefined;
 }
 
+/**
+ * A spend row rendered as a paced window rather than a bare balance.
+ *
+ * The reset instant is DERIVED (see {@link billingMonthWindow}), not sent by the
+ * provider, which is why this is a distinct shape from
+ * {@link LabeledUsageWindowView}: `detail` carries the money figure that a
+ * percentage-only window row would drop, and `segmentCount` the days in the
+ * month.
+ */
+export interface SpendWindowView extends UsageWindowView {
+  readonly label: string;
+  readonly detail: string;
+  readonly windowMs: number;
+  readonly segmentCount: number;
+}
+
 export interface AccountUsageView {
   readonly fiveHour: UsageWindowView | null;
   readonly sevenDay: UsageWindowView | null;
+  /** Claude's extra usage, when spending is enabled. Paced by {@link extraUsageWindow}. */
+  readonly spend: ServerProviderUsageSpend | null;
   /** When the provider last reported these numbers. */
   readonly fetchedAt: string | null;
   /** Every other window, in the provider's order. The ring glyph draws only 5h/7d. */
@@ -117,7 +135,11 @@ export interface AccountUsageView {
 export function accountUsageFromLimits(
   limits: ServerProviderUsageLimits | null | undefined,
 ): AccountUsageView | null {
-  if (!limits || limits.unavailable?.reason === "unsupported" || limits.windows.length === 0) {
+  if (
+    !limits ||
+    limits.unavailable?.reason === "unsupported" ||
+    (limits.windows.length === 0 && !limits.spend)
+  ) {
     return null;
   }
   let fiveHour: UsageWindowView | null = null;
@@ -145,7 +167,44 @@ export function accountUsageFromLimits(
       ...(windowMs !== null ? { segmentCount: windowSegments(windowMs) } : {}),
     });
   }
-  return { fiveHour, sevenDay, fetchedAt: limits.checkedAt, extraWindows };
+  return {
+    fiveHour,
+    sevenDay,
+    spend: limits.spend ?? null,
+    fetchedAt: limits.checkedAt,
+    extraWindows,
+  };
+}
+
+/**
+ * Format a spend figure with its currency. A money amount keeps both decimals
+ * on both sides — "$12.50 of $50" reads as two different kinds of number.
+ */
+function formatSpend(used: number, limit: number | null, currency: string): string {
+  const symbol = currency === "USD" ? "$" : `${currency} `;
+  const amount = (value: number) => `${symbol}${value.toFixed(2)}`;
+  return limit === null ? amount(used) : `${amount(used)} of ${amount(limit)}`;
+}
+
+/**
+ * Extra usage as a paced billing-month row, or null when the provider gave no
+ * percentage to pace (a spend with no cap). The reset instant is derived, not
+ * reported. See {@link billingMonthWindow}.
+ */
+export function extraUsageWindow(
+  spend: ServerProviderUsageSpend | null,
+  nowMs: number,
+): SpendWindowView | null {
+  if (!spend || spend.usedPercent === undefined) return null;
+  const { resetsAt, windowMs } = billingMonthWindow(nowMs);
+  return {
+    label: "Extra usage",
+    detail: formatSpend(spend.used, spend.limit ?? null, spend.currency),
+    utilization: spend.usedPercent,
+    resetsAt,
+    windowMs,
+    segmentCount: daysInUtcMonth(nowMs),
+  };
 }
 
 /** Day dividers for windows of a day or longer, hour dividers below that. */
@@ -260,6 +319,35 @@ export function segmentBoundariesBackground(segments: number): string | undefine
     );
   }
   return stops.length > 0 ? `linear-gradient(to right, ${stops.join(", ")})` : undefined;
+}
+
+/** Days in the UTC month containing `nowMs`; the extra-usage bar's segment count. */
+export function daysInUtcMonth(nowMs: number): number {
+  const now = new Date(nowMs);
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/**
+ * The billing month as a pace-able window: when it resets, and how long it is.
+ *
+ * The provider sends neither. `GET /api/oauth/usage` returns `extra_usage`
+ * with `is_enabled`, `monthly_limit`, `used_credits`, `utilization` and
+ * `currency` and no reset instant at all, so this is DERIVED from the
+ * maintainer's statement that the anchor is the 1st — it is not provider data,
+ * and if the account's billing anchor is not the 1st the pace is wrong.
+ *
+ * Derived in UTC, deliberately. Anchoring on the local month makes the boundary
+ * cross at a different real instant for every user: at UTC+14 the local month
+ * turns over 14 hours before the provider's counter resets, so a normal account
+ * reads "+98% over pace" in the most severe colour for those 14 hours, every
+ * month. `windowMs` is the distance between the two boundaries rather than
+ * `days * 86_400_000`, so the length always matches the month it describes.
+ */
+export function billingMonthWindow(nowMs: number): { resetsAt: string; windowMs: number } {
+  const now = new Date(nowMs);
+  const startedAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const resetsAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  return { resetsAt: new Date(resetsAt).toISOString(), windowMs: resetsAt - startedAt };
 }
 
 /**

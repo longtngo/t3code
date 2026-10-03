@@ -873,9 +873,13 @@ Three fork deltas keep the gauge honest on top of upstream:
   re-reading it. The gauge's refresh button sends it; without `fresh` a press inside the cache
   window re-serves the last probe.
 - Cursor windows carry `windowDurationMins` from `billingCycleStart`, so they pace.
+- `claudeRateLimitEventToUpdate` reads `unifiedWindows`. The CLI's `rate_limit_event` carries the
+  5-hour usage only there (852 of 853 real events); the typed top-level `utilization` never
+  updated it.
+- `ServerProviderUsageLimits.spend` carries Claude's extra usage from `get_usage`'s `spend` block
+  (else `extra_usage`), and is carried across runtime updates like `resetCredits`.
 
-Not carried: Claude extra-usage spend, Codex credits, Cursor on-demand spend and request count.
-The store has no field for balances; `get_usage` does return `extra_usage`.
+Not carried: Codex credits, Cursor on-demand spend and request count.
 
 ### 30. A failed session stop: clear the spinner, unless a compaction was in flight
 

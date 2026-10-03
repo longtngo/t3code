@@ -41,6 +41,19 @@ export const ServerProviderResetCredits = Schema.Struct({
 export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 
 /**
+ * FORK: paid usage the account may spend past its plan limits (Claude's
+ * extra usage), in the currency's major units. Monthly, with no reset
+ * instant from the provider. Present only when spending is enabled.
+ */
+export const ServerProviderUsageSpend = Schema.Struct({
+  used: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  limit: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  currency: TrimmedNonEmptyString,
+  usedPercent: Schema.optional(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }))),
+});
+export type ServerProviderUsageSpend = typeof ServerProviderUsageSpend.Type;
+
+/**
  * Subscription usage the provider knows about the signed-in account.
  *
  * `unavailable` distinguishes an account that can never report windows (API
@@ -53,6 +66,7 @@ export const ServerProviderUsageLimits = Schema.Struct({
   /** Opaque credential identity when the provider does not report an account. */
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
+  spend: Schema.optional(ServerProviderUsageSpend),
   /** Provider-owned usage settings when quota windows are not available to the client. */
   externalUsage: Schema.optional(
     Schema.Struct({
