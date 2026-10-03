@@ -87,6 +87,23 @@ export function describeMissingContextUsage(
   return `${formatProviderDisplayName(provider)} does not report context usage.`;
 }
 
+function carriedCompactionFacts(
+  usage: ThreadTokenUsageSnapshot | null | undefined,
+  maxTokens: number | null,
+): Pick<
+  ContextWindowSnapshot,
+  "compactsAutomatically" | "autoCompactThreshold" | "autoCompactSource"
+> {
+  if (usage == null || maxTokens === null || usage.maxTokens !== maxTokens) {
+    return { compactsAutomatically: true, autoCompactThreshold: null, autoCompactSource: null };
+  }
+  return {
+    compactsAutomatically: usage.compactsAutomatically ?? true,
+    autoCompactThreshold: usage.autoCompactThreshold ?? null,
+    autoCompactSource: usage.autoCompactSource ?? null,
+  };
+}
+
 /** Prefers the provider's live usage report (#8144); falls back to the last compaction item. */
 export function deriveLatestContextWindowSnapshot(
   entries: ReadonlyArray<{
@@ -121,10 +138,11 @@ export function deriveLatestContextWindowSnapshot(
       lastReasoningOutputTokens: null,
       toolUses: null,
       durationMs: null,
-      compactsAutomatically: true,
-      autoCompactThreshold: null,
+      // FORK (invariant 12): the live report carries no compaction facts; the
+      // provider thread's last `getContextUsage` snapshot does. They describe
+      // a window, so they are carried only onto a report of the same window.
+      ...carriedCompactionFacts(providerThread?.contextUsage, maxTokens),
       cost: null,
-      autoCompactSource: null,
       updatedAt: liveUsage.updatedAt,
     };
   }

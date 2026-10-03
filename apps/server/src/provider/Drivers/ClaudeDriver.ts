@@ -198,7 +198,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           enabled,
           config,
         },
-        { scopedLimitNames, onUsageLimits: (update) => snapshot.applyUsageLimits(update) },
+        {
+          scopedLimitNames,
+          onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+          // FORK: a failed read keeps the offer.
+          offerThreadCompaction: serverSettings.getRawSettings.pipe(
+            Effect.map((settings) => settings.offerThreadCompaction),
+            Effect.orElseSucceed(() => true),
+          ),
+        },
       ).pipe(
         Effect.mapError(
           (cause) =>

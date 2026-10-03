@@ -498,44 +498,31 @@ so they are live, not vestigial.
 
 ### 12. The Claude adapter still calls `getContextUsage`; upstream deleted it
 
-Upstream #8610 removed `queryCurrentContextUsage` and `normalizeClaudeContextUsageApiSnapshot`
-outright, on the grounds that `getContextUsage`'s token-count fallback can make extra model
-requests. This fork keeps the call. It is the **only** source of the compaction facts —
-`compactsAutomatically`, `autoCompactThreshold`, `autoCompactSource` — that
-`packages/contracts/src/providerRuntime.ts` carries on the wire and that the Vitals gauge's
-compaction note and marker render from (`VitalsGauge.tsx`, `lib/contextWindow.ts`). Deleting it
-compiles, passes, and leaves the note permanently blank.
+On v2 (`orchestration-v2/Adapters/ClaudeAdapterV2.ts`, helpers in the fork-owned
+`ClaudeAdapterV2Fork.ts`) the adapter asks once per turn end, before `finalizeActiveTurn`, behind a
+one-second bound, with `detail: "summary"` (answers from the last response, so none of the
+token-count API calls upstream #8610 dropped the call over). The answer lands on the provider
+thread's `contextUsage` via `claudeContextUsageSnapshot`. It is the **only** source of
+`compactsAutomatically`, `autoCompactThreshold` and `autoCompactSource`, which the Vitals gauge's
+compaction note and marker render from; deleting it compiles, passes, and blanks the note.
 
-The adapter's own names differ from the wire's, and the difference matters when grepping:
-`isAutoCompactEnabled` and `autocompactSource` (lower-case `c`) are the **raw SDK response keys**
-read in `normalizeClaudeContextUsageApiSnapshot`, and the second one is absent from the SDK's
-declared type, so it is read off the raw object. Verified 2026-09-06.
+Three traps:
 
-Upstream's replacement is **adopted underneath it**, not instead of it. `latestAssistantUsage`
-is tracked per assistant frame and `compactedSinceLatestAssistantUsage` guards the
-post-compaction window, so the precedence reads
-`contextUsageSnapshot ?? latestAssistantSnapshot ?? …`. The fork's snapshot wins when the CLI
-answers; upstream's is the next-best fallback when it times out.
+- `autocompactSource` (lower-case `c`) is absent from the SDK's declared type and read off the raw
+  object. It, not `isAutoCompactEnabled`, says whether compaction is armed.
+- The snapshot's `maxTokens` is the MODEL's window (`claudeModelContextWindow`), never the
+  response's own `maxTokens`, which is the compaction budget ("541k / 600k, 90%" on a 1M thread).
+- The web prefers the live `providerTurn.tokenUsage` report, which has no compaction facts.
+  `lib/contextWindow.ts` carries them from the provider thread onto a live report only when both
+  name the same window: a threshold is an absolute count, so across a model switch it is dropped.
 
-Three things upstream removed **outside every conflict marker**, all restored, all of which
-break the build if lost again (the good case): `getContextUsage?` on `ClaudeQueryRuntime`, the
-`SDKControlGetContextUsageResponse` type import, and `import * as Option from "effect/Option"`.
+`getContextUsage` is optional on `ClaudeAgentSdkQuerySession`, so replay and test runners need not
+answer it; only the live runner does.
 
-Two of upstream's tests are **retargeted, not deleted**:
-
-- `completes with result usage without querying current context usage` asserts
-  `getContextUsageCalls === 0`. Renamed to
-  `completes with the latest assistant frame usage, not the result total`, with the stub and the
-  call-count assertion dropped; the behaviour it is really about still holds here.
-- `preserves compacted usage when completion follows an older assistant frame` expects
-  `lastUsedTokens: 200`, the PRE-compact figure. `compactBoundaryTokenUsageSnapshot` deliberately
-  resets it to `post_tokens`, because carrying the old value forward pins the meter at the usage
-  the compaction just cleared. Retargeted to `40`.
-
-Both also used a fixed `Stream.take(N)` sized to upstream's event count. This adapter emits a
-token-usage event per assistant frame, so a fixed count truncates before the result-driven
-update and the assertion silently reads an early event. They collect through `turn.completed`
-and read the **last** usage event instead.
+`claudeQueryAutoCompactWindow` is the other half: a percentage setting resolves against the
+window the CLI really runs at, and a blank one still hands unarmed models and >= 1M windows a
+window, because the CLI refuses to compact a >= 1M window it has no default for. Upstream's
+`Number(autoCompactWindow)` sent `NaN` for a percentage, which the CLI drops silently.
 
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately
 
@@ -759,35 +746,18 @@ from — not the project's name. The two differ exactly when a file is opened ou
 workspace member, which is the wrong-root confusion the fork's label fix exists to prevent; the
 merge dropped the only call site and left the label disagreeing with the `cwd` beside it.
 
-### 22. Claude adapter tests: synthetic catalog by default, bundled where the model IS the subject
+### 22. Claude adapter tests: real slugs with the bundled catalog where the model IS the subject
 
-Upstream replaced the fork's hardcoded context-window table with the manifest-driven
-`ClaudeModelCatalog`, and pointed `ClaudeAdapter.test.ts` at a **synthetic** catalog
-(`ClaudeModelCatalog.testFixtures.ts`) so transport tests stay independent of manifest contents.
-Keep that default.
+The fork's window and auto-compaction rules (`claudeCliContextWindow`,
+`CLAUDE_UNARMED_COMPACTION_MODELS`, `claudeQueryAutoCompactWindow` in
+`orchestration-v2/Adapters/ClaudeAdapterV2Fork.ts`) are keyed on **real slugs** (`claude-opus-4-8`,
+`claude-opus-4-6`, `claude-haiku-4-5`) and resolve through `BUNDLED_CLAUDE_MODEL_CATALOG`, which is
+what the v2 adapter uses in production. Their tests in `ClaudeAdapterV2Fork.test.ts` use those
+slugs; a made-up model resolves no window and tests nothing.
 
-But the fork's auto-compaction rules are keyed on **real slugs** (`claude-opus-4-8`,
-`claude-opus-4-6`) and on the real `[1m]` API suffix, and against a synthetic catalog they resolve
-no window at all — four wrong assertions, two hangs, and a percentage resolved against 200k instead
-of 1M. Those tests pass `modelCatalog: Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)` to
-`makeHarness`, because the bundled catalog is what the adapter resolves in production.
-
-No production behaviour moved: `model-manifest.json` carries `fixedContextWindowTokens: 1000000`
-for `opus-4-8`/`opus-4-7` and `contextWindowTokens` for every model with a window toggle, so the
-catalog lookup returns what the fork's switch used to. `claudeCliContextWindow`'s hardcoded
-native-1M switch and `CLAUDE_UNARMED_COMPACTION_MODELS` are still fork-owned and still real-slug
-keyed.
-
-Related: upstream's own new adapter tests may send a second turn while the first is running.
-**Running a queued turn after the current one is fork-only**, so such a turn never reaches the
-provider — the symptom is a test that _hangs_ on a prompt read rather than one that fails.
-Retarget by completing the running turn first, which is the fork's actual contract.
-
-Be precise about what "fork-only" covers here, because two upstream queues make the loose version
-of this claim false. `origin/main` has both `promptQueue` in `ClaudeAdapter.ts` and
-`threadHasQueuedTurnStart` in `ThreadSettlementPolicy.ts`. What it does not have is the adapter's
-follow-up drain: `drainNextPendingTurn` and `withdrawQueuedTurn` are 0 hits on `origin/main` and
-live across 18 fork files. Verified 2026-09-06.
+The native-1M switch is the CLI's number, not the catalog's: `claude-opus-4-8` has no
+`contextWindow` option in the catalog, so upstream's `claudeContextWindow` read it as 200,000 while
+the CLI ran it at 1M. **Re-verify the switch on a CLI upgrade**; nothing fails loudly if it moves.
 
 ### 23. Slow-by-design RPCs get the long leash, never the untracked set
 
@@ -942,29 +912,19 @@ The reset is therefore recorded synchronously (`producedValue`, set in a `Stream
 flushed inside `catchCause`, where an Effect boundary is free. Anything else added to that inner
 pipeline has to be synchronous for the same reason.
 
-### 32. Claude notifications are `runtime.notification`; only three subtypes warn
+### 32. Claude notices: only three subtypes reach the timeline
 
-Fork commit `e71c04825` deleted `emitRuntimeWarning` from the Claude adapter to stop the
-per-turn "Runtime warning" spam: every SDK message subtype the adapter does not model used to
-reach the user as a warning row, when `logNativeSdkMessage` had already captured it. The
-`default:` arm drops to `Effect.logDebug` instead, and `case "notification"` emits a dedicated
-`runtime.notification` event regardless of priority.
+v2 has no runtime-warning rows, so the per-turn "Runtime warning" spam the fork once removed
+cannot recur: unmodelled SDK subtypes are simply ignored. Exactly three subtypes become a
+`system_notice` turn item, because each tells the user something they need:
 
-The 30th reconcile put the helper back, deliberately and narrowly. Upstream added three subtypes
-that describe something a user genuinely needs to see, and none of them is the unmodelled-subtype
-spam the fork removed:
+- `model_refusal_fallback` - upstream's own arm.
+- `model_refusal_no_fallback` - the fork's, with `api_refusal_explanation` preferred over `content`.
+- `informational` with `level === "warning"` - the fork's (e.g. a Stop hook refusing continuation).
 
-- `model_refusal_fallback` - a safety fallback silently switched the model mid-session.
-- `model_refusal_no_fallback` - the model declined and nothing took over.
-- `informational` with `level === "warning"` - e.g. a Stop hook that refused continuation.
-
-What must stay: the `default:` arm logs at debug and never warns (it now also carries upstream's
-`message satisfies never` guard, so a new SDK subtype fails typecheck rather than slipping
-through), and notifications of every priority go to `runtime.notification`, never to a warning
-row. Upstream's `case "notification"` emitting a high-priority warning is dropped on sight - it
-would sit unreachable behind the fork's arm and re-open the spam if the arms were ever reordered.
-`ClaudeAdapter.test.ts`'s "consumes undeclared and UX-internal system subtypes without warning
-rows" pins the whole shape: exactly three warnings, two notifications.
+`notification` frames and every other `informational` level stay out of the timeline. The fork's
+toast for `notification` (`apps/web/src/lib/notificationToast.ts`) has no v2 channel yet and is
+unmounted. `ClaudeAdapterV2Fork.test.ts` "shows a refusal and a warning note" pins the shape.
 
 ### 34. Ingestion command ids: the fork skips the receipt, upstream only adds entropy
 
@@ -984,53 +944,27 @@ upstream at all (it is fork-only across 8 files). The fork's version is strictly
 not an Effect, so yielding it produces `undefined` where a `CommandId` is required. Count them:
 upstream has 11, the fork must have 0.
 
-### 35. The Claude result classifier is the fork's pair, not upstream's `resultOutcome`
+### 35. The Claude result classifier keeps the fork's rules on upstream's v2 failure path
 
-Upstream #10296 folded `turnStatusFromResult` and `resultUserFacingError` into one `resultOutcome`
-that classifies from `terminal_reason` alone. Adopting it silently drops four things the fork's
-pair does: abort handling (`isAbortedResult`, so a user Stop is not recorded as a failure), the
-guard for a non-string `result` (the CLI runs ahead of the typed SDK and throwing here tears down
-the session), per-**line** diagnostic filtering (`[ede_diagnostic]` can sit on any line), and the
-529 `OVERLOADED_RESULT_MESSAGE` fallback. Keep the fork's two functions and its
-`FAILED_TERMINAL_REASONS` set, which upstream does not have.
+`ClaudeAdapterV2.ts`'s `terminalStatusFromResult` delegates to the fork's
+`claudeResultTerminalStatus` (`ClaudeAdapterV2Fork.ts`). What it adds over upstream's v2
+classifier:
 
-The 31st reconcile took upstream's _call site_ without its _declaration_, which typecheck caught.
-The dangerous version of this merge is the one that takes both.
+- A result the CLI tags `success` with `is_error: true` is **failed** even with no hint and no
+  terminal reason. Upstream read it as completed and dropped the failure it had just built, so the
+  user saw a turn that ended with nothing.
+- `aborted_*` terminal reasons are an interruption; `CLAUDE_FAILED_TERMINAL_REASONS` (kept in step
+  with `terminalResultError`) outrank the `interrupt` / `cancel` substring heuristics, which read
+  diagnostics-free `errors[]` only.
+- `[ede_diagnostic]` is filtered trimmed, case-insensitively and per LINE of `result`
+  (`claudeResultProse`), and a non-string `result` is guarded: it reaches no string API.
 
-**Widened 2026-09-08 (32nd reconcile).** Upstream #10321 and #10549 gave `resultOutcome` something
-the fork's pair did not have: a `failureHint` assembled from evidence the turn recorded while it
-was failing - `authenticationFailureMessage` (set when the CLI reports `authentication_failed`,
-via `claudeSignedOutMessage`) and `rejectedRateLimitTypes` / `latestAssistantRateLimited`. Its
-point is that `terminal_reason: "api_error"` should name the expired login or the usage window
-instead of "Claude gave up after repeated API errors."
-
-That is adopted, on the fork's classifier rather than upstream's. `resultOutcome` and
-`terminalResultError` are still rejected; the hint is threaded into
-`resultUserFacingError(result, failureHint)` and `structuredResultFailureMessage(result, failureHint)`,
-which is where the shared `switch` already reads it. The three `ClaudeTurnState` fields and every
-site that writes them are upstream's, merged unchanged. Status classification did NOT move:
-`api_error` is already in the fork's `FAILED_TERMINAL_REASONS`, so `turnStatusFromResult` needs no
-hint.
-
-**Threading the hint is not the whole graft, and the first attempt at it was wrong twice** - nine
-upstream tests caught both. The message for a result the CLI tags `success` while setting
-`is_error` now has a strict order, in `successTaggedFailureMessage`:
-
-1. **The typed `errors[]` entry**, if any. The fork previously read that list only for
-   non-`success` subtypes, so a success-tagged failure carrying `Tool execution failed: EACCES`
-   reported the _hint_ instead - a rate-limit or expired-login line, describing the category while
-   throwing away the actual error.
-2. **The CLI's own prose**, per-line diagnostic filtering intact.
-3. **A structured fallback, and here the fork and upstream genuinely disagree.** The fork refuses
-   to build a message out of `terminal_reason`, because it reads `api_error` for every provider
-   HTTP failure and would claim a turn was abandoned after repeated retries when it was not.
-   Upstream's new tests require exactly that message. **The discriminator is whether the payload
-   HAS a `result` field**: present but unusable (blank, or not a string) means the CLI had a place
-   to say why and said nothing, so only the turn's recorded evidence may speak and the caller's
-   generic "Claude turn failed." otherwise stands; absent entirely is a different payload shape -
-   upstream's rate-limit results carry no `result` at all - where `terminal_reason` is the only
-   account of the failure there is. Both sides' tests pass on that split; picking either rule
-   outright reddens three tests belonging to the other.
+The failure MESSAGE order is upstream's v2 one and is adopted, not the fork's v1 order: typed
+`errors[]`, then the structured message (529, 429, or `terminal_reason` with the turn's
+auth/usage-limit hint), then the hint, then the filtered prose. The fork's v1 rule ("prose before
+`terminal_reason` when the CLI wrote any") is retired: on v2 the prose already reaches the user as
+the synthetic assistant message, and upstream's replay fixture `claude_result_is_error` pins the
+hint winning over it.
 
 ### 40. `homePath` and `configDirPath` are two settings here, and a blank one SCRUBS
 

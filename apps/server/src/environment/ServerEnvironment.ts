@@ -245,6 +245,8 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
       jiraTicketLinks: true,
+      // FORK: the Claude adapter answers resume questions from the setting.
+      offerThreadCompaction: true,
       environmentIcon: true,
       projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),

@@ -94,6 +94,39 @@ describe("live provider-turn usage (#8144)", () => {
     expect(snapshot?.usedPercentage).toBe(21);
   });
 
+  it("carries the thread's compaction facts onto a live report of the same window", () => {
+    // FORK (invariant 12): Claude's live report has no compaction facts; the
+    // turn-end getContextUsage snapshot on the provider thread does.
+    const providerThread = {
+      contextUsage: {
+        usedTokens: 500_000,
+        maxTokens: 1_000_000,
+        compactsAutomatically: true,
+        autoCompactThreshold: 967_000,
+        autoCompactSource: "settings",
+      },
+      updatedAt: DateTime.makeUnsafe("2026-08-27T00:00:00.000Z"),
+    };
+    const sameWindow = deriveLatestContextWindowSnapshot(
+      [],
+      { usedTokens: 541_000, maxTokens: 1_000_000, updatedAt: "2026-08-27T00:01:00.000Z" },
+      providerThread,
+    );
+    expect(sameWindow).toMatchObject({
+      usedTokens: 541_000,
+      autoCompactThreshold: 967_000,
+      autoCompactSource: "settings",
+    });
+    // A threshold is an absolute count for its window: after a model switch it
+    // would draw the marker for the wrong model, so it is dropped.
+    const otherWindow = deriveLatestContextWindowSnapshot(
+      [],
+      { usedTokens: 41_000, maxTokens: 200_000, updatedAt: "2026-08-27T00:02:00.000Z" },
+      providerThread,
+    );
+    expect(otherWindow).toMatchObject({ autoCompactThreshold: null, autoCompactSource: null });
+  });
+
   it("handles a report without a known context window", () => {
     const snapshot = deriveLatestContextWindowSnapshot([], {
       usedTokens: 42_000,
