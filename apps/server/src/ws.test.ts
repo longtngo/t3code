@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { CommandId, ORCHESTRATION_PROTOCOL_VERSION, ProjectId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,7 +10,9 @@ import {
   hasCompatibleOrchestrationProtocol,
   resolveAvailableEditorsForConfig,
   shouldUseBoundedThreadSnapshot,
+  toProjectMutationError,
 } from "./ws.ts";
+import { ProjectMemberInvalidError, ProjectOperationError } from "./project/ProjectService.ts";
 
 it("accepts only the current orchestration protocol before websocket RPC setup", () => {
   assert.isTrue(
@@ -48,3 +50,19 @@ it.effect("does not block server config when editor discovery never resolves", (
     assert.deepEqual(availableEditors, []);
   }),
 );
+
+it("sends a refused workspace member's reason to the client, and nothing internal", () => {
+  const commandId = CommandId.make("command:ws-members");
+  const projectId = ProjectId.make("project:ws-members");
+  const refused = toProjectMutationError(
+    commandId,
+    new ProjectMemberInvalidError({ projectId, detail: "warehouse is attached twice." }),
+  );
+  assert.equal(refused.message, "warehouse is attached twice.");
+  assert.equal(refused.commandId, commandId);
+  const internal = toProjectMutationError(
+    commandId,
+    new ProjectOperationError({ operation: "read-project", projectId, cause: "disk" }),
+  );
+  assert.equal(internal.message, "Failed to mutate project.");
+});

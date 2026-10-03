@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointScopeId,
   CommandId,
   ProviderSessionId,
   ProviderThreadId,
@@ -79,6 +81,8 @@ function restartEffect(
 function makeExecutorLayer(input: {
   readonly events: Ref.Ref<ReadonlyArray<string>>;
   readonly failFirstStart?: Ref.Ref<boolean>;
+  readonly rollback?: CheckpointRollbackService.CheckpointRollbackServiceV2Shape["execute"];
+  readonly dispatched?: Ref.Ref<ReadonlyArray<unknown>>;
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const dependencies = Layer.mergeAll(
@@ -131,7 +135,9 @@ function makeExecutorLayer(input: {
     ),
     Layer.succeed(
       CheckpointRollbackService.CheckpointRollbackServiceV2,
-      CheckpointRollbackService.CheckpointRollbackServiceV2.of({ execute: () => Effect.void }),
+      CheckpointRollbackService.CheckpointRollbackServiceV2.of({
+        execute: input.rollback ?? (() => Effect.void),
+      }),
     ),
     Layer.succeed(
       RuntimeRequestService.RuntimeRequestServiceV2,
@@ -148,7 +154,14 @@ function makeExecutorLayer(input: {
     Layer.provide(
       Layer.mergeAll(
         dependencies,
-        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          dispatch: (command) =>
+            input.dispatched === undefined
+              ? Effect.die("unexpected dispatch")
+              : Ref.update(input.dispatched, (commands) => [...commands, command]).pipe(
+                  Effect.as({ sequence: 0, storedEvents: [] } as never),
+                ),
+        }),
         ServerSettings.layerTest(),
       ),
     ),
@@ -751,5 +764,93 @@ it.effect("safely retries after replacement cleanup succeeds and start fails", (
       "detach",
       "start",
     ]);
+  }),
+);
+
+// Fork: the last failed rollback attempt tells the client why. A refusal over
+// moved workspace members names them; any other failure, a defect included,
+// gets the fixed message and never the cause or a stack.
+it.effect.each([
+  {
+    name: "member refusal",
+    failure: "members",
+    expected: "api has changed since this checkpoint.",
+  },
+  { name: "other typed failure", failure: "typed", expected: undefined },
+  { name: "defect", failure: "defect", expected: undefined },
+] as const)("reports a terminal rollback failure to the client: $name", ({ failure, expected }) =>
+  Effect.gen(function* () {
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+    const rollbackThreadId = ThreadId.make("thread:effect-worker-rollback-message");
+    const checkpointId = CheckpointId.make("checkpoint:effect-worker-rollback-message");
+    const rollbackError = (
+      reason: "workspace-members-moved" | "provider-turn-unavailable",
+      detail?: string,
+    ) =>
+      new CheckpointRollbackService.CheckpointRollbackExecutionError({
+        reason,
+        threadId: rollbackThreadId,
+        providerThreadId,
+        checkpointId,
+        ...(detail === undefined ? {} : { detail }),
+      });
+    const layer = makeExecutorLayer({
+      events,
+      dispatched,
+      rollback: () =>
+        failure === "members"
+          ? Effect.fail(
+              rollbackError("workspace-members-moved", "api has changed since this checkpoint."),
+            )
+          : failure === "typed"
+            ? Effect.fail(rollbackError("provider-turn-unavailable"))
+            : Effect.die(new Error("secret stack detail")),
+    });
+    const timestamp = DateTime.formatIso(yield* DateTime.now);
+    const commandId = CommandId.make("command:effect-worker-rollback-message");
+    const exit = yield* EffectWorker.OrchestrationEffectExecutorV2.pipe(
+      Effect.flatMap((executor) =>
+        executor.execute(
+          {
+            id: "effect:effect-worker-rollback-message",
+            commandId,
+            threadId: rollbackThreadId,
+            request: {
+              type: "provider-thread.rollback",
+              providerThreadId,
+              checkpointId,
+              scopeId: CheckpointScopeId.make("scope:effect-worker-rollback-message"),
+            },
+            status: "running",
+            attemptCount: 5,
+            availableAt: timestamp,
+            leaseOwner: "test-worker",
+            leaseExpiresAt: timestamp,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            completedAt: null,
+            lastError: null,
+          },
+          { willRetry: false },
+        ),
+      ),
+      Effect.provide(layer),
+      Effect.exit,
+    );
+    assert.isTrue(Exit.isFailure(exit));
+    const commands = (yield* Ref.get(dispatched)) as ReadonlyArray<{
+      readonly type: string;
+      readonly requestId: CommandId;
+      readonly message: string;
+    }>;
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0]?.type, "checkpoint.rollback.fail");
+    assert.equal(commands[0]?.requestId, commandId);
+    assert.equal(
+      commands[0]?.message,
+      expected ?? CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE,
+    );
+    assert.notInclude(commands[0]?.message ?? "", "secret stack detail");
   }),
 );

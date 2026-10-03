@@ -567,6 +567,18 @@ export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   );
 }
 
+/** The error a failed `projectsMutate` sends to the client. */
+export function toProjectMutationError(
+  commandId: CommandId,
+  cause: { readonly _tag: string; readonly message: string },
+): ProjectMutationError {
+  return new ProjectMutationError({
+    commandId,
+    message: projectMutationErrorMessage(cause),
+    cause,
+  });
+}
+
 export function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
 }): boolean {
@@ -3186,16 +3198,9 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsMutate]: (mutation) =>
           observeRpcEffect(
             WS_METHODS.projectsMutate,
-            startup.enqueueCommand(mutateProject(mutation)).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProjectMutationError({
-                    commandId: mutation.commandId,
-                    message: projectMutationErrorMessage(cause),
-                    cause,
-                  }),
-              ),
-            ),
+            startup
+              .enqueueCommand(mutateProject(mutation))
+              .pipe(Effect.mapError((cause) => toProjectMutationError(mutation.commandId, cause))),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
