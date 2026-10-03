@@ -244,6 +244,9 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
+      // FORK: the subagent dispatch toggle and per-thread offload (Claude processes).
+      subagentBackend: true,
+      subagentBackendThreadModes: true,
       jiraTicketLinks: true,
       // FORK: the Claude adapter answers resume questions from the setting.
       offerThreadCompaction: true,

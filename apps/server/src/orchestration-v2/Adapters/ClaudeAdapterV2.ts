@@ -129,7 +129,11 @@ import {
   claudeResultProse,
   claudeResultTerminalStatus,
   claudeUserFacingResultErrors,
+  subagentDispatchAppend,
+  withSubagentBackendState,
 } from "./ClaudeAdapterV2Fork.ts";
+import { prepareActiveSubagentThreadBackend } from "../../subagentBackend/SubagentLiveThreads.ts";
+import type { PreparedThreadBackend } from "../../subagentBackend/SubagentBackend.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -822,6 +826,12 @@ export function makeClaudeQueryOptions(input: {
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
+  /**
+   * FORK: this thread's subagent offload, prepared just before the process spawns. Points
+   * `SUBAGENT_BACKEND_STATE` at the thread's flag file and, for `cursor`, appends the
+   * dispatch instruction. Absent leaves the environment and prompt untouched.
+   */
+  readonly subagentBackend?: PreparedThreadBackend;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -866,6 +876,7 @@ export function makeClaudeQueryOptions(input: {
           ...(autoCompactWindow === undefined ? {} : { autoCompactWindow }),
           ...(outputStyle ? { outputStyle } : {}),
         } as ClaudeSdkSettings);
+  const environment = withSubagentBackendState(input.environment, input.subagentBackend?.statePath);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
@@ -909,14 +920,15 @@ export function makeClaudeQueryOptions(input: {
     ...(input.settings?.binaryPath
       ? { pathToClaudeCodeExecutable: input.settings.binaryPath }
       : {}),
-    ...(input.environment === undefined ? {} : { env: input.environment }),
+    ...(environment === undefined ? {} : { env: environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     systemPrompt: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append:
         buildRuntimeInstructions({ harness: "Claude Code" }) +
-        (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS),
+        (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS) +
+        subagentDispatchAppend(input.subagentBackend?.backend),
     },
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };
@@ -2922,6 +2934,14 @@ export interface ClaudeAdapterV2Options {
    * question so a toggle reaches live sessions. Absent means offer.
    */
   readonly offerThreadCompaction?: Effect.Effect<boolean>;
+  /**
+   * FORK: prepares a thread's subagent offload before its process spawns. Defaults to the
+   * server's live preparer (`prepareActiveSubagentThreadBackend`), which is `undefined` —
+   * no offload — when the subagent backend layer is not running.
+   */
+  readonly prepareSubagentBackend?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<PreparedThreadBackend | undefined>;
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -7042,6 +7062,11 @@ export function makeClaudeAdapterV2(
           const hasPersistedProviderTurn = turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          // FORK: written and read here, at the one point a process is spawned, so the
+          // file `SUBAGENT_BACKEND_STATE` names exists before the first subagent can run.
+          const subagentBackend = yield* (
+            adapterOptions.prepareSubagentBackend ?? prepareActiveSubagentThreadBackend
+          )(turnInput.threadId);
           const querySession = yield* queryRunner
             .open({
               threadId: turnInput.threadId,
@@ -7067,6 +7092,7 @@ export function makeClaudeAdapterV2(
                 canUseTool,
                 onUserDialog,
                 supportedDialogKinds: ["resume_return"],
+                ...(subagentBackend === undefined ? {} : { subagentBackend }),
               }),
             })
             .pipe(

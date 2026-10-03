@@ -16,6 +16,7 @@ import {
   NodeId,
   type OrchestrationV2ProviderThread,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   type ProviderTurnId,
@@ -24,6 +25,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -36,6 +38,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerConfig from "../../config.ts";
+import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
+import { SubagentBackendLive } from "../../subagentBackend/SubagentBackend.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
@@ -51,6 +56,7 @@ import {
   claudeQueryAutoCompactWindow,
   claudeResultProse,
   claudeResultTerminalStatus,
+  subagentDispatchAppend,
 } from "./ClaudeAdapterV2Fork.ts";
 
 const NATIVE_SESSION = "fork-native-session";
@@ -847,4 +853,109 @@ describe("ClaudeAdapterV2 fork deltas", () => {
       }).pipe(provide),
     ),
   );
+});
+
+describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
+  // The defect this feature shipped with once (2026-09-04): every flag file was right and
+  // no subagent ever went to Cursor, because nothing told the AGENT. So this drives the
+  // real chain — settings -> SubagentBackendLive's preparer -> the adapter's process spawn —
+  // and asserts on the options the Claude SDK is asked to run with.
+  const arm = (input: { readonly enabled: boolean; readonly mode: "on" | "off" }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        // `readBackendFile` reads `$HOME/.local/state/...`; never the real one.
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-sbt-home-" });
+        const previousHome = process.env.HOME;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            process.env.HOME = home;
+          }),
+          () =>
+            Effect.sync(() => {
+              process.env.HOME = previousHome;
+            }),
+        );
+        const threadId = ThreadId.make("thread-claude-fork");
+        const backendContext = yield* Layer.build(
+          SubagentBackendLive.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                ServerConfig.layerTest("/tmp", { prefix: "t3-sbt-config-" }),
+                serverSettingsLayerTest({
+                  subagentBackendEnabled: input.enabled,
+                  subagentBackendThreadModes: { [threadId]: input.mode },
+                  providerInstances: {
+                    [ProviderInstanceId.make("cursor")]: {
+                      driver: ProviderDriverKind.make("cursor"),
+                      enabled: true,
+                      config: { binaryPath: "/bin/echo" },
+                    },
+                  },
+                }),
+              ),
+            ),
+          ),
+        );
+        const { subagentThreadsDir } = Context.get(backendContext, ServerConfig.ServerConfig);
+        const harness = yield* makeHarness();
+        yield* harness.startTurn();
+        const opened = harness.getOpenedOptions();
+        const statePath = opened?.env?.SUBAGENT_BACKEND_STATE;
+        const append = (opened?.systemPrompt as { readonly append?: string } | undefined)?.append;
+        const onDisk =
+          statePath === undefined
+            ? undefined
+            : JSON.parse(yield* fileSystem.readFileString(statePath));
+        return { statePath, append: append ?? "", onDisk, subagentThreadsDir };
+      }),
+    ).pipe(provide);
+
+  it.effect("a thread switched on runs with the wrapper's state file and the instruction", () =>
+    Effect.gen(function* () {
+      const on = yield* arm({ enabled: true, mode: "on" });
+      assert.isString(on.statePath);
+      assert.isTrue(on.statePath!.startsWith(`${on.subagentThreadsDir}/`));
+      assert.equal(on.onDisk.backend, "cursor");
+      assert.equal(on.onDisk.binaryPath, "/bin/echo");
+      assert.include(on.append, "<subagent_dispatch>");
+      assert.include(on.append, "~/bin/subagent-dispatch");
+    }),
+  );
+
+  it.effect("a thread switched off, or the master switch off, gets no instruction", () =>
+    Effect.gen(function* () {
+      const off = yield* arm({ enabled: true, mode: "off" });
+      assert.equal(off.onDisk.backend, "default");
+      assert.notInclude(off.append, "subagent_dispatch");
+      const masterOff = yield* arm({ enabled: false, mode: "on" });
+      assert.equal(masterOff.onDisk.backend, "default");
+      assert.include(masterOff.onDisk.degraded, "switched off");
+      assert.notInclude(masterOff.append, "subagent_dispatch");
+    }),
+  );
+
+  it.effect("with no subagent backend running, the process env and prompt are untouched", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.startTurn();
+        const opened = harness.getOpenedOptions();
+        assert.isUndefined(opened?.env?.SUBAGENT_BACKEND_STATE);
+        assert.notInclude(
+          (opened?.systemPrompt as { readonly append?: string } | undefined)?.append ?? "",
+          "subagent_dispatch",
+        );
+      }),
+    ).pipe(provide),
+  );
+});
+
+describe("subagentDispatchAppend", () => {
+  it("enables only on an exact `cursor`", () => {
+    assert.match(subagentDispatchAppend("cursor"), /subagent-dispatch/);
+    for (const other of ["default", "", "Cursor", "cursor ", undefined]) {
+      assert.equal(subagentDispatchAppend(other), "");
+    }
+  });
 });

@@ -31,7 +31,7 @@ command -v claude >/dev/null || { echo "claude CLI not on PATH" >&2; exit 69; }
 # The instruction comes from the source, never a copy here. A copy is exactly what drifted last
 # time: the text was edited twice after it was measured.
 INSTRUCTION=$(cd "$HERE" && node --experimental-strip-types print-instruction.mjs) || {
-  echo "could not read the shipped instruction from ClaudeAdapter.ts" >&2; exit 70; }
+  echo "could not read the shipped instruction from ClaudeAdapterV2Fork.ts" >&2; exit 70; }
 [ -n "$INSTRUCTION" ] || { echo "shipped instruction is empty" >&2; exit 70; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/subagent-routing-XXXXXX")

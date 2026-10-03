@@ -66,6 +66,7 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
@@ -519,6 +520,9 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
 
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
+  // FORK: per-thread subagent offload. Registers the preparer Claude adapters call before
+  // they spawn a process; its reconciler is forked by ServerRuntimeStartup.
+  SubagentBackend.SubagentBackendLive,
   ThreadSettlementWorkerLive,
   Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
     Layer.provide(ProjectionStoreV2.layer),
