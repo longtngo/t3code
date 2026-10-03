@@ -34,6 +34,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { makeTransientGitRetryPolicy, resolveGitRetryAttempts } from "./gitRetry.ts";
 import {
@@ -3234,6 +3235,61 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  // Git records real paths, so resolve the deepest existing ancestor the same
+  // way (/tmp and /private/tmp match) and keep the missing tail as given.
+  const realPathOfMaybeMissing = Effect.fn("realPathOfMaybeMissing")(function* (target: string) {
+    const missingTail: Array<string> = [];
+    let current = path.resolve(target);
+    while (true) {
+      const real = yield* fileSystem.realPath(current).pipe(Effect.option);
+      if (Option.isSome(real)) return path.join(real.value, ...missingTail.toReversed());
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      missingTail.push(path.basename(current));
+      current = parent;
+    }
+  });
+  // `git worktree add` refuses a path git still has an admin entry for, even
+  // when its directory is gone. `reuseRegisteredPath` drops exactly that entry
+  // (`<common-dir>/worktrees/<id>`, whose `gitdir` names `<path>/.git`) and
+  // then adds normally, so git still refuses an existing path or a branch in
+  // use elsewhere. It never touches a working tree or another prunable entry,
+  // unlike `add --force`, `worktree remove` or `worktree prune`. A locked entry
+  // is left for git to refuse; git also holds one `locked` while its own add is
+  // in flight, and a finished add has its directory. Callers hold the
+  // workspace lease for the resolved path across this and the add: without it
+  // a second caller can pass its checks, stall, then delete the first caller's
+  // fresh entry. That only covers this process. Two servers on one repo can
+  // still race, and git itself is not safe with two concurrent adds of one path.
+  const releaseMissingWorktreeRegistration = Effect.fn("releaseMissingWorktreeRegistration")(
+    function* (cwd: string, worktreePath: string, target: string) {
+      const isPresent = (target: string) =>
+        fileSystem.exists(target).pipe(Effect.orElseSucceed(() => true));
+      const repository = yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null));
+      if (repository === null) return;
+      const adminRoot = path.join(repository.gitCommonDir, "worktrees");
+      const ids = yield* fileSystem
+        .readDirectory(adminRoot)
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      for (const id of ids) {
+        const adminDir = path.join(adminRoot, id);
+        const gitdir = yield* fileSystem.readFileString(path.join(adminDir, "gitdir")).pipe(
+          Effect.map((content) => content.trim()),
+          Effect.orElseSucceed(() => ""),
+        );
+        if (gitdir === "") continue;
+        // `worktree.useRelativePaths` stores it relative to the admin entry.
+        const registered = yield* realPathOfMaybeMissing(path.resolve(adminDir, gitdir));
+        if (path.dirname(registered) !== target) continue;
+        if (yield* isPresent(path.join(adminDir, "locked"))) return;
+        // Checked last, right before the delete.
+        if (yield* isPresent(worktreePath)) return;
+        yield* fileSystem.remove(adminDir, { recursive: true }).pipe(Effect.ignore);
+        return;
+      }
+    },
+  );
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -3241,19 +3297,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    // `--force` here means only "the path is registered but its directory is
-    // gone, take it over" — the exact situation git's own error points at
-    // ("use 'add -f' to override, or 'prune' or 'remove' to clear"). It cannot
-    // clobber a live worktree: git refuses `add` on an existing path either way.
-    const force = input.reuseRegisteredPath === true ? ["--force"] : [];
     const args = input.newRefName
-      ? ["worktree", "add", ...force, "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", ...force, worktreePath, input.refName];
+      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGit(
+    const addWorktree = executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
       ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
@@ -3275,6 +3326,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
       },
     );
+    if (input.reuseRegisteredPath === true) {
+      const target = yield* realPathOfMaybeMissing(worktreePath);
+      yield* withWorkspaceLease(
+        target,
+        releaseMissingWorktreeRegistration(input.cwd, worktreePath, target).pipe(
+          Effect.andThen(addWorktree),
+        ),
+      );
+    } else {
+      yield* addWorktree;
+    }
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);

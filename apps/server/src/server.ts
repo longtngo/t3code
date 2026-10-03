@@ -380,11 +380,13 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(GitWorkflowLayerLive),
-      // Auto-pull reads the project row. The orchestration runtime also
+      // Auto-pull reads the project row and the thread shells. The orchestration runtime also
       // consumes the broadcaster (run finalization), so the policy cannot read
       // the store from the runtime's output.
       Layer.provide(
-        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(Layer.provide(ProjectStore.layer)),
+        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+          Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
+        ),
       ),
     ),
   ),

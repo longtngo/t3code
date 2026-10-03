@@ -48,6 +48,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly requestId: CommandId;
     readonly title?: string;
+    readonly failed?: true;
   }) =>
     threads
       .dispatch({
@@ -56,6 +57,7 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         requestId: input.requestId,
         ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.failed === true ? { failed: true as const } : {}),
       })
       .pipe(Effect.asVoid);
 
@@ -64,6 +66,7 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     const outcome:
       | { readonly type: "stale" }
+      | { readonly type: "failed" }
       | { readonly type: "complete"; readonly title?: string } = yield* Effect.gen(function* () {
       const projection = yield* threads.getThreadRecords(
         input.threadId,
@@ -131,16 +134,25 @@ const make = Effect.gen(function* () {
               threadId: input.threadId,
               requestId: input.requestId,
               cause,
-            }).pipe(Effect.as({ type: "complete" as const })),
+            }).pipe(Effect.as({ type: "failed" as const })),
       ),
     );
 
     if (outcome.type === "stale") {
       return;
     }
+    // "Complete with no title" and "failed" both leave the title alone, but only
+    // a failure the user asked for is worth telling them about. Automatic
+    // first-title generation stays silent: the user never asked for it.
     yield* complete({
-      ...input,
-      ...(outcome.title === undefined ? {} : { title: outcome.title }),
+      threadId: input.threadId,
+      requestId: input.requestId,
+      ...(outcome.type === "complete" && outcome.title !== undefined
+        ? { title: outcome.title }
+        : {}),
+      ...(outcome.type === "failed" && input.kind.type === "regenerate"
+        ? { failed: true as const }
+        : {}),
     });
   });
 

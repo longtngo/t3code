@@ -470,24 +470,30 @@ export const layer: Layer.Layer<
               worktreePath,
               branch,
             });
-            yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: project.workspaceRoot,
-                  refName: branch,
-                  path: worktreePath,
-                }),
-              ),
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logWarning("provider turn start failed to recreate worktree", {
-                      threadId: projection.thread.id,
-                      worktreePath,
-                      cause: Cause.pretty(cause),
-                    }),
-              ),
-            );
+            // A deleted worktree directory leaves git's admin entry behind, which
+            // makes `git worktree add` refuse the path. Take over that one entry
+            // rather than pruning: `git worktree prune` is repo-global and drops
+            // EVERY worktree whose directory is absent right now (an unmounted
+            // volume, a worktree mid-move), and `git worktree repair` cannot put
+            // those registrations back.
+            yield* gitWorkflow
+              .createWorktree({
+                cwd: project.workspaceRoot,
+                refName: branch,
+                path: worktreePath,
+                reuseRegisteredPath: true,
+              })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.logWarning("provider turn start failed to recreate worktree", {
+                        threadId: projection.thread.id,
+                        worktreePath,
+                        cause: Cause.pretty(cause),
+                      }),
+                ),
+              );
           }
         }
       }

@@ -27,6 +27,7 @@ import {
   v2ThreadId,
 } from "../state/orchestrationV2TestFixtures.ts";
 
+import { presentThreadShell } from "../state/models.ts";
 import { applyOrchestrationV2ProjectionEvent } from "../state/orchestrationV2Projection.ts";
 
 const environmentId = EnvironmentId.make("environment-cache-test");
@@ -68,6 +69,7 @@ const shellSnapshotWithSummaries: OrchestrationV2ShellSnapshot = {
         requestId: CommandId.make("title-regeneration-v2"),
         startedAt: v2Now,
       },
+      titleRegenerationFailedAt: v2Now,
     },
   ],
 };
@@ -150,6 +152,16 @@ describe("orchestration cache envelopes", () => {
         threadShell?.titleRegeneration === null || threadShell?.titleRegeneration === undefined
           ? null
           : DateTime.formatIso(threadShell.titleRegeneration.startedAt),
+      ).toBe("2026-06-20T00:00:00.000Z");
+      expect(
+        threadShell?.titleRegenerationFailedAt == null
+          ? null
+          : DateTime.formatIso(threadShell.titleRegenerationFailedAt),
+      ).toBe("2026-06-20T00:00:00.000Z");
+      expect(
+        threadShell === undefined
+          ? null
+          : presentThreadShell(environmentId, threadShell).titleRegenerationFailedAt,
       ).toBe("2026-06-20T00:00:00.000Z");
       expect(DateTime.formatIso(thread.snapshot.projection.thread.updatedAt)).toBe(
         "2026-06-20T00:00:00.000Z",

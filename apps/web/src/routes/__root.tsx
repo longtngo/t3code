@@ -53,6 +53,7 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
+import { useTitleRegenerationFailureToasts } from "../hooks/useTitleRegenerationFailureToasts";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -248,6 +249,7 @@ function RootRouteView() {
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
           ) : null}
           {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
+          {primaryEnvironmentAuthenticated ? <TitleRegenerationFailureToasts /> : null}
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {appShell}
@@ -490,6 +492,11 @@ function AuthenticatedTracingBootstrap() {
 
 function ThreadCompletionNotifications() {
   useThreadCompletionNotifications();
+  return null;
+}
+
+function TitleRegenerationFailureToasts() {
+  useTitleRegenerationFailureToasts();
   return null;
 }
 
