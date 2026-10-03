@@ -86,6 +86,8 @@ import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
+import { resolveActiveRepo, useWorkspaceRepos } from "../hooks/useWorkspaceRepos";
+import WorkspaceRepoBar from "./WorkspaceRepoBar";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
@@ -165,7 +167,19 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const workspaceRepos = useWorkspaceRepos(routeThreadRef);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
+  const activeRepo = resolveActiveRepo(workspaceRepos, selectedRepoId);
+  // Only an explicitly selected member overrides the working directory. Every
+  // other case keeps the exact expression the panel used before workspaces
+  // existed, so an ordinary project cannot change behavior here.
+  const activeCwd =
+    activeRepo?.kind === "member"
+      ? activeRepo.cwd
+      : (activeThread?.worktreePath ?? activeProject?.workspaceRoot);
+  // Checkpoints are captured for the thread's own checkout only, so a turn diff
+  // has no meaning while a member repository is selected.
+  const isPrimaryRepo = activeRepo === null || activeRepo.kind === "primary";
   const activeRepositoryRoot = activeThread?.worktreePath
     ? undefined
     : activeProject?.repositoryIdentity?.rootPath;
@@ -238,16 +252,25 @@ export default function DiffPanel({
       : selectedTurn?.runId === latestTurn?.runId
         ? "Latest turn"
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.runId}` : selectedGitScope;
+  // The repository is part of the section identity. Without it a comment left on
+  // `README.md` in one repository is looked up under the same key as a
+  // `README.md` in another, and the composer draft that reaches the agent names
+  // a file it cannot attribute to a repository.
+  const reviewSectionId = selectedTurn
+    ? `turn:${selectedTurn.runId}`
+    : isPrimaryRepo
+      ? selectedGitScope
+      : `${selectedGitScope}@${activeRepo?.id ?? ""}`;
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
+  const reviewScopeTitle = selectedGitScope === "unstaged" ? "Working tree" : "Branch changes";
   const reviewSectionTitle = selectedTurn
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : selectedGitScope === "unstaged"
-      ? "Working tree"
-      : "Branch changes";
+    : isPrimaryRepo
+      ? reviewScopeTitle
+      : `${reviewScopeTitle} — ${activeRepo?.title ?? ""}`;
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -563,6 +586,7 @@ export default function DiffPanel({
         threadRef: routeThreadRef,
         filePath,
         activeCwd,
+        repoCwd: isPrimaryRepo ? undefined : activeCwd,
         repositoryRoot: activeRepositoryRoot,
         openInEditor: (targetPath) => {
           void (async () => {
@@ -583,7 +607,7 @@ export default function DiffPanel({
         },
       });
     },
-    [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
+    [activeCwd, activeRepositoryRoot, isPrimaryRepo, openInPreferredEditor, routeThreadRef],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
@@ -627,6 +651,16 @@ export default function DiffPanel({
     if (!routeThreadRef) return;
     useDiffPanelStore.getState().selectBranchBaseRef(routeThreadRef, baseRef);
   };
+  const selectRepo = (repoId: string) => {
+    setSelectedRepoId(repoId);
+    // Turn diffs come from the thread's own checkpoints. Moving to a member
+    // repository while one is selected would leave the panel showing that
+    // turn's patch under another repository's name, so the scope moves with it.
+    const nextRepo = workspaceRepos.find((repo) => repo.id === repoId);
+    if (nextRepo?.kind === "member" && selectedRunId !== null) {
+      selectGitScope("branch");
+    }
+  };
   // The scope menu has two radio groups: the top-level one treats the latest
   // turn as "latest", while the turn sub-menu keys every turn by id so the
   // latest turn is also marked there.
@@ -668,37 +702,45 @@ export default function DiffPanel({
               <DropdownMenuRadioItem value="branch" closeOnClick>
                 <span>Branch changes</span>
               </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="latest" closeOnClick>
-                <span>Latest turn</span>
-              </DropdownMenuRadioItem>
+              {isPrimaryRepo && (
+                <DropdownMenuRadioItem value="latest" closeOnClick>
+                  <span>Latest turn</span>
+                </DropdownMenuRadioItem>
+              )}
             </DropdownMenuRadioGroup>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Turn</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuRadioGroup value={selectedTurnValue} onValueChange={selectScopeValue}>
-                  {orderedTurnDiffSummaries.map((summary) => {
-                    const turnCount =
-                      summary.checkpointTurnCount ??
-                      inferredCheckpointTurnCountByRunId[summary.runId] ??
-                      "?";
-                    return (
-                      <DropdownMenuRadioItem
-                        key={summary.runId}
-                        value={`turn:${summary.runId}`}
-                        closeOnClick
-                      >
-                        <span className="flex items-center gap-2">
-                          <span>Turn {turnCount}</span>
-                          <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                            {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
+            {/* Turn diffs are the thread's own checkpoints; none exist for a member. */}
+            {isPrimaryRepo && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>Turn</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuRadioGroup
+                    value={selectedTurnValue}
+                    onValueChange={selectScopeValue}
+                  >
+                    {orderedTurnDiffSummaries.map((summary) => {
+                      const turnCount =
+                        summary.checkpointTurnCount ??
+                        inferredCheckpointTurnCountByRunId[summary.runId] ??
+                        "?";
+                      return (
+                        <DropdownMenuRadioItem
+                          key={summary.runId}
+                          value={`turn:${summary.runId}`}
+                          closeOnClick
+                        >
+                          <span className="flex items-center gap-2">
+                            <span>Turn {turnCount}</span>
+                            <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                              {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
+                            </span>
                           </span>
-                        </span>
-                      </DropdownMenuRadioItem>
-                    );
-                  })}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {selectedRunId === null && selectedGitScope === "branch" && selectedGitSource?.baseRef && (
@@ -957,6 +999,15 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      {activeThread && activeRepo && routeThreadRef ? (
+        <WorkspaceRepoBar
+          environmentId={activeThread.environmentId}
+          onSelect={selectRepo}
+          repos={workspaceRepos}
+          selectedId={activeRepo.id}
+          threadRef={routeThreadRef}
+        />
+      ) : null}
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.

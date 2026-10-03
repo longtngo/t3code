@@ -91,6 +91,8 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { DirectoryListingView } from "./DirectoryListingView";
 import { listedFileTarget, workspaceListingPath } from "./directoryListing.logic";
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
+import { resolveActiveRepo, useWorkspaceRepos } from "~/hooks/useWorkspaceRepos";
+import WorkspaceRepoBar from "../WorkspaceRepoBar";
 
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
 import {
@@ -978,9 +980,22 @@ export default function FilePreviewPanel({
   selectedFilePending,
   workspaceMutationId,
 }: FilePreviewPanelProps) {
-  // The tree always shows the project; the member-repository root selector
-  // returns with workspace members (U2).
-  const treeCwd = projectCwd;
+  const workspaceRepos = useWorkspaceRepos(threadRef);
+  // Keyed by thread: two threads in the same project share this component
+  // instance when neither uses a worktree, and a root chosen on one of them
+  // must not silently repoint the other's file browser.
+  const threadKey = `${threadRef.environmentId}:${threadRef.threadId}`;
+  const [treeSelection, setTreeSelection] = useState<{
+    readonly threadKey: string;
+    readonly repoId: string;
+  } | null>(null);
+  const activeRepo = resolveActiveRepo(
+    workspaceRepos,
+    treeSelection?.threadKey === threadKey ? treeSelection.repoId : null,
+  );
+  // Only an explicitly selected member moves the tree's root. Everything else
+  // keeps the cwd the caller passed, so an ordinary project is untouched.
+  const treeCwd = activeRepo?.kind === "member" ? activeRepo.cwd : projectCwd;
   // The open file resolves against the repository it was opened from, not
   // against whatever the tree is showing. That is what lets the two move
   // independently without either of them reading the wrong file.
@@ -988,9 +1003,16 @@ export default function FilePreviewPanel({
   // A link to the workspace root opens the explorer rather than a file surface.
   const relativePath =
     attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
-  const fileRepoName = projectName;
+  // The breadcrumb names the repository the open file actually came from. It
+  // said "pickup-v2" over a file read out of an attached member, which is the
+  // same wrong-root confusion the surface root exists to prevent, just in words.
+  const fileRepoName =
+    workspaceRepos.find((repo) => repo.cwd === fileRepoCwd)?.title ?? projectName;
   const openFileFromTree = (nextRelativePath: string) => {
-    onOpenFile(nextRelativePath);
+    onOpenFile(nextRelativePath, activeRepo?.kind === "member" ? activeRepo.cwd : undefined);
+  };
+  const selectRepo = (repoId: string) => {
+    setTreeSelection({ threadKey, repoId });
   };
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
@@ -1395,11 +1417,20 @@ export default function FilePreviewPanel({
             )}
           >
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {activeRepo ? (
+                <WorkspaceRepoBar
+                  environmentId={environmentId}
+                  onSelect={selectRepo}
+                  repos={workspaceRepos}
+                  selectedId={activeRepo.id}
+                  threadRef={threadRef}
+                />
+              ) : null}
               <FileBrowserPanel
                 key={`${environmentId}:${treeCwd}`}
                 environmentId={environmentId}
                 cwd={treeCwd}
-                projectName={projectName}
+                projectName={activeRepo?.title ?? projectName}
                 // Only highlight the open file in the tree that actually
                 // contains it.
                 selectedPath={treeCwd === cwd ? relativePath : null}

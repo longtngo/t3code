@@ -53,6 +53,7 @@ import {
   type SidebarProjectGroupingMode,
   resolveEnvironmentMachineKind,
   ThreadId,
+  type WorkspaceMember,
 } from "@t3tools/contracts";
 import {
   parseScopedThreadKey,
@@ -153,6 +154,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import WorkspaceMembersControl from "./WorkspaceMembersControl";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -1305,6 +1307,28 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
     SidebarProjectGroupingMode | "inherit"
   >("inherit");
+  // Only the physical project's identity is held in state. Attaching a
+  // workspace repository is a sequential, multi-step edit (the motivating
+  // workflow attaches six repos in one sitting), so a held snapshot object
+  // would go stale after the first write: the dialog would keep rendering
+  // the pre-open member list, and the next attach would be computed from
+  // that stale list and silently discard everything attached so far.
+  const [workspaceMembersTargetRef, setWorkspaceMembersTargetRef] =
+    useState<SidebarProjectRef | null>(null);
+  const workspaceMembersTarget = useMemo(() => {
+    // This row only ever has one group in scope (`project`), so we pass it
+    // as a single-element array to the shared, unit-tested resolver rather
+    // than writing a second lookup.
+    const group = resolveSidebarProjectGroupByRef([project], workspaceMembersTargetRef);
+    if (!group || !workspaceMembersTargetRef) return null;
+    return (
+      group.memberProjects.find(
+        (member) =>
+          member.environmentId === workspaceMembersTargetRef.environmentId &&
+          member.id === workspaceMembersTargetRef.projectId,
+      ) ?? null
+    );
+  }, [project, workspaceMembersTargetRef]);
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -1523,6 +1547,41 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [projectGroupingSettings.sidebarProjectGroupingOverrides],
   );
 
+  const openWorkspaceMembersDialog = useCallback((member: SidebarProjectGroupMember) => {
+    setWorkspaceMembersTargetRef({ environmentId: member.environmentId, projectId: member.id });
+  }, []);
+
+  const closeWorkspaceMembersDialog = useCallback(() => {
+    setWorkspaceMembersTargetRef(null);
+  }, []);
+
+  const updateWorkspaceMembers = useCallback(
+    async (
+      member: SidebarProjectGroupMember,
+      members: ReadonlyArray<WorkspaceMember>,
+    ): Promise<boolean> => {
+      const result = await updateProject({
+        environmentId: member.environmentId,
+        input: { projectId: member.id, members },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to update workspace repositories",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return false;
+      }
+      return true;
+    },
+    [updateProject],
+  );
+
   const removeProject = useCallback(
     async (member: SidebarProjectGroupMember) => {
       const memberProjectRef = scopeProjectRef(member.environmentId, member.id);
@@ -1697,7 +1756,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "workspace-members" | "copy-path" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1712,6 +1771,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 return;
               case "grouping":
                 openProjectGroupingDialog(member);
+                return;
+              case "workspace-members":
+                openWorkspaceMembersDialog(member);
                 return;
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
@@ -1730,7 +1792,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "workspace-members" | "copy-path" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1774,6 +1836,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
+            buildTargetedItem("workspace-members", "Workspace repositories"),
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
@@ -1799,6 +1862,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
+      openWorkspaceMembersDialog,
       project.groupedProjectCount,
       project.memberProjects,
       project.projectKey,
@@ -2632,6 +2696,45 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               Cancel
             </Button>
             <Button onClick={saveProjectGroupingPreference}>Save</Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
+      <Dialog
+        open={workspaceMembersTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeWorkspaceMembersDialog();
+          }
+        }}
+      >
+        <DialogPopup className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Workspace repositories</DialogTitle>
+            <DialogDescription>
+              {workspaceMembersTarget
+                ? `Additional repositories threads in ${workspaceMembersTarget.workspaceRoot} can read and write.`
+                : "Additional repositories this project's threads can read and write."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            {workspaceMembersTarget ? (
+              <WorkspaceMembersControl
+                // Remount per project: an optimistic list must never carry over
+                // to a different one. Same reason as the settings page's key.
+                key={`${workspaceMembersTarget.environmentId}:${workspaceMembersTarget.id}`}
+                environmentId={workspaceMembersTarget.environmentId}
+                members={workspaceMembersTarget.members}
+                onMembersChange={(members) =>
+                  updateWorkspaceMembers(workspaceMembersTarget, members)
+                }
+              />
+            ) : null}
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeWorkspaceMembersDialog}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
