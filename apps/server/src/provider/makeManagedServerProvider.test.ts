@@ -571,8 +571,10 @@ describe("makeManagedServerProvider", () => {
         yield* provider.applyUsageLimits({ checkedAt: "2026-04-10T00:06:00.000Z", windows: [] });
 
         const [update] = Array.from(yield* Fiber.join(updatesFiber));
+        // The weekly-only update publishes its number but keeps the probe's checkedAt:
+        // it says nothing about the five-hour window.
         assert.deepStrictEqual(update?.usageLimits, {
-          checkedAt: "2026-04-10T00:05:00.000Z",
+          checkedAt: "2026-04-10T00:00:01.000Z",
           windows: [
             { id: "five_hour", kind: "session", label: "Session", usedPercent: 10 },
             {

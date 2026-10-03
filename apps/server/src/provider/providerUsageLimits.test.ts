@@ -60,10 +60,30 @@ describe("applyUsageLimitsUpdate", () => {
       },
     });
     expect(next).not.toBe(published);
-    expect(next).toEqual({
+    // A one-window update publishes its number but does not vouch for the weekly window,
+    // so the reading keeps its age.
+    expect(next).toEqual({ checkedAt, windows: [{ ...session, usedPercent: 55 }, weekly] });
+  });
+
+  it("moves checkedAt for changed numbers only when the update names every window", () => {
+    const next = applyUsageLimitsUpdate({
+      previous: published,
       checkedAt: "2026-09-03T12:00:05.000Z",
-      windows: [{ ...session, usedPercent: 55 }, weekly],
+      update: {
+        windows: [
+          { ...session, usedPercent: 55 },
+          { ...weekly, usedPercent: 21 },
+        ],
+      },
     });
+    expect(next?.checkedAt).toBe("2026-09-03T12:00:05.000Z");
+    expect(
+      applyUsageLimitsUpdate({
+        previous: undefined,
+        checkedAt: "2026-09-03T12:00:05.000Z",
+        update: { windows: [session] },
+      })?.checkedAt,
+    ).toBe("2026-09-03T12:00:05.000Z");
   });
 
   it("leaves an unsupported account and an empty update alone", () => {
@@ -86,7 +106,7 @@ describe("applyUsageLimitsUpdate", () => {
     });
 
     expect(next).toEqual({
-      checkedAt: "2026-09-03T12:00:05.000Z",
+      checkedAt,
       windows: [{ ...session, usedPercent: 55 }, weekly],
       resetCredits,
       spend,
