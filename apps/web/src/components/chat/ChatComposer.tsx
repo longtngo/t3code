@@ -91,7 +91,7 @@ import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
   isChatSurfaceFocused,
-  nextEscapeAction,
+  createChatEscapeHandler,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -6350,36 +6350,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    * there). Bubble phase, so a handler that already claimed the press wins. With
    * messages queued, Escape first takes the newest one back into the composer
    * (upstream's queued-message edit), so it never stops the turn the user was
-   * about to redirect.
+   * about to redirect; with nothing it can open, Escape stops as usual.
    */
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const action = nextEscapeAction({
-        isChatSurfaceActive: isChatSurfaceFocused({
+    const onKeyDown = createChatEscapeHandler({
+      isChatSurfaceActive: () =>
+        isChatSurfaceFocused({
           activeElement: document.activeElement,
           bodyElement: document.body,
           composerRoot: composerFormRef.current,
           hasOpenDialog: document.querySelector('[data-slot="dialog-popup"]') !== null,
         }),
-        alreadyHandled: event.defaultPrevented,
-        isAutoRepeat: event.repeat,
-        isComposing: event.isComposing,
-        hasRunningTurn: canInterrupt,
-        hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
-        heldMessageCount: queuedMessageCount,
-        recallSupported: true,
-      });
-      if (action === "recall") {
-        // Declined while a queued message is already open for editing: the
-        // press must not fall through to Stop.
-        if (onRecallQueuedMessage()) event.preventDefault();
-        return;
-      }
-      if (action !== "stop") return;
-      event.preventDefault();
-      handleInterruptPrimaryAction();
-    };
+      hasRunningTurn: canInterrupt,
+      hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
+      queuedMessageCount,
+      recallQueuedMessage: onRecallQueuedMessage,
+      stop: handleInterruptPrimaryAction,
+    });
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [

@@ -2156,7 +2156,6 @@ describe("canQueueOfflineTurn", () => {
     needsWorktree: false,
     hasPendingProgress: false,
     modesMatchThread: true,
-    alreadyQueuedForThread: false,
   };
 
   it("queues a plain-text follow-up on an existing server thread", () => {
@@ -2186,12 +2185,6 @@ describe("canQueueOfflineTurn", () => {
 
   it("refuses while an approval or user-input prompt is pending", () => {
     expect(canQueueOfflineTurn({ ...queueable, hasPendingProgress: true })).toBe(false);
-  });
-
-  it("refuses a second message while one is already queued for the thread", () => {
-    // Replayed turn-starts land back to back and some adapters fold the second
-    // into the running turn as steering, merging N messages into one answer.
-    expect(canQueueOfflineTurn({ ...queueable, alreadyQueuedForThread: true })).toBe(false);
   });
 
   it("refuses when the composer has a mode change the replay would not apply", () => {

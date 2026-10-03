@@ -315,7 +315,6 @@ import {
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import {
   enqueueTurn,
-  hasQueuedTurnForThread,
   retireDeliveredTurns,
   useCommandOutbox,
   useDeliveredTurns,
@@ -537,6 +536,9 @@ import {
   waitForRevertedMessage,
   claimThreadRewind,
   countRevertDiscardedMessages,
+  escapeRecallableQueuedCount,
+  outboxTimelineMessages,
+  serverHeldMessageIds,
   canQueueOfflineTurn,
   offlineQueueRefusalReason,
   shouldAbortSendBeforeOfflineQueue,
@@ -2091,12 +2093,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
-  // FORK: Escape's recall rung (see ChatComposer) reads the server queue.
+  // FORK: Escape's recall rung (see ChatComposer) counts what the queue strip can edit.
   const queuedMessageCount = useMemo(
-    () =>
-      isServerThread
-        ? (serverProjection?.runs.filter((run) => run.status === "queued").length ?? 0)
-        : 0,
+    () => (isServerThread ? escapeRecallableQueuedCount(serverProjection) : 0),
     [isServerThread, serverProjection],
   );
   const hasHeldQueuedRuns =
@@ -3862,34 +3861,28 @@ export default function ChatView(props: ChatViewProps) {
   // The timeline drops each one by id as soon as the server holds the message.
   const outboxQueue = useCommandOutbox((state) => state.queue);
   const deliveredOutbox = useDeliveredTurns((state) => state.delivered);
+  const outboxServerMessageIds = useMemo(
+    () => serverHeldMessageIds(serverProjection, committedServerMessageIds),
+    [committedServerMessageIds, serverProjection],
+  );
   const timelineLocalMessages = useMemo(() => {
-    const pending = [
-      ...outboxQueue
-        .filter((queued) => queued.threadId === activeThread?.id)
-        .map((queued) => ({
-          messageId: queued.messageId,
-          text: queued.input.message.text,
-          enqueuedAt: queued.enqueuedAt,
-        })),
-      ...deliveredOutbox.filter((delivered) => delivered.threadId === activeThread?.id),
-    ];
-    if (pending.length === 0) return optimisticUserMessages;
-    return [
-      ...optimisticUserMessages,
-      ...pending.map((entry): ChatMessage => ({
-        id: entry.messageId,
-        role: "user",
-        text: entry.text,
-        runId: null,
-        streaming: false,
-        createdAt: entry.enqueuedAt,
-        updatedAt: entry.enqueuedAt,
-      })),
-    ];
-  }, [activeThread?.id, deliveredOutbox, optimisticUserMessages, outboxQueue]);
+    const pending = outboxTimelineMessages({
+      threadId: activeThread?.id ?? null,
+      queue: outboxQueue,
+      delivered: deliveredOutbox,
+      serverMessageIds: outboxServerMessageIds,
+    });
+    return pending.length === 0 ? optimisticUserMessages : [...optimisticUserMessages, ...pending];
+  }, [
+    activeThread?.id,
+    deliveredOutbox,
+    optimisticUserMessages,
+    outboxQueue,
+    outboxServerMessageIds,
+  ]);
   useEffect(() => {
-    retireDeliveredTurns(serverAcknowledgedUserMessageIds);
-  }, [serverAcknowledgedUserMessageIds]);
+    retireDeliveredTurns(outboxServerMessageIds);
+  }, [outboxServerMessageIds]);
   const timelineProjectionRef = useRef<{
     readonly threadKey: string | null;
     readonly projection: TimelineEntriesProjection;
@@ -8740,7 +8733,6 @@ export default function ChatView(props: ChatViewProps) {
         modesMatchThread:
           runtimeMode === activeThread.runtimeMode &&
           sendInteractionMode === activeThread.interactionMode,
-        alreadyQueuedForThread: hasQueuedTurnForThread(activeThread.id),
       };
       // A bare "/mode" switch is a client-side command, not message text.
       if (parseStandaloneComposerSlashCommand(trimmed)) return;

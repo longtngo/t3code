@@ -2,7 +2,8 @@
  * Background right-panel surface: the provider work still running for this thread (background
  * shells, monitors, subagents). Answers "what is it waiting on?" when the thread reads Waiting.
  *
- * Rows come from `backgroundPanelTasks`; nothing here animates.
+ * Rows come from `backgroundPanelTasks`; nothing here animates. The fork's "started X ago" and
+ * duration are not shown: the v2 background roster carries no timestamps.
  */
 import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { ActivityIcon } from "lucide-react";

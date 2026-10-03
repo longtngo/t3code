@@ -42,6 +42,49 @@ function toPlanState(projection: OrchestrationV2ThreadProjection, plan: TodoPlan
 }
 
 /**
+ * Live beats finished beats superseded. A run can hold two non-superseded lists: the Claude
+ * adapter does not supersede a completed list when a new one starts, and the newer of the two
+ * is then the live one.
+ */
+const LIST_STATUS_RANK: Record<TodoPlan["status"], number> = {
+  superseded: 0,
+  draft: 1,
+  completed: 1,
+  active: 2,
+};
+
+function latestListItem(projection: OrchestrationV2ThreadProjection, planId: PlanId) {
+  return projection.turnItems.findLast(
+    (candidate) => candidate.type === "todo_list" && candidate.planId === planId,
+  );
+}
+
+/**
+ * Whether `candidate` is a newer list of the same run than `previous`. Array order is not
+ * evidence: snapshots load plans ordered by plan id, a uuid. Ties fall to the lists' turn items
+ * (ordinal, then update time), and only then to arrival order.
+ */
+function isNewerListOfRun(
+  projection: OrchestrationV2ThreadProjection,
+  candidate: TodoPlan,
+  previous: TodoPlan,
+): boolean {
+  const rank = LIST_STATUS_RANK[candidate.status] - LIST_STATUS_RANK[previous.status];
+  if (rank !== 0) return rank > 0;
+  const candidateItem = latestListItem(projection, candidate.id);
+  const previousItem = latestListItem(projection, previous.id);
+  const ordinal = (candidateItem?.ordinal ?? -1) - (previousItem?.ordinal ?? -1);
+  if (ordinal !== 0) return ordinal > 0;
+  if (candidateItem !== undefined && previousItem !== undefined) {
+    const time =
+      DateTime.toEpochMillis(candidateItem.updatedAt) -
+      DateTime.toEpochMillis(previousItem.updatedAt);
+    if (time !== 0) return time > 0;
+  }
+  return true;
+}
+
+/**
  * The Task list panel's selection, read from the thread's v2 plans: one list per run (its last
  * non-superseded `todo_list`, since each update supersedes the previous one), ordered by run.
  * Primary is the latest run's list, else the newest list of any earlier run. History covers the
@@ -57,12 +100,7 @@ export function deriveTaskListView(
     if (plan.kind !== "todo_list" || plan.steps.length === 0) continue;
     const key = plan.runId ?? `plan:${plan.id}`;
     const previous = finalPlanByGroup.get(key);
-    // Arrival order breaks ties; a superseded list never replaces a live or finished one.
-    if (
-      previous === undefined ||
-      plan.status !== "superseded" ||
-      previous.status === "superseded"
-    ) {
+    if (previous === undefined || isNewerListOfRun(projection, plan, previous)) {
       finalPlanByGroup.set(key, plan);
     }
   }

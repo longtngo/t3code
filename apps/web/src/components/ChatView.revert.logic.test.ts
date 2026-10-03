@@ -84,6 +84,12 @@ describe("countRevertDiscardedMessages", () => {
     ).toBe(2);
     expect(countRevertDiscardedMessages(null, 0)).toBe(0);
   });
+
+  it("does not count a queued run, which the rewind leaves in place", () => {
+    expect(
+      countRevertDiscardedMessages({ ...projection, runs: [run(1), run(2), run(3, "queued")] }, 1),
+    ).toBe(2);
+  });
 });
 
 describe("claimThreadRewind", () => {

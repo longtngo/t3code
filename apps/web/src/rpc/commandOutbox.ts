@@ -129,17 +129,32 @@ export function sanitizeRehydratedQueue(value: unknown): readonly QueuedTurn[] {
 /** Shared so the persist config and the cross-tab listener cannot drift apart. */
 const OUTBOX_STORAGE_KEY = "t3code:command-outbox";
 
+/** 2: orchestrator v2, where a replay must carry `dispatchMode: "queue"`. */
+const OUTBOX_STORAGE_VERSION = 2;
+
+/**
+ * A v1 entry (queued offline before the orchestrator v2 upgrade) has the same turn-start
+ * shape minus `dispatchMode`, so it is kept and told to queue: without it the replay would
+ * default to "auto" and could steer a running turn. Any other version is unknown and dropped,
+ * since a payload of an unknown shape that the server rejects is poisoned by its receipt.
+ */
+function migratePersistedOutbox(persisted: unknown, version: number): OutboxState {
+  if (version !== 1) return { queue: [] };
+  return {
+    queue: sanitizeRehydratedQueue((persisted as OutboxState | undefined)?.queue).map((turn) =>
+      turn.input.dispatchMode === undefined
+        ? { ...turn, input: { ...turn.input, dispatchMode: "queue" } }
+        : turn,
+    ),
+  };
+}
+
 export const useCommandOutbox = create<OutboxState>()(
   persist(() => ({ queue: [] as readonly QueuedTurn[] }), {
     name: OUTBOX_STORAGE_KEY,
-    // 2: orchestrator v2. A v1 entry is a V1 turn-start whose receipt the v2 server never
-    // wrote, so it is dropped with the rest rather than replayed under new semantics.
-    version: 2,
+    version: OUTBOX_STORAGE_VERSION,
     storage: createJSONStorage(resolveStorage),
-    // A payload written by an older build may not match the current command
-    // shape, and a rejected command is poisoned forever by its receipt — so
-    // drop rather than attempt to migrate.
-    migrate: () => ({ queue: [] as readonly QueuedTurn[] }),
+    migrate: migratePersistedOutbox,
     merge: (persisted, current) => ({
       ...current,
       queue: sanitizeRehydratedQueue((persisted as OutboxState | undefined)?.queue),
@@ -194,11 +209,6 @@ function setQueue(update: (queue: readonly QueuedTurn[]) => readonly QueuedTurn[
   } catch (error) {
     console.error("Failed to persist the offline outbox", error);
   }
-}
-
-/** Whether a turn is already waiting for this thread. */
-export function hasQueuedTurnForThread(threadId: ThreadId): boolean {
-  return getQueuedTurns().some((queued) => queued.threadId === threadId);
 }
 
 /**

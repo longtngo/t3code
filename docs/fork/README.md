@@ -233,6 +233,9 @@ guard is `shouldAbortSendBeforeOfflineQueue`, which must never abort on a discon
 queue branch sits below it. A merge that takes upstream's combined prop, or re-adds
 `activeEnvironmentUnavailable` to that guard, makes the outbox unreachable while its own tests
 stay green. Mobile has upstream's own outbox (`apps/mobile/src/state/thread-outbox*`).
+There is no one-message-per-thread limit on v2: replays dispatch with `queue`
+(`queue_after_active`), so each becomes its own run, in order. Storage version 2 migrates v1
+entries (same shape) by adding `dispatchMode: "queue"`; any other version is dropped.
 
 ### 5. A mid-turn send queues; it does not steer
 
@@ -1072,7 +1075,9 @@ rejected upstream's in-row expansion. Upstream's v2 timeline expands a row into
 (`QuestionAnswerHistory`), a command and its exit code, and a file change with "Open diff". The
 dialog was not restored and upstream's expansion is taken whole. Not covered: a command's
 **output**. The server strips it from the wire on purpose (`WireProjection.ts`
-`projectTurnItemForWire`), so showing it needs a per-item read, which does not exist yet.
+`projectTurnItemForWire`), so showing it needs a per-item read, which does not exist yet. The
+fork's `×N` repeat count in the row's accessible name was already gone at the v2 merge base
+(`coalesceRepeatedWorkLogEntries` had no caller), so nothing of it is lost here.
 
 ### 42. Upstream's new server test fixtures do not set `members`
 

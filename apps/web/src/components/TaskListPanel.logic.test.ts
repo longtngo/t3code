@@ -138,6 +138,51 @@ describe("deriveTaskListView", () => {
     expect(stepTexts(view.primary)).toEqual(["Current:completed"]);
   });
 
+  // The Claude adapter leaves a completed list un-superseded when the run starts another, and
+  // snapshots load plans ordered by plan id (a uuid), so either array order can arrive.
+  const ORDERS = ["arrival", "plan id"] as const;
+  it.each(ORDERS)(
+    "picks a run's current list over its earlier finished one (%s order)",
+    (order) => {
+      const finished = todo("p-old", 1, [["Old step", "completed"]], "completed");
+      const current = todo("p-new", 1, [["New step", "running"]]);
+      const view = deriveTaskListView(
+        projection(order === "arrival" ? [finished, current] : [current, finished], [run(1)]),
+        RunId.make("run-1"),
+      );
+      expect(stepTexts(view.primary)).toEqual(["New step:inProgress"]);
+    },
+  );
+  it.each(ORDERS)(
+    "picks the later of two finished lists by their turn items (%s order)",
+    (order) => {
+      const first = todo("p-first", 1, [["First list", "completed"]], "completed");
+      const second = todo("p-second", 1, [["Second list", "completed"]], "completed");
+      const plans = order === "arrival" ? [first, second] : [second, first];
+      // The turn item's ordinal decides, even against a later update time (a finished list
+      // can be touched again, e.g. a step duration landing late).
+      const byOrdinal = [
+        { ...todoItem("p-first", "2026-09-12T11:00:00.000Z"), ordinal: 2 },
+        { ...todoItem("p-second", "2026-09-12T10:00:00.000Z"), ordinal: 7 },
+      ];
+      expect(
+        stepTexts(
+          deriveTaskListView(projection(plans, [run(1)], byOrdinal), RunId.make("run-1")).primary,
+        ),
+      ).toEqual(["Second list:completed"]);
+      // Equal ordinals fall to the update time.
+      const byTime = [
+        { ...todoItem("p-first", "2026-09-12T10:00:00.000Z"), ordinal: 4 },
+        { ...todoItem("p-second", "2026-09-12T11:00:00.000Z"), ordinal: 4 },
+      ];
+      expect(
+        stepTexts(
+          deriveTaskListView(projection(plans, [run(1)], byTime), RunId.make("run-1")).primary,
+        ),
+      ).toEqual(["Second list:completed"]);
+    },
+  );
+
   it("lists earlier runs newest first by run order, not by arrival order", () => {
     const view = deriveTaskListView(
       projection(

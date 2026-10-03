@@ -27,6 +27,7 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { getUserQueuedThreadRuns } from "@t3tools/client-runtime/state/thread-workflows";
 import * as DateTime from "effect/DateTime";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
@@ -55,6 +56,7 @@ import {
 } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import type { DeliveredTurn, QueuedTurn } from "../rpc/commandOutbox";
 import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import { filterTerminalContextsWithText, type TerminalContextDraft } from "../lib/terminalContext";
@@ -1492,13 +1494,9 @@ export function canQueueOfflineTurn(input: {
    * queue instead, leaving the text in the composer.
    */
   readonly modesMatchThread: boolean;
-  /**
-   * Whether a turn is already queued for this thread. Only one is allowed:
-   * replayed turn-starts are dispatched back to back on reconnect, and the
-   * Cursor and Grok adapters fold a second turn-start into the turn already
-   * running — so N queued messages would come back as one merged answer.
-   */
-  readonly alreadyQueuedForThread: boolean;
+  // No per-thread limit: replays dispatch with `queue`, which v2 turns into
+  // `queue_after_active`, so each queued message becomes its own run, in order.
+  // (The V1 limit existed because Cursor and Grok merged back-to-back turn-starts.)
 }): boolean {
   return (
     input.hasText &&
@@ -1508,8 +1506,7 @@ export function canQueueOfflineTurn(input: {
     input.contextCount === 0 &&
     !input.needsWorktree &&
     !input.hasPendingProgress &&
-    input.modesMatchThread &&
-    !input.alreadyQueuedForThread
+    input.modesMatchThread
   );
 }
 
@@ -1566,9 +1563,6 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
  */
 export function offlineQueueRefusalReason(input: OfflineQueueInput): string {
   const reconnectFirst = "Reconnect to send it.";
-  if (input.alreadyQueuedForThread) {
-    return `A message is already waiting to send on this thread. ${reconnectFirst}`;
-  }
   if (input.attachmentCount > 0 || input.contextCount > 0) {
     return `Attachments and context can't be queued while disconnected. ${reconnectFirst}`;
   }
@@ -1652,10 +1646,18 @@ export function restorePlanFollowUpComposer(input: {
   });
 }
 
+/** The run statuses a rewind rolls back (CheckpointRollbackService); queued and live runs stay. */
+const REWIND_DISCARDED_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "interrupted",
+  "failed",
+  "cancelled",
+]);
+
 /**
  * FORK: how many messages an "Edit from here" rewind to `turnCount` removes from the thread:
- * every message of a run the rewind rolls back (ordinal above `turnCount`), the edited message
- * included. Runs already rolled back are gone and do not count again. The rewind's target is in
+ * every message of a settled run above `turnCount`, the edited message included. Runs already
+ * rolled back are gone, and queued runs survive the rewind, so neither counts. The rewind's target is in
  * the loaded window, so every newer run is too and the count is exact.
  */
 export function countRevertDiscardedMessages(
@@ -1665,7 +1667,7 @@ export function countRevertDiscardedMessages(
   if (projection === null) return 0;
   const discardedRunIds = new Set(
     projection.runs
-      .filter((run) => run.ordinal > turnCount && run.status !== "rolled_back")
+      .filter((run) => run.ordinal > turnCount && REWIND_DISCARDED_RUN_STATUSES.has(run.status))
       .map((run) => run.id),
   );
   return projection.messages.filter(
@@ -1687,4 +1689,100 @@ export function claimThreadRewind(routeThreadKey: string): boolean {
     return { rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey) };
   });
   return claimed;
+}
+
+/** FORK: queued messages Escape can take back: the user's own, never automatic deliveries. */
+export function escapeRecallableQueuedCount(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null,
+): number {
+  return projection === null ? 0 : getUserQueuedThreadRuns(projection).length;
+}
+
+/**
+ * FORK: the composer's window Escape handler. Walks `nextEscapeAction`; a recall that finds
+ * nothing to open (an edit already open, a busy row) falls through to Stop when a turn runs,
+ * so Escape is never a silent no-op over a running turn.
+ */
+export function createChatEscapeHandler(deps: {
+  readonly isChatSurfaceActive: () => boolean;
+  readonly hasRunningTurn: boolean;
+  readonly hasPendingQuestion: boolean;
+  readonly queuedMessageCount: number;
+  readonly recallQueuedMessage: () => boolean;
+  readonly stop: () => void;
+}): (
+  event: Pick<
+    KeyboardEvent,
+    "key" | "defaultPrevented" | "repeat" | "isComposing" | "preventDefault"
+  >,
+) => void {
+  return (event) => {
+    if (event.key !== "Escape") return;
+    const action = nextEscapeAction({
+      isChatSurfaceActive: deps.isChatSurfaceActive(),
+      alreadyHandled: event.defaultPrevented,
+      isAutoRepeat: event.repeat,
+      isComposing: event.isComposing,
+      hasRunningTurn: deps.hasRunningTurn,
+      hasPendingQuestion: deps.hasPendingQuestion,
+      heldMessageCount: deps.queuedMessageCount,
+      recallSupported: true,
+    });
+    if (action === "recall" && deps.recallQueuedMessage()) {
+      event.preventDefault();
+      return;
+    }
+    if (action === "stop" || (action === "recall" && deps.hasRunningTurn)) {
+      event.preventDefault();
+      deps.stop();
+    }
+  };
+}
+
+/**
+ * FORK offline outbox: every message id the server already holds for a thread. A message the
+ * server queued behind a running turn has no turn item yet, so the timeline's own turn-item
+ * dedupe misses it; its run's `userMessageId` and the message rows still name it.
+ */
+export function serverHeldMessageIds(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null,
+  committedMessageIds: Iterable<string>,
+): ReadonlySet<string> {
+  const ids = new Set<string>(committedMessageIds);
+  for (const message of projection?.messages ?? []) ids.add(message.id);
+  for (const run of projection?.runs ?? []) ids.add(run.userMessageId);
+  return ids;
+}
+
+/**
+ * FORK offline outbox: the thread's queued and just-delivered turns as pending user bubbles,
+ * minus any the server already holds (it then renders them itself, as a turn or a queue row).
+ */
+export function outboxTimelineMessages(input: {
+  readonly threadId: string | null;
+  readonly queue: ReadonlyArray<QueuedTurn>;
+  readonly delivered: ReadonlyArray<DeliveredTurn>;
+  readonly serverMessageIds: ReadonlySet<string>;
+}): ReadonlyArray<ChatMessage> {
+  const pending = [
+    ...input.queue
+      .filter((queued) => queued.threadId === input.threadId)
+      .map((queued) => ({
+        messageId: queued.messageId,
+        text: queued.input.message.text,
+        enqueuedAt: queued.enqueuedAt,
+      })),
+    ...input.delivered.filter((delivered) => delivered.threadId === input.threadId),
+  ];
+  return pending
+    .filter((entry) => !input.serverMessageIds.has(entry.messageId))
+    .map((entry) => ({
+      id: entry.messageId,
+      role: "user",
+      text: entry.text,
+      runId: null,
+      streaming: false,
+      createdAt: entry.enqueuedAt,
+      updatedAt: entry.enqueuedAt,
+    }));
 }
