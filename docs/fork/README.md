@@ -521,10 +521,12 @@ Three traps:
 answer it; only the live runner does.
 
 `claudeQueryAutoCompactWindow` is the other half: a percentage setting resolves against the
-window the CLI really runs at. A blank one sends nothing for models the CLI arms itself
-(`model-default` on 2.1.288: opus-5, fable-5, opus-4-8, opus-4-7, sonnet-5), hands unarmed models
-(`auto`: haiku-4-5, opus-4-5) their own window, and hands any other >= 1M window 1M, because the
-CLI refuses to compact a >= 1M window it has no default for (opus-4-6 at 1M). Upstream's
+window the CLI really runs at. A blank one hands unarmed models (`auto`: haiku-4-5, opus-4-5)
+their own window and every >= 1M window 1M, because the CLI refuses to compact a >= 1M window it
+has no default for (opus-4-6 at 1M on 2.1.288; every 1M model on 2.1.247). CLI 2.1.288 arms opus-5,
+fable-5, opus-4-8, opus-4-7 and sonnet-5 itself (`model-default`, 967,000), and 1M yields the same
+threshold there. Sending nothing for them was tried and reverted: the CLI on the user's PATH has
+no minimum version, and an older one would never compact. Upstream's
 `Number(autoCompactWindow)` sent `NaN` for a percentage, which the CLI drops silently.
 
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately

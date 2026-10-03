@@ -181,27 +181,15 @@ const CLAUDE_UNARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Models Claude Code compacts on its own (`autocompactSource:
- * "model-default"`, threshold 967,000, measured on 2.1.288). A blank setting
- * sends them nothing, because a supplied window outranks the CLI's remotely
- * tuned default.
- */
-const CLAUDE_CLI_ARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
-  "claude-opus-5",
-  "claude-fable-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-sonnet-5",
-]);
-
-/**
  * The `autoCompactWindow` handed to Claude Code, or undefined to send none.
  *
  * The user's setting (tokens or a percentage) resolves against the window the
- * CLI will actually use. When it resolves to nothing, models the CLI arms
- * itself get nothing, unarmed models get their own window, and any other
- * >= 1M catalog window gets 1M: the CLI refuses to compact a >= 1M window it
- * holds no default for (`claude-opus-4-6` at 1M still reports `"auto"`).
+ * CLI will actually use. When it resolves to nothing, unarmed models get their
+ * own window and any >= 1M window gets 1M: an older CLI refuses to compact a
+ * >= 1M window it holds no default for (`claude-opus-4-6` at 1M still reports
+ * `"auto"` on 2.1.288). Models 2.1.288 arms itself (`"model-default"`, 967,000)
+ * get 1M anyway: the threshold comes out the same there, and the CLI on the
+ * user's PATH has no minimum version.
  */
 export function claudeQueryAutoCompactWindow(
   setting: string | undefined,
@@ -214,11 +202,8 @@ export function claudeQueryAutoCompactWindow(
   const cliWindow = claudeCliContextWindow(modelSelection) ?? catalogWindow;
   const configured = resolveClaudeAutoCompactWindow(setting, cliWindow);
   if (configured !== undefined) return configured;
-  if (CLAUDE_CLI_ARMED_COMPACTION_MODELS.has(modelSelection.model)) return undefined;
   if (CLAUDE_UNARMED_COMPACTION_MODELS.has(modelSelection.model)) return cliWindow;
-  return catalogWindow !== undefined && catalogWindow >= 1_000_000
-    ? Math.min(catalogWindow, 1_000_000)
-    : undefined;
+  return cliWindow !== undefined && cliWindow >= 1_000_000 ? 1_000_000 : undefined;
 }
 
 function finitePositiveInteger(value: unknown): number | undefined {

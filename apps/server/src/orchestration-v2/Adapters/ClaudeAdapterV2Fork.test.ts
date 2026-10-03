@@ -192,17 +192,18 @@ describe("Claude context windows (invariants 12, 22)", () => {
     // Unarmed models (`"auto"` on 2.1.288) get their own window back.
     assert.equal(claudeQueryAutoCompactWindow("", selection("claude-haiku-4-5")), 200_000);
     assert.equal(claudeQueryAutoCompactWindow("", selection("claude-opus-4-5")), 200_000);
-    // Models the CLI arms itself (`"model-default"` on 2.1.288) keep its default.
+    // Every 1M model gets 1M, including those 2.1.288 arms itself, since an
+    // older CLI on the user's PATH may not (sonnet-5: catalog 200k, CLI 1M).
     for (const model of [
       "claude-opus-5",
       "claude-fable-5",
       "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-sonnet-5",
-      "claude-sonnet-4-6",
     ]) {
-      assert.isUndefined(claudeQueryAutoCompactWindow("", selection(model)), model);
+      assert.equal(claudeQueryAutoCompactWindow("", selection(model)), 1_000_000, model);
     }
+    assert.isUndefined(claudeQueryAutoCompactWindow("", selection("claude-sonnet-4-6")));
   });
 
   it("passes the auto-compact window and output style to the SDK", () => {
@@ -223,15 +224,15 @@ describe("Claude context windows (invariants 12, 22)", () => {
     });
     assert.notProperty(unset.settings ?? {}, "outputStyle");
     assert.notProperty(unset.settings ?? {}, "autoCompactWindow");
-    // A blank setting on a model the CLI arms itself sends no window.
-    const cliDefault = ClaudeAdapterV2.makeClaudeQueryOptions({
+    // A blank setting on a 1M model still arms compaction.
+    const oneM = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: selection("claude-opus-5"),
-      nativeThreadId: "native-fork-options-cli-default",
+      nativeThreadId: "native-fork-options-one-m",
       resume: false,
       cwd: "/workspace",
       settings: DEFAULT_CLAUDE_SETTINGS,
     });
-    assert.notProperty(cliDefault.settings ?? {}, "autoCompactWindow");
+    assert.include(oneM.settings, { autoCompactWindow: 1_000_000 });
   });
 
   it("reads compaction facts off getContextUsage, against the model's window", () => {
