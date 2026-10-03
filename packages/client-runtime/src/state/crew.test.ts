@@ -1,7 +1,23 @@
-import { ThreadId } from "@t3tools/contracts";
-import { describe, expect, it } from "@effect/vitest";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { crewRolesByThread } from "./crew.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PrimaryConnectionTarget,
+  type PreparedConnection,
+  type SupervisorConnectionState,
+} from "../connection/model.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import type * as RpcSession from "../rpc/session.ts";
+import { CREW_LIST_QUERY_OPTIONS, CREW_LIST_REFRESH_MS, crewRolesByThread } from "./crew.ts";
+import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 const task = (parent: string, crew: string, status: "open" | "closed") => ({
   parentThreadId: ThreadId.make(parent),
@@ -24,5 +40,74 @@ describe("crewRolesByThread", () => {
     });
     // A bridge whose only task closed is an ordinary thread again.
     expect(roles.has("bridge-b")).toBe(false);
+  });
+});
+
+describe("crew list query", () => {
+  it("refreshes itself every 60s while anything reads it, with no caller driving it", async () => {
+    vi.useFakeTimers();
+    try {
+      const environment = new PrimaryConnectionTarget({
+        environmentId: EnvironmentId.make("crew-environment"),
+        label: "Crew environment",
+        httpBaseUrl: "https://crew.example.test",
+        wsBaseUrl: "wss://crew.example.test",
+      });
+      let executions = 0;
+      const supervisor = await Effect.runPromise(
+        Effect.gen(function* () {
+          return EnvironmentSupervisor.EnvironmentSupervisor.of({
+            target: environment,
+            state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+              ...AVAILABLE_CONNECTION_STATE,
+              desired: true,
+              network: "online",
+              phase: "connected",
+              attempt: 1,
+              generation: 1,
+            }),
+            session: yield* SubscriptionRef.make(Option.some({} as RpcSession.RpcSession)),
+            prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none()),
+            connect: Effect.void,
+            disconnect: Effect.void,
+            retryNow: Effect.void,
+          } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        }),
+      );
+      const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (_id, effect) =>
+        Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+      const followStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["followStream"] = (
+        _id,
+        stream,
+      ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+      const registryService = EnvironmentRegistry.EnvironmentRegistry.of({
+        run,
+        followStream,
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      const runtime = Atom.runtime(
+        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registryService),
+      );
+      // The production options, with only the transport replaced.
+      const family = createEnvironmentRpcQueryAtomFamily(runtime, {
+        ...CREW_LIST_QUERY_OPTIONS,
+        execute: () =>
+          Effect.sync(() => {
+            executions += 1;
+            return { tasks: [] };
+          }),
+      });
+      const atom = family({ environmentId: environment.environmentId, input: {} });
+      const registry = AtomRegistry.make();
+      const unmount = registry.mount(atom);
+      await vi.advanceTimersByTimeAsync(10);
+      const first = executions;
+      expect(first).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(CREW_LIST_REFRESH_MS * 3 + 10);
+      expect(executions - first).toBe(3);
+      unmount();
+      registry.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

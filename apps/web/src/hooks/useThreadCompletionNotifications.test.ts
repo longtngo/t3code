@@ -69,8 +69,10 @@ describe("collectThreadCompletions", () => {
     const previous = new Map<string, string | null>();
     const threads = (status: string) => [
       shell("primary", "plain", status, "feature/x"),
-      shell("primary", "crew-a", status, "crew/task-a"),
-      shell("secondary", "crew-b", status, "crew/task-b"),
+      // A user's own crew/ branch is not the crewmate marker.
+      shell("primary", "own-crew", status, "crew/my-feature"),
+      shell("primary", "crew-a", status, "crew/3f2b8c1e-9a4d-4e7f-b6a1-0c5d2e8f9a7b"),
+      shell("secondary", "crew-b", status, "crew/0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"),
     ];
     const pass = (status: string) =>
       collectThreadCompletions({
@@ -80,6 +82,6 @@ describe("collectThreadCompletions", () => {
         crewRoles: new Map(),
       }).map(({ environmentId, completion }) => `${environmentId}:${completion.threadId}`);
     pass("running");
-    expect(pass("completed")).toEqual(["primary:plain"]);
+    expect(pass("completed")).toEqual(["primary:plain", "primary:own-crew"]);
   });
 });

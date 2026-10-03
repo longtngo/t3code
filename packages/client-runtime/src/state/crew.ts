@@ -7,6 +7,14 @@ import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from
 /** Crew state changes on the server's 60s sweep, so the shared list refreshes at that rate. */
 export const CREW_LIST_REFRESH_MS = 60_000;
 
+/** The crew list query's options, shared by its atom family and its test. */
+export const CREW_LIST_QUERY_OPTIONS = {
+  label: "environment-data:crew:list",
+  tag: WS_METHODS.crewList,
+  staleTimeMs: 5_000,
+  refreshIntervalMs: CREW_LIST_REFRESH_MS,
+} as const;
+
 /**
  * Query-atom family for crew.
  *
@@ -19,12 +27,7 @@ export function createCrewEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
-    list: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:crew:list",
-      tag: WS_METHODS.crewList,
-      staleTimeMs: 5_000,
-      refreshIntervalMs: CREW_LIST_REFRESH_MS,
-    }),
+    list: createEnvironmentRpcQueryAtomFamily(runtime, CREW_LIST_QUERY_OPTIONS),
     teardown: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:crew:teardown",
       tag: WS_METHODS.crewTeardown,

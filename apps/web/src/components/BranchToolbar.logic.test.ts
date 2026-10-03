@@ -340,6 +340,21 @@ describe("resolveLocalCheckoutBranchMismatch", () => {
     ).toBeNull();
   });
 
+  it("ignores a torn-down crewmate's kept crew branch, but not a user's crew/ branch", () => {
+    const mismatch = (activeThreadBranch: string) =>
+      resolveLocalCheckoutBranchMismatch({
+        effectiveEnvMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch,
+        currentGitBranch: "main",
+      });
+    expect(mismatch("crew/3f2b8c1e-9a4d-4e7f-b6a1-0c5d2e8f9a7b")).toBeNull();
+    expect(mismatch("crew/my-feature")).toEqual({
+      threadBranch: "crew/my-feature",
+      currentBranch: "main",
+    });
+  });
+
   it("ignores new-worktree base selection before a worktree exists", () => {
     expect(
       resolveLocalCheckoutBranchMismatch({
