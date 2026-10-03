@@ -19,6 +19,7 @@ import {
   type Settings as ClaudeSdkSettings,
   type SDKAssistantMessage,
   type SDKAPIRetryMessage,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -63,6 +64,7 @@ import {
   type ProviderUserInputAnswers,
   type ProviderThreadId,
   type ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolActivitySource,
 } from "@t3tools/contracts";
 
@@ -94,7 +96,6 @@ import {
 } from "../../provider/Drivers/ClaudeHome.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
-  resolveClaudeCatalogContextWindow,
   resolveClaudeCatalogContextWindowTokens,
 } from "../../provider/ClaudeModelCatalog.ts";
 import {
@@ -118,6 +119,18 @@ import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts
 import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
 import * as ProviderAdapter from "../ProviderAdapter.ts";
 import {
+  applyClaudeTaskToolResult,
+  claudeContextUsageSnapshot,
+  type ClaudeTaskState,
+  claudeTaskPlanSteps,
+  isClaudeTaskTool,
+  claudeModelContextWindow,
+  claudeQueryAutoCompactWindow,
+  claudeResultProse,
+  claudeResultTerminalStatus,
+  claudeUserFacingResultErrors,
+} from "./ClaudeAdapterV2Fork.ts";
+import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
@@ -133,13 +146,10 @@ import {
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 export const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
 
+// FORK: the window the CLI actually runs at (native_1m models included), not
+// only the catalog toggle (invariant 22).
 function claudeContextWindow(modelSelection: ModelSelection): number | null {
-  if (modelSelection.model === "claude-opus-4-6" || modelSelection.model === "claude-opus-4-7") {
-    return 1_000_000;
-  }
-  return resolveClaudeCatalogContextWindow(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) === "1m"
-    ? 1_000_000
-    : 200_000;
+  return claudeModelContextWindow(modelSelection);
 }
 
 export function claudeProviderTurnTokenUsage(
@@ -324,6 +334,14 @@ export interface ClaudeAgentSdkQuerySession {
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  /**
+   * FORK (invariant 12): the CLI's context answer, the only source of its
+   * compaction facts. Optional so replay and test runners need not answer.
+   */
+  readonly getContextUsage?: Effect.Effect<
+    SDKControlGetContextUsageResponse,
+    ClaudeAgentSdkQueryRunnerError
+  >;
 }
 
 type ClaudeQueryStreamExit = Exit.Exit<void, ClaudeAgentSdkQueryRunnerError>;
@@ -679,6 +697,12 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
               }),
             ),
           ),
+          // `summary` answers from the last response's usage, so it makes no
+          // token-count API calls (the reason upstream #8610 dropped the call).
+          getContextUsage: Effect.tryPromise({
+            try: () => queryRuntime.getContextUsage({ detail: "summary" }),
+            catch: (cause) => queryRunnerError(cause, "getContextUsage"),
+          }),
           close: Queue.shutdown(promptQueue).pipe(
             Effect.andThen(closeClaudeQuery(queryRuntime)),
             Effect.tap(() =>
@@ -820,12 +844,22 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
+  // FORK: a percentage resolves against the CLI's real window, and unarmed
+  // models get one even when the setting is blank (invariant 12; a bare
+  // `Number("60%")` sent NaN, which the CLI drops, leaving compaction off).
+  // The output style rides along: it is part of the CLI's system prompt.
+  const autoCompactWindow = claudeQueryAutoCompactWindow(
+    input.settings?.autoCompactWindow,
+    input.modelSelection,
+  );
+  const outputStyle = input.settings?.outputStyle;
   const effectiveQuerySettings =
-    input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
+    autoCompactWindow === undefined && !outputStyle
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
+          ...(autoCompactWindow === undefined ? {} : { autoCompactWindow }),
+          ...(outputStyle ? { outputStyle } : {}),
         } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -1005,10 +1039,9 @@ function resultTextFromSdkMessage(
   if (message.type !== "result" || message.subtype !== "success") {
     return null;
   }
-  return {
-    nativeItemId: message.uuid,
-    text: message.result,
-  };
+  // FORK: the CLI can send a non-string `result` (invariant 35).
+  const text: unknown = message.result;
+  return typeof text === "string" ? { nativeItemId: message.uuid, text } : null;
 }
 
 function makeProviderThread(input: {
@@ -2224,13 +2257,11 @@ const awaitClaudeUserInputAnswers = Effect.fn("awaitClaudeUserInputAnswers")(fun
  * so they must never become the error banner (#5557).
  */
 function resultUserFacingError(result: SDKResultMessage): string | undefined {
-  const errors = "errors" in result && Array.isArray(result.errors) ? result.errors : [];
   if (result.subtype === "success" && !result.is_error) {
     return undefined;
   }
-  return errors.find(
-    (error): error is string => typeof error === "string" && !error.startsWith("[ede_diagnostic]"),
-  );
+  // FORK: trimmed, case-insensitive diagnostic filter (invariant 35).
+  return claudeUserFacingResultErrors(result)[0];
 }
 
 function terminalResultError(
@@ -2269,39 +2300,15 @@ function isOverloadedResult(result: SDKResultMessage): boolean {
   return result.subtype === "success" && result.api_error_status === 529;
 }
 
+// FORK: the fork's classifier (invariant 35). A success-tagged result with
+// is_error is a failed turn even when no hint or terminal reason names why.
 function terminalStatusFromResult(
   message: SDKResultMessage,
-  failureHint?: string,
 ): Extract<
   OrchestrationV2ProviderTurn["status"],
   "completed" | "interrupted" | "failed" | "cancelled"
 > {
-  // The CLI can label an abort as success with is_error=false. Its explicit
-  // terminal reason takes precedence over that envelope.
-  if (
-    message.terminal_reason === "aborted_tools" ||
-    message.terminal_reason === "aborted_streaming"
-  ) {
-    return "interrupted";
-  }
-  if (message.subtype === "success") {
-    // The SDK reports API-level failures (401 auth, 529 overloaded, …) as
-    // subtype "success" with is_error set; the turn produced no real work.
-    return isOverloadedResult(message) ||
-      message.api_error_status === 429 ||
-      terminalResultError(message.terminal_reason, failureHint) !== undefined ||
-      (message.is_error && failureHint !== undefined)
-      ? "failed"
-      : "completed";
-  }
-  const errorText = message.errors.join("\n").toLowerCase();
-  if (errorText.includes("interrupt")) {
-    return "interrupted";
-  }
-  if (errorText.includes("cancel")) {
-    return "cancelled";
-  }
-  return "failed";
+  return claudeResultTerminalStatus(message);
 }
 
 function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
@@ -2413,8 +2420,12 @@ function providerFailureFromResult(
       ? "Claude API rate limit reached. Try again later."
       : terminalResultError(message.terminal_reason, failureHint);
   if (message.subtype !== "success") {
+    const listedErrors = claudeUserFacingResultErrors(message);
     return makeProviderFailure({
-      message: listedError ?? structuredError ?? message.errors.join("\n"),
+      message:
+        listedError ??
+        structuredError ??
+        (listedErrors.length === 0 ? undefined : listedErrors.join("\n")),
       code: message.subtype,
       class: failureClass,
     });
@@ -2424,7 +2435,8 @@ function providerFailureFromResult(
   }
   const apiErrorStatus = message.api_error_status ?? null;
   return makeProviderFailure({
-    message: listedError ?? structuredError ?? failureHint ?? message.result,
+    // FORK: prose is guarded (non-string) and filtered per line (invariant 35).
+    message: listedError ?? structuredError ?? failureHint ?? claudeResultProse(message),
     code:
       apiErrorStatus === null
         ? (message.terminal_reason ?? "sdk_result_error")
@@ -2883,6 +2895,11 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  /**
+   * FORK: the "Offer to compact threads" server setting, read per resume
+   * question so a toggle reaches live sessions. Absent means offer.
+   */
+  readonly offerThreadCompaction?: Effect.Effect<boolean>;
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -3176,6 +3193,10 @@ export function makeClaudeAdapterV2(
         // tool_use frame is handled, in whichever run that frame is routed
         // to (the prompt's turn, or the continuation that drains a wake).
         const heldProposedPlansByToolUseId = new Map<string, string>();
+        // FORK: Claude's Task tools (TaskCreate/TaskUpdate/TaskList) replaced
+        // TodoWrite. Their list outlives a turn, so it is kept per native thread
+        // and re-projected as a to-do list after every successful call.
+        const claudeTasksByNativeThread = new Map<string, Map<string, ClaudeTaskState>>();
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
 
@@ -4710,6 +4731,7 @@ export function makeClaudeAdapterV2(
           readonly failure?: OrchestrationV2ProviderFailure;
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
+          readonly contextUsage?: ThreadTokenUsageSnapshot;
         }) {
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
           for (const toolCall of input.context.toolCalls.values()) {
@@ -4891,6 +4913,7 @@ export function makeClaudeAdapterV2(
                   ...input.context.input.providerThread,
                   providerSessionId: session.id,
                   ...(clearConversationHead ? { nativeConversationHeadRef: null } : {}),
+                  ...(input.contextUsage === undefined ? {} : { contextUsage: input.contextUsage }),
                   firstRunOrdinal:
                     input.context.input.providerThread.firstRunOrdinal ??
                     input.context.input.runOrdinal,
@@ -5650,6 +5673,58 @@ export function makeClaudeAdapterV2(
             return;
           }
 
+          // FORK (invariant 32): the two other subtypes a user must see. A
+          // refusal with no fallback carries the explanation the failed
+          // result lacks; a warning-level informational note is e.g. a Stop
+          // hook refusing continuation. Every other informational level,
+          // `notification`, and unmodelled subtypes stay out of the timeline.
+          const forkNoticeText =
+            message.type === "system" && message.subtype === "model_refusal_no_fallback"
+              ? message.api_refusal_explanation?.trim() || message.content
+              : message.type === "system" &&
+                  message.subtype === "informational" &&
+                  message.level === "warning"
+                ? message.content
+                : undefined;
+          if (
+            forkNoticeText !== undefined &&
+            forkNoticeText.trim().length > 0 &&
+            message.type === "system"
+          ) {
+            const now = yield* DateTime.now;
+            const nativeItemId = message.uuid;
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: {
+                id: idAllocator.derive.turnItemFromProviderItem({
+                  driver: CLAUDE_PROVIDER,
+                  nativeItemId,
+                }),
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                nodeId: context.input.rootNodeId,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: {
+                  driver: CLAUDE_PROVIDER,
+                  nativeId: nativeItemId,
+                  strength: "strong",
+                },
+                parentItemId: null,
+                ordinal: yield* resolveItemOrdinal(context, nativeItemId),
+                type: "system_notice",
+                status: "completed",
+                title: forkNoticeText,
+                message: forkNoticeText,
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+              },
+            });
+            return;
+          }
+
           if (message.type === "system" && message.subtype === "api_retry") {
             const updatedAt = yield* DateTime.now;
             const previous = (yield* Ref.get(providerRetries)).get(context.providerTurnId);
@@ -6025,6 +6100,36 @@ export function makeClaudeAdapterV2(
             });
             yield* emitToolCallArtifacts(artifacts);
             context.toolCalls.delete(toolCall.nativeItemId);
+            const taskNativeThreadId =
+              context.input.providerThread.nativeThreadRef?.nativeId ?? null;
+            if (
+              isClaudeTaskTool(toolCall.toolName) &&
+              parentToolUseId === null &&
+              taskNativeThreadId !== null &&
+              !isClaudeToolResultError(toolResult)
+            ) {
+              const tasks =
+                claudeTasksByNativeThread.get(taskNativeThreadId) ??
+                new Map<string, ClaudeTaskState>();
+              claudeTasksByNativeThread.set(taskNativeThreadId, tasks);
+              if (
+                applyClaudeTaskToolResult(
+                  tasks,
+                  {
+                    toolName: toolCall.toolName,
+                    input: claudeNativeToolInputValue(toolCall.input),
+                  },
+                  output.type === "structured_tool_use_result" ? output.value : undefined,
+                )
+              ) {
+                yield* emitClaudePlanProjection({
+                  context,
+                  nativeItemId: toolCall.nativeItemId,
+                  kind: "todo_list",
+                  steps: claudeTaskPlanSteps(tasks),
+                }).pipe(Effect.orDie);
+              }
+            }
           }
 
           const assistantParentToolUseId = parentToolUseIdFromSdkMessage(message);
@@ -6253,12 +6358,30 @@ export function makeClaudeAdapterV2(
               resultFailure?.class === "usage_limit"
                 ? { ...resultFailure, resetAt }
                 : resultFailure;
+            // FORK (invariant 12): one bounded question per turn end. A slow or
+            // failed answer leaves the thread's previous snapshot in place.
+            // 1 s: on CLI 2.1.288 the `summary` call took 4-40 ms at turn end
+            // (`full`, which is not sent, took 557-634 ms).
+            const contextUsageResponse =
+              interrupted || input.query.getContextUsage === undefined
+                ? Option.none()
+                : yield* input.query.getContextUsage.pipe(
+                    Effect.timeoutOption("1 second"),
+                    Effect.orElseSucceed(() => Option.none()),
+                  );
+            const contextUsage = Option.isNone(contextUsageResponse)
+              ? undefined
+              : claudeContextUsageSnapshot(
+                  contextUsageResponse.value,
+                  claudeModelContextWindow(context.input.modelSelection),
+                );
             yield* finalizeActiveTurn({
               context,
-              status: interrupted ? "interrupted" : terminalStatusFromResult(message, failureHint),
+              status: interrupted ? "interrupted" : terminalStatusFromResult(message),
               completedAt,
               result: message,
               ...(terminalFailure === null ? {} : { failure: terminalFailure }),
+              ...(contextUsage === undefined ? {} : { contextUsage }),
             });
           }
         });
@@ -6701,6 +6824,16 @@ export function makeClaudeAdapterV2(
             Effect.gen(function* () {
               if (request.dialogKind !== "resume_return") {
                 return { behavior: "cancelled" as const };
+              }
+              // FORK: the setting off answers "Keep full history" without
+              // asking. `continue`, not `never`, so turning it back on restores
+              // the offer.
+              const offerCompaction =
+                adapterOptions.offerThreadCompaction === undefined
+                  ? true
+                  : yield* adapterOptions.offerThreadCompaction;
+              if (!offerCompaction) {
+                return { behavior: "completed" as const, result: "continue" as const };
               }
               const ageMinutes =
                 typeof request.payload.sessionAgeMinutes === "number" &&
@@ -7647,7 +7780,10 @@ export type ClaudeAdapterV2DriverEnv =
 export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
   function* (
     input: ProviderAdapterDriverCreateInput<ClaudeSettings>,
-    hooks: Pick<ClaudeAdapterV2Options, "scopedLimitNames" | "onUsageLimits"> = {},
+    hooks: Pick<
+      ClaudeAdapterV2Options,
+      "scopedLimitNames" | "onUsageLimits" | "offerThreadCompaction"
+    > = {},
   ) {
     const { instanceId, environment, enabled, config } = input;
     const fileSystem = yield* FileSystem.FileSystem;
