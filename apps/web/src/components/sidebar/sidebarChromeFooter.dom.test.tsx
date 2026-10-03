@@ -41,6 +41,9 @@ vi.mock("./SidebarLocalModels", () => ({
 vi.mock("./SidebarResourceQueue", () => ({
   SidebarResourceQueue: () => createElement("li", { "data-panel": "queue" }),
 }));
+vi.mock("./SidebarCrew", () => ({
+  SidebarCrew: () => createElement("li", { "data-panel": "crew" }),
+}));
 vi.mock("./SidebarProviderUpdatePill", () => ({ SidebarProviderUpdatePill: () => null }));
 vi.mock("./SidebarUpdatePill", () => ({
   SidebarUpdatePill: () => null,
@@ -70,6 +73,7 @@ describe("SidebarChromeFooter panel placement", () => {
     const view = await renderFooterAt("/");
     expect(view.find('[data-panel="models"]')).not.toBeNull();
     expect(view.find('[data-panel="queue"]')).not.toBeNull();
+    expect(view.find('[data-panel="crew"]')).not.toBeNull();
   });
 
   it("KEEPS both status panels on the Usage page, where Back replaces navigation", async () => {
