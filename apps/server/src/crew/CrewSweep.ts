@@ -145,7 +145,6 @@ export const deliveryId = (key: string, attempt: number) =>
 
 const isPreviouslyRejected = Schema.is(OrchestratorCommandPreviouslyRejectedError);
 
-/** How the latest run's "Preparing workspace" item ends when setup never finished. */
 /**
  * How the latest run's "Preparing workspace" item ends when setup never finished, and what
  * the bridge is told. `interrupted` is a user Stop during setup: that crewmate will not
@@ -317,8 +316,10 @@ const makeCrewSweep = Effect.gen(function* () {
    * the "Preparing workspace" item of the crewmate's run. Settled, positively, when that
    * item in the thread's LATEST run ended `failed` (setup failed), `cancelled` (startup
    * recovery cancels a preparation the server died during) or `interrupted` (a user Stop
-   * during setup) — being in the latest run means no run started after it; the latest run
-   * is re-read before each write so a run that starts meanwhile wins. An old failed item followed by later runs settles nothing.
+   * during setup) — being in the latest run means no run started after it. The latest run
+   * is re-read before each write, so a run that starts meanwhile wins; one starting between
+   * the report and the close leaves the report filed and the row open. An old failed item
+   * followed by later runs settles nothing.
    *
    * The slot is freed and the bridge is told through an ordinary `failed` report. The report
    * goes in first, under an id derived from the task, insert-or-ignore, and the row closes
