@@ -302,8 +302,13 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
 // Service
 // ---------------------------------------------------------------------------
 
-/** Remembered push keys; a run or request re-written later must not push twice. */
-const MAX_REMEMBERED_PUSH_KEYS = 1_000;
+/**
+ * Remembered push keys; a run or request re-written later must not push twice.
+ * In memory and bounded: a rewrite of a run more than this many edges old pushes
+ * again. Accepted: terminal runs are not normally re-written, and a duplicate
+ * notification is cheaper than an unbounded set or a table for it.
+ */
+export const MAX_REMEMBERED_PUSH_KEYS = 1_000;
 const SEND_TIMEOUT = "15 seconds";
 
 export interface WebPushRelayShape {
@@ -313,11 +318,28 @@ export interface WebPushRelayShape {
   readonly handleEvent: (event: OrchestrationV2DomainEvent) => Effect.Effect<void>;
   readonly drain: Effect.Effect<void>;
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  /**
+   * Stop pushing for the rest of this process. Server shutdown calls it before it
+   * cancels the runs still in flight, which are not the user's work ending.
+   */
+  readonly stop: Effect.Effect<void>;
 }
 
 export class WebPushRelay extends Context.Service<WebPushRelay, WebPushRelayShape>()(
   "t3/push/WebPushRelay",
 ) {}
+
+/**
+ * The push-service origin only. A subscription endpoint's path is its bearer token,
+ * so it must not reach logs or spans.
+ */
+function endpointOrigin(endpoint: string): string {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return "<invalid endpoint>";
+  }
+}
 
 /** Any tagged failure; the relay logs it and moves on. */
 type TaggedFailure = { readonly _tag: string };
@@ -338,11 +360,21 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
   const serverEnvironment = yield* ServerEnvironment;
   const pushRepo = yield* PushSubscriptionRepository;
   const serverSettings = yield* ServerSettingsService;
-  const httpClient = yield* HttpClient.HttpClient;
+  // No trace context to a third-party push service, and no span: its url.full would
+  // carry the subscription token.
+  const httpClient = (yield* HttpClient.HttpClient).pipe(
+    HttpClient.transform((effect) =>
+      effect.pipe(
+        Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      ),
+    ),
+  );
 
   const vapidKeys = yield* getOrCreateVapidKeys(secrets);
   const notBefore = yield* DateTime.now;
   const rememberedKeys = new Set<string>();
+  let stopped = false;
 
   // Prunes the subscription on 404/410 (gone); logs and swallows everything else so
   // one bad or hung endpoint never aborts the fan-out to the others.
@@ -379,7 +411,7 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
       const response = yield* httpClient.execute(request).pipe(Effect.timeout(SEND_TIMEOUT));
       if (response.status === 404 || response.status === 410) {
         yield* Effect.logInfo("pruning gone push subscription", {
-          endpoint: subscription.endpoint,
+          endpoint: endpointOrigin(subscription.endpoint),
           statusCode: response.status,
         });
         yield* pushRepo.deleteByEndpoint({ endpoint: subscription.endpoint });
@@ -387,14 +419,14 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
       }
       if (response.status < 200 || response.status >= 300) {
         yield* Effect.logWarning("web push send failed", {
-          endpoint: subscription.endpoint,
+          endpoint: endpointOrigin(subscription.endpoint),
           statusCode: response.status,
         });
       }
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("web push send errored", {
-          endpoint: subscription.endpoint,
+          endpoint: endpointOrigin(subscription.endpoint),
           cause: Cause.pretty(cause),
         }),
       ),
@@ -410,10 +442,16 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
     ),
   );
 
-  const processEdge = ({ threadId, edge }: PushEdge) =>
+  const processEdge = ({ threadId, key, edge }: PushEdge) =>
     Effect.gen(function* () {
+      if (stopped) return;
       const shell = yield* threads.getThreadShell(threadId);
       if (shell === null || shell.deletedAt !== null) {
+        return;
+      }
+      // A delegated subagent's run and questions belong to its parent's turn; the
+      // web notifier and the thread list skip these threads too.
+      if (shell.lineage.relationshipToParent === "subagent") {
         return;
       }
       const categories = yield* readNotificationCategories;
@@ -444,11 +482,17 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
         { concurrency: 8, discard: true },
       );
     }).pipe(
+      // Reads failed before anything was sent: forget the key so a later rewrite of
+      // the same run or request can still push. Individual sends never fail here.
       Effect.catchCause((cause) =>
-        Effect.logWarning("web push relay failed for thread", {
-          threadId,
-          cause: Cause.pretty(cause),
-        }),
+        Effect.sync(() => rememberedKeys.delete(key)).pipe(
+          Effect.andThen(
+            Effect.logWarning("web push relay failed for thread", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
       ),
     );
 
@@ -456,6 +500,7 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
 
   const handleEvent: WebPushRelayShape["handleEvent"] = (event) =>
     Effect.suspend(() => {
+      if (stopped) return Effect.void;
       const edge = classifyPushEdge(event, notBefore);
       if (edge === null || rememberedKeys.has(edge.key)) {
         return Effect.void;
@@ -486,6 +531,9 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
     handleEvent,
     drain: worker.drain,
     start,
+    stop: Effect.sync(() => {
+      stopped = true;
+    }),
   });
 });
 

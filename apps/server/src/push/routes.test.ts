@@ -52,6 +52,7 @@ const appLayer = Layer.mergeAll(pushSubscriptionsRouteLayer, pushVapidPublicKeyR
         handleEvent: () => Effect.void,
         drain: Effect.void,
         start: () => Effect.void,
+        stop: Effect.void,
       }),
     ),
   ),

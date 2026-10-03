@@ -43,6 +43,7 @@ import {
 } from "../persistence/Services/PushSubscription.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { shutdownWithNotificationsSilenced } from "../serverRuntimeStartup.ts";
 import {
   buildPushPayload,
   classifyPushEdge,
@@ -400,6 +401,139 @@ describe("WebPushRelay", () => {
       assert.equal(headers["content-encoding"], "aes128gcm");
       assert.match(headers["authorization"] ?? "", /^vapid t=.+, k=.+/);
       assert.equal(headers["urgency"], "high");
+      // No trace context leaks to the third-party push service.
+      assert.isUndefined(headers["traceparent"]);
+      assert.isUndefined(headers["b3"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("pushes nothing for a delegated subagent thread's completion or question", () =>
+    Effect.gen(function* () {
+      const child = ThreadId.make("push-subagent-child");
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: stubThreads(
+          shell({
+            id: child,
+            lineage: {
+              rootThreadId: THREAD_ID,
+              parentThreadId: THREAD_ID,
+              relationshipToParent: "subagent",
+            },
+          }),
+        ),
+      });
+      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-child"), threadId: child })));
+      yield* relay.handleEvent({ ...requestUpdated(), threadId: child });
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("pushes nothing for the runs server shutdown cancels", () =>
+    Effect.gen(function* () {
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: stubThreads(),
+      });
+      // The shape `reconcile("shutdown")` writes for a run that was running.
+      yield* shutdownWithNotificationsSilenced({
+        silenceNotifications: relay.stop,
+        shutdown: relay
+          .handleEvent(runUpdated(run({ status: "cancelled" })))
+          .pipe(Effect.andThen(relay.drain)),
+      });
+      assert.deepEqual(harness.sent, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("prunes a 404 Not Found endpoint", () =>
+    Effect.gen(function* () {
+      const notFound = "https://fcm.googleapis.com/fcm/send/not-found";
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(notFound)],
+        threads: stubThreads(),
+        respond: () => Effect.succeed(404),
+      });
+      yield* relay.handleEvent(runUpdated(run())).pipe(Effect.andThen(relay.drain));
+      assert.deepEqual(harness.deleted, [notFound]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("logs a gone endpoint by origin, never by its token", () => {
+    const logged: Array<string> = [];
+    const capture = Logger.make(({ message }) => void logged.push(JSON.stringify(message)));
+    return Effect.gen(function* () {
+      const gone = "https://fcm.googleapis.com/fcm/send/secret-subscription-token";
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(gone)],
+        threads: stubThreads(),
+        respond: () => Effect.succeed(410),
+      });
+      yield* relay.handleEvent(runUpdated(run()));
+      yield* relay.drain;
+      assert.deepEqual(harness.deleted, [gone]);
+      const pruneLog = logged.find((line) => line.includes("pruning gone push subscription"));
+      assert.include(pruneLog ?? "", "https://fcm.googleapis.com");
+      assert.notInclude(logged.join("\n"), "secret-subscription-token");
+    }).pipe(Effect.scoped, Effect.provide(Logger.layer([capture], { mergeWithExisting: true })));
+  });
+
+  it.effect("forgets a key whose reads failed, so the next rewrite of that run pushes", () =>
+    Effect.gen(function* () {
+      let failReads = true;
+      const { relay, harness } = yield* makeHarness({
+        subscriptions: [subscription(FCM)],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: () =>
+            failReads ? Effect.fail({ _tag: "ShellReadFailed" } as const) : Effect.succeed(shell()),
+        },
+      });
+      yield* relay.handleEvent(runUpdated(run(), "event:retry:1"));
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, []);
+      failReads = false;
+      yield* relay.handleEvent(runUpdated(run(), "event:retry:2"));
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, [FCM]);
+      // Once delivered, the key is remembered again.
+      yield* relay.handleEvent(runUpdated(run(), "event:retry:3"));
+      yield* relay.drain;
+      assert.deepEqual(harness.sent, [FCM]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("remembers exactly the newest 1,000 keys", () =>
+    Effect.gen(function* () {
+      // A literal, not the exported constant: the test pins the documented bound.
+      const bound = 1_000;
+      const reads: Array<string> = [];
+      const { relay } = yield* makeHarness({
+        // No subscribers: each processed edge is observable as one shell read.
+        subscriptions: [],
+        threads: {
+          streamDomainEvents: Stream.empty,
+          getThreadShell: (threadId) =>
+            Effect.sync(() => reads.push(threadId)).pipe(Effect.as(shell())),
+        },
+      });
+      const runN = (index: number) =>
+        runUpdated(run({ id: RunId.make(`run-bound-${index}`) }), `event:bound:${index}`);
+      for (let index = 0; index < bound; index += 1) {
+        yield* relay.handleEvent(runN(index));
+      }
+      yield* relay.drain;
+      assert.lengthOf(reads, bound);
+      // Still within the bound: the oldest key is remembered.
+      yield* relay.handleEvent(runN(0));
+      yield* relay.drain;
+      assert.lengthOf(reads, bound);
+      // One newer key evicts it; a rewrite of that old run is processed again.
+      yield* relay.handleEvent(runN(bound));
+      yield* relay.handleEvent(runN(0));
+      yield* relay.drain;
+      assert.lengthOf(reads, bound + 2);
     }).pipe(Effect.scoped),
   );
 
