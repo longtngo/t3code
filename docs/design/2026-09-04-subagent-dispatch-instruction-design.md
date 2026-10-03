@@ -217,9 +217,11 @@ it is named here rather than left implied.
 
 ## Known limitation
 
-A system prompt is frozen for a **conversation's** lifetime, not just a process's. On
-orchestrator v2 the flag file is rewritten on every turn, so the dispatch wrapper — which reads
-it on every call — follows a mid-thread flip at once, and refuses when the thread is off. The
+A system prompt is frozen for a **conversation's** lifetime, not just a process's. The flag
+file does follow a mid-thread flip at once: the settings reconciler (`subagentBackendReconciler`)
+rewrites every live thread's file on each settings change, and the dispatch wrapper reads it on
+every call, so it refuses as soon as the thread is off. (The adapter also rewrites the file before
+each turn, which covers a thread first seen after the change.) The
 **instruction** does not follow: it is fixed when the conversation is created, and reopening the
 process does not change it, because `--resume` replays the conversation's original system
 prompt. Measured on the real CLI (2026-10-03): a conversation started with one append, resumed

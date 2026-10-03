@@ -8,6 +8,7 @@ import {
   getThreadListV2RowAppearance,
 } from "./thread-list-v2-row-appearance";
 import { RowPressable } from "../../components/RowPressable";
+import { canStartNewThreadOnBranch } from "./new-task-context-presentation";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
@@ -1240,7 +1241,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         {(close) => (
           <ControlPillMenu
             actions={[
-              ...(thread.branch
+              ...(canStartNewThreadOnBranch(thread.branch)
                 ? [
                     {
                       id: "new-thread-on-branch",

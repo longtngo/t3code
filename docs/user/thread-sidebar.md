@@ -175,8 +175,8 @@ thread from offloading. The per-thread segment then disappears, Cursor is greyed
 in the machine-wide segment while Default stays available, and it all comes back when
 you turn the switch on. Per-thread control reaches Claude Code threads today, and
 needs a Cursor instance in Settings before its Cursor choice does anything. Turning
-offload on for a thread that is already running takes effect in its next new
-conversation; turning it off stops offloading on the thread's next turn. The
+offload on applies to new threads; an existing thread, or a fork of one, may keep
+working as it began. Turning it off stops offloading at once, in every thread. The
 machine-wide choice applies to anything on this machine that reads it.
 
 ## Panel motion
