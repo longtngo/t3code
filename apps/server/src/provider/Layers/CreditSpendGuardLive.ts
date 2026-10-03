@@ -96,28 +96,57 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
                   cause: Cause.pretty(exit.cause),
                 }).pipe(Effect.as(Option.none<ReadonlyArray<ServerProvider>>())),
           ),
-          Effect.flatMap((result) => Deferred.succeed(deferred, result)),
-          Effect.onInterrupt(() => Deferred.succeed(deferred, Option.none())),
+          // Release the slot BEFORE waking the waiters: a caller that resumes and asks
+          // again must start a new read, not find this finished one still in the map.
           Effect.ensuring(Effect.sync(() => inFlight.delete(instanceId))),
+          Effect.flatMap((result) => Deferred.succeed(deferred, result)),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => inFlight.delete(instanceId)).pipe(
+              Effect.andThen(Deferred.succeed(deferred, Option.none())),
+            ),
+          ),
           Effect.forkIn(scope),
         );
         return deferred;
       });
 
+    const spendingAllowed = serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.allowSpendingCredits),
+      Effect.catch((cause) =>
+        Effect.logWarning("credit-spend-guard.gate-unavailable", {
+          stage: "settings",
+          cause,
+        }).pipe(Effect.as(true)),
+      ),
+    );
+
+    const cachedRefusalFor = Effect.fn("CreditSpendGuard.cachedRefusalFor")(function* (
+      instanceId: ProviderInstanceId,
+    ) {
+      if (yield* spendingAllowed) return null;
+      return creditSpendBlockedReason({
+        allowSpendingCredits: false,
+        providers: yield* providerRegistry.getProviders,
+        instanceId,
+        nowMs: yield* Clock.currentTimeMillis,
+      });
+    });
+
+    /*
+     * The turn-start gate. Known limits, left as they are:
+     * - The shared fresh read has no bound of its own past each caller's timeout; it relies
+     *   on the provider probe's own 25 s timeout to end, and a caller never waits past
+     *   FRESH_READ_TIMEOUT for it.
+     * - A turn that passed this check just before the instance hit 100% still starts; the
+     *   interrupt sweeper then stops it.
+     * - A continuation after a server restart that this refuses fails visibly and is not
+     *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
+     */
     const refusalFor = Effect.fn("CreditSpendGuard.refusalFor")(function* (
       instanceId: ProviderInstanceId,
     ) {
-      const allowSpendingCredits = yield* serverSettings.getSettings.pipe(
-        Effect.map((settings) => settings.allowSpendingCredits),
-        Effect.catch((cause) =>
-          Effect.logWarning("credit-spend-guard.gate-unavailable", {
-            stage: "settings",
-            cause,
-          }).pipe(Effect.as(true)),
-        ),
-      );
       // First, so turning the switch back on takes effect without touching any provider.
-      if (allowSpendingCredits) return null;
+      if (yield* spendingAllowed) return null;
 
       let providers: ReadonlyArray<ServerProvider> = yield* providerRegistry.getProviders;
       const limits = providers.find((entry) => entry.instanceId === instanceId)?.usageLimits;
@@ -148,7 +177,7 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
       return reason;
     });
 
-    return CreditSpendGuard.of({ refusalFor });
+    return CreditSpendGuard.of({ refusalFor, cachedRefusalFor });
   });
 
 export const layer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard());

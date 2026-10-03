@@ -11,6 +11,12 @@ export interface CreditSpendGuardShape {
    * (`creditSpendBlockedReason`).
    */
   readonly refusalFor: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
+  /**
+   * The same rule on the reading already published: no fresh read and no log. For
+   * pollers that ask every few seconds (limit recovery); the turn-start gate stays
+   * the authority that re-reads.
+   */
+  readonly cachedRefusalFor: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
 }
 
 export class CreditSpendGuard extends Context.Service<CreditSpendGuard, CreditSpendGuardShape>()(

@@ -246,15 +246,17 @@ const TestLayer = makeTestLayer(WorkspaceMemberHooks.inert);
 // "Allow to spend credits": a gate the test flips once the active run is underway.
 const CREDIT_REFUSAL = 'Codex has used 100% of Weekly and "Allow to spend credits" is off.';
 let creditBlocked = false;
+const creditGateForTest = (instanceId: ProviderInstanceId) =>
+  Effect.sync(() =>
+    creditBlocked && instanceId === modelSelection.instanceId ? CREDIT_REFUSAL : null,
+  );
 const CreditGateTestLayer = makeTestLayer(
   WorkspaceMemberHooks.inert,
   Layer.succeed(
     CreditSpendGuard,
     CreditSpendGuard.of({
-      refusalFor: (instanceId) =>
-        Effect.sync(() =>
-          creditBlocked && instanceId === modelSelection.instanceId ? CREDIT_REFUSAL : null,
-        ),
+      refusalFor: creditGateForTest,
+      cachedRefusalFor: creditGateForTest,
     }),
   ),
 );
@@ -4535,10 +4537,8 @@ const CreditGateSendersLayer = Layer.provideMerge(
       Layer.succeed(
         CreditSpendGuard,
         CreditSpendGuard.of({
-          refusalFor: (instanceId) =>
-            Effect.sync(() =>
-              creditBlocked && instanceId === modelSelection.instanceId ? CREDIT_REFUSAL : null,
-            ),
+          refusalFor: creditGateForTest,
+          cachedRefusalFor: creditGateForTest,
         }),
       ),
     ),

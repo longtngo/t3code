@@ -40,13 +40,15 @@ describe("applyUsageLimitsUpdate", () => {
   it("re-stamps an unchanged reading the provider confirms once it is 30 s old", () => {
     // The credit guard re-reads usage older than 60 s; a turn that keeps reporting the
     // same numbers must keep the reading current without republishing on every tick.
-    const confirm = (at: string) =>
-      applyUsageLimitsUpdate({ previous: published, checkedAt: at, update: { windows: [weekly] } });
-    expect(confirm("2026-09-03T12:00:29.999Z")).toBe(published);
-    expect(confirm("2026-09-03T12:00:30.000Z")).toEqual({
+    const confirm = (at: string, windows: ReadonlyArray<typeof session | typeof weekly>) =>
+      applyUsageLimitsUpdate({ previous: published, checkedAt: at, update: { windows } });
+    expect(confirm("2026-09-03T12:00:29.999Z", [session, weekly])).toBe(published);
+    expect(confirm("2026-09-03T12:00:30.000Z", [session, weekly])).toEqual({
       ...published,
       checkedAt: "2026-09-03T12:00:30.000Z",
     });
+    // A one-window event (Claude's rate_limit_event) does not vouch for the weekly window.
+    expect(confirm("2026-09-03T12:05:00.000Z", [session])).toBe(published);
   });
 
   it("upserts by id and keeps the reset a percent-only update omits", () => {

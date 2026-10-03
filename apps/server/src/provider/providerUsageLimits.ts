@@ -97,9 +97,15 @@ export function applyUsageLimitsUpdate(input: {
   }
   if (!changed && previous !== undefined && previous.unavailable === undefined) {
     // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
-    // but at most every RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and
-    // each new snapshot is published to every client.
-    return Date.parse(input.checkedAt) - Date.parse(previous.checkedAt) >= RESTAMP_INTERVAL_MS
+    // but only when the update names every window (Claude reports one window per event, and
+    // a 5-hour confirmation says nothing about the weekly), and at most every
+    // RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and each new snapshot
+    // is published to every client.
+    const coversEveryWindow = previous.windows.every((window) =>
+      update.windows.some((candidate) => candidate.id === window.id),
+    );
+    return coversEveryWindow &&
+      Date.parse(input.checkedAt) - Date.parse(previous.checkedAt) >= RESTAMP_INTERVAL_MS
       ? { ...previous, checkedAt: input.checkedAt }
       : previous;
   }

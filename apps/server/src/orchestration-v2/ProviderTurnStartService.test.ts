@@ -571,7 +571,10 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
         }),
-        Layer.succeed(CreditSpendGuard, CreditSpendGuard.of({ refusalFor })),
+        Layer.succeed(
+          CreditSpendGuard,
+          CreditSpendGuard.of({ refusalFor, cachedRefusalFor: refusalFor }),
+        ),
       ),
     ),
   );

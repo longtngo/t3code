@@ -786,6 +786,8 @@ describe("credit spend gate at client intake", () => {
         CreditSpendGuard.of({
           refusalFor: (instanceId) =>
             Effect.succeed(instanceId === blockedInstance ? REASON : null),
+          // Client intake is a real start: it must use the re-reading gate.
+          cachedRefusalFor: () => Effect.die("intake must use refusalFor"),
         }),
       ),
       Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({

@@ -84,18 +84,29 @@ export const makeSweep = Effect.gen(function* () {
   const creditSpendGuard = yield* CreditSpendGuard;
   // "Allow to spend credits" refusing the resume now: skip it instead of sending a turn the
   // start gate would fail as a non-limit error, which would drop the thread out of recovery
-  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again.
+  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again. The
+  // check reads the published usage only: a blocked thread is asked about every 5 s for
+  // as long as a 7-day window stays full, and the start gate does any fresh read.
+  const refusedThreads = new Set<ThreadId>();
   const resumeRefused = (threadId: ThreadId) =>
-    threads.getThreadShell(threadId).pipe(
-      Effect.orElseSucceed(() => null),
-      Effect.flatMap((shell) =>
-        shell === null
-          ? Effect.succeed(false)
-          : creditSpendGuard
-              .refusalFor(shell.providerInstanceId)
-              .pipe(Effect.map((reason) => reason !== null)),
-      ),
-    );
+    Effect.gen(function* () {
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+      if (shell === null) return false;
+      const reason = yield* creditSpendGuard.cachedRefusalFor(shell.providerInstanceId);
+      if (reason === null) {
+        refusedThreads.delete(threadId);
+        return false;
+      }
+      // Once per blocked spell, not every sweep.
+      if (!refusedThreads.has(threadId)) {
+        refusedThreads.add(threadId);
+        yield* Effect.logInfo("orchestration-v2.limit-recovery.credit-refused", {
+          threadId,
+          reason,
+        });
+      }
+      return true;
+    });
   return Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
@@ -105,6 +116,9 @@ export const makeSweep = Effect.gen(function* () {
       snooze: preferences.snoozeLimitedThreads,
     });
     const nowMs = DateTime.toEpochMillis(now);
+    for (const threadId of refusedThreads) {
+      if (!candidates.some((thread) => thread.id === threadId)) refusedThreads.delete(threadId);
+    }
     for (const thread of candidates) {
       const command = limitRecoveryCommand(
         thread,

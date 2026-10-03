@@ -70,6 +70,8 @@ interface RegistryStub {
     /** The read dies (not a timeout) after the delay. */
     readonly fails?: boolean;
   };
+  /** Reads after the first, in order; the first uses `fresh`. */
+  readonly laterFresh?: ReadonlyArray<NonNullable<RegistryStub["fresh"]>>;
 }
 
 const guardFor = (
@@ -83,10 +85,12 @@ const guardFor = (
       Effect.gen(function* () {
         freshReads.push(instanceId);
         expect(refreshOptions).toEqual({ fresh: true });
-        if (stub.fresh === undefined) return yield* Effect.die("no fresh read expected");
-        yield* Effect.sleep(Duration.millis(stub.fresh.delayMs));
-        if (stub.fresh.fails === true) return yield* Effect.die("probe crashed");
-        return stub.fresh.providers;
+        const fresh =
+          freshReads.length === 1 ? stub.fresh : stub.laterFresh?.[freshReads.length - 2];
+        if (fresh === undefined) return yield* Effect.die("no fresh read expected");
+        yield* Effect.sleep(Duration.millis(fresh.delayMs));
+        if (fresh.fails === true) return yield* Effect.die("probe crashed");
+        return fresh.providers;
       }),
   });
   const layer = Layer.effect(
@@ -281,6 +285,33 @@ describe("CreditSpendGuard.refusalFor after a reset and on failed reads", () => 
     }),
   );
 
+  it.live("starts a new shared read for the next caller after one failed", () =>
+    Effect.gen(function* () {
+      const guard = guardFor(
+        {
+          providers: [windowAt(claudeA, isoAgo(10 * 60_000), isoAhead(3_600_000))],
+          fresh: { providers: [], delayMs: 300, fails: true },
+          laterFresh: [{ providers: [provider(claudeA, 5)], delayMs: 50 }],
+        },
+        { freshReadTimeout: Duration.seconds(2) },
+      );
+      yield* guard.withGuard((service) =>
+        Effect.gen(function* () {
+          const first = yield* Effect.all(
+            Array.from({ length: 5 }, () => service.refusalFor(claudeA)),
+            { concurrency: "unbounded" },
+          );
+          // The failed read keeps the 100% whose reset is still ahead.
+          expect(first.every((reason) => reason !== null)).toBe(true);
+          expect(guard.freshReads).toHaveLength(1);
+          // The failed read is not left behind as the shared one: a new read runs.
+          expect(yield* service.refusalFor(claudeA)).toBeNull();
+          expect(guard.freshReads).toHaveLength(2);
+        }),
+      );
+    }),
+  );
+
   it.live("shares one fresh read across five concurrent near-limit starts", () =>
     Effect.gen(function* () {
       const guard = guardFor(
@@ -400,6 +431,52 @@ describe("runCreditSpendSweep", () => {
       yield* sweep([provider(claudeA, 10), provider(claudeB, 40)]);
       yield* sweep([provider(claudeA, 100), provider(claudeB, 40)]);
       expect(interrupts).toHaveLength(4);
+    }),
+  );
+
+  it.effect("does not stop runs on a full window whose reset has passed", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-03T12:00:00.000Z"));
+      const { threads, interrupts } = harness();
+      const swept = yield* Ref.make<ReadonlySet<ProviderInstanceId>>(new Set());
+      const resetPassed = {
+        ...provider(claudeA, 100),
+        usageLimits: {
+          checkedAt: "2026-10-03T11:00:00.000Z",
+          windows: [
+            {
+              id: "five_hour",
+              kind: "session",
+              label: "Session",
+              usedPercent: 100,
+              resetsAt: "2026-10-03T11:59:00.000Z",
+            },
+          ],
+        },
+      } as unknown as ServerProvider;
+      yield* runCreditSpendSweep({
+        allowSpendingCredits: false,
+        providers: [resetPassed],
+        swept,
+      }).pipe(Effect.provide(threads));
+      expect(interrupts).toEqual([]);
+      // Control: the same window with its reset still ahead is stopped.
+      yield* runCreditSpendSweep({
+        allowSpendingCredits: false,
+        providers: [
+          {
+            ...resetPassed,
+            usageLimits: {
+              ...resetPassed.usageLimits!,
+              windows: [
+                { ...resetPassed.usageLimits!.windows[0]!, resetsAt: "2026-10-03T13:00:00.000Z" },
+              ],
+            },
+          } as ServerProvider,
+        ],
+        swept,
+      }).pipe(Effect.provide(threads));
+      expect(interrupts.map((entry) => String(entry.runId))).toEqual(["run-a", "run-a2"]);
     }),
   );
 

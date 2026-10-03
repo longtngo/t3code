@@ -9,7 +9,10 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 /** The credit gate with spending allowed, for harnesses that do not test it. */
 export const creditSpendGuardAllowAll = Layer.succeed(
   CreditSpendGuard,
-  CreditSpendGuard.of({ refusalFor: () => Effect.succeed(null) }),
+  CreditSpendGuard.of({
+    refusalFor: () => Effect.succeed(null),
+    cachedRefusalFor: () => Effect.succeed(null),
+  }),
 );
 
 /** The client intake's credit gate with spending allowed and no prior receipts. */

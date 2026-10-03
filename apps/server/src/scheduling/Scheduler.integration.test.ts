@@ -1,4 +1,9 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Duration from "effect/Duration";
+import * as Logger from "effect/Logger";
+import { type ServerProvider } from "@t3tools/contracts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { makeCreditSpendGuard } from "../provider/Layers/CreditSpendGuardLive.ts";
 import { assert, expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -216,7 +221,9 @@ it.effect("retries a limit resume the credit gate refused once spending is allow
       Layer.succeed(
         CreditSpendGuard,
         CreditSpendGuard.of({
-          refusalFor: () =>
+          // The recovery poller must not use the re-reading gate.
+          refusalFor: () => Effect.die("recovery must use cachedRefusalFor"),
+          cachedRefusalFor: () =>
             Ref.get(blocked).pipe(
               Effect.tap((isBlocked) =>
                 isBlocked ? Ref.update(refusals, (n) => n + 1) : Effect.void,
@@ -262,4 +269,169 @@ it.effect("retries a limit resume the credit gate refused once spending is allow
       ),
     );
   }),
+);
+
+const claude = ProviderInstanceId.make("claude");
+const FAR = "2099-01-01T00:00:00.000Z";
+
+const shellFor = (id: string, now: DateTime.Utc, resetAt: string): OrchestrationV2ThreadShell =>
+  ({
+    id: ThreadId.make(id),
+    projectId: ProjectId.make("project:test"),
+    title: id,
+    providerInstanceId: claude,
+    modelSelection: { instanceId: claude, model: "claude" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdBy: "user",
+    creationSource: "web",
+    branch: null,
+    worktreePath: null,
+    lineage: { rootThreadId: ThreadId.make(id), parentThreadId: null, relationshipToParent: null },
+    forkedFrom: null,
+    activeProviderThreadId: null,
+    latestRunId: RunId.make(`run:${id}`),
+    latestRunCompletedAt: now,
+    activeRunId: null,
+    status: "failed",
+    lastErrorClass: "usage_limit",
+    usageLimitResetAt: resetAt,
+    pendingRuntimeRequest: null,
+    latestVisibleMessage: null,
+    latestUserMessageAt: now,
+    hasActionableProposedPlan: false,
+    itemCount: 1,
+    visibleItemCount: 1,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    pinnedAt: null,
+    deletedAt: null,
+    limitRecovery: {
+      runId: RunId.make(`run:${id}`),
+      resetAt,
+      autoResume: true,
+      requestId: CommandId.make(`recovery:${id}`),
+    },
+  }) as OrchestrationV2ThreadShell;
+
+it.effect(
+  "a resume blocked for an hour by a full weekly window costs no usage reads, then resumes once",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const resetAt = DateTime.formatIso(DateTime.add(now, { seconds: 60 }));
+      const candidates = yield* Ref.make([
+        shellFor("a", now, resetAt),
+        shellFor("b", now, resetAt),
+      ]);
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+      const allow = yield* Ref.make(false);
+      const freshReads = yield* Ref.make(0);
+      const refusalCalls = yield* Ref.make(0);
+      const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      const providerAt = (checkedAt: string): ServerProvider =>
+        ({
+          instanceId: claude,
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          installed: true,
+          checkedAt,
+          usageLimits: {
+            checkedAt,
+            windows: [
+              { id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 100, resetsAt: FAR },
+            ],
+          },
+        }) as unknown as ServerProvider;
+      const published = yield* Ref.make([providerAt(DateTime.formatIso(now))]);
+      const registry = Layer.mock(ProviderRegistry)({
+        getProviders: Ref.get(published),
+        refreshInstance: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(freshReads, (n) => n + 1);
+            yield* Effect.sleep(Duration.millis(500));
+            const next = [providerAt(yield* nowIso)];
+            yield* Ref.set(published, next);
+            return next;
+          }),
+      });
+      const settings = Layer.mock(ServerSettings.ServerSettingsService)({
+        getSettings: Ref.get(allow).pipe(
+          Effect.map((a) => ({ ...DEFAULT_SERVER_SETTINGS, allowSpendingCredits: a })),
+        ),
+      });
+      const guardLayer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard()).pipe(
+        Layer.provide(registry),
+        Layer.provide(settings),
+      );
+      const countingGuard = Layer.effect(
+        CreditSpendGuard,
+        Effect.gen(function* () {
+          const inner = yield* CreditSpendGuard;
+          return CreditSpendGuard.of({
+            refusalFor: (id) =>
+              Ref.update(refusalCalls, (n) => n + 1).pipe(Effect.andThen(inner.refusalFor(id))),
+            cachedRefusalFor: inner.cachedRefusalFor,
+          });
+        }),
+      ).pipe(Layer.provide(guardLayer));
+      let refusalLogs = 0;
+      const logCounter = Logger.make(({ message }) => {
+        if (String(message).includes("credit")) refusalLogs += 1;
+      });
+      const deps = Layer.mergeAll(
+        countingGuard,
+        settings,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (threadId) =>
+            Ref.get(candidates).pipe(Effect.map((all) => all.find((t) => t.id === threadId)!)),
+          dispatch: (command) =>
+            Ref.update(commands, (all) => [...all, command]).pipe(
+              // The real projection stops listing a thread once its resume run exists.
+              Effect.andThen(
+                Ref.update(candidates, (all) =>
+                  all.filter((t) => !("threadId" in command) || t.id !== command.threadId),
+                ),
+              ),
+              Effect.as({ sequence: 1, storedEvents: [] }),
+            ),
+        }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getLimitRecoveryCandidates: () => Ref.get(candidates),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        yield* TestClock.adjust("60 minutes");
+        const hour = {
+          refusalCalls: yield* Ref.get(refusalCalls),
+          freshReads: yield* Ref.get(freshReads),
+          dispatched: (yield* Ref.get(commands)).length,
+        };
+        assert.equal(hour.dispatched, 0);
+        // Blocked for an hour of 5 s sweeps: no fresh usage read, no turn-start gate call,
+        // and the refusal logged once per thread rather than every sweep.
+        assert.equal(hour.freshReads, 0);
+        assert.equal(hour.refusalCalls, 0);
+        assert.equal(refusalLogs, 2);
+        yield* Ref.set(allow, true);
+        yield* TestClock.adjust("60 seconds");
+        const after = (yield* Ref.get(commands)).map(
+          (c) => `${c.type}:${"threadId" in c ? c.threadId : ""}`,
+        );
+        assert.deepEqual(after.sort(), ["message.dispatch:a", "message.dispatch:b"]);
+      }).pipe(
+        Effect.provide(
+          UsageLimitRecoveryWorker.workerLive.pipe(
+            Layer.provide(deps),
+            Layer.provide(Scheduler.layer),
+            Layer.provide(Logger.layer([logCounter], { mergeWithExisting: false })),
+          ),
+        ),
+      );
+    }),
 );
