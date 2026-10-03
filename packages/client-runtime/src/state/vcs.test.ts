@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  ProjectId,
+  ThreadId,
   WS_METHODS,
   type VcsListRefsInput,
   type VcsListRefsResult,
@@ -341,6 +343,81 @@ describe("cached VCS refs", () => {
         expect(AsyncResult.isSuccess(refreshResult)).toBe(true);
         expect(yield* Ref.get(clears)).toBe(2);
         expect(registry.get(vcsRefsCacheStateAtom(TARGET)).revision).toBe(2);
+      }),
+    ),
+  );
+
+  // Fork: workspace members. Preparing a member moves its branch, so every
+  // surface reading the member reports must refetch without waiting for a poll.
+  it.effect("refreshes member branch reports after a member action is prepared", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const prepared = yield* Ref.make<ReadonlyArray<string>>([]);
+        const report = {
+          memberId: "member-api",
+          state: "owned-by-self" as const,
+          branch: "t3code/feature",
+          ownerThreadId: "thread-1",
+        };
+        const client = {
+          [WS_METHODS.workspaceMemberActionPrepare]: (input: { readonly memberId: string }) =>
+            Ref.update(prepared, (ids) => [...ids, input.memberId]).pipe(
+              Effect.as({ report, prBase: null }),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
+          _environmentId,
+          effect,
+        ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+          run,
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+        const runtime = Atom.runtime(
+          Layer.merge(
+            Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+            Layer.succeed(Persistence.EnvironmentCacheStore, cacheWithRefs(Option.none())),
+          ),
+        );
+        const atoms = createVcsEnvironmentAtoms(runtime);
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
+          Effect.sync(() => registry.dispose()),
+        );
+        const input = {
+          projectId: ProjectId.make("project-1"),
+          threadId: ThreadId.make("thread-1"),
+        };
+        const reports = atoms.memberBranches({ environmentId: TARGET.environmentId, input });
+        const refreshed: Array<unknown> = [];
+        const spyRegistry = new Proxy(registry, {
+          get: (target, property) =>
+            property === "refresh"
+              ? (atom: Atom.Atom<unknown>) => {
+                  refreshed.push(atom);
+                  target.refresh(atom);
+                }
+              : Reflect.get(target, property, target),
+        });
+
+        const result = yield* Effect.promise(() =>
+          atoms.memberActionPrepare.run(spyRegistry, {
+            environmentId: TARGET.environmentId,
+            input: { ...input, memberId: "member-api" },
+          }),
+        );
+
+        expect(AsyncResult.isSuccess(result)).toBe(true);
+        expect(yield* Ref.get(prepared)).toEqual(["member-api"]);
+        // The same atom every surface reads: the family hands out one per target.
+        expect(refreshed).toContain(reports);
       }),
     ),
   );

@@ -78,6 +78,30 @@ describe("applyShellStreamEvent", () => {
     expect(removed.projects).toEqual([]);
   });
 
+  // Fork: workspace members ride the project delta; attaching and detaching
+  // must reach every client without a full snapshot.
+  it("applies workspace member attach and detach from project deltas", () => {
+    const warehouse = {
+      id: "m-1",
+      path: "/w/warehouse",
+      title: "warehouse",
+      integrationBranch: "main",
+    };
+    const api = { id: "m-2", path: "/w/api", title: "api", integrationBranch: "develop" };
+    const attached = applyShellStreamEvent(v2ShellSnapshot, {
+      kind: "project.updated",
+      sequence: 1,
+      project: { ...v2Project, members: [warehouse, api] },
+    });
+    expect(attached.projects[0]?.members).toEqual([warehouse, api]);
+    const detached = applyShellStreamEvent(attached, {
+      kind: "project.updated",
+      sequence: 2,
+      project: { ...v2Project, members: [api] },
+    });
+    expect(detached.projects[0]?.members).toEqual([api]);
+  });
+
   it("keeps prior repositoryIdentity when a delta arrives with null identity", () => {
     const withIdentity = applyShellStreamEvent(v2ShellSnapshot, {
       kind: "project.updated",

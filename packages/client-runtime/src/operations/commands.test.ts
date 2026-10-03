@@ -179,6 +179,7 @@ describe("V2 environment commands", () => {
       const supervisor = yield* makeSupervisor({ commands: [], projects });
       const projectId = ProjectId.make("project-1");
       const projectIcon = { kind: "emoji", emoji: "🌲" } as const;
+      const member = { id: "m-1", path: "/work/api", title: "api", integrationBranch: "main" };
       yield* updateProject({
         projectId,
         autoPull: true,
@@ -193,6 +194,10 @@ describe("V2 environment commands", () => {
         faviconPath: null,
         defaultThreadEnvMode: null,
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      // Fork: workspace members travel on the same update.
+      yield* updateProject({ projectId, members: [member] }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
 
       expect(projects).toEqual([
         {
@@ -212,6 +217,12 @@ describe("V2 environment commands", () => {
           projectIcon: null,
           faviconPath: null,
           defaultThreadEnvMode: null,
+        },
+        {
+          type: "project.update",
+          commandId: "00000000-0000-4000-8000-000000000000",
+          projectId,
+          members: [member],
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
