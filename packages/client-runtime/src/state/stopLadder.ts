@@ -16,6 +16,13 @@ export const STOP_ESCALATION_MIN_MS = 500;
 export const STOP_ESCALATION_WINDOW_MS = 10_000;
 
 /**
+ * How long a sent hard rung keeps the button on the destructive path. The arming is held per
+ * view, not per thread, so it can outlive the turn it was for (the thread starts a new turn while
+ * another one is on screen). Past this a press is a fresh first press again.
+ */
+export const STOP_FORCE_STOPPING_STALE_MS = 60_000;
+
+/**
  * Decide what a Stop-button press should dispatch. The first press for a thread sends
  * `run.interrupt` with `mode: "cooperative"`, which ends the turn but keeps the provider session;
  * a deliberate second press (while that interrupt is still pending escalation) sends
@@ -47,7 +54,8 @@ export interface ArmedStopEscalation {
   /**
    * The hard rung was sent at `atMs` and the turn has not settled yet. Presses
    * inside the window are no-ops (the force-stop is already on its way); after
-   * it, a press re-sends the hard rung, never the cooperative one.
+   * it, a press re-sends the hard rung, until the arming goes stale
+   * (`STOP_FORCE_STOPPING_STALE_MS`) and a press is cooperative again.
    */
   readonly forceStopping?: boolean;
 }
@@ -63,7 +71,8 @@ export function nextStopAction(input: {
   }
   const elapsedMs = input.nowMs - armed.atMs;
   if (armed.forceStopping === true) {
-    return elapsedMs >= 0 && elapsedMs <= STOP_ESCALATION_WINDOW_MS ? "ignore" : "hardStop";
+    if (elapsedMs < 0 || elapsedMs > STOP_FORCE_STOPPING_STALE_MS) return "interrupt";
+    return elapsedMs <= STOP_ESCALATION_WINDOW_MS ? "ignore" : "hardStop";
   }
   // A backwards clock jump makes the arming untrustworthy. Fall back to the cooperative press,
   // which both fails safe and keeps the button working — treating it as "ignore" would wedge
@@ -92,8 +101,13 @@ export function stopRungAt(input: {
   const armed = input.armed;
   if (armed === null || armed.threadId !== input.threadId)
     return { rung: "idle", changesInMs: null };
-  if (armed.forceStopping === true) return { rung: "forceStopping", changesInMs: null };
   const elapsedMs = input.nowMs - armed.atMs;
+  if (armed.forceStopping === true) {
+    if (elapsedMs < 0 || elapsedMs > STOP_FORCE_STOPPING_STALE_MS) {
+      return { rung: "idle", changesInMs: null };
+    }
+    return { rung: "forceStopping", changesInMs: STOP_FORCE_STOPPING_STALE_MS - elapsedMs + 1 };
+  }
   if (elapsedMs < 0 || elapsedMs > STOP_ESCALATION_WINDOW_MS) {
     return { rung: "idle", changesInMs: null };
   }

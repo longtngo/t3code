@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   STOP_ESCALATION_MIN_MS,
   STOP_ESCALATION_WINDOW_MS,
+  STOP_FORCE_STOPPING_STALE_MS,
   nextStopAction,
   stopRungAt,
 } from "./stopLadder.ts";
@@ -85,6 +86,13 @@ describe("after the hard rung was sent", () => {
 
   it("re-sends the hard rung once the window passes with the turn still running", () => {
     expect(press(STOP_ESCALATION_WINDOW_MS + 1)).toBe("hardStop");
+    expect(press(STOP_FORCE_STOPPING_STALE_MS)).toBe("hardStop");
+  });
+
+  it("goes back to the cooperative rung once the force-stop is stale", () => {
+    // The arming is per view, so it can outlive its turn: a later turn's first press is cooperative.
+    expect(press(STOP_FORCE_STOPPING_STALE_MS + 1)).toBe("interrupt");
+    expect(press(-1)).toBe("interrupt");
   });
 });
 
@@ -117,9 +125,13 @@ describe("stopRungAt", () => {
     expect(armedAt(STOP_ESCALATION_WINDOW_MS + 1).changesInMs).toBeNull();
   });
 
-  it("shows the force-stop until the turn settles, and nothing on another thread", () => {
+  it("shows the force-stop until it goes stale, and nothing on another thread", () => {
     const forceStopping = { threadId: "thread-1", atMs: 1_000_000, forceStopping: true };
-    expect(armedAt(STOP_ESCALATION_WINDOW_MS * 10, forceStopping).rung).toBe("forceStopping");
+    expect(armedAt(STOP_ESCALATION_WINDOW_MS * 2, forceStopping)).toEqual({
+      rung: "forceStopping",
+      changesInMs: STOP_FORCE_STOPPING_STALE_MS - STOP_ESCALATION_WINDOW_MS * 2 + 1,
+    });
+    expect(armedAt(STOP_FORCE_STOPPING_STALE_MS + 1, forceStopping).rung).toBe("idle");
     expect(stopRungAt({ threadId: "thread-2", armed: forceStopping, nowMs: 1_000_000 }).rung).toBe(
       "idle",
     );
