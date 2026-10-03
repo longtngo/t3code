@@ -117,6 +117,17 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "thread-title.generate",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
+/**
+ * FORK Stop ladder: what a hard `run.interrupt` cancels. Only cooperative
+ * interrupt effects, so the hard effect enqueued by the same command, and an
+ * earlier hard stop mid-teardown, are left alone.
+ */
+export const supersedeCooperativeInterrupts = (runId: string) => ({
+  effectTypes: ["provider-turn.interrupt"] as const,
+  reason: `A hard Stop of run ${runId} superseded the cooperative interrupt.`,
+  cooperativeOnly: true,
+});
+
 export const PROCESS_BOUND_EFFECT_TYPES = [
   "provider-turn.start",
   "provider-turn.interrupt",
@@ -190,6 +201,8 @@ export interface EffectOutboxV2Shape {
     readonly threadId: ThreadId;
     readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
     readonly reason: string;
+    /** FORK Stop ladder: cancel only cooperative `provider-turn.interrupt` effects. */
+    readonly cooperativeOnly?: boolean;
   }) => Effect.Effect<ReadonlyArray<string>, EffectOutboxError>;
   readonly signalCancellations: (effectIds: ReadonlyArray<string>) => Effect.Effect<void>;
   readonly awaitCancellation: (effectId: string) => Effect.Effect<void>;
@@ -393,7 +406,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               : new EffectOutboxError({ operation: "list", cause }),
           ),
         ),
-      cancelUnsettled: ({ threadId, effectTypes, reason }) =>
+      cancelUnsettled: ({ threadId, effectTypes, reason, cooperativeOnly }) =>
         Effect.gen(function* () {
           if (effectTypes.length === 0) return [];
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -409,6 +422,11 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE thread_id = ${threadId}
               AND status IN ('pending', 'running')
               AND effect_type IN ${sql.in(effectTypes)}
+              ${
+                cooperativeOnly === true
+                  ? sql`AND json_extract(payload_json, '$.cooperative') = 1`
+                  : sql``
+              }
             RETURNING effect_id
           `;
           return rows.map(({ effect_id }) => effect_id);

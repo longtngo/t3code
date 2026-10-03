@@ -16,11 +16,13 @@ vi.mock("../SidebarStageBackdrop", () => ({
 
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { renderDom } from "../../testing/renderDom";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 
 const STOP = '[aria-label="Stop generation"]';
 const ARMED_STOP = '[aria-label="Force stop the provider session"]';
+const FORCE_STOPPING = '[aria-label="Force-stopping the provider session"]';
 
-function renderPendingActions(isRunning: boolean, isStopEscalated = false) {
+function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -43,7 +45,7 @@ function renderPendingActions(isRunning: boolean, isStopEscalated = false) {
       hasSendableContent: false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
-      isStopEscalated,
+      stopRung,
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -55,7 +57,7 @@ function renderPendingActions(isRunning: boolean, isStopEscalated = false) {
 function renderRunning(options?: {
   hasSendableContent?: boolean;
   onInterrupt?: () => void;
-  isStopEscalated?: boolean;
+  stopRung?: StopRung;
 }) {
   return renderDom(
     createElement(ComposerPrimaryActions, {
@@ -73,7 +75,7 @@ function renderRunning(options?: {
       hasSendableContent: options?.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
       onInterrupt: options?.onInterrupt ?? (() => {}),
-      isStopEscalated: options?.isStopEscalated ?? false,
+      stopRung: options?.stopRung ?? "idle",
       onImplementPlanInNewThread: () => {},
     }),
   );
@@ -238,7 +240,7 @@ describe("ComposerPrimaryActions with hideIdleSend", () => {
 describe("the armed Stop rung", () => {
   it("is a differently named action at the standalone Stop and still presses the ladder", async () => {
     const onInterrupt = vi.fn();
-    const armed = await renderRunning({ isStopEscalated: true, onInterrupt });
+    const armed = await renderRunning({ stopRung: "armed", onInterrupt });
     expect(armed.find(STOP)).toBeNull();
     armed.find<HTMLButtonElement>(ARMED_STOP)?.click();
     expect(onInterrupt).toHaveBeenCalledTimes(1);
@@ -248,8 +250,15 @@ describe("the armed Stop rung", () => {
     expect(unarmed.find(STOP)).not.toBeNull();
   });
 
+  it("says a force-stop is on its way after the hard press", async () => {
+    const view = await renderRunning({ stopRung: "forceStopping" });
+    expect(view.find(FORCE_STOPPING)).not.toBeNull();
+    expect(view.find(ARMED_STOP)).toBeNull();
+    expect(view.find(STOP)).toBeNull();
+  });
+
   it("is armed in the pending-question row too, a second entry to the same ladder", async () => {
-    const armed = await renderPendingActions(true, true);
+    const armed = await renderPendingActions(true, "armed");
     expect(armed.find(ARMED_STOP)).not.toBeNull();
     expect(armed.find(STOP)).toBeNull();
   });

@@ -127,6 +127,7 @@ export interface EventSinkV2Shape {
     readonly cancelUnsettledEffects?: {
       readonly effectTypes: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>;
       readonly reason: string;
+      readonly cooperativeOnly?: boolean;
     };
   }) => Effect.Effect<
     {

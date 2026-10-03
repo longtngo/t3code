@@ -21,7 +21,8 @@ export const STOP_ESCALATION_WINDOW_MS = 10_000;
  * a deliberate second press (while that interrupt is still pending escalation) sends
  * `mode: "hard"`, which restarts the provider runtime and so kills a turn wedged inside a tool.
  * The server also escalates on its own once a cooperative interrupt has not ended the turn
- * within its grace (`COOPERATIVE_INTERRUPT_GRACE`, 8 s); the second press is the faster way out.
+ * within its grace (`COOPERATIVE_INTERRUPT_GRACE`, 8 s). The second press is the faster way
+ * out: a hard `run.interrupt` cancels the cooperative interrupt still waiting out that grace.
  *
  * Escalation is valid only inside a BAND, not merely "second press ever":
  *
@@ -43,6 +44,12 @@ export type StopAction = "interrupt" | "hardStop" | "ignore";
 export interface ArmedStopEscalation {
   readonly threadId: string;
   readonly atMs: number;
+  /**
+   * The hard rung was sent at `atMs` and the turn has not settled yet. Presses
+   * inside the window are no-ops (the force-stop is already on its way); after
+   * it, a press re-sends the hard rung, never the cooperative one.
+   */
+  readonly forceStopping?: boolean;
 }
 
 export function nextStopAction(input: {
@@ -55,6 +62,9 @@ export function nextStopAction(input: {
     return "interrupt";
   }
   const elapsedMs = input.nowMs - armed.atMs;
+  if (armed.forceStopping === true) {
+    return elapsedMs >= 0 && elapsedMs <= STOP_ESCALATION_WINDOW_MS ? "ignore" : "hardStop";
+  }
   // A backwards clock jump makes the arming untrustworthy. Fall back to the cooperative press,
   // which both fails safe and keeps the button working — treating it as "ignore" would wedge
   // Stop entirely until the clock caught up.
@@ -62,4 +72,33 @@ export function nextStopAction(input: {
     return "interrupt";
   }
   return elapsedMs < STOP_ESCALATION_MIN_MS ? "ignore" : "hardStop";
+}
+
+/** What the Stop button should show. */
+export type StopRung = "idle" | "armed" | "forceStopping";
+
+/**
+ * The Stop button's look, decided from the same arming and clock as
+ * `nextStopAction`, so the armed rung shows exactly while a press would take
+ * it: not during the 500 ms floor, and not after the window. `changesInMs` is
+ * when the look next changes; a client schedules one repaint there (no
+ * continuous animation).
+ */
+export function stopRungAt(input: {
+  readonly threadId: string | null;
+  readonly armed: ArmedStopEscalation | null;
+  readonly nowMs: number;
+}): { readonly rung: StopRung; readonly changesInMs: number | null } {
+  const armed = input.armed;
+  if (armed === null || armed.threadId !== input.threadId)
+    return { rung: "idle", changesInMs: null };
+  if (armed.forceStopping === true) return { rung: "forceStopping", changesInMs: null };
+  const elapsedMs = input.nowMs - armed.atMs;
+  if (elapsedMs < 0 || elapsedMs > STOP_ESCALATION_WINDOW_MS) {
+    return { rung: "idle", changesInMs: null };
+  }
+  if (elapsedMs < STOP_ESCALATION_MIN_MS) {
+    return { rung: "idle", changesInMs: STOP_ESCALATION_MIN_MS - elapsedMs };
+  }
+  return { rung: "armed", changesInMs: STOP_ESCALATION_WINDOW_MS - elapsedMs + 1 };
 }

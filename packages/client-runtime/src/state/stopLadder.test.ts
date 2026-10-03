@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { STOP_ESCALATION_MIN_MS, STOP_ESCALATION_WINDOW_MS, nextStopAction } from "./stopLadder.ts";
+import {
+  STOP_ESCALATION_MIN_MS,
+  STOP_ESCALATION_WINDOW_MS,
+  nextStopAction,
+  stopRungAt,
+} from "./stopLadder.ts";
 
 /**
  * Web tests this through ChatView.logic; these pin it where BOTH clients now
@@ -64,5 +69,59 @@ describe("nextStopAction", () => {
         nowMs: STOP_ESCALATION_WINDOW_MS - 1,
       }),
     ).toBe("interrupt");
+  });
+});
+
+describe("after the hard rung was sent", () => {
+  const forceStopping = { threadId: "thread-1", atMs: 1_000_000, forceStopping: true };
+  const press = (elapsedMs: number) =>
+    nextStopAction({ threadId: "thread-1", armed: forceStopping, nowMs: 1_000_000 + elapsedMs });
+
+  it("ignores presses while the force-stop is on its way, never sending the cooperative rung", () => {
+    expect(press(0)).toBe("ignore");
+    expect(press(STOP_ESCALATION_MIN_MS)).toBe("ignore");
+    expect(press(STOP_ESCALATION_WINDOW_MS)).toBe("ignore");
+  });
+
+  it("re-sends the hard rung once the window passes with the turn still running", () => {
+    expect(press(STOP_ESCALATION_WINDOW_MS + 1)).toBe("hardStop");
+  });
+});
+
+describe("stopRungAt", () => {
+  const armedAt = (elapsedMs: number, armed = { threadId: "thread-1", atMs: 1_000_000 }) =>
+    stopRungAt({ threadId: "thread-1", armed, nowMs: armed.atMs + elapsedMs });
+
+  it("shows the armed rung exactly while nextStopAction would take it", () => {
+    for (const elapsed of [
+      0,
+      STOP_ESCALATION_MIN_MS - 1,
+      STOP_ESCALATION_MIN_MS,
+      STOP_ESCALATION_WINDOW_MS,
+      STOP_ESCALATION_WINDOW_MS + 1,
+    ]) {
+      const action = nextStopAction({
+        threadId: "thread-1",
+        armed: { threadId: "thread-1", atMs: 1_000_000 },
+        nowMs: 1_000_000 + elapsed,
+      });
+      expect(armedAt(elapsed).rung === "armed").toBe(action === "hardStop");
+    }
+  });
+
+  it("schedules one repaint at each boundary", () => {
+    expect(armedAt(0).changesInMs).toBe(STOP_ESCALATION_MIN_MS);
+    expect(armedAt(STOP_ESCALATION_MIN_MS).changesInMs).toBe(
+      STOP_ESCALATION_WINDOW_MS - STOP_ESCALATION_MIN_MS + 1,
+    );
+    expect(armedAt(STOP_ESCALATION_WINDOW_MS + 1).changesInMs).toBeNull();
+  });
+
+  it("shows the force-stop until the turn settles, and nothing on another thread", () => {
+    const forceStopping = { threadId: "thread-1", atMs: 1_000_000, forceStopping: true };
+    expect(armedAt(STOP_ESCALATION_WINDOW_MS * 10, forceStopping).rung).toBe("forceStopping");
+    expect(stopRungAt({ threadId: "thread-2", armed: forceStopping, nowMs: 1_000_000 }).rung).toBe(
+      "idle",
+    );
   });
 });

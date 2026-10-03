@@ -8,12 +8,13 @@ import {
   resolveWorktreeSetupProgress,
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
+import { restorePlanFollowUpComposer } from "./ChatView.logic";
 import {
-  restorePlanFollowUpComposer,
-  STOP_ESCALATION_WINDOW_MS,
   nextStopAction,
+  stopRungAt,
   type ArmedStopEscalation,
-} from "./ChatView.logic";
+  type StopRung,
+} from "@t3tools/client-runtime/state/stop-ladder";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
 import {
@@ -4391,42 +4392,50 @@ export default function ChatView(props: ChatViewProps) {
     activeRuntime,
   );
   /**
-   * FORK Stop ladder (registry inv 7, 39). The arming is held twice: the ref is
+   * FORK Stop ladder (registry inv 7, 39). The ladder is held twice: the ref is
    * what `onInterrupt` READS, because the gesture is an impatient double-click
-   * and a ref is current inside the first click's handler; the state only
-   * renders the armed rung. Both are written through `armStopEscalation` alone.
-   * It carries WHEN it was armed, since `nextStopAction` decides from that
-   * timestamp; the timer only reverts the button's look (a background tab
-   * throttles timers, and the arming must still have expired on return).
+   * and a ref is current inside the first click's handler; the state is only
+   * the button's look. Both are written through `setStopLadder` alone. The look
+   * comes from `stopRungAt`, the same clock `nextStopAction` decides with, and
+   * one timer repaints it at the next boundary (500 ms floor, 10 s window).
    */
-  const armedStopEscalationRef = useRef<ArmedStopEscalation | null>(null);
-  const [escalatedStopThreadId, setEscalatedStopThreadId] = useState<string | null>(null);
-  const stopEscalationDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const armStopEscalation = useCallback(function arm(threadId: string | null) {
-    if (stopEscalationDecayRef.current !== null) {
-      clearTimeout(stopEscalationDecayRef.current);
-      stopEscalationDecayRef.current = null;
+  const stopLadderRef = useRef<ArmedStopEscalation | null>(null);
+  const [stopRung, setStopRung] = useState<{ threadId: string; rung: StopRung } | null>(null);
+  const stopRungTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setStopLadder = useCallback(function apply(next: ArmedStopEscalation | null) {
+    if (stopRungTimerRef.current !== null) {
+      clearTimeout(stopRungTimerRef.current);
+      stopRungTimerRef.current = null;
     }
-    armedStopEscalationRef.current = threadId === null ? null : { threadId, atMs: Date.now() };
-    setEscalatedStopThreadId(threadId);
-    if (threadId !== null) {
-      stopEscalationDecayRef.current = setTimeout(() => arm(null), STOP_ESCALATION_WINDOW_MS);
+    stopLadderRef.current = next;
+    if (next === null) {
+      setStopRung(null);
+      return;
+    }
+    const { rung, changesInMs } = stopRungAt({
+      threadId: next.threadId,
+      armed: next,
+      nowMs: Date.now(),
+    });
+    setStopRung({ threadId: next.threadId, rung });
+    if (changesInMs !== null) {
+      stopRungTimerRef.current = setTimeout(() => apply(stopLadderRef.current), changesInMs);
     }
   }, []);
   useEffect(
     () => () => {
-      if (stopEscalationDecayRef.current !== null) clearTimeout(stopEscalationDecayRef.current);
+      if (stopRungTimerRef.current !== null) clearTimeout(stopRungTimerRef.current);
     },
     [],
   );
-  // The turn ended: the wedge the arming belonged to is over, so a Stop pressed
-  // once today never makes tomorrow's first press hard. A thread switch needs no
-  // reset: the arming is keyed by thread id.
+  // The turn ended: the wedge the ladder belonged to is over (and a force-stop
+  // has landed), so a Stop pressed once today never makes tomorrow's first
+  // press hard. A thread switch needs no reset: the ladder is keyed by thread.
   useEffect(() => {
-    if (!canInterruptRunningThread) armStopEscalation(null);
-  }, [armStopEscalation, canInterruptRunningThread]);
-  const isStopEscalated =
-    escalatedStopThreadId !== null && escalatedStopThreadId === activeThread?.id;
+    if (!canInterruptRunningThread) setStopLadder(null);
+  }, [canInterruptRunningThread, setStopLadder]);
+  const activeStopRung: StopRung =
+    stopRung !== null && stopRung.threadId === activeThread?.id ? stopRung.rung : "idle";
   const dispatchInterrupt = useCallback(
     async (threadId: ThreadId, mode: "cooperative" | "hard") => {
       const result = await interruptThreadTurn({
@@ -4456,18 +4465,18 @@ export default function ChatView(props: ChatViewProps) {
     const threadId = activeThread.id;
     const action = nextStopAction({
       threadId,
-      armed: armedStopEscalationRef.current,
+      armed: stopLadderRef.current,
       nowMs: Date.now(),
     });
     if (action === "ignore") return;
-    if (action === "hardStop") {
-      armStopEscalation(null);
-      await dispatchInterrupt(threadId, "hard");
-      return;
+    // A hard press shows "force-stopping" until the turn settles; presses in
+    // the meantime are no-ops, never a fresh cooperative rung.
+    const forceStopping = action === "hardStop";
+    setStopLadder({ threadId, atMs: Date.now(), ...(forceStopping ? { forceStopping } : {}) });
+    if (!(await dispatchInterrupt(threadId, forceStopping ? "hard" : "cooperative"))) {
+      setStopLadder(null);
     }
-    armStopEscalation(threadId);
-    if (!(await dispatchInterrupt(threadId, "cooperative"))) armStopEscalation(null);
-  }, [activeThread, armStopEscalation, dispatchInterrupt]);
+  }, [activeThread, dispatchInterrupt, setStopLadder]);
   /**
    * The `thread.stop` keybinding (inv 39): the plain cooperative interrupt. It
    * neither reads nor arms the ladder, so a shortcut press can never turn the
@@ -11248,7 +11257,7 @@ export default function ChatView(props: ChatViewProps) {
                               onSend={onSend}
                               onResume={onResume}
                               onInterrupt={onInterrupt}
-                              isStopEscalated={isStopEscalated}
+                              stopRung={activeStopRung}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
                               onSelectActivePendingUserInputOption={

@@ -395,14 +395,27 @@ cooperative: true })` and then waits for the projected turn to leave `running`, 
   `COOPERATIVE_INTERRUPT_GRACE` (8 s, measured: 491 of 572 Claude cooperative interrupts on the
   fork's V1 log settled within 5 s, 493 within 8 s, 4 more by 15 s). A rejected or late rung
   falls through to the hard call itself, so a provider that cannot cooperate is handled
-  explicitly. It returns which rung ended the stop.
+  explicitly. A turn that ended on its own first (the projection no longer shows it running, or
+  the adapter says "is not active") is a finished Stop and never escalates. It returns which
+  rung ended the stop.
+- Effects run one at a time per thread, so a hard `run.interrupt` cancels any cooperative
+  interrupt effect still waiting out its grace (`supersedeCooperativeInterrupts`, filtered to
+  `cooperative: true` so an earlier hard stop mid-teardown is left alone). The cancelled fiber is
+  interrupted before it can escalate: exactly one hard stop runs, at once.
 - `EffectWorker` dispatches `thread.background-work.settle` only after the hard rung. The
   cooperative rung keeps the process, which still reports on its background work.
 - Adapters: an interrupt without `requestRuntimeRestart` was already soft in Codex, Cursor,
   OpenCode, OpenCode2, Pi and ACP (Grok, Antigravity), so they ignore the flag. Claude's
   restart-steer interrupt closes its query, so `ClaudeAdapterV2.interruptTurn` reads
-  `cooperative` and only sends `query.interrupt`. The fork's V1 `stopTask` sweep is not ported:
+  `cooperative` and only sends `query.interrupt`. A turn ended that way keeps the thread's
+  background roster and wake state (the CLI still runs those tasks); only a closed process
+  drops them. The hard rung skips a second interrupt request when the cooperative one already
+  asked, and goes straight to the close. The fork's V1 `stopTask` sweep is not ported:
   background tasks surviving the first rung is the point, and the hard rung ends them.
+- Clients: after the hard press the Stop button shows "force-stopping" until the turn settles,
+  and presses in the next 10 s are no-ops (later ones re-send hard, never cooperative). The
+  armed look comes from `stopRungAt`, the same clock as `nextStopAction`, so it appears at
+  500 ms, not 0. Mobile shows the same rungs with an octagon icon.
 
 ### 8. RETIRED with V1: the interrupt reactor's live-session gate
 

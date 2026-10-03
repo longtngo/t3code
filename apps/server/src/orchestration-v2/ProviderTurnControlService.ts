@@ -55,6 +55,13 @@ const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 export const COOPERATIVE_INTERRUPT_GRACE = Duration.seconds(8);
 const COOPERATIVE_SETTLE_POLL = Duration.millis(100);
 
+/**
+ * The adapter's answer when the turn it was asked to interrupt is no longer
+ * its active turn (Codex, Cursor, OpenCode, Pi; Claude returns success).
+ */
+const isTurnNotActiveFailure = (errorText: string) =>
+  /is not active|is not the active turn/i.test(errorText);
+
 /** Which rung an interrupt ended on. Only a hard stop ends background work. */
 export type ProviderTurnInterruptOutcome = "cooperative" | "hard";
 
@@ -231,6 +238,20 @@ export const layer: Layer.Layer<
                 Effect.exit,
               );
             if (Exit.isSuccess(settled) && Option.isSome(settled.value)) {
+              return "cooperative" as const;
+            }
+            // Classified positively: the turn ended on its own between the
+            // orchestrator's check and this call, so the provider no longer
+            // has it. That Stop is done. Escalating would restart the runtime
+            // and kill background work nobody asked to stop.
+            const { providerTurn: current } = yield* projections.getProviderControlContext(
+              input.threadId,
+              input,
+            );
+            if (
+              current?.status !== "running" ||
+              (Exit.isFailure(settled) && isTurnNotActiveFailure(Cause.pretty(settled.cause)))
+            ) {
               return "cooperative" as const;
             }
             yield* Effect.logWarning(

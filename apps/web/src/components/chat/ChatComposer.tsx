@@ -86,6 +86,7 @@ import {
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
@@ -1393,8 +1394,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onResume: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
-  /** FORK: Stop is showing its second (hard) rung. */
-  isStopEscalated: boolean;
+  /** FORK Stop ladder: what the Stop button shows. */
+  stopRung: StopRung;
   onImplementPlanInNewThread: () => void;
   onCompactContext?: (() => void) | undefined;
   compactDisabled: boolean;
@@ -1438,7 +1439,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onResume={props.onResume}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
-        isStopEscalated={props.isStopEscalated}
+        stopRung={props.stopRung}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
     </>
@@ -1672,8 +1673,8 @@ export interface ChatComposerProps {
   onResume: () => void;
   /** FORK: the Stop ladder (button and Escape). See `ChatView` `onInterrupt`. */
   onInterrupt: () => void;
-  /** FORK: Stop is showing its second (hard) rung. */
-  isStopEscalated: boolean;
+  /** FORK Stop ladder: what the Stop button shows. */
+  stopRung: StopRung;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
@@ -1797,7 +1798,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onSend,
     onResume,
     onInterrupt,
-    isStopEscalated,
+    stopRung,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -7856,7 +7857,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
-                    isStopEscalated={isStopEscalated}
+                    stopRung={stopRung}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
                       compactDisabled || noProviderAvailable || isSendBusy || isConnecting

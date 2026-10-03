@@ -131,6 +131,7 @@ import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -200,6 +201,8 @@ export interface ThreadDetailScreenProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** FORK Stop ladder: what the Stop buttons show. */
+  readonly stopRung: StopRung;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   /** Whether the model picker may offer providers other than this thread's. */
@@ -1224,6 +1227,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         collapsed={userInputCollapsed}
                         onToggleCollapsed={handleToggleUserInputCollapsed}
                         onStopThread={props.onStopThread}
+                        stopRung={props.stopRung}
                         cardProgress={userInputCardProgress}
                         cardCoverage={userInputCardCoverage}
                         onInputFocusChange={handleOwnedInputFocusChange}
@@ -1326,6 +1330,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onNativePasteText={props.onNativePasteText}
                       onRemoveDraftImage={props.onRemoveDraftImage}
                       onStopThread={props.onStopThread}
+                      stopRung={props.stopRung}
                       onSendMessage={handleSendMessage}
                       onShowUsageLimits={showUsageLimits}
                       canSwitchProvider={props.canSwitchThreadProvider}

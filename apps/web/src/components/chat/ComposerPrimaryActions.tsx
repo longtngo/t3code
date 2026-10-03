@@ -8,6 +8,7 @@ import {
   OctagonXIcon,
   PlayIcon,
 } from "lucide-react";
+import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { useShortcutModifierState } from "../../shortcutModifierState";
@@ -63,11 +64,11 @@ interface ComposerPrimaryActionsProps {
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   /**
-   * FORK Stop ladder: the next Stop press is the hard rung (it restarts the
-   * provider runtime). Rendered visibly so the destructive press is neither
-   * undiscoverable nor mistaken for "stop again".
+   * FORK Stop ladder. `armed`: the next press is the hard rung (it restarts the
+   * provider runtime), shown only while a press would take it. `forceStopping`:
+   * the hard rung was sent and the turn has not settled; presses do nothing.
    */
-  isStopEscalated?: boolean;
+  stopRung?: StopRung;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -121,7 +122,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
-  isStopEscalated = false,
+  stopRung = "idle",
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -146,6 +147,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   // and forgotten on the other. It is told apart by SHAPE (an octagon) and a
   // ring, not colour: the button is already destructive red at rest. Static on
   // purpose; a pulsing "armed" state is a continuously repainting animation.
+  const isStopEscalated = stopRung !== "idle";
+  const stopLabel =
+    stopRung === "armed"
+      ? "Force stop the provider session"
+      : stopRung === "forceStopping"
+        ? "Force-stopping the provider session"
+        : "Stop generation";
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <Tooltip key="interrupt">
       <TooltipTrigger
@@ -161,8 +169,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             )}
             {...pointerFocusProps}
             onClick={onInterrupt}
-            data-stop-escalated={isStopEscalated ? "true" : "false"}
-            aria-label={isStopEscalated ? "Force stop the provider session" : "Stop generation"}
+            data-stop-rung={stopRung}
+            aria-label={stopLabel}
           />
         }
       >
@@ -175,9 +183,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         )}
       </TooltipTrigger>
       <TooltipPopup>
-        {isStopEscalated
+        {stopRung === "armed"
           ? "The turn has not stopped yet. Press again to force-stop the provider session"
-          : "Interrupt"}
+          : stopRung === "forceStopping"
+            ? "Force-stopping the provider session"
+            : "Interrupt"}
       </TooltipPopup>
     </Tooltip>
   );

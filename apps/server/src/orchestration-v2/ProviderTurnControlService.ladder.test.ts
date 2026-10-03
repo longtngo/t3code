@@ -26,6 +26,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   ProviderAdapterInterruptError,
+  ProviderAdapterProtocolError,
   type ProviderAdapterV2InterruptInput,
   type ProviderAdapterV2SessionRuntime,
 } from "./ProviderAdapter.ts";
@@ -36,7 +37,14 @@ const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
 
 /** How a fake provider answers the cooperative rung. */
-type CooperativeBehaviour = "ends-turn" | "acks-but-wedged" | "rejects";
+type CooperativeBehaviour =
+  | "ends-turn"
+  | "acks-but-wedged"
+  | "rejects"
+  // The turn ended natively just before the interrupt arrived: the adapter
+  // answers "not active" (Codex, OpenCode); the projection may lag behind.
+  | "turn-already-gone"
+  | "turn-already-gone-projected";
 
 interface Unit {
   readonly threadId: ThreadId;
@@ -131,6 +139,21 @@ const makeRuntime = (unit: Unit, now: DateTime.Utc): ProviderAdapterV2SessionRun
           providerThreadId: unit.providerThreadId,
           providerTurnId: unit.providerTurnId,
           cause: "this provider cannot end a turn without restarting",
+        });
+      }
+      if (unit.behaviour === "turn-already-gone-projected") {
+        // A provider whose error does not say why; the projection does.
+        unit.turn = { ...unit.turn, status: "completed", completedAt: now };
+        return yield* new ProviderAdapterInterruptError({
+          driver,
+          providerThreadId: unit.providerThreadId,
+          providerTurnId: unit.providerTurnId,
+        });
+      }
+      if (unit.behaviour === "turn-already-gone") {
+        return yield* new ProviderAdapterProtocolError({
+          driver,
+          detail: `Provider turn ${unit.providerTurnId} is not active and cannot be interrupted`,
         });
       }
       if (unit.behaviour === "ends-turn") yield* endTurn;
@@ -247,5 +270,28 @@ it.effect("a turn the cooperative rung leaves running escalates after the grace,
     assert.deepEqual(rungs(wedged), ["cooperative", "hard"]);
     assert.equal(wedged.turn.status, "interrupted");
     assert.deepEqual(rungs(healthy), ["cooperative"]);
+  }),
+);
+
+// Multi-unit: a turn that ended on its own just before the cooperative
+// interrupt is a finished Stop on every provider, never a reason to restart the
+// runtime (which would kill its background work). A real refusal beside it
+// still escalates.
+it.effect("a turn that ended before the cooperative interrupt never escalates", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const lagging = makeUnit("gone-lagging", "turn-already-gone", now);
+    const projected = makeUnit("gone-projected", "turn-already-gone-projected", now);
+    const refusing = makeUnit("refusing", "rejects", now);
+    const layer = controlLayer([lagging, projected, refusing], now);
+    const outcomes = yield* Effect.forEach(
+      [lagging, projected, refusing],
+      (unit) => interruptCooperatively(unit).pipe(Effect.provide(layer)),
+      { concurrency: "unbounded" },
+    );
+    assert.deepEqual(outcomes, ["cooperative", "cooperative", "hard"]);
+    assert.deepEqual(rungs(lagging), ["cooperative"]);
+    assert.deepEqual(rungs(projected), ["cooperative"]);
+    assert.deepEqual(rungs(refusing), ["cooperative", "hard"]);
   }),
 );
