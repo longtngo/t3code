@@ -17,7 +17,9 @@ import {
   createChatEscapeHandler,
   escapeRecallableQueuedCount,
   outboxTimelineMessages,
+  recallLatestQueuedMessage,
   serverHeldMessageIds,
+  type QueuedRecallOutcome,
 } from "./ChatView.logic";
 
 const base = makeThreadProjectionFixture();
@@ -90,7 +92,7 @@ function escapeEvent() {
   };
 }
 
-function handler(input: { queued: number; running: boolean; recall: () => boolean }) {
+function handler(input: { queued: number; running: boolean; recall: () => QueuedRecallOutcome }) {
   const stop = vi.fn();
   const press = createChatEscapeHandler({
     isChatSurfaceActive: () => true,
@@ -115,41 +117,90 @@ describe("Escape over the server queue", () => {
     ).toBe(1);
   });
 
+  // Running turn throughout. Only "nothing to recall" may reach Stop.
+  it.each([
+    { queued: 1, outcome: "opened", stops: false, prevents: true },
+    { queued: 1, outcome: "editOpen", stops: false, prevents: true },
+    { queued: 1, outcome: "busy", stops: false, prevents: false },
+    { queued: 1, outcome: "nothing", stops: true, prevents: true },
+    { queued: 0, outcome: "nothing", stops: true, prevents: true },
+  ] as const)(
+    "queued $queued, recall $outcome: stops=$stops",
+    ({ queued, outcome, stops, prevents }) => {
+      const recall = vi.fn((): QueuedRecallOutcome => outcome);
+      const { press, stop } = handler({ queued, running: true, recall });
+      const event = escapeEvent();
+      press(event);
+      expect(stop).toHaveBeenCalledTimes(stops ? 1 : 0);
+      expect(event.preventDefault).toHaveBeenCalledTimes(prevents ? 1 : 0);
+      expect(recall).toHaveBeenCalledTimes(queued > 0 ? 1 : 0);
+    },
+  );
+
   it("stops a running turn when only an automatic delivery is queued", () => {
-    const recall = vi.fn(() => false);
+    const recall = vi.fn((): QueuedRecallOutcome => "nothing");
     const { press, stop } = handler({
       queued: escapeRecallableQueuedCount(automaticDelivery),
       running: true,
       recall,
     });
-    const event = escapeEvent();
-    press(event);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(event.preventDefault).toHaveBeenCalled();
-  });
-
-  it("takes the newest queued message back instead of stopping", () => {
-    const recall = vi.fn(() => true);
-    const { press, stop } = handler({ queued: 1, running: true, recall });
-    const event = escapeEvent();
-    press(event);
-    expect(recall).toHaveBeenCalledTimes(1);
-    expect(stop).not.toHaveBeenCalled();
-    expect(event.preventDefault).toHaveBeenCalled();
-  });
-
-  it("falls through to Stop when the recall finds nothing to open", () => {
-    const { press, stop } = handler({ queued: 1, running: true, recall: () => false });
     press(escapeEvent());
+    expect(recall).not.toHaveBeenCalled();
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it("leaves an idle thread alone when there is nothing to recall", () => {
-    const { press, stop } = handler({ queued: 1, running: false, recall: () => false });
+    const { press, stop } = handler({ queued: 1, running: false, recall: () => "nothing" });
     const event = escapeEvent();
     press(event);
     expect(stop).not.toHaveBeenCalled();
     expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("recallLatestQueuedMessage", () => {
+  it("cancels an open edit through the strip's own cancel path and opens nothing", () => {
+    const cancelEdit = vi.fn();
+    const editLatest = vi.fn(() => true);
+    expect(
+      recallLatestQueuedMessage({ editOpen: true, queuedMessageCount: 2, cancelEdit, editLatest }),
+    ).toBe("editOpen");
+    expect(cancelEdit).toHaveBeenCalledTimes(1);
+    expect(editLatest).not.toHaveBeenCalled();
+  });
+
+  it("opens the newest queued message, or reports the strip busy when it declines", () => {
+    const cancelEdit = vi.fn();
+    expect(
+      recallLatestQueuedMessage({
+        editOpen: false,
+        queuedMessageCount: 1,
+        cancelEdit,
+        editLatest: () => true,
+      }),
+    ).toBe("opened");
+    expect(
+      recallLatestQueuedMessage({
+        editOpen: false,
+        queuedMessageCount: 1,
+        cancelEdit,
+        editLatest: () => false,
+      }),
+    ).toBe("busy");
+    expect(cancelEdit).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing when the user has nothing queued", () => {
+    const editLatest = vi.fn(() => true);
+    expect(
+      recallLatestQueuedMessage({
+        editOpen: false,
+        queuedMessageCount: 0,
+        cancelEdit: () => {},
+        editLatest,
+      }),
+    ).toBe("nothing");
+    expect(editLatest).not.toHaveBeenCalled();
   });
 });
 

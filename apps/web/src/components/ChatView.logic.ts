@@ -1699,16 +1699,41 @@ export function escapeRecallableQueuedCount(
 }
 
 /**
- * FORK: the composer's window Escape handler. Walks `nextEscapeAction`; a recall that finds
- * nothing to open (an edit already open, a busy row) falls through to Stop when a turn runs,
- * so Escape is never a silent no-op over a running turn.
+ * FORK: what Escape's recall rung did. Only `nothing` (no message of the user's in the queue)
+ * may fall through to Stop: Escape must never stop the turn while the user is backing out of a
+ * queued-message edit, or while a queue row is still saving.
+ */
+export type QueuedRecallOutcome = "opened" | "editOpen" | "busy" | "nothing";
+
+/**
+ * FORK: Escape's recall rung over upstream's queue strip. An open edit is cancelled through the
+ * strip's own cancel path; otherwise the newest queued message is opened for editing, which the
+ * strip declines while one of its rows is busy.
+ */
+export function recallLatestQueuedMessage(input: {
+  readonly editOpen: boolean;
+  readonly queuedMessageCount: number;
+  readonly cancelEdit: () => void;
+  readonly editLatest: () => boolean;
+}): QueuedRecallOutcome {
+  if (input.editOpen) {
+    input.cancelEdit();
+    return "editOpen";
+  }
+  if (input.queuedMessageCount === 0) return "nothing";
+  return input.editLatest() ? "opened" : "busy";
+}
+
+/**
+ * FORK: the composer's window Escape handler. Walks `nextEscapeAction`; the recall rung's
+ * outcome decides the rest, and only a recall that found nothing at all falls through to Stop.
  */
 export function createChatEscapeHandler(deps: {
   readonly isChatSurfaceActive: () => boolean;
   readonly hasRunningTurn: boolean;
   readonly hasPendingQuestion: boolean;
   readonly queuedMessageCount: number;
-  readonly recallQueuedMessage: () => boolean;
+  readonly recallQueuedMessage: () => QueuedRecallOutcome;
   readonly stop: () => void;
 }): (
   event: Pick<
@@ -1728,14 +1753,20 @@ export function createChatEscapeHandler(deps: {
       heldMessageCount: deps.queuedMessageCount,
       recallSupported: true,
     });
-    if (action === "recall" && deps.recallQueuedMessage()) {
-      event.preventDefault();
+    if (action === "recall") {
+      const outcome = deps.recallQueuedMessage();
+      if (outcome === "opened" || outcome === "editOpen") {
+        event.preventDefault();
+        return;
+      }
+      if (outcome === "busy") return;
+      // outcome === "nothing": the count was stale; behave as if nothing was queued.
+      if (!deps.hasRunningTurn) return;
+    } else if (action !== "stop") {
       return;
     }
-    if (action === "stop" || (action === "recall" && deps.hasRunningTurn)) {
-      event.preventDefault();
-      deps.stop();
-    }
+    event.preventDefault();
+    deps.stop();
   };
 }
 

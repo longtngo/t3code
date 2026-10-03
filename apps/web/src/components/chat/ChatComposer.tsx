@@ -87,11 +87,10 @@ import {
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
 import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
+import type { QueuedRecallOutcome } from "../ChatView.logic";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
-  isChatSurfaceFocused,
-  createChatEscapeHandler,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -273,6 +272,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { useChatEscapeKey } from "./useChatEscapeKey";
 import {
   ComposerControl,
   ComposerControlIcon,
@@ -1681,7 +1681,7 @@ export interface ChatComposerProps {
   /** FORK: messages waiting in the server queue; Escape takes the newest back first. */
   queuedMessageCount: number;
   /** FORK: opens the newest queued message in the composer; false when it cannot right now. */
-  onRecallQueuedMessage: () => boolean;
+  onRecallQueuedMessage: () => QueuedRecallOutcome;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
@@ -1806,8 +1806,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onResume,
     onInterrupt,
     stopRung,
-    queuedMessageCount,
-    onRecallQueuedMessage,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -6342,41 +6340,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
-  /**
-   * FORK: Escape walks the same Stop ladder the button does, so two deliberate
-   * presses force-stop and a held key (auto-repeat) never reaches the hard rung.
-   * Scoped by focus: every overlay that owns Escape takes focus out of this form,
-   * and `document.body` counts as the chat (clicking the transcript leaves focus
-   * there). Bubble phase, so a handler that already claimed the press wins. With
-   * messages queued, Escape first takes the newest one back into the composer
-   * (upstream's queued-message edit), so it never stops the turn the user was
-   * about to redirect; with nothing it can open, Escape stops as usual.
-   */
-  useEffect(() => {
-    const onKeyDown = createChatEscapeHandler({
-      isChatSurfaceActive: () =>
-        isChatSurfaceFocused({
-          activeElement: document.activeElement,
-          bodyElement: document.body,
-          composerRoot: composerFormRef.current,
-          hasOpenDialog: document.querySelector('[data-slot="dialog-popup"]') !== null,
-        }),
-      hasRunningTurn: canInterrupt,
-      hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
-      queuedMessageCount,
-      recallQueuedMessage: onRecallQueuedMessage,
-      stop: handleInterruptPrimaryAction,
-    });
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
-    activePendingApproval,
+  // FORK: Escape walks the Stop ladder and the server queue; see useChatEscapeKey.
+  useChatEscapeKey(props, {
+    composerFormRef,
     canInterrupt,
-    handleInterruptPrimaryAction,
-    onRecallQueuedMessage,
-    pendingUserInputs.length,
-    queuedMessageCount,
-  ]);
+    hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
+  });
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);

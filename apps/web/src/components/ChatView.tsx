@@ -537,6 +537,7 @@ import {
   claimThreadRewind,
   countRevertDiscardedMessages,
   escapeRecallableQueuedCount,
+  recallLatestQueuedMessage,
   outboxTimelineMessages,
   serverHeldMessageIds,
   canQueueOfflineTurn,
@@ -4573,10 +4574,6 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
-  const recallQueuedMessage = useCallback(
-    () => queuedRunsControlRef.current?.editLatest(false) ?? false,
-    [],
-  );
   const queuedEditSaveInFlightRef = useRef(false);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const queuedEditImageResources = useMemo(
@@ -4641,6 +4638,18 @@ export default function ChatView(props: ChatViewProps) {
     queuedEditDraftTargetFor,
     scheduleComposerFocus,
   ]);
+  // FORK: Escape's recall rung (see createChatEscapeHandler): cancel an open edit through the
+  // strip's own cancel path, else open the newest queued message for editing.
+  const recallQueuedMessage = useCallback(
+    () =>
+      recallLatestQueuedMessage({
+        editOpen: editingQueuedRun !== null,
+        queuedMessageCount,
+        cancelEdit: cancelEditingQueuedRun,
+        editLatest: () => queuedRunsControlRef.current?.editLatest(false) ?? false,
+      }),
+    [cancelEditingQueuedRun, editingQueuedRun, queuedMessageCount],
+  );
   const removeEditingQueuedAttachment = useCallback((attachmentId: string) => {
     setEditingQueuedRun((current) =>
       current === null

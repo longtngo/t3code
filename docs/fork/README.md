@@ -1076,8 +1076,9 @@ rejected upstream's in-row expansion. Upstream's v2 timeline expands a row into
 dialog was not restored and upstream's expansion is taken whole. Not covered: a command's
 **output**. The server strips it from the wire on purpose (`WireProjection.ts`
 `projectTurnItemForWire`), so showing it needs a per-item read, which does not exist yet. The
-fork's `×N` repeat count in the row's accessible name was already gone at the v2 merge base
-(`coalesceRepeatedWorkLogEntries` had no caller), so nothing of it is lost here.
+fork's `×N` repeat count (in the row text and its accessible name) is also lost to users: it
+was already gone before this unit, at the v2 merge base (`coalesceRepeatedWorkLogEntries` had
+no caller), and U6 did not restore it.
 
 ### 42. Upstream's new server test fixtures do not set `members`
 
