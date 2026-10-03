@@ -427,6 +427,27 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddPullRequests,
     },
     {
+      label: "Task list",
+      icon: ListTodo,
+      shortcut: "K",
+      available: props.tasksAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.tasks,
+      onClick: props.onAddTasks,
+      progress:
+        props.taskCompletedCount !== undefined && props.taskTotalCount !== undefined
+          ? `${props.taskCompletedCount}/${props.taskTotalCount}`
+          : null,
+    },
+    {
+      label: "Background",
+      icon: Activity,
+      shortcut: "G",
+      available: props.backgroundAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.background,
+      onClick: props.onAddBackground,
+      badgeCount: props.liveBackgroundCount,
+    },
+    {
       label: "Undo closed tab",
       icon: Undo2,
       shortcut: "U",
@@ -516,9 +537,24 @@ function RightPanelEmptyState(props: {
     return (
       <span className="relative inline-flex shrink-0">
         <Icon className={iconClassName} />
+        {"badgeCount" in action && action.badgeCount > 0 ? (
+          <span
+            aria-hidden
+            className="absolute -top-1.5 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-3xs font-semibold tabular-nums text-white"
+          >
+            {action.badgeCount}
+          </span>
+        ) : null}
       </span>
     );
   };
+
+  const actionProgress = (action: SurfaceAction) =>
+    "progress" in action && action.progress !== null ? (
+      <span className="shrink-0 rounded-full bg-success/15 px-1.5 text-3xs font-medium leading-4 tabular-nums text-success">
+        {action.progress}
+      </span>
+    ) : null;
 
   return (
     <div
@@ -570,6 +606,7 @@ function RightPanelEmptyState(props: {
                   >
                     {action.label}
                   </span>
+                  {actionProgress(action)}
                   <Kbd>{action.shortcut}</Kbd>
                 </button>
                 {/*
@@ -616,6 +653,7 @@ function RightPanelEmptyState(props: {
                   >
                     {actionIcon(action, "size-4")}
                     <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                    {actionProgress(action)}
                     <Kbd>{action.shortcut}</Kbd>
                   </div>
                 }
@@ -973,6 +1011,22 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequests,
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: "Task list",
+      icon: ListTodo,
+      shortcut: "K",
+      available: props.tasksAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.tasks,
+      onClick: props.onAddTasks,
+    },
+    {
+      label: "Background",
+      icon: Activity,
+      shortcut: "G",
+      available: props.backgroundAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.background,
+      onClick: props.onAddBackground,
     },
     {
       label: "Undo closed tab",
