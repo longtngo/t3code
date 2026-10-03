@@ -23,9 +23,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as References from "effect/References";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
@@ -1046,6 +1048,79 @@ describe("ThreadSettlementServiceV2 terminals", () => {
 });
 
 describe("ThreadSettlementServiceV2 single-thread sweeps", () => {
+  it.effect("reports an unchanged lookup failure once per group, not once per sweep", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const failures = yield* Ref.make<Record<string, string | null>>({
+          "feature-a": "gh exited 1",
+          "feature-b": "gh exited 1",
+        });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("lookup-a", { branch: "feature-a" }),
+            makeThread("lookup-b", { branch: "feature-b" }),
+          ]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          branchPullRequest: (input) =>
+            Ref.get(failures).pipe(
+              Effect.flatMap((byBranch) => {
+                const failure = byBranch[input.branch] ?? null;
+                return failure === null ? Effect.succeed(null) : Effect.die(new Error(failure));
+              }),
+            ),
+        });
+        const warnings: Array<string> = [];
+        const logger = Logger.make<unknown, void>(({ fiber, logLevel }) => {
+          if (logLevel !== "Warn") return;
+          const annotations = fiber.getRef(References.CurrentLogAnnotations);
+          warnings.push(String(annotations.branch));
+        });
+        const warningsFor = (branch: string) => warnings.filter((value) => value === branch);
+
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          const nextSweep = Effect.gen(function* () {
+            yield* TestClock.adjust("1 minute");
+            yield* Queue.take(fixture.snapshotReads);
+            yield* service.drain;
+          });
+
+          assert.deepStrictEqual(warnings.toSorted(), ["feature-a", "feature-b"]);
+          yield* nextSweep;
+          yield* nextSweep;
+          // Two more sweeps hit both failures again and said nothing.
+          assert.strictEqual((yield* Ref.get(fixture.branchCalls)).length, 6);
+          assert.strictEqual(warnings.length, 2);
+
+          // A different failure is news.
+          yield* Ref.update(failures, (byBranch) => ({ ...byBranch, "feature-a": "gh hung" }));
+          yield* nextSweep;
+          assert.strictEqual(warningsFor("feature-a").length, 2);
+
+          // A recovery re-arms the group: the same failure after it reports again.
+          yield* Ref.update(failures, (byBranch) => ({ ...byBranch, "feature-a": null }));
+          yield* nextSweep;
+          yield* Ref.update(failures, (byBranch) => ({ ...byBranch, "feature-a": "gh hung" }));
+          yield* nextSweep;
+          assert.strictEqual(warningsFor("feature-a").length, 3);
+          assert.strictEqual(warningsFor("feature-b").length, 1);
+        }).pipe(
+          Effect.provide(
+            fixture.layer.pipe(
+              Layer.provideMerge(Logger.layer([logger], { mergeWithExisting: false })),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
   it.effect("a finished run reads only its own thread's settlement candidate", () =>
     Effect.scoped(
       Effect.gen(function* () {

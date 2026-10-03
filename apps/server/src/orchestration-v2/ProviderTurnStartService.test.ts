@@ -141,11 +141,13 @@ it("does not commit running state when inherited background routing cannot be re
 
     expect(error._tag).toBe("ProviderTurnStartError");
     expect(projectionReadCount).toBe(2);
-    expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
+    // Never a repo-wide prune: it would drop every other absent worktree too.
+    expect(pruneWorktrees).not.toHaveBeenCalled();
     expect(createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-turn-start-project",
       refName: "feature/restore",
       path: "/tmp/missing-provider-turn-start-worktree",
+      reuseRegisteredPath: true,
     });
     expect(writeIfRunCurrent).not.toHaveBeenCalled();
     expect(startRootRun).not.toHaveBeenCalled();
