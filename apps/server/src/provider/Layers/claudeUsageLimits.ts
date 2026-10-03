@@ -14,6 +14,7 @@ import type { SDKControlGetUsageResponse, SDKRateLimitInfo } from "@anthropic-ai
 import type {
   ProviderUsageLimitsUpdate,
   ServerProviderUsageLimits,
+  ServerProviderUsageSpend,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -135,19 +136,46 @@ export function claudeRateLimitEventToUpdate(
   info: SDKRateLimitInfo,
   names: ClaudeScopedLimitNames,
 ): ProviderUsageLimitsUpdate | undefined {
+  // FORK: the CLI reports every account-wide window in `unifiedWindows`
+  // while the top-level `utilization` names only the window the event is
+  // about, and is usually absent. Measured on 853 real events: 852 carried
+  // the 5-hour window only here, and the top level updated it 0 times.
+  const windows = new Map<string, ServerProviderUsageWindow>();
+  for (const [id, window] of readUnifiedWindows(info)) {
+    windows.set(id, makeWindow(id, window.utilization * 100, isoFromEpochSeconds(window.resetsAt)));
+  }
   const type: string | undefined = info.rateLimitType;
-  if (!type || typeof info.utilization !== "number") {
-    return undefined;
+  if (type && typeof info.utilization === "number") {
+    const usedPercent = info.utilization * 100;
+    const resetsAt = isoFromEpochSeconds(info.resetsAt);
+    if (type in WINDOWS) {
+      windows.set(type, makeWindow(type, usedPercent, resetsAt));
+    } else if (type === OVERAGE_INCLUDED_EVENT_TYPE && names.overageIncluded) {
+      const window = scopedWindow(names.overageIncluded, usedPercent, resetsAt);
+      windows.set(window.id, window);
+    }
   }
-  const usedPercent = info.utilization * 100;
-  const resetsAt = isoFromEpochSeconds(info.resetsAt);
-  if (type in WINDOWS) {
-    return { windows: [makeWindow(type, usedPercent, resetsAt)] };
+  return windows.size > 0 ? { windows: [...windows.values()] } : undefined;
+}
+
+/**
+ * `unifiedWindows` ships in the CLI ahead of the SDK typings we pin, so it is
+ * read structurally: `{ five_hour: { utilization: 0.18, resetsAt: <epoch s> } }`.
+ */
+function readUnifiedWindows(
+  info: SDKRateLimitInfo,
+): ReadonlyArray<readonly [string, { readonly utilization: number; readonly resetsAt?: number }]> {
+  const raw = (info as { readonly unifiedWindows?: unknown }).unifiedWindows;
+  if (typeof raw !== "object" || raw === null) return [];
+  const entries: Array<readonly [string, { utilization: number; resetsAt?: number }]> = [];
+  for (const id of Object.keys(WINDOWS)) {
+    const window = (raw as Record<string, unknown>)[id];
+    if (typeof window !== "object" || window === null) continue;
+    const { utilization, resetsAt } = window as { utilization?: unknown; resetsAt?: unknown };
+    if (typeof utilization !== "number" || !Number.isFinite(utilization)) continue;
+    entries.push([id, typeof resetsAt === "number" ? { utilization, resetsAt } : { utilization }]);
   }
-  if (type === OVERAGE_INCLUDED_EVENT_TYPE && names.overageIncluded) {
-    return { windows: [scopedWindow(names.overageIncluded, usedPercent, resetsAt)] };
-  }
-  return undefined;
+  return entries;
 }
 
 /**
@@ -183,9 +211,106 @@ export function claudeUsageResponseToLimits(input: {
     // skipped would let a mid-turn event open a row the probe never showed.
     overageIncluded ??= entry.display_name;
   }
+  const spend = readSpend(response.rate_limits);
   return {
-    limits: makeUsageLimits({ checkedAt, windows }),
+    limits: { ...makeUsageLimits({ checkedAt, windows }), ...(spend ? { spend } : {}) },
     names: { overageIncluded },
+  };
+}
+
+interface Money {
+  readonly amount_minor: number;
+  readonly currency: string;
+  readonly exponent: number;
+}
+
+function readMoney(value: unknown): Money | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { amount_minor, currency, exponent } = value as Partial<Money>;
+  return typeof amount_minor === "number" &&
+    typeof currency === "string" &&
+    currency.length > 0 &&
+    typeof exponent === "number"
+    ? { amount_minor, currency, exponent }
+    : undefined;
+}
+
+const toMajor = (money: Money) => money.amount_minor / 10 ** money.exponent;
+
+/**
+ * FORK: extra usage, from the structured `spend` block `get_usage` returns
+ * beside the windows, else the older `extra_usage` record (minor units).
+ * Both ship ahead of the SDK typings, so both are read structurally. Absent
+ * when spending is off, or when there is neither a limit nor any spend.
+ *
+ * `usedPercent` is clamped to 100 while `used` keeps the real figure, so an
+ * overspent month draws a full bar beside text like "CAD 201.66 of CAD 200.00".
+ */
+function readSpend(rateLimits: object): ServerProviderUsageSpend | undefined {
+  const { spend, extra_usage: extra } = rateLimits as {
+    readonly spend?: unknown;
+    readonly extra_usage?: unknown;
+  };
+  let used: number | undefined;
+  let limit: number | undefined;
+  let currency: string | undefined;
+  let percent: unknown;
+  // `spend` is authoritative when present: an explicit `enabled: false` means
+  // no row even if the older `extra_usage` record still says enabled. Only an
+  // enabled block too malformed to read falls back to `extra_usage`.
+  const spendEnabled =
+    typeof spend === "object" && spend !== null
+      ? (spend as { enabled?: unknown }).enabled
+      : undefined;
+  if (spendEnabled === false) return undefined;
+  if (spendEnabled === true) {
+    const usedMoney = readMoney((spend as { used?: unknown }).used);
+    const limitMoney = readMoney((spend as { limit?: unknown }).limit);
+    if (usedMoney) {
+      used = toMajor(usedMoney);
+      currency = usedMoney.currency;
+      limit = limitMoney ? toMajor(limitMoney) : undefined;
+      percent = (spend as { percent?: unknown }).percent;
+    }
+  }
+  if (
+    used === undefined &&
+    typeof extra === "object" &&
+    extra !== null &&
+    (extra as { is_enabled?: unknown }).is_enabled === true
+  ) {
+    const record = extra as {
+      used_credits?: unknown;
+      monthly_limit?: unknown;
+      currency?: unknown;
+      utilization?: unknown;
+      decimal_places?: unknown;
+    };
+    // Amounts are minor units at the record's own precision (2 for CAD/USD).
+    const scale =
+      10 **
+      (typeof record.decimal_places === "number" && Number.isInteger(record.decimal_places)
+        ? record.decimal_places
+        : 2);
+    used = typeof record.used_credits === "number" ? record.used_credits / scale : 0;
+    limit = typeof record.monthly_limit === "number" ? record.monthly_limit / scale : undefined;
+    currency =
+      typeof record.currency === "string" && record.currency.length > 0 ? record.currency : "USD";
+    percent = record.utilization;
+  }
+  if (used === undefined || currency === undefined) return undefined;
+  if (used <= 0 && (limit ?? 0) <= 0) return undefined;
+  const usedPercent =
+    typeof percent === "number" && Number.isFinite(percent)
+      ? clampPercent(percent)
+      : limit !== undefined && limit > 0
+        ? clampPercent((used / limit) * 100)
+        : undefined;
+  return {
+    used: Math.max(0, used),
+    ...(limit !== undefined ? { limit } : {}),
+    currency,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
   };
 }
 
