@@ -19,6 +19,7 @@ import {
   isInterimBackgroundLiveness,
 } from "@t3tools/contracts";
 import type {
+  CrewRole,
   NotificationCategorySettings,
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadShell,
@@ -40,6 +41,7 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import webpush from "web-push";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CrewRoles } from "../crew/CrewRoles.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -363,8 +365,15 @@ export interface WebPushRelayThreads {
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, TaggedFailure>;
 }
 
+/**
+ * A thread's crew role, or null when it is not crew; `CrewRoles.roleOf` in production. Must
+ * not fail: an unreadable crew table reads as "not crew", which notifies as before.
+ */
+export type WebPushRelayCrewRoleOf = (threadId: ThreadId) => Effect.Effect<CrewRole | null>;
+
 export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
   threads: WebPushRelayThreads,
+  crewRoleOf: WebPushRelayCrewRoleOf = () => Effect.succeed(null),
 ) {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const serverEnvironment = yield* ServerEnvironment;
@@ -465,13 +474,20 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
       if (shell.lineage.relationshipToParent === "subagent") {
         return;
       }
-      // FORK: a crewmate reports to its lead through crew, not to the operator's phone.
-      // Recognised by its exact `crew/<taskId>` branch, the same marker the web notifier
-      // silences on, so the phone and the browser agree.
-      if (isCrewBranch(shell.branch)) {
+      // FORK: a crew thread's completion is crew's business, not the operator's phone —
+      // the lead hears from its crewmates through crew, and a crewmate reports to its
+      // lead. As on `personal`, ANY role counts, not only an open row: teardown closes the
+      // row before it archives the thread, and the interrupted run settles in between. A
+      // crewmate with no row (a shell from another server's database) is still caught by
+      // its exact `crew/<taskId>` branch, the marker the web notifier uses. The edge's key
+      // stays remembered, so it is consumed rather than re-fired once the thread stops
+      // being crew; the next edge after that notifies.
+      const crewRole = yield* crewRoleOf(threadId);
+      if (crewRole !== null || isCrewBranch(shell.branch)) {
         yield* Effect.logInfo("crew.notification.suppressed.web-push", {
           crewLogCode: "crew.notification.suppressed.web-push",
           threadId,
+          crewRole: crewRole ?? "crewmate",
           edge: edge.kind,
         });
         return;
@@ -561,7 +577,8 @@ export const makeWebPushRelay = Effect.fn("WebPushRelay.make")(function* (
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
-  return yield* makeWebPushRelay(threads);
+  const crewRoles = yield* CrewRoles;
+  return yield* makeWebPushRelay(threads, crewRoles.roleOf);
 });
 
 export const layer = Layer.effect(WebPushRelay, make).pipe(Layer.provide(FetchHttpClient.layer));
