@@ -194,7 +194,6 @@ const makeCrewService = (options?: CrewServiceOptions) =>
     const crewLog = yield* CrewLog;
     const runTeardown = yield* makeCrewTeardown;
 
-    // oxlint-disable-next-line t3code/no-global-process-runtime
     const limit = resolveCrewMaxConcurrentTasks(options?.env ?? process.env);
     const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 

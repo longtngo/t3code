@@ -77,7 +77,6 @@ export const readCursorUsage = Effect.fn("subagentBackend.cursorUsageRead")(
     const httpClientOption = yield* Effect.serviceOption(HttpClient.HttpClient);
 
     const payload = yield* makeAccountUsagePoll({
-      // oxlint-disable-next-line t3code/no-global-process-runtime
       env: process.env,
       httpClient: httpClientOption,
       spawner: Option.some(childProcessSpawner),

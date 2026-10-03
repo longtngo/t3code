@@ -62,11 +62,9 @@ describe("crew derive", () => {
     expect(Object.keys(BY_STATUS).sort()).toEqual([...ALL_STATUSES].sort());
   });
 
-  for (const [status, expected] of Object.entries(BY_STATUS)) {
-    it(`thread ${status} renders ${expected}`, () => {
-      expect(derive(OPEN, withStatus(status as OrchestrationV2ShellThreadStatus))).toBe(expected);
-    });
-  }
+  it.each(Object.entries(BY_STATUS))("thread %s renders %s", (status, expected) => {
+    expect(derive(OPEN, withStatus(status as OrchestrationV2ShellThreadStatus))).toBe(expected);
+  });
 
   it("no shell renders starting", () => {
     expect(derive(OPEN, { status: null })).toBe("starting");

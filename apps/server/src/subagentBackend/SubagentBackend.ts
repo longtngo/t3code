@@ -245,10 +245,12 @@ function decodeCursorInstanceConfig(config: unknown): CursorSettings | null {
   }
 }
 
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+
 /** Narrows a flag-file instance id to the branded slug, or null when it does not conform. */
 function validInstanceIdOrNull(value: string | null): ProviderInstanceId | null {
   if (value === null) return null;
-  return Schema.is(ProviderInstanceId)(value) ? value : null;
+  return isProviderInstanceId(value) ? value : null;
 }
 
 /** Enabled Cursor instances this machine can dispatch subagents to. */
