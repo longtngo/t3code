@@ -30,6 +30,7 @@ import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
+import { SidebarSubagentBackend } from "./SidebarSubagentBackend";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
@@ -239,13 +240,15 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           )}
           {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
             Usage are navigation, so "Back" rightly replaces them once you are on one of
-            those pages. Local models and Resource Queue are live status readouts —
+            those pages. Subagents, Local models and Resource Queue are live status readouts —
             hiding them there would be a silent capability loss for no gain.
             `SidebarUpdatePill` below sits outside for the same reason.
 
             Local models' and Resource Queue's open state lives in this component rather than
             in each panel: both anchor to the wrapper above with identical insets, so two open
-            panels would occupy the same box. */}
+            panels would occupy the same box. Subagents keeps its own state; its panel is an
+            in-flow first item of this row, not an overlay. */}
+          <SidebarSubagentBackend />
           <SidebarLocalModels
             isOpen={openFooterPanel === "models"}
             onOpenChange={(open) => setFooterPanelOpen("models", open)}
