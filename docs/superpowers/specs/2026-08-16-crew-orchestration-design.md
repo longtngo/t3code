@@ -29,6 +29,24 @@ contradicted by the doc comment of the file it cited, and each load-bearing for 
 What survives is still: reserve a row, create a worktree, note or wake, close the
 row, delete nothing.
 
+> **Ported to orchestrator v2 (2026-10).** The fork's `personal` branch moved onto
+> upstream's orchestrator v2, which deleted the v1 provider service, session reaper,
+> stall watchdog and projection snapshot this revision was measured against. The
+> crew contract (§2, §7, §8 refusals, §9 codes, §10 surfaces) is unchanged; the
+> mechanisms beneath it now sit on v2 services. **`[V]` and `[X]` citations to v1
+> files below are historical** — they record why a rule exists, not where its code
+> lives today. The mapping:
+>
+> | v1 mechanism (this text)                        | v2 mechanism (the code)                                                                                        |
+> | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+> | `createWorktree` + `thread.create` + turn start | `ThreadLaunchService.launch`, worktree strategy with an explicit `path`, and the brief as its `initialMessage` |
+> | `appendSessionNote` / wake turn, turn guard     | `ThreadManagementService.sendToThread`: `steer` for `progress` only, `queue` otherwise (§5)                    |
+> | session reaper exemption for crew threads (§4)  | **None.** A queued v2 message is durable, so idle release loses nothing a crew row needs                       |
+> | `OrchestrationSessionStatus` ladder (§4)        | `OrchestrationV2ShellThreadStatus` ladder in `apps/server/src/crew/derive.ts`                                  |
+> | `crewRole` on `OrchestrationThreadShell` (§3)   | `CrewRoles.roleOf`, read by the server relay; the web derives its role map from `crew.list`                    |
+> | `stopSession`, watchdog record clear (§6)       | interrupt the thread; detach its live provider sessions                                                        |
+> | zombie scan (§5, §8)                            | **None.** Archive's session detach is an effect in upstream's durable outbox                                   |
+
 ## 0. Reading this document
 
 **Tags:** `[X]` executed · `[V: path:line]` read at `01c68bb03` · `[W]` verified
@@ -358,38 +376,12 @@ select produced a critical of its own (an answer with no terminal state, retried
 the same table. `crew_report` refuses `answer` as an input state (§8), and §4's
 "last report's `state` as a sublabel" skips `answer` rows.
 
-**A crew bridge is exempt from the session reaper**, which is what actually
-protects a `progress` note. `appendSessionNote` puts the text in an in-process
-queue `[V: ClaudeAdapter.ts:5309]` and does not touch the binding's `lastSeenAt`
-`[V: ProviderService.ts:1251-1267 — no `directory.upsert`]`, so an idle bridge is
-the reaper's ideal target: it stops a session after 30 minutes of inactivity,
-sweeping every 5 minutes, and none of its guards can see a queued note
-`[V: apps/server/src/provider/Layers/ProviderSessionReaper.ts:21-22, :54-142]`.
-Measured on the developer's own event log, **the reaper is 125 of 169 session
-stops in 10 days across 44 threads, and 135 of 290 all-time — 74%** `[X:
-read-only]`.
-
-The exemption is one `continue` in the reaper's guard chain, on a thread shell it
-has already fetched, keyed on the `crewRole` field §3 already adds for §2 cost 3
-`[X: arm A reaps the bridge, arm B does not]`. It costs two arms, not one: the reaper exempts `crewRole` of `bridge` or
-`crewmate`, and **not** `crewmate-closed` (§3). A bridge is `bridge` only while it
-parents an `open` task, or it would be exempt forever after its first dispatch; a
-crewmate becomes `crewmate-closed` when its task closes, or a crewmate whose
-teardown failed could never be reaped at all. That second scope
-is what stops §6's stated residual becoming a permanent leak: after §5's three
-zombie-stop attempts the reaper is the last thing that can stop a crewmate whose
-`stopSession` failed, and an unscoped exemption forbids it `[X: provider process
-alive past the threshold, while §12 clause 10 stays green because it asserts the
-slot, not the process]`. §8's `nested`, by contrast, is computed over rows of every
-status; the two scopes are deliberately different.
-
-**Do not implement it by calling `recordTaskLiveness` to set
-`backgroundLiveness`**, which is the obvious shortcut and is wrong three ways: that
-registry is in-memory and empty after a restart, so it disappears at one of the
-moments the loss happens; `isAutoSettlementCandidate` returns false while it is
-set `[V: ThreadSettlementPolicy.ts:98]`, so the bridge never auto-settles; and it
-changes `WebPushRelay`'s category filter `[V: WebPushRelay.ts:474]`. A `crewRole`
-read is persisted, survives restart, and has none of those effects.
+**On v2 there is no reaper exemption, because there is nothing for it to protect.**
+Revision 16 exempted crew threads from the session reaper because
+`appendSessionNote` held a `progress` note in an in-process queue that a reaped
+session discarded. On v2 a report is a durable message (§5): a `steer` lands in a
+running turn or is not sent at all, and a `queue` message survives the provider
+session being released. The v2 idle release therefore carries no crew check.
 
 **Revision 15 tried to _display_ this loss instead, and could not.** A
 `notedWithoutTurn` boolean grew a companion turn id and a sixth sweep step and
@@ -416,8 +408,7 @@ talkative bridge exhaust the budget its crewmate needs to report `done`.
 
 ## 5. Delivery
 
-The sweep runs every 60s; a `crew.report` nudge runs the same loop. One lock per
-parent thread covers both triggers.
+The sweep runs every 60s, in one fiber, so no two passes overlap.
 
 **Select `WHERE notedAt IS NULL ORDER BY (state = 'progress'), createdAt`** —
 blocking states first, then oldest, across every task regardless of status.
@@ -448,160 +439,68 @@ directions; the code stays in the `crew.deliver.*` family for both, because it
 describes the row's fate rather than its direction. Measured, the conjunct's only value was an index seek the
 query already follows with a temp b-tree sort, on an append-only table bounded at 200 non-answer rows per task, ≤400 with answers `[X: EXPLAIN QUERY PLAN, both forms]`.
 
-This is defence in depth, not a live starvation fix. **The `[X]` that justified it
-is withdrawn:** it measured a one-report-per-pass model, and the ride-along rule
-below drains the whole pass at once, so the ordering term now changes no outcome
-`[X: 0 of 512 scenarios; 60 of 512 with the ride-along removed]`. Keep the term so
+This is defence in depth, not a live starvation fix: one message per destination
+drains the whole pass at once, so the ordering term changes no outcome. Keep it so
 that blocking states lead if a future change ever reintroduces a per-pass bound.
 
-**Crew issues at most one `thread.turn.start` per _destination thread_ per pass,
-unconditionally.** The destination is the bridge for a report and the crewmate for
-an `answer` — §5's steps are written for a destination, not for a bridge, and the
-distinction is load-bearing rather than pedantic. **A wake carries a payload only for a report the append did not place; every
-other report it carries is named, not quoted**, and the destination reads them
-with `crew_status`. That predicate is per report, not per pass. Revision 16 wrote
-it as a count — "only a single-report wake carries a payload" — which attaches a
-payload to text already in the transcript in the one cell the two rules disagree
-on: a single `done` report on a live Claude bridge, where step 3 appends _and_
-step 4 wakes. The bridge then reads the same report twice in one turn and cannot
-tell that from two reports `[X: 8-cell matrix, 1 cell at two channels]`. Every
-report the wake carries is stamped; none defers, so there is no
-second-non-`progress`-report arm and no code for one.
+**On orchestrator v2 a report travels as an ordinary v2 message**, through
+`ThreadManagementService.sendToThread` — upstream's send path, which owns the durable
+queue, steering and receipts. Revision 16's turn guard, per-pass woken set,
+pending-turn-start check and `appendSessionNote` placement are all gone: each existed
+to avoid a v1 hazard that v2's server-native queue does not have. A message sent with
+mode `queue` starts a run on an idle thread and waits behind active work on a busy
+one, durably; nothing replaces a human's accepted turn. Mode `steer` places text into
+a run already in progress without starting a turn. Upstream's delegated-completion
+delivery uses the same shape (`queue_after_active`, `createdBy: "agent"`,
+`creationSource: "server"`).
 
-A coalesced _payload_ does not fit: §5's bound is 1 KiB per note and §11 fixes the
-prefix at 40 bytes, so one line is already 1064 bytes and every report past the
-first is dropped — silently, with `notedAt` stamped, so it is never re-selected
-`[X: N=2 drops 1, N=200 drops 199]`. Removing the bound instead makes the payload
-unbounded: 0.81 MiB ≈ 213k tokens in a single prompt at cap 4 `[X]`, which is §2
-cost 4's entire overnight budget in one turn. The nudge has neither problem, and
-§5 already uses that shape wherever the note landed.
+**Per pass, the unnoted rows are grouped by destination thread** — the bridge for a
+report, the crewmate for an `answer` — and each destination gets **at most one
+message**:
 
-"A `progress` report never consumes the budget" would be a second dispatch, and a
-second dispatch destroys the first: `replacePendingTurnStart` clears every pending
-row for the thread before inserting
-`[V: apps/server/src/persistence/Layers/ProjectionTurns.ts:283-286]`. On a
-non-Claude bridge the `needs-decision` text exists **only** in that replaced
-payload, and its `notedAt` is already stamped — silent, permanent loss of the one
-report blocking a crewmate that holds a slot `[X: the decision turn replaced before
-running]`. The coalesced payload obeys the same 1 KiB bound per note and is
-truncated whole at 8 KiB, oldest first.
+1. **Thread guard.** The destination is missing, deleted, or archived → stamp every
+   row for it and log `crew.deliver.abandoned` (the terminal rule above).
+2. **Any row that must be read** (`needs-decision`, `done`, `failed`, `answer`) → one
+   `queue` message carrying every unnoted row for that destination.
+3. **Only `progress` rows** → one `steer` message if the destination has a steerable
+   run, logged `crew.deliver.no-turn` per row; otherwise nothing is sent and the rows
+   stay unnoted. They ride the next message to that thread, and `crew_status` and the
+   panel show them meanwhile. Only the typed "no run to steer" refusal means "not
+   now"; every other refusal is a failed delivery.
+4. **Stamp `notedAt` last, only after the send was accepted.** A refused send stamps
+   nothing, so the rows are re-selected next pass, and logs `crew.deliver.failed` once
+   per unbroken run of failures for that destination — not 1,440 identical lines a day.
 
-1. **Thread guard.** The bridge thread exists, is not deleted, and
-   `archivedAt === null`. Fail → log `crew.deliver.deferred.thread` with which of
-   the three it was, retry next sweep. This precedes everything because
-   `appendSessionNote` checks none of it (§1).
-2. **Turn guard, before the append, for `state !== 'progress'`.** A
-   `needs-decision`, `done` or `failed` report must reach the bridge, and §1
-   records that a note is read on the next turn or not at all — so appending
-   before you know you can wake buys nothing. Busy, and no wake yet dispatched for this bridge in this pass → log
-   `crew.deliver.deferred.busy` and defer, without appending and without
-   stamping.
-3. **Append.** On `true`, or on `false` for a non-`progress` report, continue. On
-   `false` for a `progress` report — a non-Claude bridge, or a Claude session
-   that is stopped or closed — run the turn guard now; on busy, log
-   `crew.deliver.deferred.no-session` and defer, stamping nothing. The log belongs
-   in the defer arm: a `false` append that then wakes is the _working_ path on
-   every non-Claude bridge, and logging a refusal there means ~800 `deferred`
-   lines an overnight run describing 800 successful deliveries.
-4. **Wake** if the report is non-`progress`, or if step 3's append returned
-   `false`; log `crew.deliver.no-turn` when it does not.
-5. **Stamp `notedAt` last, and only once the work it records has succeeded** — the
-   append on the no-wake path, the dispatch on the wake path, and the _already
-   dispatched_ wake for a report that rode one. All three arms stamp; naming only
-   the dispatch leaves the design's headline case — `progress` appended to a live
-   Claude bridge, where no dispatch happens — never stamped, re-selecting and
-   re-appending every 60s forever `[X: 6 appends over 6 sweeps]`, which is verbatim
-   the failure that retired `deliveredAt`.
+**Keyed on the destination, not the bridge.** An `answer` and a `done` report on one
+task in one pass go to two different threads; keyed on the bridge, the answer would
+reach the bridge while the crewmate stays blocked holding a slot.
 
-**The turn guard is crew's own:** `activeTurnId === null`, no pending approvals or
-user input, and `getPendingTurnStartByThreadId(threadId)` is `None`
-`[V: apps/server/src/persistence/Services/ProjectionTurns.ts:132]`.
+**Idempotent retries.** The command and message ids derive from the report ids the
+message carries, so a send whose acceptance landed but whose stamp did not replays
+its receipt next pass instead of delivering twice.
 
-**There is no fourth "already woken this pass" conjunct, and the `[X]` that
-justified one was false.** Revisions 13-15 carried a per-sweep woken `Set` because
-"no projection read can close the race — the projection has not moved within one
-sweep". It has: `projectionPipeline.projectEvent` runs **inside** the append
-transaction, serially, before the dispatch returns, and
-`thread.turn-start-requested` writes the pending row right there
-`[V: apps/server/src/orchestration/Layers/OrchestrationEngine.ts:258-267;
-ProjectionPipeline.ts:1299, :1857 concurrency 1]`. So the instant a wake returns,
-`getPendingTurnStartByThreadId` is `Some` and the three conjuncts above already
-serialise the pass. The `Set` was redundant, and moving it out of step 2 in
-revision 15 changed nothing, because the other three conjuncts block identically.
+**The message quotes each row's note** (1 KiB each, bounded at insert) until 8 KiB of
+quoted text is spent, then names the rest — "…and N more crew reports. Read them with
+`crew_status`." — so no pass can ship an unbounded prompt. Every row the message
+carries is stamped, quoted or named.
 
-**Instead: once a wake has been dispatched for a given _destination thread_ in
-this pass, the remaining rows for that same destination append and stamp without
-re-evaluating the guard.** They ride the turn that is already coming.
+**While crew is switched off the pass delivers answers only** (§8).
 
-Keyed on the bridge instead, an `answer` sorts into the same pass as a `done`
-report on the same task, "rides" the turn the report just dispatched **to a
-different thread**, appends `false` on any non-Claude crewmate, and is stamped
-handled. The operator's answer is silently lost and the crewmate stays blocked
-holding a slot `[X: crewmate never woken]` — verbatim the outcome §5 rejects the
-second-dispatch design for. Without that sentence the guard is correct and
-the outcome is still wrong — reports 2, 3 and 4 defer unappended, which is the
-revision-14 behaviour under a different cause `[X: appends 1, not 4]`.
+**There is no zombie scan.** Revision 16 re-issued `stopSession` for closed tasks
+whose thread was still in `listSessions()`, bounded at three attempts. On v2 teardown
+step 7 archives the crewmate, and archive's session detach is an effect in upstream's
+durable outbox, committed with the archive itself and retried by its worker; the
+`listSessions()` enumeration it scanned does not exist on v2.
 
-Do not reuse the in-repo guard's `session.status === "ready"` conjunct: it is
-anti-correlated with the case a wake exists for — a `stopped` or absent session
-is exactly when a turn is required `[X: unreachable in 87.5% of states]`. The
-pending-turn-start check is what keeps crew from silently replacing a human's
-accepted turn, since `replacePendingTurnStart` keeps one pending row per thread
-`[V: apps/server/src/persistence/Layers/ProjectionTurns.ts:283]`. (Revision 15's per-sweep `Set` paragraph stood here; it and its `[X]` are
-retired above.)
-
-**Transaction boundary.** Read-and-claim in one short transaction, commit, then
-append and dispatch outside it, then stamp in a second short transaction, using
-`UPDATE … WHERE reportId = ? AND notedAt IS NULL` and `changes() == 1` as the
-once-only token. The permit is never held across provider I/O.
-
-**An answer is a report row travelling the other way**, so it takes the same
-select and the same four steps. `crew_answer(reportId, text)` inserts a row with
-`state = 'answer'` and `replyTo = reportId`; the loop guards the _crewmate's_
-thread rather than the bridge's, appends, wakes, and stamps its `notedAt`. Its
-defer arms log `crew.answer.deferred.<thread|busy>` — never `no-session`, which no
-answer path can reach (§9).
-
-`crew_answer` reports **queued**, not delivered — it returns on the insert — and
-§8 refuses a second answer to a report that already has one. Revision 15 gave the
-answer its own column and its own select, and that produced a critical of its own:
-a deferred answer had no terminal state, so a torn-down crewmate left the row
-matching forever, 60 selections and 60 log lines an hour `[X: one hour]`. As a
-report row it is closed by the same `task.status` handling as everything else.
-
-**The sweep also stops zombies, in a fiber of its own.** For any thread in
-`listSessions()` whose row is `closed`, re-issue `stopSession` — **up to three
-attempts per thread per boot, or until the thread leaves `listSessions()`** — and
-log `crew.zombie.stopped`. One attempt is too few: the only mode worth retrying is the transient adapter
-call. **Two** of the three persisted modes are reachable (§1) — the second being an
-instance id that no longer resolves in the registry, which is not exotic: **246 of
-488 live bindings name a custom instance** the operator can delete in Settings
-`[X: live directory, read-only]`. Neither is transient, so the bound of three caps
-log lines rather than rescuing a slot.
-
-**Wrap `listSessions()` in `Effect.catchCause`**, log
-`crew.sweep.zombie-scan-failed` **once per unbroken run of failures, and stop the
-zombie fiber after three consecutive ones**. The disagreement that kills it does
-not heal while the offending session lives, so an unbounded log would be 1,440
-identical lines a day — the shape this fork fixed in `01c68bb03`. It is not defect-free (§1), its `never` error
-channel means an ordinary catch does not rescue it, and one unguarded call takes
-the delivery loop down for the rest of the boot — every report undelivered,
-silently, with §12 clause 13 already satisfied by the first tick.
-
-**There is no MCP-credential touch.** Revision 14 had the sweep refresh each open
-task's credential on the strength of a §1 row that was false: liveness is
-refreshed by any MCP request, not only by a provider turn (§1), so a crewmate that
-files reports keeps its own credential alive. The mechanism bought nothing and
-permanently disabled the only expiry bound on a `bypassPermissions` credential. A
-crewmate that has made no MCP call in 24h has filed no report in 24h, which is a
-case for the operator.
+**There is no MCP-credential touch.** Liveness is refreshed by any MCP request, so a
+crewmate that files reports keeps its own credential alive; one that has made no
+MCP call in 24h has filed no report in 24h, which is a case for the operator.
 
 ### Payload
 
-Bounded to **1 KiB**: normalize newlines → bound bytes on character boundaries,
-accounting for prefix cost → prefix every line. The wake turn adds a per-wake
-nonce fence. **No part of this is a security boundary** — the reader is an agent
-with Bash and direct DB write.
+Bounded to **1 KiB** per note: normalize newlines → bound bytes on character
+boundaries. A delivery message quotes at most 8 KiB of notes (above). **No part of
+this is a security boundary** — the reader is an agent with Bash and direct DB write.
 
 ## 6. Teardown
 
@@ -611,12 +510,12 @@ slot on a `stopSession` error, which fails deterministically (§1), so Retry re-
 the same call forever and the cap reached zero `[X]`.
 
 1. `status = 'closed'`
-2. `[W]` clear the stall-watchdog record for the thread
-3. `revokeActiveMcpThread(threadId)`
+2. interrupt the crewmate thread's active run (`ThreadManagementService.interruptThread`)
+3. `McpSessionRegistry.revokeThread(threadId)`
 4. `TerminalManager.close({threadId})`
-5. `stopSession(threadId)` — a missing binding is **success**
+5. detach every live provider session recorded for the thread — none is **success**
 6. clear `worktreePath` and `branch` from the crew thread's meta
-7. archive the crewmate thread if it exists and is not already archived
+7. archive the crewmate thread if it exists and is not already archived or deleted
 
 **There is no drain step, because §5's select no longer excludes closed tasks.**
 Revision 15 added one, and it was inert on the path teardown is actually invoked
@@ -626,20 +525,10 @@ turn and every non-`progress` report deferred on the turn guard `[X: drained 0 o
 status conjunct from the select (§5) handles both, and delivery moves from
 synchronous-at-teardown to at most 60s later.
 
-**Step 2 has no API and Phase 1 must add one.** `clearRecord` is a private closure
-and `adoptExternalStop` is the opposite operation (§1). Add
-`clearRecoveryRecord(threadId)` to the shape; §3 lists both files and the one
-integration test whose inline stub breaks.
-
-Step 2 is not optional, though revision 14 stated its cause wrongly. Teardown does
-not _arm_ a resurrection — `awaitingStopForTurnId` is written in exactly two
-places, the watchdog's own self-trip and `adoptExternalStop`, neither of which
-crew calls `[V: ProviderTurnStallWatchdog.ts:362, :459]`. It _completes_ one the
-watchdog already armed: step 5 makes `activeTurnId` null, and the resume branch
-has no archival check, so a stop already pending fires against the torn-down
-thread on the next 60s sweep. Measured against the real watchdog: with step 2 on,
-zero resumes; with step 2 stubbed to fail, `thread.turn.start` is dispatched to a
-thread that is stopped, archived, and `closed` `[X]`.
+**Step 2 replaces the v1 watchdog-record clear.** v1 needed it because a stop the
+stall watchdog had already armed would resume a torn-down thread; v2 has no such
+watchdog, and interrupting before detaching means no run is left to settle into a
+completion after step 5.
 
 Step 6 is what stops `ensureThreadWorktree` re-creating a directory the operator
 deleted (§7).
@@ -650,8 +539,9 @@ constraint, and the pair step 2 exists for.
 
 **One residual, stated rather than hidden.** Step 1 mutes the crewmate — §8
 refuses every tool on a `closed` row — before step 5 stops it. A crewmate
-mid-turn loses `crew_report` and, if step 5 fails, keeps running with its slot
-already released. §5's sweep is what eventually stops it.
+mid-turn loses `crew_report` and, if steps 2 and 5 both fail, keeps running with its
+slot already released. Step 7's archive detaches it through upstream's outbox, and
+`Re-run teardown` (§10) repeats every step.
 
 ## 7. Cleanup and the disk bound
 
@@ -777,11 +667,8 @@ a turn on the operator's own thread, which is the noise a master switch is
 expected to stop; those rows stay unnoted and deliver when crew is turned back
 on, and the panel reads the database directly so nothing becomes invisible.
 
-`CrewSweep.start()` also forks a zombie scan, which does **not** read the switch.
-Stopping a provider session for an already-closed task is cleanup, the same
-argument that keeps `teardown` open. It queries closed tasks first and skips the
-provider-session enumeration entirely when there are none, so a server that never
-turns crew on pays one indexed query a minute and nothing else.
+Boot also closes orphaned rows (`crew.reap.orphan`) whatever the switch says:
+it touches only rows whose crew thread no longer exists.
 
 Registration of the five MCP tools is deliberately _not_ gated on it. A tool
 listing cannot be retracted once a server is running - `McpServer` exposes
@@ -804,18 +691,17 @@ dispatches while the sweep still runs and the panel still polls.
 - **Warnings, one per refusal §8 or §5 actually has:**
   `crew.dispatch.refused.<disabled|cap|thread|provider|browser-access|disk|nested|payload>`,
   `crew.dispatch.compensate.skipped`,
-  `crew.deliver.deferred.<thread|no-session|busy>`, `crew.deliver.no-turn`,
-  `crew.deliver.abandoned`,
-  `crew.answer.deferred.<thread|busy>` — not `no-session`, which no answer path can
-  emit: an answer is never `progress`, so a `false` append falls through to the
-  wake rather than the defer arm —
+  `crew.deliver.no-turn`, `crew.deliver.abandoned`, `crew.deliver.failed` (a send the
+  destination refused for any reason but "no run to steer"; once per unbroken run of
+  failures per destination) —
   `crew.tool.refused.<tool>.<reason>` — the one family covering every non-dispatch
   refusal in §8, since `crew_report`'s per-task cap and `crew_teardown`'s and
   `crew_answer`'s row lookups each need a code or §11's both-ways correspondence
   test fails — `crew.notification.suppressed.<web-push|agent-awareness|web>`,
   `crew.tool.invoked.<crew_dispatch|crew_status|crew_teardown|crew_answer|crew_report>`,
-  `crew.teardown.step-failed.<1|2|3|4|5|6|7>`, `crew.zombie.stopped`,
-  `crew.sweep.zombie-scan-failed`, `crew.reap.orphan`. `crew.deliver.no-turn` and `crew.deliver.abandoned` are delivery **outcomes**;
+  `crew.teardown.step-failed.<1|2|3|4|5|6|7>`, `crew.reap.orphan`.
+  `crew.deliver.no-turn`, `crew.deliver.abandoned` and `crew.deliver.failed` are delivery
+  **outcomes**;
   every other code above names a refusal or a deferral, and the bullet header covers
   all three kinds.
   **The non-dispatch refusals are six literal codes, not a cross product.**
@@ -903,8 +789,8 @@ field, so §10 needs an explicit error state or a failing call shows a frozen pa
 with no explanation.
 
 **A `Re-run teardown` action is available on a `closed` row** whose thread is still
-in a session. Without it the zombie budget (§5) is the only thing that can stop a
-live `bypassPermissions` agent, and `Teardown` is `open`-only.
+in a session. It is the operator's way to repeat a teardown whose steps failed, and
+`Teardown` is `open`-only.
 
 **Crewmate text renders plain** — no markdown, links or images, length-clamped.
 The reason is not `dangerouslySetInnerHTML`: `ChatMarkdown` pairs `rehypeRaw`
@@ -916,7 +802,7 @@ is that the sanitize schema extends `protocols` with `"file"` for `href` and
 
 | Provider     |        Phase 1         | Note                                                                                                                                                                                                                                                                                                                  |
 | ------------ | :--------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude       |       supported        | The only provider with `appendSessionNote`, so the only one where `progress` costs no turn                                                                                                                                                                                                                            |
+| Claude       |       supported        | On v2 every provider takes `progress` by steering a running turn (§5), so no provider pays a turn for it                                                                                                                                                                                                              |
 | Codex        |       supported        | Per-thread app-server child with its own token `[V: CodexAdapter.ts:1809-1822]`                                                                                                                                                                                                                                       |
 | Cursor, Grok |       supported        | Per-thread MCP, ACP auto-approve `[V: CursorAdapter.ts:617-630, GrokAdapter.ts:984-996]`                                                                                                                                                                                                                              |
 | OpenCode     | **refused, for scope** | Refused because Phase 1 has not exercised it, **not** because it cannot report. §1 corrects revision 13 here: `mcp.add` is skipped only for an _external_ server, and the default config spawns a local one, so a default OpenCode crewmate can call `crew_report`. Lift the refusal when someone runs §12 against it |
@@ -980,7 +866,7 @@ arms]`. `LEGACY` is a `Set` built from an inline array literal — as a bare arr
 'number[]'`) `[X: tsgo]`. Assert `LEGACY.size === 49`. **And assert the migration
   executes.**
 - **`derive()`:** total, the four-tier ordering, and — the assertion that
-  discriminates — **for each of the seven `OrchestrationSessionStatus` members,
+  discriminates — **for each of the eleven `OrchestrationV2ShellThreadStatus` members,
   the rendering by name, plus `unknown` produced by none.** Reachability-of-every-
   rendering is the wrong quantifier; it and totality both passed on a ladder that
   dropped `stopped` into `unknown` `[X: 9 of 11 green on the defect]`.
@@ -995,50 +881,21 @@ arms]`. `LEGACY` is a `Set` built from an inline array literal — as a bare arr
   persisted binding on the way, which is why it can die), so elsewhere it is
   satisfied before the test runs `[X: the arm and
 its own inverted fixture both green]`.
-- **Delivery:** an archived bridge defers and stamps nothing; `progress` on a
-  Claude bridge starts no turn, and **a second sweep selects zero rows and issues
-  no second append** — "is not re-selected" phrased as an inference from `notedAt`
-  is green on a select that drops the `notedAt IS NULL` conjunct and re-appends
-  the same report every 60s forever `[X: 6 appends over 6 sweeps, every named
-observable still holding]`;
-  `progress` on a non-Claude bridge takes the wake turn; a `done` report on an
-  idle bridge starts one; a bridge with a `stopped` session takes the wake turn; a
-  non-`progress` report on a busy bridge **is not appended** and arrives on a
-  later sweep; a pending turn-start defers; two reports for one bridge in one
-  sweep start one turn; **two consecutive sweeps, each with a fresh report on the
-  same idle bridge, start two turns** — a module-level woken set wakes each bridge
-  once per process and then defers everything forever, and both neighbouring
-  clauses are green on it `[X: 5 of 6]` — declare that set at module scope in the
-  test file and reset it between tests, or a factory-local rendering escapes a
-  harness that builds a fresh sweeper per sweep `[X]`; **four `done` reports in
-  one sweep are all appended and start one turn**; **the report's note text
-  reaches the bridge by exactly one channel** — appended-with-a-bare-nudge, or
-  not-appended-with-a-payload-carrying-wake — asserted on a Claude and a
-  non-Claude bridge, which is also the complement the "is not appended" absence
-  assertion otherwise lacks; **a non-Claude bridge with N pending `progress` reports and one `needs-decision`
-  starts one turn and delivers all N+1** (no defect arm: with the ride-along rule
-  the whole pass drains at once, so the ordering term changes no outcome in 512
-  scenarios — 60 with the ride-along removed, which is the control `[X]`); nudge and sweep together deliver once.
-- **Answers:** `crew_answer` notes the _crewmate_ thread and starts a turn even
-  when that session is `stopped`; a blocked crewmate resumes; **an answer to a
-  busy crewmate is deferred, the `answer` row survives with `notedAt` null, and it
-  arrives on a later sweep** — defective arm stamps `notedAt` on defer; **an `answer` row filed one tick before teardown, on a crewmate not yet archived,
-  is still delivered**; **an `answer` row whose crewmate is archived is abandoned on the first sweep** —
-  `notedAt` stamped, `crew.deliver.abandoned` logged, and the next sweep selects
-  nothing — defective arm omitting the terminal rule; **a report
-  whose destination is missing or deleted terminates on the first sweep**; **an
-  `answer` and a `done` report on one task in one pass wake two different
-  threads**, defective arm keying the pass on the bridge.
-- **Teardown:** closes the row first; a `stopSession` error still frees the slot;
-  an already-archived or deleted crewmate thread does not fail it; `worktreePath`
-  is cleared; the watchdog record is cleared; **with step 2 stubbed to fail and a
-  recovery record awaiting a stop, the watchdog _does_ resume the torn-down
-  thread** — that arm is the defect step 2 retires, and it must go red on the
-  correct implementation; revision 14 asserted the opposite, which is the
-  correct-arm outcome and passes on a fixture where the hazard cannot occur
-  `[X]`; **a report filed one tick before teardown is still delivered** (§5's select carries
-  no status conjunct);
-  the zombie stop makes at most three attempts per thread per boot.
+- **Delivery (v2):** a `done` report is one `queue` message to the bridge and a
+  second sweep sends nothing; `progress` alone steers with no new turn and logs
+  `crew.deliver.no-turn`; `progress` on a bridge with no steerable run stays unnoted,
+  is not a failure, and rides the next message that must be read; an `answer` and a
+  `done` report on one task go to two different threads (defective arm keys the pass
+  on the bridge); an archived, deleted or missing destination is abandoned on the
+  first sweep; with crew off only answers are delivered; a refusing destination keeps
+  its rows, logs `crew.deliver.failed` once, and does not block a second destination
+  in the same pass; the same report set derives the same command id on a retry; the
+  boot reap closes only rows created before boot whose crew thread is gone.
+- **Answers:** `crew_answer` writes one row per question and refuses a second.
+- **Teardown (v2):** closes the row first and runs step 2 before step 5; every step
+  failing still frees the slot; an already-archived or deleted crewmate is not
+  archived again; only live provider sessions are detached; **a report filed one
+  tick before teardown is still delivered** (§5's select carries no status conjunct).
 - **No deletion:** a dispatch that fails after `createWorktree` leaves the
   directory **present**; boot reap closes rows and removes nothing; there is no
   code path from crew to worktree removal — grep the crew module for
@@ -1098,13 +955,12 @@ impossible.
 _Acceptance (`T3CODE_CREW_MAX_CONCURRENT_TASKS=2`):_
 
 1. Two crewmates dispatch and report — two `crew_tasks` rows, four `crew_reports`.
-2. Both `progress` reports are noted with **no turn started**: two
-   `crew.deliver.no-turn` lines, the bridge's `latestTurn.turnId` unchanged, and a
-   second sweep emits **no further** `crew.deliver.no-turn` line for either
-   report.
-3. A `needs-decision` report is **deferred while the bridge is busy** —
-   `crew.deliver.deferred.busy`, `notedAt` still null — and **arrives on a later
-   sweep**: a turn starts and `notedAt` is set.
+2. Both `progress` reports are steered into a running bridge turn with **no turn
+   started**: two `crew.deliver.no-turn` lines, and a second sweep emits **no
+   further** `crew.deliver.no-turn` line for either report.
+3. A `needs-decision` report filed while the bridge is busy is **queued behind the
+   active run** — `notedAt` set on acceptance — and starts a turn once that run
+   ends.
 4. It is answered — an `answer` row exists with `notedAt` set — and **the crewmate
    files a further `crew_report` afterwards**.
 5. The bridge reads both tasks via `crew_status` — one `crew.tool.invoked.crew_status`
@@ -1119,7 +975,7 @@ _Acceptance (`T3CODE_CREW_MAX_CONCURRENT_TASKS=2`):_
 8. Nested dispatch is refused: `crew.dispatch.refused.nested`.
 9. A dispatch failing after `createWorktree` leaves no held slot, and **the
    worktree directory is still there** — `crew.dispatch.compensate.skipped`.
-10. A `stopSession` failure still frees the slot: `crew.teardown.step-failed.5`
+10. A failed session detach still frees the slot: `crew.teardown.step-failed.5`
     with the row `closed`.
 11. A bridge whose session is `stopped` still receives its report: the wake turn
     runs. (No rendering claim — §4's ladder renders crewmate task rows, and a

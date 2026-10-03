@@ -60,6 +60,7 @@ import {
   resolveHeadlessConnectionInfo,
 } from "./startupAccess.ts";
 import { subagentBackendReconciler } from "./subagentBackend/SubagentBackend.ts";
+import { CrewSweep } from "./crew/CrewSweep.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -519,6 +520,7 @@ const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const crewSweep = yield* CrewSweep;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const environmentTheme = yield* EnvironmentThemeService;
@@ -780,6 +782,10 @@ const make = (options?: StartupOptions) =>
       // process lifetime (see SubagentBackend.ts's module doc). A settings-change
       // subscriber, not an event-hub consumer.
       yield* Effect.forkScoped(subagentBackendReconciler);
+      // Crew: reaps rows orphaned before this boot, then delivers reports every 60s.
+      // Parked until activation; not gated on `enableCrew`, whose off state still
+      // delivers answers (see CrewSweep.runOnce).
+      yield* crewSweep.start();
 
       yield* Effect.logInfo(
         `watch rescan backstop started (${Duration.toSeconds(WATCH_RESCAN_INTERVAL)}s)`,

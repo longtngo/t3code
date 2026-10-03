@@ -55,6 +55,12 @@ export type ThreadLaunchWorkspaceStrategy =
       readonly baseRef: string;
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
+      /**
+       * FORK: an explicit checkout path. Crew names its worktrees by task id
+       * (`<worktreesDir>/crew/<taskId>`) so the row it reserves before launch already
+       * holds the real path. Absent keeps the driver's derived location.
+       */
+      readonly path?: string | undefined;
     };
 
 export interface ThreadLaunchInitialMessage {
@@ -337,7 +343,7 @@ const make = Effect.gen(function* () {
               refName: startRef,
               newRefName: branch!,
               baseRefName: input.workspaceStrategy.baseRef,
-              path: null,
+              path: input.workspaceStrategy.path ?? null,
             },
             {
               progress: {

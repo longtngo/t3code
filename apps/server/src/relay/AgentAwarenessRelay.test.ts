@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  type CrewRole,
   EnvironmentId,
   EventId,
   MessageId,
@@ -38,6 +39,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import { CrewRoles } from "../crew/CrewRoles.ts";
 import * as AgentAwarenessRelay from "./AgentAwarenessRelay.ts";
 
 const THREAD_ID = ThreadId.make("relay-thread");
@@ -144,6 +146,8 @@ const makeTestRelay = Effect.fnUntraced(function* (
     /** Serves shells from this source instead of `currentShell`. */
     readonly readShell?: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null>;
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
+    /** FORK: the crew role `CrewRoles` reports for every thread. */
+    readonly crewRole?: CrewRole | null;
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -271,6 +275,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
         ),
     }),
     Effect.provideService(FetchHttpClient.Fetch, fetch),
+    Effect.provideService(CrewRoles, { roleOf: () => Effect.succeed(options.crewRole ?? null) }),
     Effect.provide(NodeCrypto.layer),
   );
   return { relay, secrets, secretReads, currentShell, shellReads, publications, catchUp };
@@ -361,6 +366,20 @@ describe("AgentAwarenessRelay", () => {
         { threadId: SECOND_THREAD_ID, revision: 2 },
         { threadId: THREAD_ID, revision: 2 },
       ]);
+    }),
+  );
+
+  // FORK: crew threads are crew's business, not the operator's agent activity.
+  it.effect("publishes nothing for a crew thread, and still publishes for any other", () =>
+    Effect.gen(function* () {
+      for (const crewRole of ["crewmate", "crewmate-closed", "bridge"] as const) {
+        const crew = yield* makeTestRelay({ crewRole });
+        yield* crew.relay.publishThread(THREAD_ID);
+        assert.equal(crew.publications.length, 0, crewRole);
+      }
+      const ordinary = yield* makeTestRelay({ crewRole: null });
+      yield* ordinary.relay.publishThread(THREAD_ID);
+      assert.equal(ordinary.publications.length, 1);
     }),
   );
 

@@ -32,6 +32,8 @@ import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import { CrewToolkitLayer } from "./toolkits/crew/handlers.ts";
+import { CrewToolkit } from "./toolkits/crew/tools.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -708,6 +710,19 @@ export const DeviceToolkitRegistrationLive = Layer.mergeAll(
   DeviceScreenshotRegistrationLive,
 );
 
+/**
+ * FORK: the five crew tools, always registered. `CrewService` comes from the runtime's
+ * crew layer, shared with the panel RPCs and the delivery sweep.
+ *
+ * Not gated on the `enableCrew` setting: an MCP tool listing cannot be retracted
+ * (`McpServer` has `addTool` and nothing that removes one), so a registration-time gate
+ * would only mean "the switch's position when this process started". The switch is
+ * enforced where it can be honest — `CrewService` refuses `crew_dispatch` per call.
+ */
+export const CrewToolkitRegistrationLive = McpServer.toolkit(CrewToolkit).pipe(
+  Layer.provide(CrewToolkitLayer),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -717,6 +732,7 @@ const McpTransportLive = McpServer.layerHttp({
 
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
+  CrewToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
   ThreadToolkitRegistrationLive,
   AttachmentRegistrationLive,

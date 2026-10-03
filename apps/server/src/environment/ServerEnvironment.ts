@@ -247,6 +247,8 @@ export const make = Effect.gen(function* () {
       // FORK: the subagent dispatch toggle and per-thread offload (Claude processes).
       subagentBackend: true,
       subagentBackendThreadModes: true,
+      // FORK: `enableCrew` and the crew.* RPCs.
+      crew: true,
       jiraTicketLinks: true,
       // FORK: the Claude adapter answers resume questions from the setting.
       offerThreadCompaction: true,
