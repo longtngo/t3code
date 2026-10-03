@@ -173,25 +173,35 @@ export function claudeModelContextWindow(modelSelection: ModelSelection): number
 /**
  * Models Claude Code leaves UNARMED: it classifies their window as `"auto"`
  * and then never auto-compacts. Handing the CLI the model's own window flips
- * that to `"settings"` without narrowing anything. Only models measured
- * unarmed (2.1.247) are listed, because a supplied window outranks the CLI's
- * remotely tuned defaults.
+ * that to `"settings"` without narrowing anything. Measured on 2.1.288.
  */
 const CLAUDE_UNARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
-  "claude-opus-5",
-  "claude-fable-5",
   "claude-haiku-4-5",
   "claude-opus-4-5",
+]);
+
+/**
+ * Models Claude Code compacts on its own (`autocompactSource:
+ * "model-default"`, threshold 967,000, measured on 2.1.288). A blank setting
+ * sends them nothing, because a supplied window outranks the CLI's remotely
+ * tuned default.
+ */
+const CLAUDE_CLI_ARMED_COMPACTION_MODELS: ReadonlySet<string> = new Set([
+  "claude-opus-5",
+  "claude-fable-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-sonnet-5",
 ]);
 
 /**
  * The `autoCompactWindow` handed to Claude Code, or undefined to send none.
  *
  * The user's setting (tokens or a percentage) resolves against the window the
- * CLI will actually use. When it resolves to nothing, unarmed models get their
- * own window and any >= 1M catalog window gets 1M: the CLI refuses to compact
- * a >= 1M window it holds no default for, which is exactly what enabling the
- * 1M context did to every long thread.
+ * CLI will actually use. When it resolves to nothing, models the CLI arms
+ * itself get nothing, unarmed models get their own window, and any other
+ * >= 1M catalog window gets 1M: the CLI refuses to compact a >= 1M window it
+ * holds no default for (`claude-opus-4-6` at 1M still reports `"auto"`).
  */
 export function claudeQueryAutoCompactWindow(
   setting: string | undefined,
@@ -202,15 +212,13 @@ export function claudeQueryAutoCompactWindow(
     modelSelection,
   );
   const cliWindow = claudeCliContextWindow(modelSelection) ?? catalogWindow;
-  return (
-    resolveClaudeAutoCompactWindow(setting, cliWindow) ??
-    (CLAUDE_UNARMED_COMPACTION_MODELS.has(modelSelection.model)
-      ? claudeCliContextWindow(modelSelection)
-      : undefined) ??
-    (catalogWindow !== undefined && catalogWindow >= 1_000_000
-      ? Math.min(catalogWindow, 1_000_000)
-      : undefined)
-  );
+  const configured = resolveClaudeAutoCompactWindow(setting, cliWindow);
+  if (configured !== undefined) return configured;
+  if (CLAUDE_CLI_ARMED_COMPACTION_MODELS.has(modelSelection.model)) return undefined;
+  if (CLAUDE_UNARMED_COMPACTION_MODELS.has(modelSelection.model)) return cliWindow;
+  return catalogWindow !== undefined && catalogWindow >= 1_000_000
+    ? Math.min(catalogWindow, 1_000_000)
+    : undefined;
 }
 
 function finitePositiveInteger(value: unknown): number | undefined {

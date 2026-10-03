@@ -844,8 +844,8 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
-  // FORK: a percentage resolves against the CLI's real window, and unarmed or
-  // >= 1M windows get one even when the setting is blank (invariant 12; a bare
+  // FORK: a percentage resolves against the CLI's real window, and unarmed
+  // models get one even when the setting is blank (invariant 12; a bare
   // `Number("60%")` sent NaN, which the CLI drops, leaving compaction off).
   // The output style rides along: it is part of the CLI's system prompt.
   const autoCompactWindow = claudeQueryAutoCompactWindow(
@@ -6360,6 +6360,8 @@ export function makeClaudeAdapterV2(
                 : resultFailure;
             // FORK (invariant 12): one bounded question per turn end. A slow or
             // failed answer leaves the thread's previous snapshot in place.
+            // 1 s: on CLI 2.1.288 the `summary` call took 4-40 ms at turn end
+            // (`full`, which is not sent, took 557-634 ms).
             const contextUsageResponse =
               interrupted || input.query.getContextUsage === undefined
                 ? Option.none()

@@ -18,19 +18,23 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
+  type ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   ProviderAdapterV2RuntimePolicy,
@@ -174,13 +178,31 @@ describe("Claude context windows (invariants 12, 22)", () => {
   it("resolves the auto-compact window the CLI is handed", () => {
     // A percentage resolves against the CLI's real 1M window.
     assert.equal(claudeQueryAutoCompactWindow("60%", selection("claude-opus-4-8")), 600_000);
+    // claude-sonnet-5: the catalog says 200k, the CLI runs it at 1M.
+    assert.equal(claudeQueryAutoCompactWindow("60%", selection("claude-sonnet-5")), 600_000);
     assert.equal(claudeQueryAutoCompactWindow("300000", SONNET), 300_000);
-    // Blank on a >= 1M window still arms compaction.
-    assert.equal(claudeQueryAutoCompactWindow("", selection("claude-opus-4-8")), 1_000_000);
-    // Unarmed models get their own window back.
+    // Blank on a 1M window the CLI holds no default for still arms compaction.
+    assert.equal(
+      claudeQueryAutoCompactWindow(
+        "",
+        selection("claude-opus-4-6", [{ id: "contextWindow", value: "1m" }]),
+      ),
+      1_000_000,
+    );
+    // Unarmed models (`"auto"` on 2.1.288) get their own window back.
     assert.equal(claudeQueryAutoCompactWindow("", selection("claude-haiku-4-5")), 200_000);
-    // An armed sub-1M model is left to the CLI's own tuning.
-    assert.isUndefined(claudeQueryAutoCompactWindow("", SONNET));
+    assert.equal(claudeQueryAutoCompactWindow("", selection("claude-opus-4-5")), 200_000);
+    // Models the CLI arms itself (`"model-default"` on 2.1.288) keep its default.
+    for (const model of [
+      "claude-opus-5",
+      "claude-fable-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+    ]) {
+      assert.isUndefined(claudeQueryAutoCompactWindow("", selection(model)), model);
+    }
   });
 
   it("passes the auto-compact window and output style to the SDK", () => {
@@ -201,6 +223,15 @@ describe("Claude context windows (invariants 12, 22)", () => {
     });
     assert.notProperty(unset.settings ?? {}, "outputStyle");
     assert.notProperty(unset.settings ?? {}, "autoCompactWindow");
+    // A blank setting on a model the CLI arms itself sends no window.
+    const cliDefault = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: selection("claude-opus-5"),
+      nativeThreadId: "native-fork-options-cli-default",
+      resume: false,
+      cwd: "/workspace",
+      settings: DEFAULT_CLAUDE_SETTINGS,
+    });
+    assert.notProperty(cliDefault.settings ?? {}, "autoCompactWindow");
   });
 
   it("reads compaction facts off getContextUsage, against the model's window", () => {
@@ -311,7 +342,7 @@ function makeTurnInput(input: {
 }
 
 const makeHarness = (options?: {
-  readonly getContextUsage?: () => SDKControlGetContextUsageResponse;
+  readonly getContextUsage?: Effect.Effect<SDKControlGetContextUsageResponse>;
   readonly offerThreadCompaction?: boolean;
   readonly modelSelection?: ModelSelection;
 }) =>
@@ -325,6 +356,7 @@ const makeHarness = (options?: {
     const terminals =
       yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
     let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+    const interruptRequested = yield* Deferred.make<void>();
     const getContextUsage = options?.getContextUsage;
     const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
       instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
@@ -346,11 +378,9 @@ const makeHarness = (options?: {
               messages: Stream.fromQueue(sdkMessages),
               offer: () => Effect.void,
               setModel: () => Effect.void,
-              interrupt: Effect.void,
+              interrupt: Deferred.succeed(interruptRequested, undefined),
               close: Effect.void,
-              ...(getContextUsage === undefined
-                ? {}
-                : { getContextUsage: Effect.sync(getContextUsage) }),
+              ...(getContextUsage === undefined ? {} : { getContextUsage }),
             };
           }),
         forkSession: () => Effect.die("unused forkSession"),
@@ -382,12 +412,13 @@ const makeHarness = (options?: {
       Effect.forkScoped,
     );
     let attempts = 0;
-    const startTurn = Effect.gen(function* () {
+    // `current` is the provider thread as orchestration would pass it back.
+    const startTurn = Effect.fnUntraced(function* (current = providerThread) {
       attempts += 1;
       yield* runtime.startTurn(
         makeTurnInput({
           threadId,
-          providerThread,
+          providerThread: current,
           now: yield* DateTime.now,
           attempt: `attempt-fork-${attempts}`,
           modelSelection,
@@ -398,11 +429,29 @@ const makeHarness = (options?: {
       Effect.forEach(frames, (value) => Queue.offer(sdkMessages, frame(value)), {
         discard: true,
       });
+    const latestProviderThread = () =>
+      events
+        .flatMap((event) =>
+          event.type === "provider_thread.updated" ? [event.providerThread] : [],
+        )
+        .at(-1);
+    const runningProviderTurnIds = () =>
+      events.flatMap((event) =>
+        event.type === "provider_turn.updated" && event.providerTurn.status === "running"
+          ? [event.providerTurn.id]
+          : [],
+      );
+    const interrupt = (providerTurnId: ProviderTurnId) =>
+      runtime.interruptTurn({ providerThread, providerTurnId });
     return {
       events,
       terminals,
       startTurn,
       offer,
+      interrupt,
+      interruptRequested,
+      latestProviderThread,
+      runningProviderTurnIds,
       getOpenedOptions: () => openedOptions,
     };
   });
@@ -419,7 +468,7 @@ describe("ClaudeAdapterV2 fork deltas", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         yield* harness.offer(
           result({
             is_error: true,
@@ -431,7 +480,7 @@ describe("ClaudeAdapterV2 fork deltas", () => {
         if (failed.status !== "failed") return;
         assert.equal(failed.failure.message, "API Error: 500 Internal server error");
 
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         yield* harness.offer(result({ result: "recovered" }));
         const recovered = yield* Queue.take(harness.terminals);
         assert.equal(recovered.status, "completed");
@@ -443,14 +492,14 @@ describe("ClaudeAdapterV2 fork deltas", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         yield* harness.offer(result({ is_error: true, result: { unexpected: true } }));
         const failed = yield* Queue.take(harness.terminals);
         assert.equal(failed.status, "failed");
         if (failed.status !== "failed") return;
         // Classified from the result, not a torn-down query stream.
         assert.equal(failed.failure.class, "provider_error");
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         yield* harness.offer(result({ result: "still here" }));
         assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
       }).pipe(provide),
@@ -461,7 +510,7 @@ describe("ClaudeAdapterV2 fork deltas", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         const system = (fields: Record<string, unknown>) => ({
           type: "system",
           uuid: nextUuid(),
@@ -496,7 +545,7 @@ describe("ClaudeAdapterV2 fork deltas", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness();
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         const toolUse = (id: string, name: string, input: unknown) => ({
           type: "assistant",
           message: {
@@ -553,16 +602,15 @@ describe("ClaudeAdapterV2 fork deltas", () => {
       Effect.gen(function* () {
         const harness = yield* makeHarness({
           modelSelection: selection("claude-opus-4-8"),
-          getContextUsage: () =>
-            ({
-              totalTokens: 541_000,
-              maxTokens: 967_000,
-              isAutoCompactEnabled: true,
-              autoCompactThreshold: 967_000,
-              autocompactSource: "settings",
-            }) as unknown as SDKControlGetContextUsageResponse,
+          getContextUsage: Effect.succeed({
+            totalTokens: 541_000,
+            maxTokens: 967_000,
+            isAutoCompactEnabled: true,
+            autoCompactThreshold: 967_000,
+            autocompactSource: "settings",
+          } as unknown as SDKControlGetContextUsageResponse),
         });
-        yield* harness.startTurn;
+        yield* harness.startTurn();
         yield* harness.offer(result());
         yield* Queue.take(harness.terminals);
         const usage = harness.events
@@ -586,7 +634,7 @@ describe("ClaudeAdapterV2 fork deltas", () => {
       Effect.gen(function* () {
         for (const offer of [false, true]) {
           const harness = yield* makeHarness({ offerThreadCompaction: offer });
-          yield* harness.startTurn;
+          yield* harness.startTurn();
           const onUserDialog = harness.getOpenedOptions()?.onUserDialog;
           assert.isDefined(onUserDialog);
           if (onUserDialog === undefined) return;
@@ -614,6 +662,187 @@ describe("ClaudeAdapterV2 fork deltas", () => {
           abort.abort();
           yield* Effect.promise(() => answer.catch(() => undefined));
         }
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("ends the turn and keeps the last compaction facts when getContextUsage hangs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const asked = yield* Queue.unbounded<number>();
+        let calls = 0;
+        const harness = yield* makeHarness({
+          modelSelection: selection("claude-opus-4-8"),
+          getContextUsage: Effect.suspend(() => {
+            calls += 1;
+            return calls === 1
+              ? Effect.succeed({
+                  totalTokens: 100_000,
+                  maxTokens: 1_000_000,
+                  isAutoCompactEnabled: true,
+                  autoCompactThreshold: 967_000,
+                  autocompactSource: "model-default",
+                } as unknown as SDKControlGetContextUsageResponse)
+              : Queue.offer(asked, calls).pipe(Effect.andThen(Effect.never));
+          }),
+        });
+        yield* harness.startTurn();
+        yield* harness.offer(result());
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        const first = harness.latestProviderThread();
+        assert.equal(first?.contextUsage?.usedTokens, 100_000);
+
+        yield* harness.startTurn(first);
+        yield* harness.offer(result());
+        yield* Queue.take(asked);
+        // The turn waits on the question, and no longer than its bound.
+        assert.isTrue(Option.isNone(yield* Queue.poll(harness.terminals)));
+        yield* TestClock.adjust("1 second");
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        assert.deepEqual(harness.latestProviderThread()?.contextUsage, first?.contextUsage);
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("does not ask getContextUsage after an interrupted turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let calls = 0;
+        const harness = yield* makeHarness({
+          getContextUsage: Effect.sync(() => {
+            calls += 1;
+            return { totalTokens: 1 } as unknown as SDKControlGetContextUsageResponse;
+          }),
+        });
+        // Control: a completed turn asks once.
+        yield* harness.startTurn();
+        yield* harness.offer(result());
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        assert.equal(calls, 1);
+
+        yield* harness.startTurn(harness.latestProviderThread());
+        for (let attempt = 0; attempt < 5000; attempt++) {
+          if (new Set(harness.runningProviderTurnIds()).size === 2) break;
+          yield* Effect.yieldNow;
+        }
+        const providerTurnId = [...new Set(harness.runningProviderTurnIds())][1];
+        assert.isDefined(providerTurnId);
+        if (providerTurnId === undefined) return;
+        yield* harness.interrupt(providerTurnId).pipe(Effect.forkScoped);
+        yield* Deferred.await(harness.interruptRequested);
+        yield* harness.offer(
+          result({
+            subtype: "error_during_execution",
+            is_error: true,
+            errors: ["[ede_diagnostic] aborted"],
+            terminal_reason: "aborted_streaming",
+          }),
+        );
+        assert.equal((yield* Queue.take(harness.terminals)).status, "interrupted");
+        assert.equal(calls, 1);
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("keeps diagnostics out of an error-subtype failure message", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.startTurn();
+        yield* harness.offer(
+          result({
+            subtype: "error_during_execution",
+            is_error: true,
+            errors: ["[ede_diagnostic] stop_reason=n/a result_type=user"],
+          }),
+        );
+        const failed = yield* Queue.take(harness.terminals);
+        assert.equal(failed.status, "failed");
+        if (failed.status !== "failed") return;
+        assert.notInclude(failed.failure.message, "ede_diagnostic");
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("completes a successful turn whose result is not a string, with no fallback text", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.startTurn();
+        yield* harness.offer(result({ result: ["not", "text"] }));
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        const assistantTexts = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+            ? [event.turnItem.text]
+            : [],
+        );
+        assert.deepEqual(assistantTexts, []);
+      }).pipe(provide),
+    ),
+  );
+
+  // Upstream projects TodoWrite only for the main agent; Task tools match it.
+  it.effect("ignores Task tool calls made by a subagent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.startTurn();
+        const toolUse = (id: string, name: string, input: unknown, parent: string | null) => ({
+          type: "assistant",
+          message: {
+            model: "claude-sonnet-4-6",
+            id: `msg_${id}`,
+            type: "message",
+            role: "assistant",
+            content: [{ type: "tool_use", id, name, input }],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+          parent_tool_use_id: parent,
+          uuid: nextUuid(),
+          session_id: NATIVE_SESSION,
+        });
+        const toolResult = (id: string, structured: unknown, parent: string | null) => ({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: id, content: "ok", is_error: false }],
+          },
+          parent_tool_use_id: parent,
+          uuid: nextUuid(),
+          session_id: NATIVE_SESSION,
+          tool_use_result: structured,
+        });
+        yield* harness.offer(
+          toolUse("toolu_agent", "Agent", { description: "Helper", prompt: "Help." }, null),
+          {
+            type: "system",
+            subtype: "task_started",
+            task_id: "task-helper",
+            tool_use_id: "toolu_agent",
+            description: "Helper",
+            task_type: "local_agent",
+            uuid: nextUuid(),
+            session_id: NATIVE_SESSION,
+          },
+          toolUse("toolu_sub_create", "TaskCreate", { subject: "Subagent task" }, "toolu_agent"),
+          toolResult(
+            "toolu_sub_create",
+            { task: { id: "9", subject: "Subagent task" } },
+            "toolu_agent",
+          ),
+          toolUse("toolu_main_create", "TaskCreate", { subject: "Main task" }, null),
+          toolResult("toolu_main_create", { task: { id: "1", subject: "Main task" } }, null),
+          result(),
+        );
+        yield* Queue.take(harness.terminals);
+        const lists = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "todo_list"
+            ? [event.turnItem.steps.map((step) => step.text)]
+            : [],
+        );
+        assert.deepEqual(lists, [["Main task"]]);
       }).pipe(provide),
     ),
   );

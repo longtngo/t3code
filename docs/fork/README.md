@@ -501,7 +501,8 @@ so they are live, not vestigial.
 On v2 (`orchestration-v2/Adapters/ClaudeAdapterV2.ts`, helpers in the fork-owned
 `ClaudeAdapterV2Fork.ts`) the adapter asks once per turn end, before `finalizeActiveTurn`, behind a
 one-second bound, with `detail: "summary"` (answers from the last response, so none of the
-token-count API calls upstream #8610 dropped the call over). The answer lands on the provider
+token-count API calls upstream #8610 dropped the call over; it took 4-40 ms on CLI 2.1.288). It is
+skipped after an interrupted turn, and a slow or failed answer keeps the previous snapshot. The answer lands on the provider
 thread's `contextUsage` via `claudeContextUsageSnapshot`. It is the **only** source of
 `compactsAutomatically`, `autoCompactThreshold` and `autoCompactSource`, which the Vitals gauge's
 compaction note and marker render from; deleting it compiles, passes, and blanks the note.
@@ -520,8 +521,10 @@ Three traps:
 answer it; only the live runner does.
 
 `claudeQueryAutoCompactWindow` is the other half: a percentage setting resolves against the
-window the CLI really runs at, and a blank one still hands unarmed models and >= 1M windows a
-window, because the CLI refuses to compact a >= 1M window it has no default for. Upstream's
+window the CLI really runs at. A blank one sends nothing for models the CLI arms itself
+(`model-default` on 2.1.288: opus-5, fable-5, opus-4-8, opus-4-7, sonnet-5), hands unarmed models
+(`auto`: haiku-4-5, opus-4-5) their own window, and hands any other >= 1M window 1M, because the
+CLI refuses to compact a >= 1M window it has no default for (opus-4-6 at 1M). Upstream's
 `Number(autoCompactWindow)` sent `NaN` for a percentage, which the CLI drops silently.
 
 ### 13. The provider-settings re-seed is UPSTREAM's, deliberately
@@ -749,7 +752,8 @@ merge dropped the only call site and left the label disagreeing with the `cwd` b
 ### 22. Claude adapter tests: real slugs with the bundled catalog where the model IS the subject
 
 The fork's window and auto-compaction rules (`claudeCliContextWindow`,
-`CLAUDE_UNARMED_COMPACTION_MODELS`, `claudeQueryAutoCompactWindow` in
+`CLAUDE_UNARMED_COMPACTION_MODELS`, `CLAUDE_CLI_ARMED_COMPACTION_MODELS`,
+`claudeQueryAutoCompactWindow` in
 `orchestration-v2/Adapters/ClaudeAdapterV2Fork.ts`) are keyed on **real slugs** (`claude-opus-4-8`,
 `claude-opus-4-6`, `claude-haiku-4-5`) and resolve through `BUNDLED_CLAUDE_MODEL_CATALOG`, which is
 what the v2 adapter uses in production. Their tests in `ClaudeAdapterV2Fork.test.ts` use those
