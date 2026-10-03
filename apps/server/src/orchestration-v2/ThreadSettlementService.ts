@@ -26,6 +26,7 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { describeSettlementFailure, makeSettlementFailureLogGate } from "./settlementFailureLog.ts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
@@ -260,6 +261,10 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const terminals = yield* TerminalManager.TerminalManager;
 
+  // Lives here, in `make`'s closure, deliberately: declared inside `sweep` it
+  // would be rebuilt every minute and the dedupe would be a silent no-op.
+  const failureLog = makeSettlementFailureLogGate();
+
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
@@ -467,23 +472,45 @@ export const make = Effect.gen(function* () {
     });
 
     yield* Effect.forEach(
-      groups.values(),
-      (group) =>
+      groups.entries(),
+      ([groupKey, group]) =>
         Effect.gen(function* () {
           const pullRequest = yield* pullRequestFor(group);
+          // A group that answered again may report its next failure.
+          failureLog.forget(groupKey);
           if (pullRequest === undefined) return;
           yield* Effect.forEach(group, (thread) => settleThread(thread, pullRequest), {
             discard: true,
           });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("automatic thread settlement skipped", {
-                  threadIds: group.map((thread) => thread.id),
-                  cause: Cause.pretty(cause),
-                }),
-          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+            // The sweep re-enters this path every minute for as long as the
+            // group stays a candidate, so only a changed failure is news. The
+            // full cause still goes out at debug level, outside the dedupe.
+            const failure = describeSettlementFailure(Cause.squash(cause));
+            const detailed = Effect.logDebug("automatic thread settlement skipped", {
+              threadIds: group.map((thread) => thread.id),
+              cause: Cause.pretty(cause),
+            });
+            if (!failureLog.shouldLog(groupKey, failure.failureKey)) return detailed;
+            return detailed.pipe(
+              Effect.andThen(
+                Effect.logWarning(
+                  "automatic thread settlement skipped; the same failure stays silent until it changes",
+                ).pipe(
+                  Effect.annotateLogs({
+                    threadCount: group.length,
+                    workspaceRoot: projects.get(group[0]!.projectId)?.workspaceRoot ?? "unknown",
+                    branch: group[0]!.branch ?? "unknown",
+                    errorTag: failure.errorTag,
+                    error: failure.message,
+                    ...(failure.detail === undefined ? {} : { errorDetail: failure.detail }),
+                  }),
+                ),
+              ),
+            );
+          }),
         ),
       { concurrency: 8, discard: true },
     );

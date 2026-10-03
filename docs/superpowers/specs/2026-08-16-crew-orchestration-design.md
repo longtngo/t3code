@@ -753,8 +753,8 @@ dispatches while the sweep still runs and the panel still polls.
   Two codes earlier revisions listed are gone because nothing can emit them: the disk
   refusal (§7, never built) and `…suppressed.web`, whose notifier runs in the browser
   and has no crew log (its silence is asserted in a web unit test). `…suppressed.web-push`
-  stays listed; its emitter belongs to the Web Push relay and is wired when that relay
-  and crew are integrated.
+  is emitted by the Web Push relay, which skips a thread on the exact crewmate branch
+  (the same marker the web notifier uses).
   `crew.deliver.no-turn`, `crew.deliver.abandoned` and `crew.deliver.failed` are delivery
   **outcomes**;
   every other code above names a refusal or a deferral, and the bullet header covers

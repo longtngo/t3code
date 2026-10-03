@@ -2156,7 +2156,6 @@ describe("canQueueOfflineTurn", () => {
     needsWorktree: false,
     hasPendingProgress: false,
     modesMatchThread: true,
-    alreadyQueuedForThread: false,
   };
 
   it("queues a plain-text follow-up on an existing server thread", () => {
@@ -2188,12 +2187,6 @@ describe("canQueueOfflineTurn", () => {
     expect(canQueueOfflineTurn({ ...queueable, hasPendingProgress: true })).toBe(false);
   });
 
-  it("refuses a second message while one is already queued for the thread", () => {
-    // Replayed turn-starts land back to back and some adapters fold the second
-    // into the running turn as steering, merging N messages into one answer.
-    expect(canQueueOfflineTurn({ ...queueable, alreadyQueuedForThread: true })).toBe(false);
-  });
-
   it("refuses when the composer has a mode change the replay would not apply", () => {
     // The server reads a turn's runtime/interaction mode from the THREAD; a
     // queued replay skips the settings sync, so it would run in the old mode.
@@ -2206,6 +2199,7 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     hasActiveThread: true,
     isSendBusy: false,
     isConnecting: false,
+    isRevertingCheckpoint: false,
     threadDetailLoading: false,
     settingsHydrated: true,
     sendInFlight: false,
@@ -2247,6 +2241,9 @@ describe("shouldAbortSendBeforeOfflineQueue", () => {
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, hasActiveThread: false })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isSendBusy: true })).toBe(true);
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isConnecting: true })).toBe(true);
+    expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, isRevertingCheckpoint: true })).toBe(
+      true,
+    );
     expect(shouldAbortSendBeforeOfflineQueue({ ...sendable, threadDetailLoading: true })).toBe(
       true,
     );

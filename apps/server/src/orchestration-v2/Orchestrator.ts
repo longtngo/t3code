@@ -2844,11 +2844,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         case "thread.title.regeneration.complete":
+          // A superseded request stays silent: it cannot report a failure over
+          // a newer one. A current one records its outcome, so a retry that
+          // succeeds clears the previous failure.
           return thread.titleRegeneration?.requestId === command.requestId
             ? {
                 ...thread,
                 ...(command.title === undefined ? {} : { title: command.title }),
                 titleRegeneration: null,
+                titleRegenerationFailedAt: command.failed === true ? now : null,
                 updatedAt: now,
               }
             : thread;

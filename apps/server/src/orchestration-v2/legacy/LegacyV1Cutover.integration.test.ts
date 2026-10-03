@@ -79,9 +79,9 @@ const codexModelSelection = {
 /**
  * A V1 database as it exists on disk before a V2 server first opens it: schema
  * through fork migration 58 (upstream's 049). Fork ids diverge from upstream's
- * (registry section 1), so the site-local `ThreadSummaryTimeline` row sits at the
- * fork's burned id 34, matching databases where local builds recorded extra names
- * under the shared id sequence. The cutover then applies fork ids 59-65, ending in
+ * (registry section 1), so a site-local `ThreadSummaryTimeline` row is recorded at
+ * id 34 in place of the fork's `PushSubscriptions`, matching databases where local
+ * builds recorded other names under the shared id sequence. The cutover then applies fork ids 59-65, ending in
  * OrchestrationV2 (64), on top of the untouched copy.
  */
 const seedV1Database = (fixturePath: string, workspace: string) =>
@@ -91,11 +91,12 @@ const seedV1Database = (fixturePath: string, workspace: string) =>
       yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
       yield* sql`PRAGMA journal_mode = WAL;`;
-      yield* runMigrations({ toMigrationInclusive: 58 });
+      yield* runMigrations({ toMigrationInclusive: 33 });
       yield* sql`
         INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES (34, 'ThreadSummaryTimeline')
       `;
+      yield* runMigrations({ toMigrationInclusive: 58 });
       yield* sql`
         CREATE TABLE thread_summary_timeline_entries (
           entry_id TEXT PRIMARY KEY,
@@ -872,6 +873,9 @@ describe("orchestration v2 legacy v1 cutover", () => {
               const authSessionColumns = yield* sql<{ readonly name: string }>`
               PRAGMA table_info(auth_sessions)
             `;
+              const pushSubscriptionTables = yield* sql<{ readonly name: string }>`
+              SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'push_subscriptions'
+            `;
               return {
                 migrationEventCount: migrationEventCount[0]?.count ?? 0,
                 importRows,
@@ -880,6 +884,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 longProjection: continuedAgain,
                 migration34Name: recordedMigration34[0]?.name ?? null,
                 authSessionColumnNames: authSessionColumns.map((column) => column.name),
+                hasPushSubscriptions: pushSubscriptionTables.length === 1,
               };
             }).pipe(
               Effect.provide(
@@ -897,16 +902,17 @@ describe("orchestration v2 legacy v1 cutover", () => {
             ),
           );
 
-          // The copied database recorded a site-local migration under the fork's
-          // burned id 34. The divergence is surfaced at startup while the rest of
-          // the cutover still runs; no fork migration sits at 34, so none is skipped.
+          // The copied database recorded a site-local migration under id 34. The
+          // divergence is surfaced at startup while the rest of the cutover still
+          // runs; the skipped PushSubscriptions body is re-run idempotently at 37.
           const divergenceLog = boot1Logs.find((log) =>
             String(log.message).includes("migration history diverges"),
           );
           assert.deepStrictEqual(divergenceLog?.annotations.divergent, [
-            "34:ThreadSummaryTimeline (unknown to this build)",
+            "34:ThreadSummaryTimeline (this build: PushSubscriptions)",
           ]);
           assert.equal(firstBoot.migration34Name, "ThreadSummaryTimeline");
+          assert.isTrue(firstBoot.hasPushSubscriptions);
           // Upstream's AuthSessionClientConnection is fork id 48, so it applied.
           assert.include(firstBoot.authSessionColumnNames, "client_surface");
           assert.include(firstBoot.authSessionColumnNames, "client_app_version");

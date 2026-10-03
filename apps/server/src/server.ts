@@ -27,6 +27,8 @@ import {
   otlpTracesProxyRouteLayer,
   assetRouteLayer,
   attachmentUploadRouteLayer,
+  pushSubscriptionsRouteLayer,
+  pushVapidPublicKeyRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   viewerAssetRouteLayer,
@@ -79,6 +81,8 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { PushSubscriptionRepositoryLive } from "./persistence/Layers/PushSubscription.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -382,11 +386,13 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(GitWorkflowLayerLive),
-      // Auto-pull reads the project row. The orchestration runtime also
+      // Auto-pull reads the project row and the thread shells. The orchestration runtime also
       // consumes the broadcaster (run finalization), so the policy cannot read
       // the store from the runtime's output.
       Layer.provide(
-        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(Layer.provide(ProjectStore.layer)),
+        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+          Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
+        ),
       ),
     ),
   ),
@@ -519,8 +525,18 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+// Web Push background notifications. The relay service is merged out because the
+// server config (VAPID public key) and the HTTP key route read it.
+const WebPushRelayLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const relay = yield* WebPushRelay.WebPushRelay;
+    yield* relay.start();
+  }),
+).pipe(Layer.provideMerge(WebPushRelay.layer));
+
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
+  WebPushRelayLive,
   // FORK: per-thread subagent offload. Registers the preparer Claude adapters call before
   // they spawn a process; its reconciler is forked by ServerRuntimeStartup.
   SubagentBackend.SubagentBackendLive,
@@ -560,6 +576,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
+  // Push subscriptions: shared by the register RPC, the HTTP re-register route and
+  // the relay's fan-out.
+  Layer.provideMerge(PushSubscriptionRepositoryLive),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
   // to clients; neither depends on the other.
@@ -677,6 +696,8 @@ const makeRoutesLayer = Layer.mergeAll(
     viewerRouteLayer,
     viewerAssetRouteLayer,
     attachmentUploadRouteLayer,
+    pushSubscriptionsRouteLayer,
+    pushVapidPublicKeyRouteLayer,
     deviceHubProxyRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,

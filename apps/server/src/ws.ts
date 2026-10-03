@@ -199,6 +199,8 @@ import * as WorkspaceMemberRpc from "./workspace/WorkspaceMemberRpc.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
+import { registerPushSubscription } from "./push/register.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
@@ -563,6 +565,33 @@ const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
+
+/**
+ * Which registry refresh a `server.refreshProviders` request means: a cwd's
+ * workspace snapshot, one instance, or everything. `fresh` reaches both
+ * targeted forms; the Vitals gauge relies on it to bypass a cached probe.
+ */
+export function refreshProvidersForRequest(
+  providerRegistry: Pick<
+    ProviderRegistry.ProviderRegistryShape,
+    "refresh" | "refreshInstance" | "refreshWorkspaceSnapshot"
+  >,
+  input: {
+    readonly instanceId?: ProviderInstanceId | undefined;
+    readonly cwd?: string | undefined;
+    readonly fresh?: boolean | undefined;
+  },
+) {
+  const fresh = input.fresh === true;
+  if (input.instanceId === undefined) return providerRegistry.refresh();
+  return input.cwd !== undefined
+    ? providerRegistry.refreshWorkspaceSnapshot({
+        instanceId: input.instanceId,
+        cwd: input.cwd,
+        fresh,
+      })
+    : providerRegistry.refreshInstance(input.instanceId, { fresh });
+}
 
 export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (
@@ -1309,6 +1338,7 @@ const makeWsRpcLayer = (
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
+      const webPushRelay = yield* WebPushRelay.WebPushRelay;
       const crewDirectory = yield* CrewDirectory.CrewDirectory;
       // The toggle fails safe like the rest of this feature (see SubagentBackend.ts's
       // module doc): an unreadable flag file or settings store degrades to this
@@ -1776,6 +1806,7 @@ const makeWsRpcLayer = (
                   shellRevealInFileManagerKind: fileManagerRevealKind,
                 }),
             threadResumeCompletionMarker: true,
+            webPushVapidPublicKey: webPushRelay.vapidPublicKey,
             threadSnapshotPagination: true,
             ...Option.match(scratchWorkspaceRoot, {
               onNone: () => ({}),
@@ -2344,15 +2375,7 @@ const makeWsRpcLayer = (
               if (input.instanceId === undefined) {
                 yield* usageLimitSources.refresh;
               }
-              let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-                ? providerRegistry.refreshWorkspaceSnapshot({
-                    instanceId: input.instanceId,
-                    cwd: input.cwd,
-                    fresh: input.fresh === true,
-                  })
-                : input.instanceId !== undefined
-                  ? providerRegistry.refreshInstance(input.instanceId)
-                  : providerRegistry.refresh();
+              let providers = yield* refreshProvidersForRequest(providerRegistry, input);
               if (input.refreshModels) {
                 const instances = yield* providerInstances.listInstances;
                 for (const instance of instances) {
@@ -2695,6 +2718,17 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.getResourceQueue, resourceQueue.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.pushSubscriptionsRegister]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pushSubscriptionsRegister,
+            // Shared with the HTTP route the service worker calls on
+            // pushsubscriptionchange (SSRF guard + upsert live in one place). The
+            // helper never fails; a non-"registered" outcome collapses to ok:false.
+            registerPushSubscription(input.subscription).pipe(
+              Effect.map((outcome) => ({ ok: outcome === "registered" })),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.crewList]: (_input) =>
           observeRpcEffect(
             WS_METHODS.crewList,

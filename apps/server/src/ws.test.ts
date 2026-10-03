@@ -1,5 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ORCHESTRATION_PROTOCOL_VERSION, ProjectId } from "@t3tools/contracts";
+import {
+  CommandId,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ProjectId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -8,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import {
   hasCompatibleOrchestrationProtocol,
+  refreshProvidersForRequest,
   resolveAvailableEditorsForConfig,
   shouldUseBoundedThreadSnapshot,
   toProjectMutationError,
@@ -66,3 +72,26 @@ it("sends a refused workspace member's reason to the client, and nothing interna
   );
   assert.equal(internal.message, "Failed to mutate project.");
 });
+it.effect("passes `fresh` through to every targeted provider refresh", () =>
+  Effect.gen(function* () {
+    const calls: Array<unknown> = [];
+    const registry = {
+      refresh: () => Effect.sync(() => void calls.push(["all"])).pipe(Effect.as([])),
+      refreshInstance: (instanceId: ProviderInstanceId, options?: { readonly fresh?: boolean }) =>
+        Effect.sync(() => void calls.push(["instance", instanceId, options])).pipe(Effect.as([])),
+      refreshWorkspaceSnapshot: (input: object) =>
+        Effect.sync(() => void calls.push(["workspace", input])).pipe(Effect.as([])),
+    };
+    const instanceId = ProviderInstanceId.make("claudeAgent");
+    yield* refreshProvidersForRequest(registry, { instanceId, fresh: true });
+    yield* refreshProvidersForRequest(registry, { instanceId });
+    yield* refreshProvidersForRequest(registry, { instanceId, cwd: "/repo", fresh: true });
+    yield* refreshProvidersForRequest(registry, { fresh: true });
+    assert.deepStrictEqual(calls, [
+      ["instance", instanceId, { fresh: true }],
+      ["instance", instanceId, { fresh: false }],
+      ["workspace", { instanceId, cwd: "/repo", fresh: true }],
+      ["all"],
+    ]);
+  }),
+);

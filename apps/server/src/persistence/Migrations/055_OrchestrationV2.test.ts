@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: 34 is burned, and upstream's 055/056 apply as 64/65 (registry section 1).
-        Array.from({ length: 65 }, (_, index) => index + 1).filter((id) => id !== 34),
+        // Fork ids: upstream's 055/056 apply as 64/65 (registry section 1).
+        Array.from({ length: 65 }, (_, index) => index + 1),
       );
     }),
   );

@@ -33,6 +33,7 @@ import { ThreadNotificationCoordinator } from "../components/ThreadNotificationC
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
+import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ProviderAuthCallbackCoordinator } from "../components/settings/ProviderAuthCallbackCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -53,6 +54,7 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
+import { useTitleRegenerationFailureToasts } from "../hooks/useTitleRegenerationFailureToasts";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -223,6 +225,7 @@ function RootRouteView() {
         <GlassAppearanceSync />
         <FontAppearanceSync />
         <ThreadQueueCoordinator />
+        <OutboxFlushCoordinator />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />
         <FirstRunGate
@@ -248,6 +251,7 @@ function RootRouteView() {
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
           ) : null}
           {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
+          {primaryEnvironmentAuthenticated ? <TitleRegenerationFailureToasts /> : null}
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {appShell}
@@ -490,6 +494,11 @@ function AuthenticatedTracingBootstrap() {
 
 function ThreadCompletionNotifications() {
   useThreadCompletionNotifications();
+  return null;
+}
+
+function TitleRegenerationFailureToasts() {
+  useTitleRegenerationFailureToasts();
   return null;
 }
 

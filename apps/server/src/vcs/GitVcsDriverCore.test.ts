@@ -6,6 +6,7 @@ import { assert, it, describe } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -2927,6 +2928,278 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         // still just a matter of the volume coming back.
         const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
         assert.isTrue(registered.includes(bystander));
+      }),
+    );
+
+    it.effect("refuses to reuse a path for a branch checked out in another worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* makeTmpDir("git-worktrees-");
+        const threadPath = pathService.join(root, "thread");
+        const userPath = pathService.join(root, "user");
+
+        // The thread's worktree is removed, then the user checks its branch out
+        // somewhere else.
+        yield* driver.createWorktree({
+          cwd,
+          path: threadPath,
+          refName: initialBranch,
+          newRefName: "feature/shared",
+        });
+        yield* fileSystem.remove(threadPath, { recursive: true });
+        yield* git(cwd, ["worktree", "remove", threadPath]);
+        yield* git(cwd, ["worktree", "add", userPath, "feature/shared"]);
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: threadPath,
+            refName: "feature/shared",
+            reuseRegisteredPath: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(yield* fileSystem.exists(threadPath), false);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.equal(registered.split("branch refs/heads/feature/shared").length - 1, 1);
+      }),
+    );
+
+    it.effect("leaves a missing locked worktree registered and refuses to reuse it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const locked = pathService.join(yield* makeTmpDir("git-worktrees-"), "locked");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: locked,
+          refName: initialBranch,
+          newRefName: "feature/locked",
+        });
+        yield* git(cwd, ["worktree", "lock", locked]);
+        yield* fileSystem.remove(locked, { recursive: true });
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: locked,
+            refName: "feature/locked",
+            reuseRegisteredPath: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(yield* fileSystem.exists(locked), false);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.include(registered, locked);
+        assert.include(registered, "locked");
+      }),
+    );
+
+    it.effect("recreates a missing path git no longer has registered", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const removed = pathService.join(yield* makeTmpDir("git-worktrees-"), "removed");
+
+        // The user removed the worktree cleanly, so git has no entry left.
+        yield* driver.createWorktree({
+          cwd,
+          path: removed,
+          refName: initialBranch,
+          newRefName: "feature/removed",
+        });
+        yield* git(cwd, ["worktree", "remove", removed]);
+
+        yield* driver.createWorktree({
+          cwd,
+          path: removed,
+          refName: "feature/removed",
+          reuseRegisteredPath: true,
+        });
+
+        assert.equal(yield* fileSystem.exists(removed), true);
+        assert.equal(yield* git(removed, ["branch", "--show-current"]), "feature/removed");
+      }),
+    );
+
+    it.effect("never touches an existing worktree, even one holding only ignored files", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, ".gitignore", "node_modules/\n");
+        yield* git(cwd, ["add", ".gitignore"]);
+        yield* git(cwd, ["commit", "-m", "ignore node_modules"]);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const live = pathService.join(yield* makeTmpDir("git-worktrees-"), "live");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: live,
+          refName: initialBranch,
+          newRefName: "feature/live",
+        });
+        yield* writeTextFile(live, "node_modules/pkg/index.js", "module.exports = 1;\n");
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: live,
+            refName: "feature/live",
+            reuseRegisteredPath: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(
+          yield* fileSystem.exists(pathService.join(live, "node_modules/pkg/index.js")),
+          true,
+        );
+        // Its admin entry is intact: git still treats the directory as a worktree.
+        assert.equal(yield* git(live, ["branch", "--show-current"]), "feature/live");
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.include(registered, "branch refs/heads/feature/live");
+      }),
+    );
+
+    it.effect("lets one of two concurrent recreations of a path win, without breaking it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const shared = pathService.join(yield* makeTmpDir("git-worktrees-"), "shared");
+
+        // Two threads share one worktree path and both find it missing.
+        yield* driver.createWorktree({
+          cwd,
+          path: shared,
+          refName: initialBranch,
+          newRefName: "feature/shared-a",
+        });
+        yield* git(cwd, ["branch", "feature/shared-b", initialBranch]);
+        yield* fileSystem.remove(shared, { recursive: true });
+
+        const results = yield* Effect.all(
+          ["feature/shared-a", "feature/shared-b"].map((refName) =>
+            driver
+              .createWorktree({ cwd, path: shared, refName, reuseRegisteredPath: true })
+              .pipe(Effect.exit),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        assert.equal(results.filter(Exit.isSuccess).length, 1);
+        const branch = yield* git(shared, ["branch", "--show-current"]);
+        assert.include(["feature/shared-a", "feature/shared-b"], branch);
+
+        // The other thread read "missing" before the winner's add finished and
+        // only now reaches the driver. It must not take the path over.
+        const loser = branch === "feature/shared-a" ? "feature/shared-b" : "feature/shared-a";
+        const late = yield* driver
+          .createWorktree({ cwd, path: shared, refName: loser, reuseRegisteredPath: true })
+          .pipe(Effect.flip);
+        assert.equal(late._tag, "GitCommandError");
+
+        // The winner's worktree is whole: directory and admin entry both there.
+        assert.equal(yield* git(shared, ["branch", "--show-current"]), branch);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.equal(
+          registered
+            .split("\n")
+            .filter((line) => line.startsWith("worktree ") && line.endsWith("/shared")).length,
+          1,
+        );
+        assert.notInclude(registered, "prunable");
+      }),
+    );
+
+    it.effect("holds a second recreation of a path until the first one has finished", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const shared = pathService.join(yield* makeTmpDir("git-worktrees-"), "shared");
+        // Both callers resolve the path before either goes further, so without
+        // serialization both pass their checks against the same stale entry.
+        // Then any second admin-entry delete stalls until one recreation has
+        // fully finished: the window in which the second caller would delete
+        // the winner's fresh entry.
+        const bothArrived = yield* Deferred.make<void>();
+        let arrivals = 0;
+        const firstFinished = yield* Deferred.make<void>();
+        let adminRemovals = 0;
+        const stallingFileSystem: FileSystem.FileSystem = {
+          ...fileSystem,
+          realPath: (target) =>
+            Effect.gen(function* () {
+              if (target === shared) {
+                arrivals += 1;
+                if (arrivals === 2) yield* Deferred.succeed(bothArrived, undefined);
+                if (arrivals <= 2) yield* Deferred.await(bothArrived);
+              }
+              return yield* fileSystem.realPath(target);
+            }),
+          remove: (target, options) =>
+            Effect.gen(function* () {
+              if (target.includes(`${pathService.sep}worktrees${pathService.sep}`)) {
+                adminRemovals += 1;
+                if (adminRemovals > 1) yield* Deferred.await(firstFinished);
+              }
+              return yield* fileSystem.remove(target, options);
+            }),
+        };
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(FileSystem.FileSystem, stallingFileSystem),
+          Effect.provide(ServerConfigLayer),
+        );
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* driver.createWorktree({
+          cwd,
+          path: shared,
+          refName: initialBranch,
+          newRefName: "feature/held-a",
+        });
+        yield* git(cwd, ["branch", "feature/held-b", initialBranch]);
+        yield* fileSystem.remove(shared, { recursive: true });
+
+        const results = yield* Effect.all(
+          ["feature/held-a", "feature/held-b"].map((refName) =>
+            driver.createWorktree({ cwd, path: shared, refName, reuseRegisteredPath: true }).pipe(
+              Effect.exit,
+              Effect.tap(() => Deferred.succeed(firstFinished, undefined)),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        assert.equal(results.filter(Exit.isSuccess).length, 1);
+        // The winner is a working repository that git still lists.
+        yield* git(shared, ["rev-parse", "--git-dir"]);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.equal(
+          registered
+            .split("\n")
+            .filter((line) => line.startsWith("worktree ") && line.endsWith("/shared")).length,
+          1,
+        );
+        // The second caller found the path taken and deleted nothing.
+        assert.equal(adminRemovals, 1);
       }),
     );
 

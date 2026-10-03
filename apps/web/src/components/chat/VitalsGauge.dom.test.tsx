@@ -60,10 +60,9 @@ function renderCompactionNote(overrides: Partial<ContextWindowSnapshot>) {
       accountUsage={{
         fiveHour: null,
         sevenDay: null,
-        extraUsage: null,
+        spend: null,
         fetchedAt: null,
         extraWindows: [],
-        balances: [],
       }}
       host={compactionHost}
       now={0}
@@ -100,10 +99,9 @@ describe("VitalsDetail auto-compaction note", () => {
         accountUsage={{
           fiveHour: null,
           sevenDay: null,
-          extraUsage: null,
+          spend: null,
           fetchedAt: null,
           extraWindows: [],
-          balances: [],
         }}
         host={compactionHost}
         now={0}
@@ -205,10 +203,9 @@ describe("VitalsGauge detail", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -332,10 +329,9 @@ describe("VitalsGauge detail", () => {
         accountUsage={{
           fiveHour: null,
           sevenDay: null,
-          extraUsage: null,
+          spend: null,
           fetchedAt: null,
           extraWindows: [],
-          balances: [],
         }}
         host={host}
         now={0}
@@ -350,18 +346,24 @@ describe("VitalsGauge detail", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: null,
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [
         {
+          id: "Codex 5h",
           label: "Codex 5h",
           utilization: 60,
           resetsAt: new Date(FIVE_HOUR_MS / 2).toISOString(),
           windowMs: FIVE_HOUR_MS,
         },
-        { label: "Cursor auto", utilization: 25, resetsAt: null, windowMs: null },
+        {
+          id: "cursor-auto",
+          label: "Cursor auto",
+          utilization: 25,
+          resetsAt: null,
+          windowMs: null,
+        },
       ],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -451,10 +453,9 @@ describe("VitalsDetail usage refresh", () => {
   const usageWithLimits = {
     fiveHour: { utilization: 88, resetsAt: null },
     sevenDay: { utilization: 41, resetsAt: null },
-    extraUsage: null,
+    spend: null,
     fetchedAt: null,
     extraWindows: [],
-    balances: [],
   };
 
   const REFRESH_LABEL = '[aria-label="Refresh usage from the provider"]';
@@ -541,10 +542,9 @@ describe("VitalsGauge trigger", () => {
         accountUsage={{
           fiveHour: { utilization: 88, resetsAt: null },
           sevenDay: { utilization: 41, resetsAt: null },
-          extraUsage: null,
+          spend: null,
           fetchedAt: null,
           extraWindows: [],
-          balances: [],
         }}
         host={{ sample, streaming: true, enabled: true, onToggle: () => {} }}
       />,
@@ -727,10 +727,9 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: { utilization: 30, resetsAt: null },
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -751,10 +750,9 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: { utilization: 30, resetsAt: null },
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -773,10 +771,9 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: null,
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -798,10 +795,9 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: { utilization: 70, resetsAt: at(14, 20).toISOString() },
       sevenDay: null,
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -838,17 +834,17 @@ describe("VitalsGauge window reset time", () => {
     const accountUsage: AccountUsageView = {
       fiveHour: null,
       sevenDay: null,
-      extraUsage: null,
+      spend: null,
       fetchedAt: null,
       extraWindows: [
         {
+          id: "weekly",
           label: "weekly",
           utilization: 42,
           resetsAt: at(14, 20).toISOString(),
           windowMs: null,
         },
       ],
-      balances: [],
     };
     const view = await renderDom(
       <VitalsDetail
@@ -909,5 +905,27 @@ describe("VitalsGauge context model name", () => {
     const view = await render({ modelDisplayName: null, maxTokens: null });
     expect(view.text()).not.toContain("window");
     expect(view.text()).toContain("Context");
+  });
+});
+
+describe("VitalsDetail extra usage", () => {
+  it("shows the spend row with its money figure while extra usage is enabled", async () => {
+    const view = await renderDom(
+      <VitalsDetail
+        context={emptyContext}
+        accountUsage={{
+          fiveHour: null,
+          sevenDay: { utilization: 99, resetsAt: null },
+          spend: { used: 150.5, limit: 200, currency: "CAD", usedPercent: 75.25 },
+          fetchedAt: null,
+          extraWindows: [],
+        }}
+        host={{ sample: null, streaming: false, enabled: false, onToggle: () => {} }}
+        now={Date.UTC(2026, 9, 3, 12)}
+        timestampFormat="24-hour"
+      />,
+    );
+    expect(view.text()).toContain("Extra usage");
+    expect(view.text()).toContain("CAD 150.50 of CAD 200.00");
   });
 });

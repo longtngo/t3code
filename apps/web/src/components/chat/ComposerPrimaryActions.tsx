@@ -45,7 +45,13 @@ interface ComposerPrimaryActionsProps {
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isConnecting: boolean;
+  /** FORK: the environment is disconnected. A plain message is QUEUED for reconnect. */
   isEnvironmentUnavailable: boolean;
+  /**
+   * FORK: blocks sending outright (no provider, no project). Distinct from
+   * `isEnvironmentUnavailable`, which leaves Send live so the message is queued.
+   */
+  isSendBlocked: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   canResume?: boolean;
@@ -112,6 +118,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   sendDisabledReason,
   isConnecting,
   isEnvironmentUnavailable,
+  isSendBlocked,
   isPreparingWorktree,
   hasSendableContent,
   canResume = false,
@@ -226,6 +233,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           {...pointerFocusProps}
           disabled={
             isEnvironmentUnavailable ||
+            isSendBlocked ||
             pendingAction.isResponding ||
             (pendingAction.isLastQuestion ? !pendingAction.isComplete : !pendingAction.canAdvance)
           }
@@ -248,7 +256,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           className={cn(messageActionPillClassName, "h-9 sm:h-8", compact ? "px-3" : "px-4")}
           {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+          disabled={
+            isSendBusy ||
+            isSendDisabled ||
+            isConnecting ||
+            isEnvironmentUnavailable ||
+            isSendBlocked
+          }
         >
           {isConnecting || isSendBusy ? "Sending..." : "Refine"}
         </button>
@@ -261,7 +275,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           className={cn(messageActionPillClassName, "h-9 rounded-r-none px-4 sm:h-8")}
           {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+          disabled={
+            isSendBusy ||
+            isSendDisabled ||
+            isConnecting ||
+            isEnvironmentUnavailable ||
+            isSendBlocked
+          }
         >
           {isConnecting || isSendBusy ? "Sending..." : "Implement"}
         </button>
@@ -276,7 +296,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 )}
                 aria-label="Implementation actions"
                 {...pointerFocusProps}
-                disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+                disabled={
+                  isSendBusy ||
+                  isSendDisabled ||
+                  isConnecting ||
+                  isEnvironmentUnavailable ||
+                  isSendBlocked
+                }
               />
             }
           >
@@ -284,7 +310,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           </MenuTrigger>
           <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
             <MenuItem
-              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+              disabled={
+                isSendBusy ||
+                isSendDisabled ||
+                isConnecting ||
+                isEnvironmentUnavailable ||
+                isSendBlocked
+              }
               onClick={() => void onImplementPlanInNewThread()}
             >
               Implement in a new thread
@@ -310,7 +342,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           ? "Steer message"
           : "Submit message";
   const submitStatus = isEnvironmentUnavailable
-    ? "Environment disconnected"
+    ? showResume
+      ? "Environment disconnected"
+      : "Queue message to send on reconnect"
     : (sendDisabledReason ??
       (isConnecting
         ? "Connecting"
@@ -338,11 +372,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       )}
       {...pointerFocusProps}
       onClick={showResume ? onResume : onSubmitMessage}
+      // FORK (inv 4b): checks `isSendBlocked`, not `isEnvironmentUnavailable`: a
+      // disconnected environment leaves Send live so the message is queued for
+      // reconnect instead of being swallowed by a dead button.
       disabled={
         isSendBusy ||
         isSendDisabled ||
         isConnecting ||
-        isEnvironmentUnavailable ||
+        isSendBlocked ||
+        (showResume && isEnvironmentUnavailable) ||
         (!hasSendableContent && !showResume)
       }
       aria-label={submitStatus ?? submitLabel}

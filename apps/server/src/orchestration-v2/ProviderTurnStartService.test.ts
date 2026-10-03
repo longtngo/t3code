@@ -15,12 +15,14 @@ import {
   ProjectId,
   type OrchestrationV2ThreadProjection,
   OrchestrationV2DomainEvent,
+  GitCommandError,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -39,7 +41,9 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
-it("does not commit running state when inherited background routing cannot be read", async () => {
+function makeMissingWorktreeHarness(input: {
+  readonly createWorktree: Effect.Effect<unknown, GitCommandError>;
+}) {
   const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
   const runId = RunId.make("run_provider_turn_start_projection_failure");
   const attemptId = RunAttemptId.make("attempt_provider_turn_start_projection_failure");
@@ -87,7 +91,7 @@ it("does not commit running state when inherited background routing cannot be re
   );
   const startRootRun = vi.fn(() => Effect.void);
   const pruneWorktrees = vi.fn(() => Effect.void);
-  const createWorktree = vi.fn(() => Effect.succeed({} as never));
+  const createWorktree = vi.fn(() => input.createWorktree as Effect.Effect<never, GitCommandError>);
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -134,22 +138,88 @@ it("does not commit running state when inherited background routing cannot be re
     ),
   );
 
+  const readCount = () => projectionReadCount;
+  return {
+    threadId,
+    runId,
+    layer,
+    readCount,
+    writeIfRunCurrent,
+    startRootRun,
+    pruneWorktrees,
+    createWorktree,
+  };
+}
+
+it("does not commit running state when inherited background routing cannot be read", async () => {
+  const harness = makeMissingWorktreeHarness({ createWorktree: Effect.succeed({}) });
+
   await Effect.gen(function* () {
     const error = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
-      .start({ threadId, runId })
+      .start({ threadId: harness.threadId, runId: harness.runId })
       .pipe(Effect.flip);
 
     expect(error._tag).toBe("ProviderTurnStartError");
-    expect(projectionReadCount).toBe(2);
-    expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
-    expect(createWorktree).toHaveBeenCalledWith({
+    expect(harness.readCount()).toBe(2);
+    expect(harness.writeIfRunCurrent).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(harness.layer), Effect.runPromise);
+});
+
+it("recreates a missing thread worktree in place without a repo-wide prune", async () => {
+  const harness = makeMissingWorktreeHarness({ createWorktree: Effect.succeed({}) });
+
+  await Effect.gen(function* () {
+    yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+      .start({ threadId: harness.threadId, runId: harness.runId })
+      .pipe(Effect.flip);
+
+    // A prune would drop every other absent worktree's registration too.
+    expect(harness.pruneWorktrees).not.toHaveBeenCalled();
+    expect(harness.createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-turn-start-project",
       refName: "feature/restore",
       path: "/tmp/missing-provider-turn-start-worktree",
+      reuseRegisteredPath: true,
     });
-    expect(writeIfRunCurrent).not.toHaveBeenCalled();
-    expect(startRootRun).not.toHaveBeenCalled();
-  }).pipe(Effect.provide(layer), Effect.runPromise);
+  }).pipe(Effect.provide(harness.layer), Effect.runPromise);
+});
+
+it("logs and continues the turn when the missing worktree cannot be recreated", async () => {
+  // Git refuses, e.g. the branch is now checked out in another worktree.
+  const harness = makeMissingWorktreeHarness({
+    createWorktree: Effect.fail(
+      new GitCommandError({
+        operation: "GitVcsDriver.createWorktree",
+        command: "git",
+        cwd: "/tmp/provider-turn-start-project",
+        detail: "git worktree add failed",
+        exitCode: 128,
+      }),
+    ),
+  });
+  const warnings: Array<string> = [];
+  const logger = Logger.make(({ logLevel, message }) => {
+    if (logLevel === "Warn") warnings.push(String([message].flat()[0]));
+  });
+
+  await Effect.gen(function* () {
+    const error = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+      .start({ threadId: harness.threadId, runId: harness.runId })
+      .pipe(Effect.flip);
+
+    // The turn got past the worktree step: it stopped at the next read, which
+    // this harness fails on purpose.
+    expect(harness.createWorktree).toHaveBeenCalledOnce();
+    expect(harness.readCount()).toBe(2);
+    expect(error._tag).toBe("ProviderTurnStartError");
+    expect(warnings).toContain("provider turn start failed to recreate worktree");
+  }).pipe(
+    Effect.provide(
+      Layer.merge(harness.layer, Logger.layer([logger], { mergeWithExisting: false })),
+    ),
+    Effect.runPromise,
+  );
 });
 
 function makeLocalCommandHarness(input: {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { EnvironmentId, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -14,13 +14,16 @@ import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
 import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import { useEnvironment } from "~/state/environments";
+import { serverEnvironment } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
 import {
+  accountUsageFromLimits,
   type AccountUsageView,
-  type UsageBalanceView,
   type Severity,
   type UsageWindowView,
   clampPct,
   computeWindowPace,
+  extraUsageWindow,
   formatSnapshotAge,
   formatWindowReset,
   segmentBoundariesBackground,
@@ -295,8 +298,7 @@ export function WindowRow(props: {
         </span>
         {/*
           `detail` before the reset time: a spend row's headline is its money
-          figure, and moving that row from a balance to a window would otherwise
-          drop "CAD 201.66 of CAD 200.00" from the panel entirely.
+          figure, and the derived month reset says nothing the bar does not.
         */}
         {props.detail !== undefined ? (
           <span className="whitespace-nowrap">{props.detail}</span>
@@ -316,6 +318,7 @@ function LimitsBlock(props: {
 }) {
   const { usage, now, timestampFormat, refresh } = props;
   const age = formatSnapshotAge(usage.fetchedAt, now);
+  const extraUsage = extraUsageWindow(usage.spend, now);
   return (
     <div className={BLOCK_CLASS}>
       <div className="flex items-baseline justify-between gap-2">
@@ -384,20 +387,20 @@ function LimitsBlock(props: {
             segmentCount={7}
           />
         ) : null}
-        {usage.extraUsage ? (
+        {extraUsage ? (
           <WindowRow
-            label={usage.extraUsage.label}
-            window={usage.extraUsage}
-            windowMs={usage.extraUsage.windowMs}
+            label={extraUsage.label}
+            window={extraUsage}
+            windowMs={extraUsage.windowMs}
             now={now}
             timestampFormat={timestampFormat}
-            segmentCount={usage.extraUsage.segmentCount}
-            detail={usage.extraUsage.detail}
+            segmentCount={extraUsage.segmentCount}
+            detail={extraUsage.detail}
           />
         ) : null}
         {usage.extraWindows.map((window) => (
           <WindowRow
-            key={window.label}
+            key={window.id}
             label={window.label}
             window={window}
             windowMs={window.windowMs}
@@ -406,34 +409,7 @@ function LimitsBlock(props: {
             segmentCount={window.segmentCount}
           />
         ))}
-        {usage.balances.map((balance) => (
-          <BalanceRow key={balance.label} balance={balance} />
-        ))}
       </div>
-    </div>
-  );
-}
-
-/**
- * A balance, not a window. No pace bar: these have no reset time, so there is
- * no elapsed fraction to be ahead or behind, and a pace treatment would imply
- * a deadline that does not exist. Coloured by absolute utilization when the
- * balance has a ceiling, and left neutral when it does not.
- */
-function BalanceRow(props: { balance: UsageBalanceView }) {
-  const { balance } = props;
-  const level = balance.utilization === null ? null : vitalsLevel(clampPct(balance.utilization));
-  return (
-    <div className="flex items-center gap-3 py-1">
-      <span className="min-w-0 flex-1 truncate text-xs text-foreground">{balance.label}</span>
-      <span
-        className={cn(
-          "font-mono text-2xs tabular-nums",
-          level === null ? "text-muted-foreground" : SEVERITY_TEXT[level],
-        )}
-      >
-        {balance.detail}
-      </span>
     </div>
   );
 }
@@ -693,9 +669,8 @@ export function VitalsDetail(props: {
   const hasWindows = Boolean(
     accountUsage?.fiveHour ||
     accountUsage?.sevenDay ||
-    accountUsage?.extraUsage ||
-    accountUsage?.extraWindows.length ||
-    accountUsage?.balances.length,
+    extraUsageWindow(accountUsage?.spend ?? null, now) ||
+    accountUsage?.extraWindows.length,
   );
   return (
     <div className="flex flex-col">
@@ -835,20 +810,39 @@ function useNow(intervalMs: number): number {
 }
 
 /**
- * Connects {@link VitalsGauge} to the live host-metrics stream and the persisted
- * enable/pause toggle. Context and account usage are derived upstream (from the
- * thread activity log) and passed in.
+ * On-demand usage refresh for one provider instance. `fresh` makes the server
+ * drop the instance's probe cache, so a press fetches from the provider rather
+ * than re-serving the last probe. The numbers arrive on the provider snapshot
+ * like every other update; `pending` covers only the round trip.
+ */
+function useProviderUsageRefresh(
+  environmentId: EnvironmentId,
+  instanceId: ProviderInstanceId | null,
+): { run: () => void; pending: boolean } | undefined {
+  const [pending, setPending] = useState(false);
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    label: "vitals:refresh-usage",
+  });
+  const run = useCallback(() => {
+    if (pending || instanceId === null) return;
+    setPending(true);
+    void refreshProviders({ environmentId, input: { instanceId, fresh: true } }).finally(() =>
+      setPending(false),
+    );
+  }, [environmentId, instanceId, pending, refreshProviders]);
+  return instanceId === null ? undefined : { run, pending };
+}
+
+/**
+ * Connects {@link VitalsGauge} to the live host-metrics stream, the persisted
+ * enable/pause toggle, and the usage limits of the provider instance it is
+ * given. Context is derived by the parent and passed in.
  */
 export function VitalsGaugeConnected(props: {
   environmentId: EnvironmentId;
-  /**
-   * The thread on screen. The refresh reaches threads with a live provider
-   * session on its own; this is what lets it reach an idle one, which is the
-   * state most threads sit in.
-   */
-  threadId?: ThreadId | null | undefined;
   context: ContextWindowSnapshot | null;
-  accountUsage: AccountUsageView | null;
+  /** The provider instance whose usage limits the gauge shows. */
+  usageProvider: ServerProvider | null;
   providerDisplayName?: string | null | undefined;
   modelDisplayName?: string | null | undefined;
   sessionProvider?: string | null | undefined;
@@ -859,12 +853,18 @@ export function VitalsGaugeConnected(props: {
   // The environment the metrics are streamed from, which is the machine they
   // describe - not necessarily the one the reader is holding.
   const environment = useEnvironment(props.environmentId);
+  const usageLimits = props.usageProvider?.usageLimits;
+  const accountUsage = useMemo(() => accountUsageFromLimits(usageLimits), [usageLimits]);
+  const refreshUsage = useProviderUsageRefresh(
+    props.environmentId,
+    props.usageProvider?.instanceId ?? null,
+  );
   return (
     <VitalsGauge
       context={props.context}
-      accountUsage={props.accountUsage}
+      accountUsage={accountUsage}
       host={{ sample, streaming, enabled, onToggle: setEnabled }}
-      // The on-demand usage refresh returns with the account-usage port (U5).
+      refreshUsage={refreshUsage}
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
       sessionProvider={props.sessionProvider}

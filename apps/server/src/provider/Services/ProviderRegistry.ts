@@ -46,6 +46,8 @@ export interface ProviderRegistryShape {
    */
   readonly refreshInstance: (
     instanceId: ProviderInstanceId,
+    /** `fresh` drops the instance's probe caches first, so the re-read is a real one. */
+    options?: { readonly fresh?: boolean },
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**

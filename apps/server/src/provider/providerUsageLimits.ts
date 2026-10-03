@@ -94,6 +94,7 @@ export function applyUsageLimitsUpdate(input: {
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
+    ...(previous?.spend !== undefined ? { spend: previous.spend } : {}),
   };
 }
 
@@ -121,6 +122,13 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
  * per-window epoch bookkeeping needed to reconcile the two was more code
  * than the sub-second regression it prevented. The next runtime event
  * corrects it.
+ *
+ * FORK: a probe can serve a cached read (Claude caches its capabilities
+ * probe for minutes), so a successful probe whose windows were read BEFORE
+ * the published ones keeps the published windows rather than reverting a
+ * newer runtime update to older numbers. Everything else comes from the
+ * probe: reset credits are re-read on every check, and spend is never older
+ * than the probe that last published it.
  */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
@@ -129,6 +137,15 @@ export function resolveUsageLimitsAfterProbe(input: {
   const { published, probed } = input;
   if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
     return published;
+  }
+  if (
+    probed &&
+    published &&
+    !probed.unavailable &&
+    !published.unavailable &&
+    Date.parse(probed.checkedAt) < Date.parse(published.checkedAt)
+  ) {
+    return { ...probed, checkedAt: published.checkedAt, windows: published.windows };
   }
   return probed;
 }

@@ -42,6 +42,7 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as WebPushRelay from "./push/WebPushRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { EnvironmentThemeService } from "./environmentTheme.ts";
@@ -460,6 +461,16 @@ interface StartupOptions {
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
 
+/**
+ * Shutdown cancels every run still in flight (and with `continueThreadsAfterServerUpdate`
+ * resumes it after the restart). Those cancellations are not the user's work ending, so
+ * notifications are silenced before any of it starts.
+ */
+export const shutdownWithNotificationsSilenced = <A, E, R>(input: {
+  readonly silenceNotifications: Effect.Effect<void>;
+  readonly shutdown: Effect.Effect<A, E, R>;
+}) => input.silenceNotifications.pipe(Effect.andThen(input.shutdown));
+
 export const startEffectWorkerWithRelay = Effect.fn(
   "ServerRuntimeStartup.startEffectWorkerWithRelay",
 )(function* <WorkerContext, RelayContext>(input: {
@@ -520,6 +531,7 @@ const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const webPushRelay = yield* WebPushRelay.WebPushRelay;
     const crewSweep = yield* CrewSweep;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -543,15 +555,23 @@ const make = (options?: StartupOptions) =>
             cause: "Server runtime is shutting down.",
           }),
         );
-        const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
-        if (workerFiber !== null) {
-          yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
-        }
-        yield* providerRuntimeRecovery.prepareForShutdown.pipe(
-          Effect.ensuring(providerSessions.shutdown),
-        );
-        const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
-        yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
+        yield* shutdownWithNotificationsSilenced({
+          silenceNotifications: webPushRelay.stop,
+          shutdown: Effect.gen(function* () {
+            const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
+            if (workerFiber !== null) {
+              yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
+            }
+            yield* providerRuntimeRecovery.prepareForShutdown.pipe(
+              Effect.ensuring(providerSessions.shutdown),
+            );
+            const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
+            yield* Effect.logInfo(
+              "V2 orchestration shutdown reconciliation completed",
+              reconciliation,
+            );
+          }),
+        });
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("V2 orchestration shutdown reconciliation failed", {
