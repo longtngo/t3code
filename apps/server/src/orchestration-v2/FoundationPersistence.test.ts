@@ -30,6 +30,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scheduler from "effect/Scheduler";
@@ -539,6 +540,87 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           );
         }),
       ),
+  );
+
+  it.effect("drops a bounded subscriber that stops taking live events", () => {
+    const overflowed = Deferred.makeUnsafe<void>();
+    const overflowLogger = Logger.make(({ message }) => {
+      const text = Array.isArray(message) ? message[0] : message;
+      if (text === "orchestration live event buffer is full") {
+        Deferred.doneUnsafe(overflowed, Effect.void);
+      }
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const thread = makeThread(ThreadId.make("thread:stalled-live-subscriber"), now);
+        const [created] = yield* sink.write({
+          events: [threadCreatedEvent({ id: "event:stalled-live:created", thread, now })],
+        });
+        const metadataEvent = (index: number) => ({
+          id: EventId.make(`event:stalled-live:${index}`),
+          type: "thread.metadata-updated" as const,
+          threadId: thread.id,
+          occurredAt: now,
+          payload: { ...thread, title: `Updated ${index}` },
+        });
+        const pull = yield* Stream.toPull(
+          sink.stream({ threadId: thread.id, afterSequence: created!.sequence, bounded: true }),
+        );
+        // The subscriber is live: it receives one event, then never asks for the next
+        // batch, like a socket whose client stopped acknowledging.
+        const [first] = yield* sink.write({ events: [metadataEvent(0)] });
+        assert.deepEqual(
+          (yield* pull).map((stored) => stored.sequence),
+          [first!.sequence],
+        );
+        yield* sink.write({
+          events: Array.from({ length: LIVE_STREAM_MAX_ITEMS + 1 }, (_, index) =>
+            metadataEvent(index + 1),
+          ),
+        });
+        yield* Deferred.await(overflowed);
+        const result = yield* Effect.result(pull);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.equal(result.failure._tag, "EventSinkStreamError");
+          if (result.failure._tag === "EventSinkStreamError") {
+            assert.isTrue(isLiveStreamBufferError(result.failure.cause));
+          }
+        }
+      }),
+    ).pipe(Effect.provide(Logger.layer([overflowLogger], { mergeWithExisting: true })));
+  });
+
+  it.effect("reports live events an unbounded subscriber has not taken yet", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const thread = makeThread(ThreadId.make("thread:live-backlog"), now);
+        const [created] = yield* sink.write({
+          events: [threadCreatedEvent({ id: "event:live-backlog:created", thread, now })],
+        });
+        const metadataEvent = (index: number) => ({
+          id: EventId.make(`event:live-backlog:${index}`),
+          type: "thread.metadata-updated" as const,
+          threadId: thread.id,
+          occurredAt: now,
+          payload: { ...thread, title: `Updated ${index}` },
+        });
+        const pull = yield* Stream.toPull(
+          sink.stream({ threadId: thread.id, afterSequence: created!.sequence }),
+        );
+        yield* sink.write({ events: [metadataEvent(0)] });
+        assert.lengthOf(yield* pull, 1);
+        assert.equal(yield* sink.liveBacklog, 0);
+        yield* sink.write({ events: [1, 2, 3].map(metadataEvent) });
+        assert.equal(yield* sink.liveBacklog, 3);
+        assert.lengthOf(yield* pull, 3);
+        assert.equal(yield* sink.liveBacklog, 0);
+      }),
+    ),
   );
 
   it.effect("filters worker replay and live queues without losing matching events", () =>

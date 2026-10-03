@@ -174,6 +174,12 @@ export interface EventSinkV2Shape {
     /** Bound RPC subscribers; internal workers must not drop their subscription under load. */
     readonly bounded?: boolean;
   }) => Stream.Stream<OrchestrationV2StoredEvent, EventSinkV2Error>;
+  /**
+   * Live events published but not yet taken by the slowest unbounded subscriber, summed
+   * over the live hubs. Bounded subscribers drain eagerly, so a growing value means an
+   * internal worker stopped taking. Read by the server's hub gauge.
+   */
+  readonly liveBacklog: Effect.Effect<number>;
   readonly latestSequence: (input?: {
     readonly threadId?: ThreadId;
   }) => Effect.Effect<number, EventSinkV2Error>;
@@ -817,6 +823,11 @@ const baseLayer: Layer.Layer<
               }),
           ),
         ),
+      liveBacklog: Effect.sync(() => {
+        let backlog = PubSub.sizeUnsafe(liveEvents);
+        for (const pubsub of liveEventsByType.values()) backlog += PubSub.sizeUnsafe(pubsub);
+        return backlog;
+      }),
       latestSequence: (input) =>
         eventStore.latestSequence(input).pipe(
           Effect.mapError(

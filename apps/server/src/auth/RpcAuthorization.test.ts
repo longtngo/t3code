@@ -101,7 +101,6 @@ describe("RPC authorization scopes", () => {
       );
     }
   });
-
 });
 
 it("requires operate permission for host retry while preserving read-only listing", () => {
