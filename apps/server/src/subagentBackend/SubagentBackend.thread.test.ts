@@ -1,18 +1,33 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds a real tmpdir HOME so the fixed on-disk flag-file path is exercised for real.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { ProviderInstanceId, type ServerSettings, ThreadId } from "@t3tools/contracts";
+import {
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import { ServerConfig, layerTest as serverConfigLayerTest } from "../config.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService, layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import {
+  CREDIT_BLOCK_RECONCILED,
+  MASTER_OFF_REASON,
   OFF,
   type PersistedBackend,
   readBackendFile,
@@ -238,6 +253,12 @@ describe("resolveThreadBackend", () => {
   });
 });
 
+/** No provider publishes usage, so the credit block never applies here. */
+const noProvidersLayer = Layer.mock(ProviderRegistry)({
+  getProviders: Effect.succeed([]),
+  streamChanges: Stream.empty,
+});
+
 /** Live-thread double: the threads whose Claude process opened in this server process. */
 function liveThreadsLayer(threadIds: ReadonlyArray<string>) {
   return Layer.mock(SubagentLiveThreads)({
@@ -280,6 +301,7 @@ describe("thread flag files", () => {
         liveThreadsLayer(threadIds),
         serverConfigLayerTest("/tmp", { prefix: "sbt-thread-" }),
         serverSettingsLayerTest(overrides),
+        noProvidersLayer,
       );
 
     it.effect("writes a 0600 file inside the threads dir, and reads it back", () =>
@@ -455,6 +477,7 @@ describe("thread flag files", () => {
             dyingLiveThreadsLayer,
             serverConfigLayerTest("/tmp", { prefix: "sbt-thread-" }),
             serverSettingsLayerTest(cursorSettings),
+            noProvidersLayer,
           ),
         ),
       ),
@@ -510,9 +533,168 @@ describe("prepareThreadBackend", () => {
             liveThreadsSetLayer,
             serverConfigLayerTest("/tmp", { prefix: "sbt-prepare-" }),
             serverSettingsLayerTest(cursorSettings),
+            noProvidersLayer,
           ),
         ),
       ),
+    );
+  });
+});
+
+describe("credit block on live threads", () => {
+  it.layer(NodeServices.layer)("credit block on live threads", (it) => {
+    const cursorAt = (nowMs: number, usedPercent: number) =>
+      ({
+        instanceId: "cursor",
+        driver: "cursor",
+        enabled: true,
+        installed: true,
+        usageLimits: {
+          checkedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+          windows: [
+            {
+              id: "totalPercentUsed",
+              kind: "monthly",
+              label: "Overall",
+              usedPercent,
+              resetsAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs + 3_600_000)),
+            },
+          ],
+        },
+      }) as unknown as ServerProvider;
+
+    /**
+     * Forks the real reconciler over live thread "a", with settings that publish changes
+     * and a registry read through `getProviders`. `next` is the receipt: the reconciler
+     * logs once the files reflect a changed credit block, and a reconciler that died
+     * fails it rather than hanging.
+     */
+    const startReconciler = Effect.fn(function* (
+      getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>,
+      providerChanges: Queue.Queue<ReadonlyArray<ServerProvider>>,
+    ) {
+      const initial = yield* ServerSettingsService.use((service) => service.getRawSettings);
+      const settings = yield* Ref.make(initial);
+      const settingsChanges = yield* Queue.unbounded<ServerSettings>();
+      const reconciled = yield* Queue.unbounded<unknown>();
+      const logger = Logger.make(({ message }) => {
+        const parts = Array.isArray(message) ? message : [message];
+        if (parts[0] === CREDIT_BLOCK_RECONCILED) {
+          Queue.offerUnsafe(reconciled, (parts[1] as { blocked: unknown }).blocked);
+        }
+      });
+      const counter = { reconciles: 0 };
+      const { subagentThreadsDir } = yield* ServerConfig;
+      yield* writeBackendFile(CURSOR);
+      const fiber = yield* subagentBackendReconciler.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(SubagentLiveThreads)({
+              list: Effect.sync(() => {
+                counter.reconciles += 1;
+                return [ThreadId.make("a")];
+              }),
+            }),
+            Layer.mock(ProviderRegistry)({
+              getProviders,
+              streamChanges: Stream.fromQueue(providerChanges),
+            }),
+            Layer.mock(ServerSettingsService)({
+              getSettings: Ref.get(settings),
+              getRawSettings: Ref.get(settings),
+              streamChanges: Stream.fromQueue(settingsChanges),
+              subscribeChanges: Effect.succeed(Stream.fromQueue(settingsChanges)),
+            }),
+            Logger.layer([logger], { mergeWithExisting: true }),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      return {
+        counter,
+        next: Effect.raceFirst(
+          Queue.take(reconciled),
+          Fiber.join(fiber).pipe(Effect.andThen(Effect.die("the reconciler ended"))),
+        ),
+        fileOfA: readThreadBackendFile(subagentThreadsDir, ThreadId.make("a")),
+        changeSettings: (patch: Partial<ServerSettings>) =>
+          Ref.updateAndGet(settings, (current) => ({ ...current, ...patch })).pipe(
+            Effect.flatMap((next) => Queue.offer(settingsChanges, next)),
+          ),
+      };
+    });
+
+    const creditLayers = Layer.mergeAll(
+      serverConfigLayerTest("/tmp", { prefix: "sbt-credit-" }),
+      serverSettingsLayerTest({ ...cursorSettings, allowSpendingCredits: false }),
+    );
+
+    // A Cursor reading that crosses 100% must rewrite live threads' files with no settings
+    // change, as the fork's credit guard did; every other provider change must not.
+    it.effect("a Cursor usage flip rewrites live threads' files, and nothing else does", () =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([cursorAt(nowMs, 50)]);
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const publish = (usedPercent: number) =>
+          Ref.set(providers, [cursorAt(nowMs, usedPercent)]).pipe(
+            Effect.andThen(Queue.offer(changes, [cursorAt(nowMs, usedPercent)])),
+          );
+        const run = yield* startReconciler(Ref.get(providers), changes);
+
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+
+        // Below the cap, then at it: only the second crosses, so only it reconciles.
+        yield* publish(70);
+        yield* publish(100);
+        expect(yield* run.next).toBe(true);
+        const blocked = yield* run.fileOfA;
+        expect(blocked.backend).toBe("default");
+        expect(blocked.degraded).toContain("Cursor has used 100%");
+        expect(run.counter.reconciles).toBe(2);
+
+        // A new cycle's reading releases it the same way.
+        yield* publish(0);
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+        expect(run.counter.reconciles).toBe(3);
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
+    );
+
+    it.effect("turning spending on releases the block through the real seam", () =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const run = yield* startReconciler(Effect.succeed([cursorAt(nowMs, 100)]), changes);
+
+        expect(yield* run.next).toBe(true);
+        expect((yield* run.fileOfA).backend).toBe("default");
+
+        yield* run.changeSettings({ allowSpendingCredits: true });
+        expect(yield* run.next).toBe(false);
+        expect((yield* run.fileOfA).backend).toBe("cursor");
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
+    );
+
+    it.effect("a registry read that dies does not end the reconciler", () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+        const run = yield* startReconciler(
+          Effect.suspend(() =>
+            reads++ === 0 ? Effect.die(new Error("registry gone")) : Effect.succeed([]),
+          ),
+          changes,
+        );
+
+        // The startup read died; a later settings change must still be applied.
+        yield* run.changeSettings({ subagentBackendEnabled: false });
+        expect(yield* run.next).toBe(false);
+        const a = yield* run.fileOfA;
+        expect(a.backend).toBe("default");
+        expect(a.degraded).toBe(MASTER_OFF_REASON);
+      }).pipe(Effect.scoped, Effect.provide(creditLayers)),
     );
   });
 });

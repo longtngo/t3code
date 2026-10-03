@@ -19,6 +19,7 @@
  *
  * @module SubagentBackend
  */
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -46,8 +47,11 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
+import { cursorOffloadBlockedReason } from "../provider/creditSpendGuard.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
+import { cursorTotalUsageLimits } from "./cursorUsageRead.ts";
 import {
   layer as SubagentLiveThreadsLayer,
   registerActiveSubagentThreadBackend,
@@ -348,17 +352,23 @@ const resolveCursorTarget = Effect.fn("subagentBackend.resolveCursorTarget")(fun
 export const MASTER_OFF_REASON = "Subagent offload is switched off in Settings.";
 
 /**
- * Why Cursor offload is withheld for spending, or `null` when it is not.
+ * Why Cursor offload is withheld for spending, or `null` when it is not: "Allow to spend
+ * credits" is off and Cursor's overall window reads 100% with its reset still ahead.
  *
- * SEAM for the credit spend guard (port unit U8). On `personal` this read Cursor's usage
- * through `readCursorUsage()` and returned `cursorOffloadBlockedReason({ allowSpendingCredits,
- * cursorUsedPercent })` from `provider/creditSpendGuard.ts`. U8 owns that guard and wires it
- * back here; every per-thread writer already threads this value through
- * `resolveThreadBackend`, so the wiring is this one function body. Until then nothing is
- * withheld, which is the behaviour of `allowSpendingCredits: true`.
+ * Read live from the provider registry, as on the fork. That adds no layer edge between
+ * the registry and this module: Claude adapters reach `prepareThreadBackend` through the
+ * module-level registration in `SubagentLiveThreads`, not through the layer graph.
  */
-const readCreditsBlockedReason = (_settings: ServerSettings): Effect.Effect<string | null> =>
-  Effect.succeed(null);
+const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(function* (
+  settings: ServerSettings,
+) {
+  const registry = yield* ProviderRegistry;
+  return cursorOffloadBlockedReason({
+    allowSpendingCredits: settings.allowSpendingCredits,
+    cursorLimits: cursorTotalUsageLimits(yield* registry.getProviders),
+    nowMs: yield* Clock.currentTimeMillis,
+  });
+});
 
 /**
  * The one truth table every per-thread writer uses. Master off beats everything;
@@ -752,6 +762,9 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
   return next;
 });
 
+/** Logged once the files are rewritten for a changed credit block, startup included. */
+export const CREDIT_BLOCK_RECONCILED = "subagentBackend.credit-block-reconciled";
+
 /**
  * Subscriber body meant to be forked once at server startup: reconciles the flag
  * file once against whatever settings are current, then keeps reconciling for the
@@ -769,20 +782,60 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
  * unrelated settings write happened to occur. `subscribeChanges` acquires the
  * subscription synchronously in this fiber before the explicit startup reconcile
  * below reads a snapshot, so nothing in between can be missed either.
+ *
+ * Provider changes are watched too, for the credit block (see `onProvidersChanged`). The
+ * registry only offers `streamChanges`, so a flip landing between the startup reconcile and
+ * that stream's first pull waits for the next provider change; probes refresh periodically.
  */
 export const subagentBackendReconciler = Effect.gen(function* () {
   const serverSettings = yield* ServerSettingsService;
+  const registry = yield* ProviderRegistry;
   const changes = yield* serverSettings.subscribeChanges;
+
+  // Whether Cursor offload was withheld for spending at the last reconcile. `undefined`
+  // when that could not be read, so the next provider change reconciles.
+  let creditsBlocked: boolean | undefined;
+  const readCreditsBlocked = serverSettings.getRawSettings.pipe(
+    Effect.flatMap(readCreditsBlockedReason),
+    Effect.map((reason) => reason !== null),
+    // Defects too: this runs outside the reconcile's own catch, so anything escaping here
+    // would end the reconciler for the life of the process.
+    Effect.catchCause((cause) =>
+      Effect.logWarning("subagentBackend.creditsBlocked read failed", { cause }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
 
   // The stream payload is ignored on purpose: `reconcileAllBackends` re-reads settings
   // inside the write permit, so the global file and every thread file come from one
   // snapshot no concurrent settings write can split.
-  const reconcileLogged = reconcileAllBackends().pipe(
-    Effect.catchCause((cause) => Effect.logWarning("subagentBackend.reconcile failed", { cause })),
-  );
+  const reconcileLogged = Effect.gen(function* () {
+    const previous = creditsBlocked;
+    creditsBlocked = yield* readCreditsBlocked;
+    yield* reconcileAllBackends().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("subagentBackend.reconcile failed", { cause }),
+      ),
+    );
+    if (creditsBlocked !== previous) {
+      yield* Effect.logInfo(CREDIT_BLOCK_RECONCILED, { blocked: creditsBlocked ?? "unknown" });
+    }
+  });
+
+  // A provider change reconciles only when it flips the credit block, as the fork's
+  // credit guard did: Cursor reaching 100% (or resetting) must rewrite live threads'
+  // files without a settings change, and every other probe must not.
+  const onProvidersChanged = Effect.gen(function* () {
+    const next = yield* readCreditsBlocked;
+    if (next === undefined || next !== creditsBlocked) yield* reconcileLogged;
+  });
 
   yield* reconcileLogged;
-  yield* changes.pipe(Stream.runForEach(() => reconcileLogged));
+  yield* Stream.merge(
+    changes.pipe(Stream.map(() => reconcileLogged)),
+    registry.streamChanges.pipe(Stream.map(() => onProvidersChanged)),
+  ).pipe(Stream.runForEach((run) => run));
 });
 
 /**

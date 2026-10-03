@@ -20,11 +20,14 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   type ProviderTurnId,
+  type ServerProvider,
+  type ServerProviderUsageLimits,
   RunAttemptId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -39,6 +42,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../config.ts";
+import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import { SubagentBackendLive } from "../../subagentBackend/SubagentBackend.ts";
 import {
@@ -878,10 +882,33 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
   // no subagent ever went to Cursor, because nothing told the AGENT. So this drives the
   // real chain — settings -> SubagentBackendLive's preparer -> the adapter's process spawn —
   // and asserts on the options the Claude SDK is asked to run with.
-  const arm = (input: { readonly enabled: boolean; readonly mode: "on" | "off" }) =>
+  const arm = (input: {
+    readonly enabled: boolean;
+    readonly mode: "on" | "off";
+    readonly allowSpendingCredits?: boolean;
+    /** The Cursor instance's published usage windows; none when omitted. */
+    readonly cursorWindows?: (nowMs: number) => ServerProviderUsageLimits["windows"];
+  }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
+        // A real date, so a reader that ignores the clock cannot pass by reading epoch 0.
+        yield* TestClock.setTime(Date.parse("2026-10-03T00:00:00.000Z"));
+        const nowMs = yield* Clock.currentTimeMillis;
+        const cursorProvider = {
+          instanceId: ProviderInstanceId.make("cursor"),
+          driver: ProviderDriverKind.make("cursor"),
+          enabled: true,
+          installed: true,
+          ...(input.cursorWindows === undefined
+            ? {}
+            : {
+                usageLimits: {
+                  checkedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+                  windows: input.cursorWindows(nowMs),
+                },
+              }),
+        } as unknown as ServerProvider;
         // `readBackendFile` reads `$HOME/.local/state/...`; never the real one.
         const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-sbt-home-" });
         const previousHome = process.env.HOME;
@@ -900,7 +927,12 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
             Layer.provideMerge(
               Layer.mergeAll(
                 ServerConfig.layerTest("/tmp", { prefix: "t3-sbt-config-" }),
+                Layer.mock(ProviderRegistry)({
+                  getProviders: Effect.succeed([cursorProvider]),
+                  streamChanges: Stream.empty,
+                }),
                 serverSettingsLayerTest({
+                  allowSpendingCredits: input.allowSpendingCredits ?? true,
                   subagentBackendEnabled: input.enabled,
                   subagentBackendThreadModes: { [threadId]: input.mode },
                   providerInstances: {
@@ -950,6 +982,68 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
       assert.equal(masterOff.onDisk?.backend, "default");
       assert.include(masterOff.onDisk?.degraded, "switched off");
       assert.notInclude(masterOff.append, "subagent_dispatch");
+    }),
+  );
+
+  // "Allow to spend credits" off and Cursor's overall window at 100% withholds offload, read
+  // live from the provider registry by the production preparer.
+  const overall = (usedPercent: number, resetsAt: number) => ({
+    id: "totalPercentUsed",
+    kind: "monthly" as const,
+    label: "Overall",
+    usedPercent,
+    resetsAt: DateTime.formatIso(DateTime.makeUnsafe(resetsAt)),
+  });
+  const HOUR_MS = 60 * 60 * 1000;
+
+  it.effect("Cursor at 100% with spending off withholds offload; spending on allows it", () =>
+    Effect.gen(function* () {
+      const full = (nowMs: number) => [overall(100, nowMs + HOUR_MS)];
+      const blocked = yield* arm({
+        enabled: true,
+        mode: "on",
+        allowSpendingCredits: false,
+        cursorWindows: full,
+      });
+      assert.equal(blocked.onDisk?.backend, "default");
+      assert.include(blocked.onDisk?.degraded, "Cursor has used 100%");
+      assert.notInclude(blocked.append, "subagent_dispatch");
+      const allowed = yield* arm({
+        enabled: true,
+        mode: "on",
+        allowSpendingCredits: true,
+        cursorWindows: full,
+      });
+      assert.equal(allowed.onDisk?.backend, "cursor");
+      assert.include(allowed.append, "<subagent_dispatch>");
+    }),
+  );
+
+  it.effect("a full Cursor window whose reset has passed no longer withholds offload", () =>
+    Effect.gen(function* () {
+      const stale = yield* arm({
+        enabled: true,
+        mode: "on",
+        allowSpendingCredits: false,
+        cursorWindows: (nowMs) => [overall(100, nowMs - HOUR_MS)],
+      });
+      assert.equal(stale.onDisk?.backend, "cursor");
+      assert.include(stale.append, "<subagent_dispatch>");
+    }),
+  );
+
+  it.effect("only the overall window counts: one full pool does not withhold offload", () =>
+    Effect.gen(function* () {
+      const pool = yield* arm({
+        enabled: true,
+        mode: "on",
+        allowSpendingCredits: false,
+        cursorWindows: (nowMs) => [
+          overall(60, nowMs + HOUR_MS),
+          { ...overall(100, nowMs + HOUR_MS), id: "apiPercentUsed", label: "Other Models" },
+        ],
+      });
+      assert.equal(pool.onDisk?.backend, "cursor");
     }),
   );
 

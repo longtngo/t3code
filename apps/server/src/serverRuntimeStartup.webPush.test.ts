@@ -45,6 +45,7 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
 import { CrewSweep } from "./crew/CrewSweep.ts";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -261,6 +262,7 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       // under test here.
       Layer.succeed(CrewSweep, stub({ start: () => Effect.void })),
       Layer.succeed(SubagentLiveThreads, stub()),
+      Layer.succeed(ProviderRegistry, stub()),
       Layer.succeed(FileSystem.FileSystem, stub()),
     );
     yield* Layer.buildWithScope(
