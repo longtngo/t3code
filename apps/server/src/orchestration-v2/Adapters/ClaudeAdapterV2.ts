@@ -2715,6 +2715,9 @@ interface ClaudeLiveQueryContext {
   readonly query: ClaudeAgentSdkQuerySession;
   readonly queryPolicyKey: string;
   readonly selectionKey: string;
+  // FORK: the thread's subagent backend this process was spawned with. Its dispatch
+  // instruction is fixed at spawn, so a toggle flip needs a new process.
+  readonly subagentBackendKey: string;
   readonly closed: Deferred.Deferred<void, never>;
   // Whether this CLI process echoes a prompt's uuid on the first frame of
   // the turn answering it ("early") or only on its result. Learned from the
@@ -7010,6 +7013,14 @@ export function makeClaudeAdapterV2(
           const queryPolicyKey = claudeLiveQueryKey(queryPolicy, mcpOverrides, memberDirectories);
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
+          // FORK: resolved on every turn, before the reuse check, so flipping the Subagents
+          // toggle reaches the next turn rather than the next CLI restart. Writing the
+          // thread's flag file here is also what lets a live process's dispatch script see
+          // the new backend.
+          const subagentBackend = yield* (
+            adapterOptions.prepareSubagentBackend ?? prepareActiveSubagentThreadBackend
+          )(turnInput.threadId);
+          const subagentBackendKey = subagentBackend?.backend ?? "none";
           const existing = yield* Ref.get(queryContext);
           // A continuation prompts nothing: it drains output the live process
           // already produced, so it keeps that process whatever its selection.
@@ -7018,7 +7029,20 @@ export function makeClaudeAdapterV2(
             existing.nativeThreadId === nativeThreadId &&
             (isClaudeProviderContinuationTurn(turnInput) ||
               (existing.queryPolicyKey === queryPolicyKey &&
-                existing.selectionKey === compiledSelection.queryIdentity))
+                existing.selectionKey === compiledSelection.queryIdentity &&
+                existing.subagentBackendKey === subagentBackendKey))
+          ) {
+            return existing;
+          }
+          // FORK: a backend change alone never kills background work. The process is kept
+          // and the change applies at the next reopen with nothing running.
+          if (
+            existing !== null &&
+            existing.nativeThreadId === nativeThreadId &&
+            !existing.stopping &&
+            existing.queryPolicyKey === queryPolicyKey &&
+            existing.selectionKey === compiledSelection.queryIdentity &&
+            (yield* liveProcessRunsBackgroundWork(existing))
           ) {
             return existing;
           }
@@ -7062,11 +7086,6 @@ export function makeClaudeAdapterV2(
           const hasPersistedProviderTurn = turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
-          // FORK: written and read here, at the one point a process is spawned, so the
-          // file `SUBAGENT_BACKEND_STATE` names exists before the first subagent can run.
-          const subagentBackend = yield* (
-            adapterOptions.prepareSubagentBackend ?? prepareActiveSubagentThreadBackend
-          )(turnInput.threadId);
           const querySession = yield* queryRunner
             .open({
               threadId: turnInput.threadId,
@@ -7138,6 +7157,7 @@ export function makeClaudeAdapterV2(
             query: querySession,
             queryPolicyKey,
             selectionKey: compiledSelection.queryIdentity,
+            subagentBackendKey,
             closed,
             promptEchoMode: "unknown",
             stopping: false,

@@ -6,8 +6,12 @@
  * `listSessions()`. V2 sessions live in `ProviderSessionManagerV2`, and the only processes
  * that read a thread flag file are Claude processes spawned with `SUBAGENT_BACKEND_STATE`,
  * so the set that matters is exactly the threads `prepareThreadBackend` ran for. It lives
- * for the process; a thread whose process later closed stays listed, and rewriting its
- * file is harmless.
+ * for the process and never shrinks: a thread whose process later closed stays listed,
+ * and rewriting its file is harmless. That is deliberately unbounded because it is
+ * small: the set is read only by the reconciler, which runs on a settings change, and it
+ * can hold at most every thread that ran a Claude turn in this process — 673 threads in
+ * the developer's whole install history (2026-10-03), so at worst a few hundred
+ * sub-kilobyte file writes per settings save.
  *
  * Adapters are built below the runtime services in the layer graph, so they cannot require
  * this service. The bridge follows `McpSessionRegistry`'s module-level active-instance

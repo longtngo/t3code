@@ -352,6 +352,7 @@ const makeHarness = (options?: {
   readonly getContextUsage?: Effect.Effect<SDKControlGetContextUsageResponse>;
   readonly offerThreadCompaction?: boolean;
   readonly modelSelection?: ModelSelection;
+  readonly prepareSubagentBackend?: ClaudeAdapterV2.ClaudeAdapterV2Options["prepareSubagentBackend"];
 }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -363,6 +364,7 @@ const makeHarness = (options?: {
     const terminals =
       yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
     let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+    const allOpenedOptions: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions> = [];
     const interruptRequested = yield* Deferred.make<void>();
     const getContextUsage = options?.getContextUsage;
     const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
@@ -376,11 +378,15 @@ const makeHarness = (options?: {
       ...(options?.offerThreadCompaction === undefined
         ? {}
         : { offerThreadCompaction: Effect.succeed(options.offerThreadCompaction) }),
+      ...(options?.prepareSubagentBackend === undefined
+        ? {}
+        : { prepareSubagentBackend: options.prepareSubagentBackend }),
       queryRunner: {
         allocateSessionId: Effect.succeed(NATIVE_SESSION),
         open: (input) =>
           Effect.sync(() => {
             openedOptions = input.options;
+            allOpenedOptions.push(input.options);
             return {
               messages: Stream.fromQueue(sdkMessages),
               offer: () => Effect.void,
@@ -460,6 +466,7 @@ const makeHarness = (options?: {
       latestProviderThread,
       runningProviderTurnIds,
       getOpenedOptions: () => openedOptions,
+      allOpenedOptions,
     };
   });
 
@@ -959,6 +966,87 @@ describe("ClaudeAdapterV2 subagent offload reaches the spawned process", () => {
         );
       }),
     ).pipe(provide),
+  );
+});
+
+describe("ClaudeAdapterV2 subagent toggle flipped mid-session", () => {
+  const appendOf = (options: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined) =>
+    (options?.systemPrompt as { readonly append?: string } | undefined)?.append ?? "";
+  // The thread's backend as the live preparer would report it, turn by turn.
+  const flips = (backends: ReadonlyArray<string>) => {
+    let turn = 0;
+    return () =>
+      Effect.sync(() => ({
+        statePath: "/tmp/t3-sbt-flip/thread.json",
+        backend: backends[Math.min(turn++, backends.length - 1)]!,
+      }));
+  };
+
+  it.effect("off, on, off: each flip reopens the process on the next turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          prepareSubagentBackend: flips(["default", "cursor", "default"]),
+        });
+        for (let turn = 0; turn < 3; turn += 1) {
+          yield* harness.startTurn();
+          yield* harness.offer(result({ result: `turn ${turn}` }));
+          assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        }
+        assert.lengthOf(harness.allOpenedOptions, 3);
+        assert.deepStrictEqual(
+          harness.allOpenedOptions.map((options) =>
+            appendOf(options).includes("subagent_dispatch"),
+          ),
+          [false, true, false],
+        );
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("an unchanged backend keeps the live process", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ prepareSubagentBackend: flips(["cursor"]) });
+        for (let turn = 0; turn < 2; turn += 1) {
+          yield* harness.startTurn();
+          yield* harness.offer(result({ result: `turn ${turn}` }));
+          assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        }
+        assert.lengthOf(harness.allOpenedOptions, 1);
+      }).pipe(provide),
+    ),
+  );
+
+  it.effect("a flip while a background subagent runs keeps the process, without an error", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          prepareSubagentBackend: flips(["default", "cursor"]),
+        });
+        yield* harness.startTurn();
+        yield* harness.offer(
+          {
+            type: "system",
+            subtype: "task_started",
+            task_id: "task-background",
+            tool_use_id: "toolu_background",
+            description: "Background research",
+            subagent_type: "general-purpose",
+            task_type: "local_agent",
+            prompt: "Research, then report.",
+            uuid: nextUuid(),
+            session_id: NATIVE_SESSION,
+          },
+          result({ result: "Spawned the subagent." }),
+        );
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        yield* harness.startTurn();
+        yield* harness.offer(result({ result: "still here" }));
+        assert.equal((yield* Queue.take(harness.terminals)).status, "completed");
+        assert.lengthOf(harness.allOpenedOptions, 1);
+      }).pipe(provide),
+    ),
   );
 });
 
