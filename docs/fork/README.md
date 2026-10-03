@@ -25,7 +25,14 @@ a resolution that was right against one upstream shape can be wrong against the 
 
 ## Surface
 
-As of 2026-09-25 (41st reconcile, 57 commits), against `origin/main`. Upstream turned on four
+As of 2026-10-02 (43rd reconcile, 55 commits), against upstream `e0db2a5e58`, the commit just
+before #2829 "introduce new orchestrator" (`de34391427`). That commit replaces the server core and
+deletes 88 files the fork had changed, so it is being ported as its own project rather than merged
+here. Upstream's beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block
+renders above it, and its resting-section rule keeps `sidebarRestingSection` with Working as the
+inbox's fold. Upstream's Expo 58 upgrade dropped two native race fixes; see invariant 2.
+
+The 41st (2026-09-25, 57 commits), against `origin/main`. Upstream turned on four
 more web lint errors (invariant 59), added migration 054 (applied id 63, invariant 1), and shipped
 Claude banked resets on its own config-dir rule (invariant 40). Upstream #13572's "View agents"
 button on the live-work banner is not taken: the fork's banner title parts already open the
@@ -118,29 +125,28 @@ in a comment above its import in `Migrations.ts`; keep that up when adding one.
 
 A merge that "tidies" these into filename order will re-run or skip migrations on a live DB.
 
-### 2. No patch in `patches/` is fork-owned any more — CLOSED at the 32nd reconcile
+### 2. Two patches in `patches/` are fork-owned, for Expo 58 native races
 
-Every file in `patches/` is now upstream's. The fork's one entry,
-`patches/@effect__platform-node@4.0.0-beta.103.patch`, added a no-op `socket.on("error")`
-handler in `makeUpgradeHandler`: without it a peer RST between Node emitting `upgrade` and
-`ws` attaching its listeners becomes an unhandled `error` event that **kills the server
-process**. It was a backport of Effect-TS/effect#6927, which merged 95 minutes after beta.103
-shipped and landed in beta.104.
+Upstream's Expo 58 upgrade (#12045) deleted its own `expo-modules-core@57.0.14` and
+`expo-notifications@57.0.15` patches (#12482, #12483) but kept their macOS-only regression tests,
+`apps/mobile/scripts/permissions-service.test.ts` and `notification-center-manager.test.ts`. Upstream
+CI does not run them on macOS, so they went red only here. Measured at the 43rd reconcile:
 
-The 32nd reconcile moved to `effect@4.0.0-rc.112`, so the fix is upstream's own code and the
-patch is **deleted**, not re-pinned. That was confirmed against the published artifact rather
-than by version arithmetic: the rc.112 `@effect/platform-node` tarball's
-`src/NodeHttpServer.ts` contains `socket.on("error", () => {})` in `makeUpgradeHandler`.
+- `expo-modules-core@58.0.11` still has the unsynchronized permissions registry (ThreadSanitizer
+  race). The old patch applies unchanged as `patches/expo-modules-core@58.0.11.patch`.
+- `expo-notifications@58.0.11` added its own `Mutex` registry but still clears every pending
+  response after a replay and records a response as pending only after no delegate handled it.
+  Two of the four regression scenarios (`handoff`, `pending`) fail on it.
+  `patches/expo-notifications@58.0.11.patch` restores both. The test's fixture now stubs the
+  delegate's optional `@objc` methods, and the harness imports `Synchronization` for the `Mutex`.
 
-**The guard that replaces it is `pnpm run check:deps`** (`scripts/check-dependency-invariants.ts`),
-which probes the _installed_ module for the handler and passes on upstream's own code. It is
-NOT part of `pnpm verify` - run it by hand on any effect bump. It also owns invariant 18's
-`idle-aggregate-probe.ts` re-measurement, so one command covers both. Verified 2026-09-08:
-"All 2 dependency invariants hold" on rc.112.
+Both `patchedDependencies` entries carry a `FORK-ONLY` comment. Filenames are version-pinned, so an
+Expo bump rewrites that block and can drop an entry with nothing failing except these two tests.
+When upstream ships its own fix, delete the patch. Re-run both tests on the new version first.
 
-The original trap still applies to any future fork-owned patch: filenames are version-pinned,
-so an effect bump rewrites the whole `patchedDependencies` block and can drop an entry with
-nothing failing. Give any new one a `FORK-ONLY` comment so the loss shows up in the conflict.
+The effect `socket.on("error")` patch this entry used to describe was retired at the 32nd
+reconcile. Its guard is `pnpm run check:deps` (`scripts/check-dependency-invariants.ts`). It is not
+part of `pnpm verify`, so run it by hand on any effect bump.
 
 ### 3. Sidebar: which file is the default flipped
 

@@ -26,7 +26,10 @@ describe.skipIf(NodeOS.platform() !== "darwin")(
       const manager = NodePath.join(directory, "NotificationCenterManager.swift");
       NodeFS.writeFileSync(
         manager,
-        source.replace(/^import (ExpoModulesCore|UserNotifications)\n/gm, ""),
+        // Built standalone, the registry's Mutex needs Synchronization imported directly.
+        source
+          .replace(/^import ExpoModulesCore\n/m, "import Synchronization\n")
+          .replace(/^import UserNotifications\n/m, ""),
       );
       NodeChildProcess.execFileSync(
         "swiftc",
