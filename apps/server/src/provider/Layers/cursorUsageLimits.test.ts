@@ -48,6 +48,28 @@ describe("Cursor usage limits", () => {
     );
   });
 
+  it("carries the billing cycle's length when the dashboard reports its start", () => {
+    const limits = cursorUsageResponseToLimits(
+      {
+        billingCycleStart: "1780445696000",
+        billingCycleEnd: "1783037696000",
+        planUsage: { totalPercentUsed: 40 },
+      },
+      checkedAt,
+    );
+    // 30 days, the account's real cycle.
+    expect(limits.windows[0]?.windowDurationMins).toBe(43_200);
+    const backwards = cursorUsageResponseToLimits(
+      {
+        billingCycleStart: "1783037696000",
+        billingCycleEnd: "1780445696000",
+        planUsage: { totalPercentUsed: 40 },
+      },
+      checkedAt,
+    );
+    expect(backwards.windows[0]?.windowDurationMins).toBeUndefined();
+  });
+
   it("does not invent unused allowance for absent buckets", () => {
     expect(cursorUsageResponseToLimits({ planUsage: {} }, checkedAt).unavailable?.reason).toBe(
       "unsupported",
