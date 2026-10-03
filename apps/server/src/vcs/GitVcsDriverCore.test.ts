@@ -2930,6 +2930,80 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("refuses to reuse a path for a branch checked out in another worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* makeTmpDir("git-worktrees-");
+        const threadPath = pathService.join(root, "thread");
+        const userPath = pathService.join(root, "user");
+
+        // The thread's worktree is removed, then the user checks its branch out
+        // somewhere else.
+        yield* driver.createWorktree({
+          cwd,
+          path: threadPath,
+          refName: initialBranch,
+          newRefName: "feature/shared",
+        });
+        yield* fileSystem.remove(threadPath, { recursive: true });
+        yield* git(cwd, ["worktree", "remove", threadPath]);
+        yield* git(cwd, ["worktree", "add", userPath, "feature/shared"]);
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: threadPath,
+            refName: "feature/shared",
+            reuseRegisteredPath: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(yield* fileSystem.exists(threadPath), false);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.equal(registered.split("branch refs/heads/feature/shared").length - 1, 1);
+      }),
+    );
+
+    it.effect("leaves a missing locked worktree registered and refuses to reuse it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const locked = pathService.join(yield* makeTmpDir("git-worktrees-"), "locked");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: locked,
+          refName: initialBranch,
+          newRefName: "feature/locked",
+        });
+        yield* git(cwd, ["worktree", "lock", locked]);
+        yield* fileSystem.remove(locked, { recursive: true });
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: locked,
+            refName: "feature/locked",
+            reuseRegisteredPath: true,
+          })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.equal(yield* fileSystem.exists(locked), false);
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.include(registered, locked);
+        assert.include(registered, "locked");
+      }),
+    );
+
     it.effect("allows worktree removal to run longer than the default command timeout", () =>
       Effect.gen(function* () {
         const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;

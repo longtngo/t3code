@@ -3241,14 +3241,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    // `--force` here means only "the path is registered but its directory is
-    // gone, take it over" — the exact situation git's own error points at
-    // ("use 'add -f' to override, or 'prune' or 'remove' to clear"). It cannot
-    // clobber a live worktree: git refuses `add` on an existing path either way.
-    const force = input.reuseRegisteredPath === true ? ["--force"] : [];
+    // A registered path whose directory is gone makes `worktree add` refuse it.
+    // Drop that one admin entry (a plain `worktree remove` accepts a missing
+    // directory) and then add normally. Not `add --force`: that also overrides
+    // "branch is already used by another worktree" and checks one branch out
+    // twice. Only when the path is absent, so a live worktree is never removed.
+    // A locked or never-registered path fails the remove; the add then reports
+    // the real error.
+    if (
+      input.reuseRegisteredPath === true &&
+      !(yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true)))
+    ) {
+      yield* executeGit(
+        "GitVcsDriver.createWorktree",
+        input.cwd,
+        ["worktree", "remove", worktreePath],
+        { allowNonZeroExit: true },
+      );
+    }
     const args = input.newRefName
-      ? ["worktree", "add", ...force, "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", ...force, worktreePath, input.refName];
+      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 

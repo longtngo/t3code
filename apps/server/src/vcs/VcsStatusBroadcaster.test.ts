@@ -1316,6 +1316,12 @@ describe("autoPullPolicyLayer.isIdle", () => {
     // No run is active yet, but one is next in line and will start here.
     { name: "a queued run", patch: { status: "queued" } },
     { name: "a run waiting on the user", patch: { status: "waiting" } },
+    // The shell's status already reads terminal while the active run is still
+    // live; only activityRunStatus sees it.
+    {
+      name: "an active run behind a completed status",
+      patch: { status: "completed", activityRunStatus: "running" },
+    },
     {
       name: "a pending runtime request",
       patch: { pendingRuntimeRequest: { id: "request-1", kind: "approval" } },
