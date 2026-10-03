@@ -141,6 +141,10 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
      *   interrupt sweeper then stops it.
      * - A continuation after a server restart that this refuses fails visibly and is not
      *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
+     * - A one-window runtime update with changed numbers stamps the whole reading's
+     *   checkedAt, so another window can look fresh and skip its re-read for up to 60 s; the
+     *   sweeper is the backstop. (checkedAt also orders runtime updates against probes, so
+     *   it cannot stamp less; the fix would be a per-window probe/runtime merge.)
      */
     const refusalFor = Effect.fn("CreditSpendGuard.refusalFor")(function* (
       instanceId: ProviderInstanceId,
