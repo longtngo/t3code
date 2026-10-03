@@ -798,7 +798,13 @@ export const subagentBackendReconciler = Effect.gen(function* () {
   const readCreditsBlocked = serverSettings.getRawSettings.pipe(
     Effect.flatMap(readCreditsBlockedReason),
     Effect.map((reason) => reason !== null),
-    Effect.orElseSucceed(() => undefined),
+    // Defects too: this runs outside the reconcile's own catch, so anything escaping here
+    // would end the reconciler for the life of the process.
+    Effect.catchCause((cause) =>
+      Effect.logWarning("subagentBackend.creditsBlocked read failed", { cause }).pipe(
+        Effect.as(undefined),
+      ),
+    ),
   );
 
   // The stream payload is ignored on purpose: `reconcileAllBackends` re-reads settings
