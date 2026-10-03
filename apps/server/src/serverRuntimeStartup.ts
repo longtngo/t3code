@@ -46,6 +46,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { EnvironmentThemeService } from "./environmentTheme.ts";
 import { runWatchRescanBackstop, WATCH_RESCAN_INTERVAL } from "./watchRescanBackstop.ts";
+import { parsePositiveIntEnv } from "./provider/Layers/parsePositiveIntEnv.ts";
 import { forkParked, forkParkedFiber } from "./serverActivation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -203,6 +204,14 @@ export interface AutoPullProgress {
 }
 
 const AUTO_PULL_PROGRESS_START: AutoPullProgress = { total: 0, completed: 0 };
+
+/** Interval for the event-hub health gauge (0 = disabled via T3CODE_HUB_GAUGE_MS=0). */
+const DEFAULT_HUB_GAUGE_INTERVAL_MS = 60_000;
+
+const hubGaugeIntervalMs =
+  process.env.T3CODE_HUB_GAUGE_MS === "0"
+    ? 0
+    : (parsePositiveIntEnv("T3CODE_HUB_GAUGE_MS") ?? DEFAULT_HUB_GAUGE_INTERVAL_MS);
 
 /**
  * How long the whole startup auto-pull phase may take before startup abandons it.
@@ -744,6 +753,28 @@ const make = (options?: StartupOptions) =>
           },
         }),
       );
+      // Event-hub health gauge: the live-event backlog next to heap usage, so an internal
+      // subscriber that stops taking from EventSink's unbounded hub shows up before it
+      // becomes an OOM. Forked here rather than in the EventSink layer because an interval
+      // fiber built with a layer starts at the test clock's epoch and replays once per
+      // interval when a test warps the clock (docs/fork/README.md invariant 18).
+      if (hubGaugeIntervalMs > 0) {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* Effect.forkScoped(
+          Effect.forever(
+            Effect.gen(function* () {
+              yield* Effect.sleep(Duration.millis(hubGaugeIntervalMs));
+              const memory = process.memoryUsage();
+              yield* Effect.logInfo("orchestration.hub.gauge", {
+                hubBacklog: yield* threads.liveEventBacklog,
+                heapUsedMb: Math.round(memory.heapUsed / 1_048_576),
+                rssMb: Math.round(memory.rss / 1_048_576),
+              });
+            }),
+          ),
+        );
+      }
+
       yield* Effect.logInfo(
         `watch rescan backstop started (${Duration.toSeconds(WATCH_RESCAN_INTERVAL)}s)`,
       );

@@ -1422,107 +1422,62 @@ The check now also scans the sibling components the panel imports, one level dee
 negative control (`not-a-real-settings-anchor`) so a substring search over several whole files
 cannot silently start matching everything.
 
-### 18. The event hub is unbounded; every consumer of it must not be
+### 18. The event hubs are unbounded; every WebSocket reader of them must not be
 
-`apps/server/src/orchestration/Layers/OrchestrationEngine.ts` publishes domain events into an
-**unbounded** `PubSub`. That is deliberate - the dispatch worker must never backpressure on a
-slow reader - and it is exactly why every consumer needs its own bound. Two confirmed OOM
-crash-loops came from this hub, and each fix is a separate piece that a merge can revert on its
-own:
+On orchestrator v2 the hubs are `EventSink`'s `liveEvents` plus one `PubSub.unbounded` per
+filtered event type (`apps/server/src/orchestration-v2/EventSink.ts`), and
+`OrchestrationEventStore`'s `committedEvents`, which feeds the shell. Unbounded is deliberate:
+a write must never backpressure on a reader. Two OOM crash-loops on the old engine came from a
+reader that stopped taking, so each reader needs its own bound.
 
-- **There is exactly one eager accessor, `subscribeDomainEventsLossless`, and it is unbounded.**
-  A bounded sibling, `subscribeDomainEvents`, used to sit beside it for WebSocket callers, backed
-  by `boundedSubscriberStream` and `T3CODE_WS_SUBSCRIBER_BUFFER`. It was **removed in a standalone
-  cleanup after the 31st reconcile**: `ws.ts` had already moved to `makeLiveStreamBudget`
-  (invariant 31), leaving the bounded accessor with **zero production callers** while it went on
-  attracting reactors by mistake - `d2bb199d4` (the 112-commit merge) put `ProviderCommandReactor`
-  on it, and the 31st reconcile brought `ThreadPullRequestReactor` in on it. Both were caught by
-  review, neither by a test.
+- **WebSocket readers go through `LiveStreamBudget`.** `EventSink.stream({ bounded: true })` and
+  `streamProjectedApplicationEvents` subscribe, drain eagerly, and charge every retained event to
+  a 1,000-item / 8 MiB budget that fails the stream on overflow; the client resubscribes from its
+  last sequence (invariant 31). `subscribeThread` and `subscribeArchivedShell` reach the sink
+  through `OrchestratorV2.streamStoredEventsFrom`, which is the one place that passes
+  `bounded: true`; `subscribeShell` takes `streamProjectedApplicationEvents`. What must not come
+  back is a WS path on the plain `stream()` form, `streamStoredEventsFrom` without `bounded`, or
+  an offer into the thread coalescer that skips `budget.retain`. Tests, each seen red under its
+  mutant:
+  - `FoundationPersistence.test.ts` "drops a bounded subscriber that stops taking live events":
+    the sink's bounded form on a live hub, a subscriber that takes one event and never pulls again.
+  - `Orchestrator.control-reads.test.ts` "fails a streamStoredEventsFrom reader that stops taking
+    live events": the same stall through the orchestrator. Removing `bounded: true` fails it on an
+    assertion ("hub still holds 1001 events") rather than the test timeout.
+  - `LiveStreamBudget.test.ts`: the budget alone - a slow subscriber whose unacknowledged tail
+    fills, and replay batches counted toward the item and byte limits.
+- **Internal workers use the unbounded form on purpose** (`streamDomainEvents`, or
+  `stream({ eventType })`). A worker must not lose events, so it is not budgeted; instead its
+  handler must take promptly and hand work to a `DrainableWorker` carrying ids, never event
+  bodies. Today: PullRequestSyncReactor, ThreadPullRequestService, ThreadSettlementService,
+  AgentAwarenessRelay, StorageCleanup. The one inline-blocking reader is the Orchestrator's
+  terminal-run handler, which subscribes to `run.updated` only, so a wait backs up only those.
+  A new worker with a slow inline handler pins every event from its position on.
+- **`groupedWithin` is banned in new code** (`no-unsafe-stream-aggregate`). On the leaking
+  effect build its idle schedule loop pins continuation frames until the next element arrives
+  (beta.102: +3.5 MB in 4 s at 1,000 idle ticks/s; ~79 MB/h per idle 50 ms subscription). Three
+  upstream sites in `ws.ts` keep a suppression: measured flat on the pinned 4.0.0-rc.115
+  (+0.03 MB idle probe; a 50 ms window plateaus). Re-measure with `scripts/idle-aggregate-probe.ts`
+  on any effect bump. Use the idle probe: a bursty source hides the leak, because each element
+  releases the frames.
+- **The health gauge belongs to the running server, not the layer.** `EventSinkV2.liveBacklog`
+  sums `PubSub.size` over the main hub and every per-type hub (what the slowest unbounded reader
+  has not taken). It reaches startup as `ThreadManagementService.liveEventBacklog`, because
+  `EventSinkV2` is provided only inside `runtimeLayer.ts` and a second instance would gauge an
+  empty hub. `serverRuntimeStartup.ts` logs it with heap and RSS as `orchestration.hub.gauge`
+  (`T3CODE_HUB_GAUGE_MS`, default 60 s, `0` disables). An interval fiber built inside a layer
+  starts at the test clock's epoch and replays once per interval when a test warps the clock;
+  that wedged an auto-settle test for 120 s on the old engine. Test: `FoundationPersistence.test.ts`
+  "reports live events an unbounded subscriber has not taken yet", with a thread reader on the
+  main hub and an `eventType` reader on its own hub.
 
-  **The `Lossless` suffix is a live merge tripwire, not a leftover contrast.** Upstream has its own
-  `subscribeDomainEvents` **today**: `git show origin/main:apps/server/src/orchestration/Layers/OrchestrationEngine.ts`
-  defines it, upstream has no `Lossless` accessor at all, and upstream's `ProviderCommandReactor`
-  calls it. Every reconcile therefore arrives carrying call sites named `subscribeDomainEvents`.
-  Measured by replaying upstream's exact call site into both trees:
+Retired with the old engine: the `subscribeDomainEventsLossless` name tripwire and the
+"reactors need the eager accessor" note. v2 workers subscribe lazily (upstream's design); most
+also run a periodic sweep.
 
-  ```
-  PARENT (bounded sibling present) + upstream's line   typecheck exit 0, 0 errors
-  HEAD   (sibling deleted)         + upstream's line   typecheck exit 1
-    ProviderCommandReactor.ts: error TS2339: Property 'subscribeDomainEvents'
-      does not exist on type 'OrchestrationEngineShape'
-  ```
-
-  That is what the deletion buys: a merge that used to silently put a droppable buffer in front of
-  a reactor is now a compile error. Do **not** rename `Lossless` away to match upstream - that
-  re-opens exactly this door, and upstream's accessor is unbounded, so a later upstream change to
-  it would land unreviewed.
-
-  The 38th reconcile fired the tripwire as designed: upstream moved `ThreadSettlementReactor`,
-  `PullRequestSyncReactor` and the new `storageCleanup` onto `subscribeDomainEvents`, typecheck
-  named all three plus two test stubs, and each now takes `subscribeDomainEventsLossless`.
-
-  **Probing this invariant.** The compiler now enforces the half that mattered: there is no bounded
-  accessor left to bind to. For the rest, grep non-test server source for `subscribeDomainEvents`
-  without `Lossless`. On the tree this ships with it matches **exactly one line** - the comment in
-  `OrchestrationEngine.ts` that records why the name is a tripwire. Any _other_ hit is an upstream
-  call site that arrived in a merge.
-
-  Read the matched lines, never the count, and note that the expected count is one rather than
-  zero: an earlier wording here said it "should match nothing", which the fork's own comment
-  falsifies on every run. That is the same comment-matches-the-probe trap that made three
-  invariant probes flag a correct tree in reconcile 22. An earlier wording still ("only the
-  definition and the WS layer may match") had gone **stale, not vacuous**: it would still have
-  caught a mis-wired reactor, but `ws.ts` had stopped matching and two other files matched that
-  the wording did not permit.
-
-  **Known gap:** deleting `boundedSubscriberStream.test.ts` removed the only test that drove a
-  stalled consumer against a **live hub**. The unit-level bound is covered - the single test in
-  `LiveStreamBudget.test.ts` retains to `maxItems`, deliberately never resumes the consumer, and
-  asserts the next `retain` fails - but there is still no end-to-end `subscribeShell` /
-  `subscribeThread` overflow test. The accessor invariant is structural; the bound is covered in
-  isolation and not at the seam.
-
-  (An earlier version of this paragraph said that file held "two `it` blocks, neither of which is
-  overflow-under-stall". It has one, and that one is overflow-under-stall. Corrected after being
-  measured - in the section rewritten to remove exactly this kind of claim.)
-
-- **`ws.ts` bounds through `makeLiveStreamBudget`** (see invariant 31). Upstream's coalescer
-  (#8368) was `Queue.unbounded` at _both_ ends - the precise shape that OOM-ed this server - and
-  the fork chained it into a `Queue.dropping`. Upstream has since put every offer behind a budget
-  that caps retained items **and bytes** and fails the stream on overflow, so the fork's chain was
-  dropped at the 30th reconcile in favour of it. What must not come back is an offer path into the
-  coalescer that skips `budget.retain` / `budget.check`: the queue itself is still unbounded, and
-  the budget is the only thing standing between a stalled socket and the heap.
-- **`groupedWithin`/`aggregate`/`aggregateWithin`/`aggregateWithinEither` are banned in new
-  code** by `oxlint-plugin-t3code/rules/no-unsafe-stream-aggregate.ts`; the replacement is
-  `batchWithinStackSafe`. They lower to a non-stack-safe `stepToBuffer` schedule loop that pins
-  continuation frames on every _idle_ tick (~1.9 GB/hr, crash every 13-14h). That was the
-  confirmed heap burst - not the `Stream.take` recycle first blamed and later falsified. Note
-  what is NOT true: no patch in `patches/` touches `Stream` any more, so the two allowlisted
-  `ws.ts` shell-coalescing sites are safe by virtue of the **pinned effect version alone**.
-  Re-measure with `scripts/idle-aggregate-probe.ts` on any effect bump.
-
-- **Why reactors need the eager accessor at all.** Moving `ProviderCommandReactor` off
-  `streamDomainEvents` onto an eager accessor was a real fix - its subscription then exists before
-  `start()` returns; reverting it locally took the reactor suite from 3 failures to 18 and a 235s
-  run. The mistake was only _which_ eager accessor. Any new internal reactor takes
-  `subscribeDomainEventsLossless`.
-
-  A side effect worth knowing when writing tests: with the subscription eager but the _enqueue_
-  still happening on a separate stream fiber, `reactor.drain` is **not** a barrier for work
-  triggered by a `dispatch` that just returned - the drain can find an empty worker queue and
-  return before the event has been enqueued at all. Wait on the observable outcome first (the
-  `waitFor` yield-loop in `ProviderCommandReactor.test.ts`), then drain if the assertion also needs
-  the unit's follow-up dispatch to have landed.
-
-**The health gauge belongs to the running server, not to the layer.** It reads
-`OrchestrationEngineShape.hubBacklog` and is forked in `serverRuntimeStartup.ts`
-(`T3CODE_HUB_GAUGE_MS`, default 60s, `0` disables). It lived inside the engine layer for one
-release and had to move: an interval fiber constructed with the layer starts at the _test_ clock's
-epoch, so any test that warps the clock to a real timestamp replays the gauge once per interval
-across the whole span. That wedged upstream #8600's auto-settle test at the full 120s timeout
-while the same test passed in 78ms with the gauge disabled. Anything else that wants a timer
-inside this layer inherits the same trap.
+Known gap: WebSocket terminal events (`subscribeTerminalEvents`) use `Stream.callback`'s default
+unbounded buffer, so a socket that stops acknowledging pins terminal output. Upstream code, not
+a hub reader; unaddressed.
 
 ## Rejecting an upstream feature: its own lines land outside the markers too
 
