@@ -44,9 +44,10 @@ describe("crewRolesByThread", () => {
 });
 
 describe("crew list query", () => {
-  it("refreshes itself every 60s while anything reads it, with no caller driving it", async () => {
-    vi.useFakeTimers();
-    try {
+  it.effect("refreshes itself every 60s while anything reads it, with no caller driving it", () =>
+    Effect.gen(function* () {
+      vi.useFakeTimers();
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
       const environment = new PrimaryConnectionTarget({
         environmentId: EnvironmentId.make("crew-environment"),
         label: "Crew environment",
@@ -54,38 +55,36 @@ describe("crew list query", () => {
         wsBaseUrl: "wss://crew.example.test",
       });
       let executions = 0;
-      const supervisor = await Effect.runPromise(
-        Effect.gen(function* () {
-          return EnvironmentSupervisor.EnvironmentSupervisor.of({
-            target: environment,
-            state: yield* SubscriptionRef.make<SupervisorConnectionState>({
-              ...AVAILABLE_CONNECTION_STATE,
-              desired: true,
-              network: "online",
-              phase: "connected",
-              attempt: 1,
-              generation: 1,
-            }),
-            session: yield* SubscriptionRef.make(Option.some({} as RpcSession.RpcSession)),
-            prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none()),
-            connect: Effect.void,
-            disconnect: Effect.void,
-            retryNow: Effect.void,
-          } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: environment,
+        state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+          ...AVAILABLE_CONNECTION_STATE,
+          desired: true,
+          network: "online",
+          phase: "connected",
+          attempt: 1,
+          generation: 1,
         }),
-      );
+        session: yield* SubscriptionRef.make(Option.some({} as RpcSession.RpcSession)),
+        prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
       const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (_id, effect) =>
         Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
       const followStream: EnvironmentRegistry.EnvironmentRegistry["Service"]["followStream"] = (
         _id,
         stream,
       ) => Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
-      const registryService = EnvironmentRegistry.EnvironmentRegistry.of({
-        run,
-        followStream,
-      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
       const runtime = Atom.runtime(
-        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registryService),
+        Layer.succeed(
+          EnvironmentRegistry.EnvironmentRegistry,
+          EnvironmentRegistry.EnvironmentRegistry.of({
+            run,
+            followStream,
+          } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        ),
       );
       // The production options, with only the transport replaced.
       const family = createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -99,15 +98,17 @@ describe("crew list query", () => {
       const atom = family({ environmentId: environment.environmentId, input: {} });
       const registry = AtomRegistry.make();
       const unmount = registry.mount(atom);
-      await vi.advanceTimersByTimeAsync(10);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          unmount();
+          registry.dispose();
+        }),
+      );
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10));
       const first = executions;
       expect(first).toBeGreaterThan(0);
-      await vi.advanceTimersByTimeAsync(CREW_LIST_REFRESH_MS * 3 + 10);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(CREW_LIST_REFRESH_MS * 3 + 10));
       expect(executions - first).toBe(3);
-      unmount();
-      registry.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }).pipe(Effect.scoped),
+  );
 });
