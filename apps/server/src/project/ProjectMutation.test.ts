@@ -18,10 +18,18 @@ const project = {
   defaultThreadEnvMode: null,
   autoPull: false,
   scripts: [],
+  members: [],
   createdAt: "2026-09-05T00:00:00.000Z",
   updatedAt: "2026-09-05T00:00:00.000Z",
   deletedAt: null,
 } satisfies Project;
+
+const member = {
+  id: "m-warehouse",
+  path: "/work/warehouse",
+  title: "warehouse",
+  integrationBranch: "main",
+};
 
 it.effect("preserves every project mutation field", () =>
   Effect.gen(function* () {
@@ -57,6 +65,7 @@ it.effect("preserves every project mutation field", () =>
       faviconPath: null,
       defaultThreadEnvMode: null,
       scripts: [],
+      members: [member],
     });
     yield* projectMutationOperation(projects, {
       type: "project.delete",
@@ -86,6 +95,7 @@ it.effect("preserves every project mutation field", () =>
         faviconPath: null,
         defaultThreadEnvMode: null,
         scripts: [],
+        members: [member],
       },
       { commandId: "command:delete", projectId, force: true },
     ]);

@@ -25,6 +25,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { WorkspaceMemberHooks } from "./WorkspaceMemberHooks.ts";
 
 export const ROLLBACK_FAILED_MESSAGE =
   "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
@@ -38,6 +39,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "provider-turn-unavailable",
       "unexpected-failure",
       "shared-workspace",
+      "workspace-members-moved",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
@@ -55,6 +57,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "shared-workspace":
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
+      case "workspace-members-moved":
+        return `Rollback target ${this.checkpointId} on thread ${this.threadId} would leave workspace member repositories out of step.`;
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -102,6 +106,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
+    const workspaceMembers = yield* WorkspaceMemberHooks;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -165,6 +170,23 @@ export const layer: Layer.Layer<
       ) {
         return yield* new CheckpointRollbackExecutionError({
           reason: "shared-workspace",
+          threadId: input.threadId,
+          providerThreadId: input.providerThreadId,
+          checkpointId: input.checkpointId,
+        });
+      }
+      // Fork: admission already refused with the member names; this re-check
+      // covers a member that moved while the rollback waited in the lane.
+      if (
+        input.restoreFiles !== false &&
+        (yield* workspaceMembers.rollbackRefusal({
+          threadId: input.threadId,
+          projectId: projection.thread.projectId,
+          checkpoint,
+        })) !== null
+      ) {
+        return yield* new CheckpointRollbackExecutionError({
+          reason: "workspace-members-moved",
           threadId: input.threadId,
           providerThreadId: input.providerThreadId,
           checkpointId: input.checkpointId,

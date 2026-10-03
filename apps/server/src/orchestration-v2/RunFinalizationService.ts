@@ -9,6 +9,7 @@ import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as CheckpointCapture from "./CheckpointCaptureService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { WorkspaceMemberHooks } from "./WorkspaceMemberHooks.ts";
 
 export class RunFinalizationError extends Schema.TaggedError<RunFinalizationError>()(
   "RunFinalizationError",
@@ -52,6 +53,7 @@ const make = Effect.gen(function* () {
   const checkpointCapture = yield* CheckpointCapture.CheckpointCaptureServiceV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const observer = yield* RunFinalizationObserver;
+  const workspaceMembers = yield* WorkspaceMemberHooks;
 
   const finalize: RunFinalizationService["Service"]["finalize"] = Effect.fn(
     "RunFinalizationService.finalize",
@@ -63,6 +65,9 @@ const make = Effect.gen(function* () {
           (cause) => new RunFinalizationError({ ...input, operation: "capture-checkpoint", cause }),
         ),
       );
+    // Fork: members are swept after the capture, so the checkpoint reflects the
+    // tree the run produced before any member branch moves. Never fails.
+    yield* workspaceMembers.sweep({ threadId: input.threadId });
     const projection = yield* projections
       .getCheckpointContext(input.threadId)
       .pipe(

@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
+  type WorkspaceMember,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
@@ -37,6 +38,8 @@ export interface ProjectMetaUpdateCommand {
   readonly faviconPath?: string | null;
   readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
+  /** Already validated and normalized by ProjectService. */
+  readonly members?: ReadonlyArray<WorkspaceMember>;
 }
 
 export interface ProjectDeleteCommand {
@@ -223,6 +226,7 @@ export function planProjectCommand(input: {
           ...(command.faviconPath === undefined ? {} : { faviconPath: command.faviconPath }),
           ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),
           ...(command.scripts === undefined ? {} : { scripts: command.scripts }),
+          ...(command.members === undefined ? {} : { members: command.members }),
           updatedAt: occurredAt,
         },
       });

@@ -4,6 +4,7 @@ import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts"
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProjectIconOverride, ProjectScript } from "./project.ts";
+import { WorkspaceMembers } from "./workspaceMember.ts";
 
 /** Project summary shared by the V2 shell and application project APIs. */
 export const OrchestrationProjectShell = Schema.Struct({
@@ -22,6 +23,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
+  // Fork: additional repositories this project's threads work in. Absent decodes
+  // as [] so shells from servers without workspace members still decode.
+  members: WorkspaceMembers,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

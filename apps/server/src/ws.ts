@@ -193,6 +193,8 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as WorkspaceMemberBranches from "./workspace/WorkspaceMemberBranches.ts";
+import * as WorkspaceMemberRpc from "./workspace/WorkspaceMemberRpc.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
@@ -1218,6 +1220,17 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      // Fork: workspace member repositories. See WorkspaceMemberRpc for the rules.
+      const workspaceMemberRpc = WorkspaceMemberRpc.makeWorkspaceMemberRpc({
+        readMembers: (projectId) =>
+          projectStore
+            .get(projectId)
+            .pipe(Effect.map((project) => Option.getOrUndefined(project)?.members)),
+        readThread: (threadId) => threadManagement.getThreadShell(threadId),
+        branches: yield* WorkspaceMemberBranches.WorkspaceMemberBranches,
+        refreshLocalStatus: (cwd) =>
+          vcsStatusBroadcaster.refreshLocalStatus(cwd).pipe(Effect.ignoreCause({ log: true })),
+      });
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -3176,7 +3189,8 @@ const makeWsRpcLayer = (
                   new ProjectMutationError({
                     commandId: mutation.commandId,
                     message:
-                      cause._tag === "ProjectNotEmptyError"
+                      cause._tag === "ProjectNotEmptyError" ||
+                      cause._tag === "ProjectMemberInvalidError"
                         ? cause.message
                         : "Failed to mutate project.",
                     cause,
@@ -3355,6 +3369,22 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "vcs",
             },
+          ),
+        [WS_METHODS.workspaceMemberBranches]: (input) =>
+          observeRpcEffect(WS_METHODS.workspaceMemberBranches, workspaceMemberRpc.branches(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.workspaceMemberActionPrepare]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberActionPrepare,
+            workspaceMemberRpc.actionPrepare(input),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceMemberPrBaseWrite]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceMemberPrBaseWrite,
+            workspaceMemberRpc.prBaseWrite(input),
+            { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(

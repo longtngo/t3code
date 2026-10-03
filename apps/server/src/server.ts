@@ -168,6 +168,7 @@ import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementSer
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as WorkspaceMemberHooks from "./orchestration-v2/WorkspaceMemberHooks.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -465,6 +466,13 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(PullRequestServiceLive),
       Layer.provide(ProjectServiceLayerLive),
+    ),
+  ),
+  // Fork: workspace member repositories in capture, finalization and rollback.
+  Layer.provide(
+    WorkspaceMemberHooks.live.pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(ProjectStore.layer),
     ),
   ),
 );

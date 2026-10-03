@@ -76,6 +76,9 @@ const providerInstanceFor = (instanceId: ProviderInstanceId) =>
     },
   }) as ProviderInstance;
 
+// Fork: the project's workspace members, swapped per test.
+let projectMembers: ProjectStore.ProjectRow["members"] = [];
+
 const TestLayer = RuntimePolicy.layerFromProjectStore.pipe(
   Layer.provide(
     Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
@@ -100,6 +103,7 @@ const TestLayer = RuntimePolicy.layerFromProjectStore.pipe(
             faviconPath: null,
             projectIcon: null,
             scripts: [],
+            members: projectMembers,
             createdAt: "2026-06-21T00:00:00.000Z",
             updatedAt: "2026-06-21T00:00:00.000Z",
             deletedAt: null,
@@ -119,6 +123,31 @@ it.layer(TestLayer)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-root");
+    }),
+  );
+
+  it.effect("grants every workspace member beyond cwd, in order, and nothing without members", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolve = (worktreePath: string | null) =>
+        policy.resolve({ thread: makeThread({ now, worktreePath }), modelSelection });
+
+      projectMembers = [];
+      assert.isUndefined((yield* resolve(null)).additionalDirectories);
+
+      projectMembers = [
+        { id: "m-1", path: "/repos/warehouse", title: "warehouse", integrationBranch: "main" },
+        { id: "m-2", path: "/repos/api", title: "api", integrationBranch: "develop" },
+      ];
+      // A worktree thread still works across the project's members.
+      for (const worktreePath of [null, "/project-worktree"]) {
+        assert.deepStrictEqual((yield* resolve(worktreePath)).additionalDirectories, [
+          "/repos/warehouse",
+          "/repos/api",
+        ]);
+      }
+      projectMembers = [];
     }),
   );
 

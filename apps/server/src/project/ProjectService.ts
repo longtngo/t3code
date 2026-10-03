@@ -7,6 +7,7 @@ import {
   type ProjectUpdatePayload,
   type ProjectSnapshot,
   type ThreadId,
+  type WorkspaceMember,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -82,6 +83,19 @@ export class ProjectNotEmptyError extends Schema.TaggedError<ProjectNotEmptyErro
   }
 }
 
+/**
+ * A workspace member the client asked to attach is not a usable directory, or is
+ * attached twice. Its message is shown to the user as-is.
+ */
+export class ProjectMemberInvalidError extends Schema.TaggedError<ProjectMemberInvalidError>()(
+  "ProjectMemberInvalidError",
+  { projectId: ProjectId, detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export class ProjectOperationError extends Schema.TaggedError<ProjectOperationError>()(
   "ProjectOperationError",
   {
@@ -104,6 +118,7 @@ export class ProjectOperationError extends Schema.TaggedError<ProjectOperationEr
 }
 
 export type ProjectServiceError =
+  | ProjectMemberInvalidError
   | ProjectNotFoundError
   | ProjectConflictError
   | ProjectNotEmptyError
@@ -172,6 +187,7 @@ export const make = Effect.gen(function* () {
     autoPull: row.autoPull,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
+    members: row.members,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -214,6 +230,46 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
+
+  /**
+   * Workspace member paths widen the agent's out-of-workspace directory grant,
+   * so they are validated by the SERVER rather than trusted from the client:
+   * any authenticated client can send a project update directly. Each path goes
+   * through the same normalization as `workspaceRoot`, which expands `~`,
+   * resolves to an absolute canonical path (collapsing `/srv/x/` vs `/srv/x`
+   * duplicates), and rejects a path that does not exist or is not a directory.
+   */
+  const normalizeMembers = Effect.fn("ProjectService.normalizeMembers")(function* (
+    projectId: ProjectId,
+    members: ReadonlyArray<WorkspaceMember>,
+  ) {
+    const normalized = yield* Effect.forEach(
+      members,
+      (member) =>
+        workspacePaths.normalizeWorkspaceRoot(member.path).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProjectMemberInvalidError({
+                projectId,
+                detail: `Workspace member '${member.title}': ${cause.message}`,
+              }),
+          ),
+          Effect.map((path) => ({ ...member, path })),
+        ),
+      { concurrency: 1 },
+    );
+    const seenPaths = new Set<string>();
+    for (const member of normalized) {
+      if (seenPaths.has(member.path)) {
+        return yield* new ProjectMemberInvalidError({
+          projectId,
+          detail: `Workspace member path '${member.path}' is attached more than once.`,
+        });
+      }
+      seenPaths.add(member.path);
+    }
+    return normalized;
+  });
 
   /**
    * Plan one command against rows read under its locks, then commit its event or
@@ -368,6 +424,10 @@ export const make = Effect.gen(function* () {
               projectId: input.projectId,
               workspaceRoot: input.workspaceRoot,
             });
+      const members =
+        input.members === undefined
+          ? undefined
+          : yield* normalizeMembers(input.projectId, input.members);
       yield* commit({
         type: "project.meta.update",
         commandId: input.commandId,
@@ -384,6 +444,7 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+        ...(members === undefined ? {} : { members }),
       });
       if (workspaceRoot !== previousRoot) {
         yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);

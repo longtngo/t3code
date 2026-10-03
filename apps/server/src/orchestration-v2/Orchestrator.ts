@@ -100,6 +100,7 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { WorkspaceMemberHooks } from "./WorkspaceMemberHooks.ts";
 import {
   makeSubagentChildThread,
   subagentResultForRun,
@@ -676,6 +677,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const runtimePolicy = yield* RuntimePolicyV2;
+  const workspaceMembers = yield* WorkspaceMemberHooks;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor;
 
@@ -8149,6 +8151,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: SHARED_WORKSPACE_RESTORE_MESSAGE,
+          });
+        // Fork: restoring this checkout while a workspace member repository has
+        // moved leaves an inconsistent tree behind a UI implying a clean undo.
+        const memberRefusal = yield* workspaceMembers
+          .rollbackRefusal({
+            threadId: command.threadId,
+            projectId: projection.thread.projectId,
+            checkpoint: targetCheckpoint,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                }),
+            ),
+          );
+        if (memberRefusal !== null)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: memberRefusal,
           });
       }
 

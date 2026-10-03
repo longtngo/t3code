@@ -781,6 +781,8 @@ export function makeClaudeQueryOptions(input: {
    * state.sqlite stay ungranted.
    */
   readonly attachmentsDir?: string;
+  /** Fork: workspace member repositories granted beyond `cwd`. */
+  readonly memberDirectories?: ReadonlyArray<string>;
   readonly settings?: ClaudeSettings;
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
@@ -884,6 +886,7 @@ export function makeClaudeQueryOptions(input: {
   const additionalDirectories = [
     ...(input.cwd === null ? [] : [input.cwd]),
     ...(input.attachmentsDir === undefined ? [] : [input.attachmentsDir]),
+    ...(input.memberDirectories ?? []),
   ];
   const withDirectories =
     additionalDirectories.length === 0 ? options : { ...options, additionalDirectories };
@@ -1540,6 +1543,22 @@ export function claudeEffectiveQueryPolicyKey(
     }),
     mcpServers: mcpOverrides.mcpServers,
   });
+}
+
+/**
+ * Fork: the live-query reuse key including the workspace member grant. The
+ * directory grant is fixed when the CLI process starts, so a member attached or
+ * detached since then must reopen the query (resuming the conversation) rather
+ * than reuse it; otherwise the first tool call in the new repository asks for
+ * approval. Without members the key is upstream's unchanged.
+ */
+export function claudeLiveQueryKey(
+  queryPolicy: ClaudeRuntimeQueryPolicy,
+  mcpOverrides: Parameters<typeof claudeEffectiveQueryPolicyKey>[1],
+  memberDirectories: ReadonlyArray<string>,
+): string {
+  const key = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
+  return memberDirectories.length === 0 ? key : `${key}\0${memberDirectories.join("\0")}`;
 }
 
 type ClaudeToolItemType = Extract<
@@ -6812,7 +6831,8 @@ export function makeClaudeAdapterV2(
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
-          const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
+          const memberDirectories = turnInput.runtimePolicy.additionalDirectories ?? [];
+          const queryPolicyKey = claudeLiveQueryKey(queryPolicy, mcpOverrides, memberDirectories);
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -6878,6 +6898,7 @@ export function makeClaudeAdapterV2(
                 ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
                 cwd: turnInput.runtimePolicy.cwd,
                 attachmentsDir,
+                memberDirectories,
                 settings: adapterOptions.settings,
                 environment: adapterOptions.environment,
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
