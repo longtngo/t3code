@@ -4,7 +4,7 @@ import { QrCode } from "@t3tools/shared/qrCode";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
-import { ServerConfig } from "./config.ts";
+import * as ServerConfig from "./config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 
 export interface HeadlessServeAccessInfo {
@@ -141,7 +141,7 @@ export const formatHeadlessOpenAccessOutput = (connectionString: string): string
 
 export const resolveHeadlessConnectionInfo = Effect.fn("resolveHeadlessConnectionInfo")(
   function* () {
-    const serverConfig = yield* ServerConfig;
+    const serverConfig = yield* ServerConfig.ServerConfig;
     const httpServer = yield* HttpServer.HttpServer;
     return resolveHeadlessConnectionString(
       serverConfig.host,

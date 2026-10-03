@@ -11,7 +11,6 @@ import {
   formatContextWindowTokens,
 } from "~/lib/contextWindow";
 import { formatBytes, type HostMetricsSample } from "~/lib/hostMetrics";
-import { useAccountUsageRefresh } from "~/hooks/useAccountUsageRefresh";
 import { ChevronRightIcon, RotateCwIcon } from "lucide-react";
 import { useHostMetrics, useHostMetricsEnabled } from "~/hooks/useHostMetrics";
 import { useEnvironment } from "~/state/environments";
@@ -857,7 +856,6 @@ export function VitalsGaugeConnected(props: {
 }) {
   const [enabled, setEnabled] = useHostMetricsEnabled();
   const { sample, streaming } = useHostMetrics(props.environmentId, enabled);
-  const refreshUsage = useAccountUsageRefresh(props.environmentId, props.threadId);
   // The environment the metrics are streamed from, which is the machine they
   // describe - not necessarily the one the reader is holding.
   const environment = useEnvironment(props.environmentId);
@@ -866,7 +864,7 @@ export function VitalsGaugeConnected(props: {
       context={props.context}
       accountUsage={props.accountUsage}
       host={{ sample, streaming, enabled, onToggle: setEnabled }}
-      refreshUsage={refreshUsage}
+      // The on-demand usage refresh returns with the account-usage port (U5).
       providerDisplayName={props.providerDisplayName}
       modelDisplayName={props.modelDisplayName}
       sessionProvider={props.sessionProvider}

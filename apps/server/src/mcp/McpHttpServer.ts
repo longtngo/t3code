@@ -16,14 +16,25 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { PreviewAutomationError } from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { CrewToolkit } from "./toolkits/crew/tools.ts";
-import { CrewToolkitLayer } from "./toolkits/crew/handlers.ts";
-import { CrewServiceLive } from "../crew/CrewService.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
+import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
+import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
+import { EnvironmentHandlersLive } from "./toolkits/environment/handlers.ts";
+import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { ProjectHandlersLive } from "./toolkits/project/handlers.ts";
+import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
+import { AttachmentHandlersLive } from "./toolkits/attachment/handlers.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
+import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
+import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -33,6 +44,9 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
+import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import {
@@ -646,6 +660,37 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
+  Layer.provide(OrchestratorToolkitHandlersLive),
+  Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(ThreadMetadataMcpService.layer),
+);
+
+export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
+  Layer.provide(ThreadToolkitHandlersLive),
+);
+
+const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
+  Layer.provide(WorktreeToolkitHandlersLive),
+  Layer.provide(WorktreeMcpService.layer),
+);
+
+const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
+  Layer.provide(PreviewControlsHandlersLive),
+);
+
+const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
+  Layer.provide(EnvironmentHandlersLive),
+);
+
+const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(
+  Layer.provide(ProjectHandlersLive),
+);
+
+const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
+  Layer.provide(AttachmentHandlersLive),
+);
+
 export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
@@ -670,33 +715,15 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-/**
- * The crew tools, always registered.
- *
- * Not gated on the `enableCrew` setting, because an MCP tool listing cannot be
- * retracted: `McpServer` exposes `addTool` and nothing that removes one, so a
- * tool advertised to a running server stays advertised for that server's life.
- * A build-time gate would therefore only ever mean "the switch's position when
- * this process started", which is a second, quieter contract to explain and to
- * get wrong. The switch is enforced where it can be honest — `CrewService`
- * refuses `crew_dispatch` per call with reason `disabled`.
- *
- * The cost is five tool definitions in every thread's context while crew is off.
- * That is the same context-window cost §9 of the design already records as
- * Phase 1's known limitation, and the fix for it is the `/mcp/crew` second mount
- * in Phase 2, not this flag.
- */
-const CrewToolkitRegistrationLive = McpServer.toolkit(CrewToolkit).pipe(
-  // `CrewRepository`, `CrewLog` and the teardown hooks come from the crew layer
-  // `server.ts` already builds for the panel. Constructing a second set here
-  // would mean two repositories over one database and two log sinks, and would
-  // need `SqlClient` at a point that does not have it.
-  Layer.provide(CrewToolkitLayer.pipe(Layer.provide(CrewServiceLive()))),
-);
-
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
-  CrewToolkitRegistrationLive,
+  OrchestratorToolkitRegistrationLive,
+  ThreadToolkitRegistrationLive,
+  AttachmentRegistrationLive,
+  ProjectRegistrationLive,
+  EnvironmentRegistrationLive,
+  PreviewControlsRegistrationLive,
+  WorktreeToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

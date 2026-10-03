@@ -5,7 +5,7 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -29,9 +29,7 @@ import { SidebarLocalModels } from "./SidebarLocalModels";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
-import { SidebarCrew } from "./SidebarCrew";
 import { SidebarResourceQueue } from "./SidebarResourceQueue";
-import { SidebarSubagentBackend } from "./SidebarSubagentBackend";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
@@ -138,12 +136,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
-  const { environments } = useEnvironments();
-  // The page reads every connected server, so one of them offering pull requests is enough for
-  // the link to lead somewhere.
-  const pullRequestsSupported = environments.some(
-    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
-  );
+  const pullRequestsSupported = usePullRequestsSupported();
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -246,15 +239,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           )}
           {/* Fork-only, and OUTSIDE the branch above on purpose. Settings, Pull Requests and
             Usage are navigation, so "Back" rightly replaces them once you are on one of
-            those pages. Subagents, Local models and Resource Queue are live status readouts —
+            those pages. Local models and Resource Queue are live status readouts —
             hiding them there would be a silent capability loss for no gain.
             `SidebarUpdatePill` below sits outside for the same reason.
 
             Local models' and Resource Queue's open state lives in this component rather than
             in each panel: both anchor to the wrapper above with identical insets, so two open
-            panels would occupy the same box. Subagents keeps its own state; its panel is an
-            in-flow first item of this row, not an overlay. */}
-          <SidebarSubagentBackend />
+            panels would occupy the same box. */}
           <SidebarLocalModels
             isOpen={openFooterPanel === "models"}
             onOpenChange={(open) => setFooterPanelOpen("models", open)}
@@ -263,7 +254,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             isOpen={openFooterPanel === "queue"}
             onOpenChange={(open) => setFooterPanelOpen("queue", open)}
           />
-          <SidebarCrew />
           <SidebarUpdatePill />
         </SidebarMenu>
       </div>

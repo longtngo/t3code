@@ -28,10 +28,10 @@ import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
-import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ProviderAuthCallbackCoordinator } from "../components/settings/ProviderAuthCallbackCoordinator";
@@ -53,7 +53,6 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { useThreadCompletionNotifications } from "../hooks/useThreadCompletionNotifications";
-import { useTitleRegenerationFailureToasts } from "../hooks/useTitleRegenerationFailureToasts";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -223,10 +222,6 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
-        {/* Drives a cross-environment queue, so it is not gated on the primary
-            environment's auth, nor on first-run onboarding: another environment
-            may be connected with work already queued. */}
-        <OutboxFlushCoordinator />
         <ThreadQueueCoordinator />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />
@@ -246,13 +241,13 @@ function RootRouteView() {
           <CustomSnoozeDialogHost />
           <SlowRpcRequestToastCoordinator />
           <WsReconnectTimelineLog />
+          {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
           <ProjectCloneToastCoordinator />
           <HostedStaticEnvironmentBootstrap />
           {primaryEnvironmentAuthenticated ? (
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
           ) : null}
           {primaryEnvironmentAuthenticated ? <ThreadCompletionNotifications /> : null}
-          {primaryEnvironmentAuthenticated ? <TitleRegenerationFailureToasts /> : null}
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {appShell}
@@ -495,11 +490,6 @@ function AuthenticatedTracingBootstrap() {
 
 function ThreadCompletionNotifications() {
   useThreadCompletionNotifications();
-  return null;
-}
-
-function TitleRegenerationFailureToasts() {
-  useTitleRegenerationFailureToasts();
   return null;
 }
 

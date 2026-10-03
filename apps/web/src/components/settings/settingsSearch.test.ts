@@ -382,6 +382,10 @@ describe("searchSettings", () => {
       id: "word-wrap",
       to: "/settings/appearance",
     });
+    expect(searchSettings("composer context")[0]).toMatchObject({
+      id: "composer-context",
+      to: "/settings/appearance",
+    });
     expect(searchSettings("environment identification")[0]).toMatchObject({
       id: "environment-identification",
       to: "/settings/appearance",
@@ -652,10 +656,6 @@ describe("notification settings search entries", () => {
     // existing deep links keep working, but the section must follow the move.
     expect(searchSettings("task completion notifications")[0]).toMatchObject({
       id: "task-completion-notifications",
-      to: "/settings/notifications",
-    });
-    expect(searchSettings("background notifications")[0]).toMatchObject({
-      id: "background-notifications",
       to: "/settings/notifications",
     });
   });

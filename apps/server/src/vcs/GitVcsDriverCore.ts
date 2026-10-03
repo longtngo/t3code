@@ -41,7 +41,7 @@ import {
   parseRemoteNamesInGitOrder,
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -868,7 +868,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const { worktreesDir } = yield* ServerConfig;
+  const { worktreesDir } = yield* ServerConfig.ServerConfig;
   const crypto = yield* Crypto.Crypto;
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
@@ -1790,7 +1790,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
-  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (cwd: string) {
+  const readStatusDetailsLocal = Effect.fn("readStatusDetailsLocal")(function* (
+    cwd: string,
+    options?: GitVcsDriver.GitLocalStatusOptions,
+  ) {
+    const includeDivergence = options?.includeDivergence !== false;
+    const statusArgs = [
+      "status",
+      "--porcelain=2",
+      "--branch",
+      ...(includeDivergence ? [] : ["--no-ahead-behind"]),
+    ];
     const indexResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.indexPath",
       cwd,
@@ -1830,7 +1840,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      ["status", "--porcelain=2", "--branch"],
+      statusArgs,
       {
         allowNonZeroExit: true,
       },
@@ -1853,7 +1863,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...gitCommandContext({
           operation: "GitVcsDriver.statusDetails.status",
           cwd,
-          args: ["status", "--porcelain=2", "--branch"],
+          args: statusArgs,
         }),
         detail: "Git status failed.",
         exitCode: statusResult.exitCode,
@@ -1953,7 +1963,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         upstreamRef = value.length > 0 ? value : null;
         continue;
       }
-      if (line.startsWith("# branch.ab ")) {
+      if (includeDivergence && line.startsWith("# branch.ab ")) {
         const value = line.slice("# branch.ab ".length).trim();
         const parsed = parseBranchAb(value);
         aheadCount = parsed.ahead;
@@ -1968,7 +1978,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const fallbackAheadCount =
-      !upstreamRef && refName
+      includeDivergence && !upstreamRef && refName
         ? yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0))
         : null;
 
@@ -1981,7 +1991,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       refName !== null &&
       (refName === defaultBranch ||
         (defaultBranch === null && (refName === "main" || refName === "master")));
-    if (refName && !isDefaultBranch) {
+    if (includeDivergence && refName && !isDefaultBranch) {
       aheadOfDefaultCount =
         fallbackAheadCount !== null
           ? fallbackAheadCount
@@ -2031,8 +2041,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const statusDetailsLocal: GitVcsDriver.GitVcsDriver["Service"]["statusDetailsLocal"] = Effect.fn(
     "statusDetailsLocal",
-  )(function* (cwd) {
-    return yield* readStatusDetailsLocal(cwd);
+  )(function* (cwd, options) {
+    return yield* readStatusDetailsLocal(cwd, options);
   });
 
   const statusDetails: GitVcsDriver.GitVcsDriver["Service"]["statusDetails"] = Effect.fn(
@@ -3661,13 +3671,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     });
   });
 
+  const deleteLocalBranch: GitVcsDriver.GitVcsDriver["Service"]["deleteLocalBranch"] = Effect.fn(
+    "deleteLocalBranch",
+  )(function* (input) {
+    yield* executeGit(
+      "GitVcsDriver.deleteLocalBranch",
+      input.cwd,
+      ["branch", input.force === true ? "-D" : "-d", "--", input.refName],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorDetail: "git branch delete failed",
+      },
+    );
+  });
+
   const renameBranch: GitVcsDriver.GitVcsDriver["Service"]["renameBranch"] = Effect.fn(
     "renameBranch",
   )(function* (input) {
     if (input.oldBranch === input.newBranch) {
       return { branch: input.newBranch };
     }
-    const targetBranch = yield* resolveAvailableBranchName(input.cwd, input.newBranch);
+    const targetBranch = input.exactName
+      ? input.newBranch
+      : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
     yield* executeGit(
       "GitVcsDriver.renameBranch",
@@ -3845,7 +3871,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // becomes a fetch storm.
     status: (input) => retryTransientRead(status(input)),
     statusDetails: (cwd) => retryTransientRead(statusDetails(cwd)),
-    statusDetailsLocal: (cwd) => retryTransientRead(statusDetailsLocal(cwd)),
+    statusDetailsLocal: (cwd, options) => retryTransientRead(statusDetailsLocal(cwd, options)),
     statusDetailsRemote,
     prepareCommitContext,
     commit: (cwd, subject, body, options) =>
@@ -3885,6 +3911,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     setBranchUpstream: (input) => withListRefsInvalidation(input.cwd, setBranchUpstream(input)),
     removeWorktree: (input) => withListRefsInvalidation(input.cwd, removeWorktree(input)),
     pruneWorktrees: (input) => withListRefsInvalidation(input.cwd, pruneWorktrees(input)),
+    deleteLocalBranch: (input) => withListRefsInvalidation(input.cwd, deleteLocalBranch(input)),
     renameBranch: (input) => withListRefsInvalidation(input.cwd, renameBranch(input)),
     createRef: (input) => withListRefsInvalidation(input.cwd, createRef(input)),
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),

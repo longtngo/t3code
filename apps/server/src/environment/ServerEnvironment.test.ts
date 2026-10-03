@@ -184,15 +184,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.vcsLocalOnlyStatus).toBe(true);
       expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
-      expect(second.capabilities.subagentBackend).toBe(true);
-      expect(second.capabilities.subagentBackendThreadModes).toBe(true);
-      // I11: this assertion is load-bearing. The surrounding test asserts a SUBSET of
-      // capabilities, so adding the schema field without advertising it here would
-      // otherwise pass, and the Settings row would be hidden on every client.
-      expect(second.capabilities.allowSpendingCredits).toBe(true);
-      expect(second.capabilities.offerThreadCompaction).toBe(true);
       expect(second.capabilities.jiraTicketLinks).toBe(true);
-      expect(second.capabilities.threadPlanHistory).toBe(true);
+      expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),
   );
@@ -269,7 +262,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withFd.capabilities.desktopAppUpdate).toBe(true);
       expect(withFd.capabilities.serverSelfUpdateProgress).toBe(true);
-      expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
+      // v2 recovery terminalizes running runs on restart, so continuation
+      // stays unadvertised until the v2 runtime carries the markers.
+      expect(withFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const withoutFd = yield* describeWith({ mode: "desktop" });
       expect(withoutFd.capabilities.serverSelfUpdate).toBe("desktop-managed");

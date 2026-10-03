@@ -902,6 +902,23 @@ describe("ChatMarkdown Windows file links", () => {
   });
 
   it.each([true, false])(
+    "keeps backslashes CommonMark would read as escapes with parseRawHtml=%s",
+    async (parseRawHtml) => {
+      const view = await renderDom(
+        <ChatMarkdown
+          cwd="C:/Users/shawn/project"
+          environmentId={environmentId}
+          text={String.raw`[settings](C:\Users\shawn\.claude\settings.json)`}
+          lineBreaks={!parseRawHtml}
+          parseRawHtml={parseRawHtml}
+        />,
+      );
+
+      expect(view.find('[href="C:/Users/shawn/.claude/settings.json"]')).not.toBeNull();
+    },
+  );
+
+  it.each([true, false])(
     "distinguishes same-named backslash paths with parseRawHtml=%s",
     async (parseRawHtml) => {
       const view = await renderDom(

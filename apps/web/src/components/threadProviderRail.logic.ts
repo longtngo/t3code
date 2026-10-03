@@ -6,7 +6,7 @@ import {
 
 import { normalizeProviderAccentColor } from "../providerInstances";
 import { formatProviderDriverKindLabel } from "../providerModels";
-import { providerInstanceInitials } from "./chat/ProviderInstanceIcon";
+import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
 
 /**
  * Resolution for the per-thread provider indicator: which provider instance a thread is on, and
@@ -17,13 +17,13 @@ import { providerInstanceInitials } from "./chat/ProviderInstanceIcon";
 /** The minimum a thread must expose for its provider to be resolved. */
 export interface ThreadProviderSource {
   readonly modelSelection: { readonly instanceId: ProviderInstanceId };
-  readonly session: { readonly providerInstanceId?: ProviderInstanceId | undefined } | null;
+  readonly runtime: { readonly providerInstanceId?: ProviderInstanceId | undefined } | null;
 }
 
 /**
  * The provider instance a thread is currently on.
  *
- * A live session's provider outranks the thread's stored selection: when a session is running,
+ * A live runtime's provider outranks the thread's stored selection: when a session is running,
  * the provider actually serving the thread is the truthful answer, and the two can differ (a
  * locked continuation keeps its original instance after the stored selection moves on). This
  * mirrors the composer's precedence so the rail and the composer never disagree.
@@ -32,7 +32,7 @@ export interface ThreadProviderSource {
  * is required — so there is no "unknown provider" case to render.
  */
 export function resolveThreadProviderInstanceId(thread: ThreadProviderSource): ProviderInstanceId {
-  return thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+  return thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
 }
 
 /** How a provider instance is drawn in the list: its accent, and the name that announces it. */

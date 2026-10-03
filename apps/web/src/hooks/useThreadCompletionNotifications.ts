@@ -21,14 +21,50 @@ import { useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+
 import { useClientSettings, usePrimarySettings } from "./useSettings";
 import { useThreadShells } from "../state/entities";
 import {
   classifyThreadCompletion,
   notifyThreadCompletions,
   registerThreadNotificationHost,
+  type ThreadBackgroundLiveness,
 } from "../lib/notifier";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
+
+/**
+ * The latest run's status in the V1 turn-state vocabulary the notifier
+ * classifies: every active v2 status reads "running", and only completed,
+ * failed and interrupted/cancelled runs are terminal outcomes. A rolled-back
+ * run notifies nothing.
+ */
+function latestRunNotificationState(shell: EnvironmentThreadShell): string | null {
+  switch (shell.latestRun?.status) {
+    case undefined:
+      return null;
+    case "preparing":
+    case "queued":
+    case "starting":
+    case "running":
+    case "waiting":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "error";
+    case "interrupted":
+    case "cancelled":
+      return "interrupted";
+    default:
+      return null;
+  }
+}
+
+/** Post-settlement background work: v2 reports it as the shell's pending roster. */
+function backgroundLivenessOf(shell: EnvironmentThreadShell): ThreadBackgroundLiveness {
+  return shell.pendingBackgroundTasks.length > 0 ? "monitoring" : null;
+}
 
 export function useThreadCompletionNotifications(): void {
   const navigate = useNavigate();
@@ -103,19 +139,18 @@ export function useThreadCompletionNotifications(): void {
       seen.add(key);
       // Absent key => first observation => `undefined`, which never fires.
       const previousState = previous.has(key) ? (previous.get(key) ?? null) : undefined;
-      const nextState = shell.latestTurn?.state ?? null;
+      const nextState = latestRunNotificationState(shell);
       const completion = classifyThreadCompletion({
         threadId: shell.id,
         previousState,
-        nextTurnId: shell.latestTurn?.turnId ?? null,
+        nextTurnId: shell.latestRun?.runId ?? null,
         nextState,
         title: shell.title,
-        crewRole: shell.crewRole,
       });
       if (completion) {
         notifyThreadCompletions({
           environmentId: shell.environmentId,
-          completions: [{ ...completion, backgroundLiveness: shell.backgroundLiveness }],
+          completions: [{ ...completion, backgroundLiveness: backgroundLivenessOf(shell) }],
           enabled: enabledBox.current,
           categories: categoriesBox.current,
         });

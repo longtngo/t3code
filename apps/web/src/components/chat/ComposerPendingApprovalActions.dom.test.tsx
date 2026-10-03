@@ -1,4 +1,4 @@
-import { ApprovalRequestId } from "@t3tools/contracts";
+import { RuntimeRequestId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../../testing/renderDom";
@@ -13,7 +13,8 @@ describe("ComposerPendingApprovalActions", () => {
   it("keeps the main decisions visible and secondary decisions in the menu", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-1")}
+        requestId={RuntimeRequestId.make("approval-1")}
+        canRespond
         isResponding={false}
         onRespondToApproval={async () => undefined}
       />,
@@ -31,7 +32,8 @@ describe("ComposerPendingApprovalActions", () => {
   it("keeps secondary provider labels out of the compact action row", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-safari")}
+        requestId={RuntimeRequestId.make("approval-safari")}
+        canRespond
         isResponding={false}
         options={[
           { decision: "decline", label: "Decline" },
@@ -52,7 +54,8 @@ describe("ComposerPendingApprovalActions", () => {
   it("preserves provider labels for the main decisions", async () => {
     const view = await renderDom(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-1")}
+        requestId={RuntimeRequestId.make("approval-1")}
+        canRespond
         isResponding={false}
         options={[
           { decision: "accept", label: "Allow once" },
@@ -72,10 +75,11 @@ describe("ComposerPendingApprovalActions", () => {
 
   it("responds with the decision of the button that was pressed", async () => {
     const onRespondToApproval = vi.fn(async () => undefined);
-    const requestId = ApprovalRequestId.make("approval-clicked");
+    const requestId = RuntimeRequestId.make("approval-clicked");
     const view = await renderDom(
       <ComposerPendingApprovalActions
         requestId={requestId}
+        canRespond
         isResponding={false}
         onRespondToApproval={onRespondToApproval}
       />,
@@ -95,7 +99,8 @@ describe("ComposerPendingApprovalActions", () => {
     const onRespondToApproval = vi.fn(async () => undefined);
     const view = await renderDom(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-responding")}
+        requestId={RuntimeRequestId.make("approval-responding")}
+        canRespond
         isResponding
         onRespondToApproval={onRespondToApproval}
       />,

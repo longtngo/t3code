@@ -18,7 +18,6 @@ import {
   useAppearancePreferences,
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
-import { useTitleRegenerationFailureAlerts } from "./features/threads/useTitleRegenerationFailureAlerts";
 import { appAtomRegistry } from "./state/atom-registry";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
@@ -66,11 +65,6 @@ export default function App() {
   );
 }
 
-function TitleRegenerationFailureAlerts() {
-  useTitleRegenerationFailureAlerts();
-  return null;
-}
-
 function AppContent() {
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
@@ -78,7 +72,6 @@ function AppContent() {
   return (
     <>
       <SplashScreenCoordinator />
-      <TitleRegenerationFailureAlerts />
       <SubscriptionUsageCoordinator />
       <GestureHandlerRootView className="flex-1">
         <KeyboardProvider statusBarTranslucent>

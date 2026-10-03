@@ -39,20 +39,20 @@ const fixture = vi.hoisted(() => {
     interactionMode: "default",
     branch: null,
     worktreePath: null,
-    latestTurn: null,
+    latestRun: null,
+    pendingBackgroundTasks: [],
     createdAt: "2026-09-13T10:00:00.000Z",
     updatedAt: "2026-09-13T10:00:00.000Z",
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
-    session: running
+    pinnedAt: null,
+    runtime: running
       ? {
-          threadId: id,
           status: "running",
+          activeRunId: "turn-1",
           providerName: instanceId,
           providerInstanceId: instanceId,
-          runtimeMode: "full-access",
-          activeTurnId: "turn-1",
           lastError: null,
           updatedAt: "2026-09-13T10:00:00.000Z",
         }

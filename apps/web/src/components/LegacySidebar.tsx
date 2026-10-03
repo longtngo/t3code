@@ -53,7 +53,6 @@ import {
   type SidebarProjectGroupingMode,
   resolveEnvironmentMachineKind,
   ThreadId,
-  type WorkspaceMember,
 } from "@t3tools/contracts";
 import {
   parseScopedThreadKey,
@@ -68,6 +67,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -153,7 +153,6 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
-import WorkspaceMembersControl from "./WorkspaceMembersControl";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -189,6 +188,8 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   resolveProjectStatusIndicator,
+  resolveThreadRowClassName,
+  resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
@@ -408,7 +409,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     return () => window.removeEventListener("dragend", clearFileDrag);
   }, [isFileDragOver]);
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(isActive);
-  const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
@@ -465,8 +467,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [discoveredPorts, navigateToThread, openPreview, threadRef],
   );
-  const isThreadRunning =
-    thread.session?.status === "running" && thread.session.activeTurnId != null;
+  const isThreadRunning = !threadRuntimeCanArchive(thread.runtime);
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -1149,6 +1150,7 @@ interface SidebarProjectItemProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1170,6 +1172,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     handleNewThread,
     archiveThread,
     deleteThread,
+    markThreadUnread,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -1212,7 +1215,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const { isMobile, setOpenMobile } = useSidebar();
-  const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -1303,29 +1305,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
     SidebarProjectGroupingMode | "inherit"
   >("inherit");
-  // Only the physical project's identity is held in state. Attaching a
-  // workspace repository is a sequential, multi-step edit (the motivating
-  // workflow attaches six repos in one sitting), so a held snapshot object
-  // would go stale after the first write: the dialog would keep rendering
-  // the pre-open member list, and the next attach would be computed from
-  // that stale list and silently discard everything attached so far. See
-  // `Sidebar.tsx`'s `projectActionsTargetRef` for the same fix.
-  const [workspaceMembersTargetRef, setWorkspaceMembersTargetRef] =
-    useState<SidebarProjectRef | null>(null);
-  const workspaceMembersTarget = useMemo(() => {
-    // This row only ever has one group in scope (`project`), so we pass it
-    // as a single-element array to the shared, unit-tested resolver rather
-    // than writing a second lookup.
-    const group = resolveSidebarProjectGroupByRef([project], workspaceMembersTargetRef);
-    if (!group || !workspaceMembersTargetRef) return null;
-    return (
-      group.memberProjects.find(
-        (member) =>
-          member.environmentId === workspaceMembersTargetRef.environmentId &&
-          member.id === workspaceMembersTargetRef.projectId,
-      ) ?? null
-    );
-  }, [project, workspaceMembersTargetRef]);
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -1359,7 +1338,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const lastVisitedAtByThreadKey = new Map(
       projectThreads.map((thread, index) => [
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        threadLastVisitedAts[index] ?? null,
+        resolveThreadLastVisitedAt(thread.lastVisitedAt, threadLastVisitedAts[index] ?? undefined),
       ]),
     );
     const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
@@ -1411,7 +1390,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const lastVisitedAtByThreadKey = new Map(
       projectThreads.map((thread, index) => [
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        threadLastVisitedAts[index] ?? null,
+        resolveThreadLastVisitedAt(thread.lastVisitedAt, threadLastVisitedAts[index] ?? undefined),
       ]),
     );
     const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
@@ -1542,41 +1521,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
     },
     [projectGroupingSettings.sidebarProjectGroupingOverrides],
-  );
-
-  const openWorkspaceMembersDialog = useCallback((member: SidebarProjectGroupMember) => {
-    setWorkspaceMembersTargetRef({ environmentId: member.environmentId, projectId: member.id });
-  }, []);
-
-  const closeWorkspaceMembersDialog = useCallback(() => {
-    setWorkspaceMembersTargetRef(null);
-  }, []);
-
-  const updateWorkspaceMembers = useCallback(
-    async (
-      member: SidebarProjectGroupMember,
-      members: ReadonlyArray<WorkspaceMember>,
-    ): Promise<boolean> => {
-      const result = await updateProject({
-        environmentId: member.environmentId,
-        input: { projectId: member.id, members },
-      });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to update workspace repositories",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-        return false;
-      }
-      return true;
-    },
-    [updateProject],
   );
 
   const removeProject = useCallback(
@@ -1753,7 +1697,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "workspace-members" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1768,9 +1712,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 return;
               case "grouping":
                 openProjectGroupingDialog(member);
-                return;
-              case "workspace-members":
-                openWorkspaceMembersDialog(member);
                 return;
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
@@ -1789,7 +1730,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "workspace-members" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1833,7 +1774,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
-            buildTargetedItem("workspace-members", "Workspace repositories"),
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
@@ -1859,7 +1799,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
-      openWorkspaceMembersDialog,
       project.groupedProjectCount,
       project.memberProjects,
       project.projectKey,
@@ -1973,7 +1912,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return threadRef && thread ? [{ threadKey, threadRef, thread }] : [];
       });
       const hasRunningThread = selectedThreadEntries.some(
-        ({ thread }) => thread.session?.status === "running" && thread.session.activeTurnId != null,
+        ({ thread }) => !threadRuntimeCanArchive(thread.runtime),
       );
 
       const clicked = await api.contextMenu.show(
@@ -1982,8 +1921,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
 
       if (clicked === "mark-unread") {
-        for (const { threadKey, thread } of selectedThreadEntries) {
-          markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        for (const { threadRef } of selectedThreadEntries) {
+          markThreadUnread(threadRef);
         }
         clearSelection();
         return;
@@ -2372,7 +2311,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "mark-unread") {
-        markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        markThreadUnread(threadRef);
         return;
       }
       if (clicked === "copy-path") {
@@ -2696,45 +2635,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogFooter>
         </DialogPopup>
       </Dialog>
-
-      <Dialog
-        open={workspaceMembersTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            closeWorkspaceMembersDialog();
-          }
-        }}
-      >
-        <DialogPopup className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Workspace repositories</DialogTitle>
-            <DialogDescription>
-              {workspaceMembersTarget
-                ? `Additional repositories threads in ${workspaceMembersTarget.workspaceRoot} can read and write.`
-                : "Additional repositories this project's threads can read and write."}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel>
-            {workspaceMembersTarget ? (
-              <WorkspaceMembersControl
-                // Remount per project: an optimistic list must never carry over
-                // to a different one. Same reason as the settings page's key.
-                key={`${workspaceMembersTarget.environmentId}:${workspaceMembersTarget.id}`}
-                environmentId={workspaceMembersTarget.environmentId}
-                members={workspaceMembersTarget.members}
-                onMembersChange={(members) =>
-                  updateWorkspaceMembers(workspaceMembersTarget, members)
-                }
-              />
-            ) : null}
-          </DialogPanel>
-          <DialogFooter>
-            <Button variant="outline" onClick={closeWorkspaceMembersDialog}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
     </>
   );
 });
@@ -2998,6 +2898,7 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -3040,6 +2941,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
+    markThreadUnread,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3180,6 +3082,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         handleNewThread={handleNewThread}
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
+                        markThreadUnread={markThreadUnread}
                         threadJumpLabelByKey={threadJumpLabelByKey}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
@@ -3213,6 +3116,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
+                markThreadUnread={markThreadUnread}
                 threadJumpLabelByKey={threadJumpLabelByKey}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
@@ -3248,7 +3152,7 @@ export default function LegacySidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread } = useThreadActions();
+  const { archiveThread, deleteThread, markThreadUnread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
     strict: false,
@@ -3900,6 +3804,7 @@ export default function LegacySidebar() {
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
+        markThreadUnread={markThreadUnread}
         sortedProjects={sortedProjects}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}

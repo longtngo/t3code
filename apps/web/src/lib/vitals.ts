@@ -1,4 +1,12 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+/**
+ * The two fields {@link deriveLatestAccountUsage} reads from an activity. V1's
+ * `OrchestrationThreadActivity` is gone under orchestrator v2; the account-usage
+ * source returns with the v2 port (U5), so this stays structural until then.
+ */
+export interface AccountUsageActivity {
+  readonly kind: string;
+  readonly payload: unknown;
+}
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 
 import { formatShortTimestamp } from "../timestampFormat";
@@ -382,7 +390,7 @@ function parseCodexBalances(value: unknown): UsageBalanceView[] {
  * view with null windows so the caller can omit the block.
  */
 export function deriveLatestAccountUsage(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activities: ReadonlyArray<AccountUsageActivity>,
   nowMs: number,
 ): AccountUsageView | null {
   for (let index = activities.length - 1; index >= 0; index -= 1) {

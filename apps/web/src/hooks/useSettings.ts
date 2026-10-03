@@ -14,6 +14,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
+  type ProviderInstanceMutation,
   ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -411,6 +412,21 @@ export function readEnvironmentSettings(environmentId: EnvironmentId): UnifiedSe
     appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId)) ??
       DEFAULT_SERVER_SETTINGS,
     getClientSettingsSnapshot(),
+  );
+}
+
+/** Atomically mutate one provider instance against the server's latest settings snapshot. */
+export function usePersistEnvironmentProviderInstanceMutation(environmentId: EnvironmentId) {
+  const mutateProviderInstance = useAtomCommand(serverEnvironment.mutateProviderInstance, {
+    reportFailure: false,
+  });
+  return useCallback(
+    (providerInstanceMutation: ProviderInstanceMutation, patch: ServerSettingsPatch = {}) =>
+      mutateProviderInstance({
+        environmentId,
+        input: { patch, providerInstanceMutation },
+      }),
+    [environmentId, mutateProviderInstance],
   );
 }
 

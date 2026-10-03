@@ -48,7 +48,6 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     scripts: [],
-    members: [],
     ...overrides,
   };
 }
@@ -500,46 +499,5 @@ describe("resolveSidebarProjectGroupByRef", () => {
     });
 
     expect(resolved?.memberProjects.map((member) => member.id)).toEqual([primary.id, remote.id]);
-  });
-
-  // The regression this exists for: the project settings dialog used to hold
-  // the snapshot it was opened with. Attaching a workspace member dispatched
-  // the update, but the dialog kept rendering the pre-attach member list, so
-  // the SECOND attach was computed from the empty list and dropped the first.
-  // Re-deriving from live state on each render is what makes both survive.
-  it("re-derives members after the project is updated", () => {
-    const memberA = {
-      id: "member-a",
-      path: "/srv/prm_portal_api",
-      title: "prm_portal_api",
-      integrationBranch: "pickup-v2",
-    };
-    const memberB = {
-      id: "member-b",
-      path: "/srv/warehouse",
-      title: "warehouse",
-      integrationBranch: "pickup-v2",
-    };
-    const target = {
-      environmentId: primaryEnvironmentId,
-      projectId: ProjectId.make("project-1"),
-    };
-
-    const beforeAttach = resolveSidebarProjectGroupByRef(buildGroups([makeProject()]), target);
-    expect(beforeAttach?.members).toEqual([]);
-
-    const afterFirstAttach = resolveSidebarProjectGroupByRef(
-      buildGroups([makeProject({ members: [memberA] })]),
-      target,
-    );
-    expect(afterFirstAttach?.members).toEqual([memberA]);
-
-    // What the dialog now feeds the editor, so the second attach appends
-    // rather than replacing.
-    const afterSecondAttach = resolveSidebarProjectGroupByRef(
-      buildGroups([makeProject({ members: [...(afterFirstAttach?.members ?? []), memberB] })]),
-      target,
-    );
-    expect(afterSecondAttach?.members).toEqual([memberA, memberB]);
   });
 });

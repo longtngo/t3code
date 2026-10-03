@@ -7,7 +7,6 @@ import {
   type EnvironmentThreadState,
   createThreadEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/threads";
-import { createHeldMessageEnvironmentAtoms } from "@t3tools/client-runtime/state/held-messages";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -42,14 +41,14 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  return Option.getOrElse(
+  const state = Option.getOrElse(
     AsyncResult.value(result),
     () => EMPTY_ENVIRONMENT_THREAD_STATE,
   ) as EnvironmentThreadState;
+  return state;
 }
 
 /**
  * Recall for a message the running turn is holding. Shares the web app's
  * command so both surfaces reach the same RPC through the same atom shape.
  */
-export const heldMessageEnvironment = createHeldMessageEnvironmentAtoms(connectionAtomRuntime);

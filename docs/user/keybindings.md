@@ -9,9 +9,16 @@ In **Settings → General → Send shortcut**, choose whether Enter sends, requi
 `mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
-A message sent while the agent runs waits in the thread's queue and opens its own
-turn when the running one ends. In a new thread, `mod+Enter` keeps starting the
-thread in the background.
+**Follow-up behavior** chooses Queue or Steer while the agent runs. Use
+`mod+Enter` to do the opposite for one message, even when the send shortcut
+requires a modifier. In a new thread, `mod+Alt+Enter` starts the thread in the
+background and opens a fresh composer. Change either shortcut in
+**Settings → Keybindings** under **Composer: Opposite Queue or Steer Action** or
+**Composer: Start in Background**. These bindings take priority over the send
+shortcut. Click the send button to use the configured follow-up behavior.
+
+When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
+steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
 Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
@@ -83,7 +90,8 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 ## When conditions
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
-`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`.
+`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
+`turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.

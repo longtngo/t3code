@@ -7,11 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { AsyncResult } from "effect/unstable/reactivity";
-import {
-  type EnvironmentId,
-  type ProjectIconOverride,
-  type WorkspaceMember,
-} from "@t3tools/contracts";
+import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { InfoIcon, Trash2Icon } from "lucide-react";
@@ -29,7 +25,6 @@ import { useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
-import WorkspaceMembersControl from "../WorkspaceMembersControl";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -300,32 +295,6 @@ function ProjectDetail({
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
 
-  // FORK: workspace members belong to the physical project, not the group, so this
-  // writes to one checkout only - never through `updateAllMembers`. Returns whether
-  // the write landed: `WorkspaceMembersControl` clears its editor on true, and
-  // keeping it open on false is what stops a failed save discarding what was typed.
-  const updateWorkspaceMembers = useCallback(
-    async (
-      member: SidebarProjectGroupMember,
-      members: ReadonlyArray<WorkspaceMember>,
-    ): Promise<boolean> => {
-      const result = mapAtomCommandResult(
-        await updateProject({
-          environmentId: member.environmentId,
-          input: { projectId: member.id, members },
-        }),
-        () => undefined,
-      );
-      if (result._tag === "Failure") {
-        // Silent on an interrupted command, which `reportFailure` already skips.
-        reportFailure("Failed to update workspace repositories", result);
-        return false;
-      }
-      return true;
-    },
-    [reportFailure, updateProject],
-  );
-
   const removeMembers = useCallback(
     async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
       const api = readLocalApi();
@@ -522,33 +491,6 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
-        {/* FORK: the multi-repo workspace editor. It is per checkout, so with more than
-            one checkout each gets its own row labelled by its workspace root. */}
-        <SettingsSection title="Workspace repositories">
-          {group.memberProjects.map((member) => (
-            <SettingsRow
-              key={member.physicalProjectKey}
-              title={
-                hasMultipleCheckouts ? (member.environmentLabel ?? "Checkout") : "Repositories"
-              }
-              description={
-                hasMultipleCheckouts
-                  ? member.workspaceRoot
-                  : "Extra repositories this checkout's threads can read and write, each on its own integration branch."
-              }
-            >
-              <WorkspaceMembersControl
-                // One control per checkout, keyed by it: the editor state
-                // (`editingId`) belongs to the checkout whose list it resolves
-                // against, and must never be shared across rows.
-                key={member.physicalProjectKey}
-                environmentId={member.environmentId}
-                members={member.members}
-                onMembersChange={(next) => updateWorkspaceMembers(member, next)}
-              />
-            </SettingsRow>
-          ))}
-        </SettingsSection>
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Danger">
           <SettingsRow

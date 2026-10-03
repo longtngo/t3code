@@ -22,9 +22,9 @@ import {
   createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
-import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import * as Persistence from "../platform/persistence.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
@@ -57,7 +57,7 @@ function canUseVcsRefsCache(input: VcsListRefsInput): boolean {
 
 export const commitVcsRefsRefresh = Effect.fn("CachedVcsRefsState.commitRefresh")(function* (
   registry: AtomRegistry.AtomRegistry,
-  cache: EnvironmentCacheStore["Service"],
+  cache: Persistence.EnvironmentCacheStore["Service"],
   input: {
     readonly environmentId: EnvironmentId;
     readonly cwd: string;
@@ -127,8 +127,8 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
   registry?: AtomRegistry.AtomRegistry,
   persistedCacheReadable = true,
 ) {
-  const supervisor = yield* EnvironmentSupervisor;
-  const cache = yield* EnvironmentCacheStore;
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const cache = yield* Persistence.EnvironmentCacheStore;
   const environmentId = supervisor.target.environmentId;
   const useCache = canUseVcsRefsCache(input);
   const cached =
@@ -148,7 +148,7 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       : Option.none<VcsListRefsResult>();
   const refresh = Effect.fn("CachedVcsRefsState.refresh")(function* () {
     const refs = yield* request(WS_METHODS.vcsListRefs, input).pipe(
-      Effect.provideService(EnvironmentSupervisor, supervisor),
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     );
     const persist = cache.saveVcsRefs(environmentId, input.cwd, refs).pipe(
       Effect.catch((error) =>
@@ -242,7 +242,7 @@ function cachedVcsRefsChanges(
 }
 
 export function createVcsEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | EnvironmentCacheStore | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | Persistence.EnvironmentCacheStore | R, E>,
 ) {
   /**
    * One flat family on purpose: families hold entries via WeakRef, so a nested
@@ -279,16 +279,6 @@ export function createVcsEnvironmentAtoms<R, E>(
       cwd: target.input.cwd,
     });
 
-  // Refreshed on a timer as well as on demand: a member's branch can move
-  // because another thread swept it, and nothing pushes that to this client.
-  // Named here rather than inline so `memberActionPrepare` can invalidate it.
-  const memberBranches = createEnvironmentRpcQueryAtomFamily(runtime, {
-    label: "environment-data:workspace:member-branches",
-    tag: WS_METHODS.workspaceMemberBranches,
-    staleTimeMs: 15_000,
-    refreshIntervalMs: 60_000,
-  });
-
   return {
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
@@ -318,42 +308,6 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
-    }),
-    memberBranches,
-    // Commands, not queries: both write. The prepare step moves a branch in the
-    // user's checkout, so it runs when an action is about to, never on a timer.
-    // Serialized per member rather than per path. These name a member id and
-    // let the server resolve the directory, but a member id still maps to one
-    // checkout — and `memberActionPrepare` cuts and checks out a branch there,
-    // which two concurrent calls must not do at once.
-    memberActionPrepare: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:workspace:member-action-prepare",
-      tag: WS_METHODS.workspaceMemberActionPrepare,
-      concurrency: {
-        mode: "serial",
-        key: (target) => `${target.environmentId}:${target.input.memberId}`,
-      },
-      // This command is the one thing on this client that moves a member's
-      // branch, so it is also the one thing that can say the reports are wrong
-      // without waiting for a poll. Every surface reading them — the repository
-      // bar, the composer guard — shares this atom.
-      onSettled: (target, registry) =>
-        Effect.sync(() => {
-          registry.refresh(
-            memberBranches({
-              environmentId: target.environmentId,
-              input: { projectId: target.input.projectId, threadId: target.input.threadId },
-            }),
-          );
-        }),
-    }),
-    memberPrBaseWrite: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:workspace:member-pr-base-write",
-      tag: WS_METHODS.workspaceMemberPrBaseWrite,
-      concurrency: {
-        mode: "serial",
-        key: (target) => `${target.environmentId}:${target.input.memberId}`,
-      },
     }),
     refreshLocalStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-local-status",

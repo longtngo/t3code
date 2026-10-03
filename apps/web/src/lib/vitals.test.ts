@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
 import {
+  type AccountUsageActivity,
   arcPathD,
   billingMonthWindow,
   clampPct,
@@ -25,16 +25,8 @@ import {
 // mid-month in a 31-day month, clear of either boundary.
 const NOW_MS = Date.UTC(2026, 7, 15, 12, 0, 0);
 
-function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
-  return {
-    id: EventId.make(id),
-    tone: "info",
-    kind,
-    summary: kind,
-    payload,
-    turnId: TurnId.make("turn-1"),
-    createdAt: "2026-07-27T00:00:00.000Z",
-  };
+function makeActivity(_id: string, kind: string, payload: unknown): AccountUsageActivity {
+  return { kind, payload };
 }
 
 describe("vitalsLevel", () => {

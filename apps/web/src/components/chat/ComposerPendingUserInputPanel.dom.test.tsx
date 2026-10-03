@@ -1,4 +1,4 @@
-import { ApprovalRequestId } from "@t3tools/contracts";
+import { RuntimeRequestId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../../testing/renderDom";
@@ -17,8 +17,9 @@ function renderPanel(
     <ComposerPendingUserInputPanel
       pendingUserInputs={[
         {
-          requestId: ApprovalRequestId.make("request-1"),
+          requestId: RuntimeRequestId.make("request-1"),
           createdAt: "2026-08-07T00:00:00.000Z",
+          responseCapability: "live",
           questions: [
             {
               id: "question-1",

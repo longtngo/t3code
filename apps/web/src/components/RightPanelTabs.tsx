@@ -27,7 +27,6 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   Activity,
-  Bot,
   Smartphone,
   ChevronDown,
   ChevronLeft,
@@ -80,6 +79,7 @@ import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
 import { useDeviceState } from "~/state/device";
+import type { PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
 import {
   newestPullRequestSummary,
   pullRequestEnvironment,
@@ -103,6 +103,7 @@ interface RightPanelTabsProps {
   widthStorageKey?: string;
   /** Forwarded to PreviewPanelShell as the initial width before a user resize. */
   defaultWidth?: number;
+  inlineSize?: PreviewPanelInlineSize;
   layoutControls?: ReactNode;
   surfaces: readonly RightPanelSurface[];
   /** Fallback environment for surfaces that do not carry their own. */
@@ -139,7 +140,6 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
-  onAddAgents: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
   onUndoClosedTab: () => void;
@@ -150,15 +150,12 @@ interface RightPanelTabsProps {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
-  agentsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
   /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
   closedTabCount: number;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
-  /** Running + waiting subagents; badges the Agents card in the empty state. */
-  liveAgentCount: number;
   /** Running top-level background tasks; badges the Background row in the empty state. */
   liveBackgroundCount: number;
   /** The latest turn's task list progress; the launcher's Task list row shows it only when both are set. */
@@ -190,7 +187,6 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   pullRequests: "No linked pull requests are available for this thread.",
-  agents: "Agents are only available from a thread.",
   tasks: "The task list is only available from a thread.",
   background: "Background tasks are only available from a thread.",
   undoClosedTab: "No recently closed tabs.",
@@ -217,7 +213,6 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   pullRequests: "No linked pull requests available.",
-  agents: "Available from a thread.",
   tasks: "Available from a thread.",
   background: "Available from a thread.",
   undoClosedTab: "No recently closed tabs.",
@@ -360,7 +355,6 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
-  onAddAgents: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
   onUndoClosedTab: () => void;
@@ -371,13 +365,11 @@ function RightPanelEmptyState(props: {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
-  agentsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
   /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
   closedTabCount: number;
   deviceAvailable: boolean;
-  liveAgentCount: number;
   liveBackgroundCount: number;
   taskCompletedCount?: number | undefined;
   taskTotalCount?: number | undefined;
@@ -393,7 +385,6 @@ function RightPanelEmptyState(props: {
       available: props.browserAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.browser,
       onClick: props.onAddBrowser,
-      badgeCount: 0,
     },
     {
       label: "Terminal",
@@ -402,7 +393,6 @@ function RightPanelEmptyState(props: {
       available: props.terminalAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.terminal,
       onClick: props.onAddTerminal,
-      badgeCount: 0,
     },
     {
       label: "Files",
@@ -411,7 +401,6 @@ function RightPanelEmptyState(props: {
       available: props.filesAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.files,
       onClick: props.onAddFiles,
-      badgeCount: 0,
     },
     {
       label: "Diff",
@@ -420,7 +409,6 @@ function RightPanelEmptyState(props: {
       available: props.diffAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.diff,
       onClick: props.onAddDiff,
-      badgeCount: 0,
     },
     {
       label: "Pull request",
@@ -429,7 +417,6 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
-      badgeCount: 0,
     },
     {
       label: "Linked pull requests",
@@ -438,38 +425,6 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
       onClick: props.onAddPullRequests,
-      badgeCount: 0,
-    },
-    {
-      label: "Agents",
-      icon: Bot,
-      shortcut: "A",
-      available: props.agentsAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
-      onClick: props.onAddAgents,
-      badgeCount: props.liveAgentCount,
-    },
-    {
-      label: "Task list",
-      icon: ListTodo,
-      shortcut: "K",
-      available: props.tasksAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.tasks,
-      onClick: props.onAddTasks,
-      badgeCount: 0,
-      progress:
-        props.taskCompletedCount !== undefined && props.taskTotalCount !== undefined
-          ? `${props.taskCompletedCount}/${props.taskTotalCount}`
-          : null,
-    },
-    {
-      label: "Background",
-      icon: Activity,
-      shortcut: "G",
-      available: props.backgroundAvailable,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.background,
-      onClick: props.onAddBackground,
-      badgeCount: props.liveBackgroundCount,
     },
     {
       label: "Undo closed tab",
@@ -488,7 +443,6 @@ function RightPanelEmptyState(props: {
       available: props.deviceAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
-      badgeCount: 0,
     },
   ] as const;
 
@@ -557,26 +511,11 @@ function RightPanelEmptyState(props: {
   const isHighlighted = (action: SurfaceAction) =>
     highlightIndex !== -1 && availableActions[highlightIndex] === action;
 
-  const actionProgress = (action: SurfaceAction) =>
-    "progress" in action && action.progress !== null ? (
-      <span className="shrink-0 rounded-full bg-success/15 px-1.5 text-3xs font-medium leading-4 tabular-nums text-success">
-        {action.progress}
-      </span>
-    ) : null;
-
   const actionIcon = (action: SurfaceAction, iconClassName = "size-4") => {
     const Icon = action.icon;
     return (
       <span className="relative inline-flex shrink-0">
         <Icon className={iconClassName} />
-        {action.badgeCount > 0 ? (
-          <span
-            aria-hidden
-            className="absolute -top-1.5 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-3xs font-semibold tabular-nums text-white"
-          >
-            {action.badgeCount}
-          </span>
-        ) : null}
       </span>
     );
   };
@@ -631,7 +570,6 @@ function RightPanelEmptyState(props: {
                   >
                     {action.label}
                   </span>
-                  {actionProgress(action)}
                   <Kbd>{action.shortcut}</Kbd>
                 </button>
                 {/*
@@ -678,7 +616,6 @@ function RightPanelEmptyState(props: {
                   >
                     {actionIcon(action, "size-4")}
                     <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                    {actionProgress(action)}
                     <Kbd>{action.shortcut}</Kbd>
                   </div>
                 }
@@ -726,8 +663,6 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "pull-requests":
       return "Pull requests";
-    case "agents":
-      return "Agents";
     case "tasks":
       return "Task list";
     case "background":
@@ -824,8 +759,6 @@ function SurfaceIcon({
       );
     case "pull-requests":
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
-    case "agents":
-      return <Bot className="size-3 shrink-0" />;
     case "tasks":
       return <ListTodo className="size-3 shrink-0" />;
     case "background":
@@ -1042,30 +975,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequests,
     },
     {
-      label: "Agents",
-      icon: Bot,
-      shortcut: "A",
-      available: props.agentsAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.agents,
-      onClick: props.onAddAgents,
-    },
-    {
-      label: "Task list",
-      icon: ListTodo,
-      shortcut: "K",
-      available: props.tasksAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.tasks,
-      onClick: props.onAddTasks,
-    },
-    {
-      label: "Background",
-      icon: Activity,
-      shortcut: "G",
-      available: props.backgroundAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.background,
-      onClick: props.onAddBackground,
-    },
-    {
       label: "Undo closed tab",
       icon: Undo2,
       shortcut: "U",
@@ -1270,6 +1179,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {...(props.open !== undefined ? { open: props.open } : {})}
       {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
       {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
+      {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
     >
       <div
         className={cn(
@@ -1617,7 +1527,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
-            onAddAgents={props.onAddAgents}
             onAddTasks={props.onAddTasks}
             onAddBackground={props.onAddBackground}
             onUndoClosedTab={props.onUndoClosedTab}
@@ -1628,12 +1537,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             pullRequestsAvailable={props.pullRequestsAvailable}
-            agentsAvailable={props.agentsAvailable}
             tasksAvailable={props.tasksAvailable}
             backgroundAvailable={props.backgroundAvailable}
             closedTabCount={props.closedTabCount}
             deviceAvailable={props.deviceAvailable}
-            liveAgentCount={props.liveAgentCount}
             liveBackgroundCount={props.liveBackgroundCount}
             taskCompletedCount={props.taskCompletedCount}
             taskTotalCount={props.taskTotalCount}

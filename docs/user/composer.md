@@ -32,6 +32,29 @@ also send files to T3 Code through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
+## Send while the agent is working
+
+On web and desktop, choose **Settings → General → Follow-up behavior** to queue
+new messages for a later turn or steer the running turn immediately. The setting
+applies to this client; already queued messages keep their place. Queued messages
+are saved on the server and can be edited, reordered, or removed above the composer.
+`Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
+it steers when your default is Queue and queues when your default is Steer.
+
+Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
+the oldest queued message as a steer. This leaves the current draft intact and
+requires an active turn that supports steering. Change
+`thread.steerQueuedMessage` in **Settings → Keybindings** to use another shortcut.
+
+Press `Option+Up` on macOS or `Alt+Up` on Windows and Linux with the cursor at the
+start of the composer to edit the most recently queued message. Change
+`thread.editQueuedMessage` to use another shortcut.
+
+Mobile has the same choice under **Settings → Follow-ups**. While a turn is
+running the send button shows which action it will take. Long-press it to use the
+other action for a single message, or hold `Cmd` while sending from a hardware
+keyboard. The button only offers Steer when the running agent supports it.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
@@ -91,7 +114,8 @@ On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
 File restore is only offered for threads running in a worktree, and it is
-refused when another thread or agent session also uses that directory, since
+refused when another thread or agent session also uses that directory, a folder
+inside it, or a folder that contains it, since
 restoring would erase their changes. A thread that works in the project directory
 rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
@@ -137,6 +161,30 @@ awake; it can sleep normally once recording stops.
 Transcription runs on your device. T3 Code deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
+## Queued messages
+
+On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
+empty. Adding text or attachments replaces it with a steer arrow. Click it to send a message into
+the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
+switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
+`Ctrl+Enter` on desktop, to queue the message for after the active turn.
+
+Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
+the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
+to a steer, or remove it.
+
+If the server restarts, saved queued messages keep their order and are held. Press
+**Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
+sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.
+
+The pencil on a queued row opens that message in the composer for editing. The original message
+stays in the queue until you save, and its row is highlighted while you edit. The message's
+attachments appear above the text with a remove control, and new images can be added the usual way.
+The checkmark saves the queued message in place; **Cancel** on its row leaves it unchanged. Whatever
+you had typed in the composer before starting the edit is restored afterwards. If the queued
+message starts or is removed while you are editing, the edit ends: changed content moves into the
+composer when it is empty, and is discarded otherwise.
+
 ## Commands and skills
 
 Type `/` for commands or `$` to add a skill from the selected environment and
@@ -173,6 +221,13 @@ pull requests in the current project's repository. Continue typing digits to fil
 by any part of its pull request numbers. A complete number is also resolved directly, even when that
 pull request is older than the recent list. Type a single word after `#` to search pull requests in
 the repository by text. Choose a result to insert it as a chip.
+
+Another thread can be context too. Type `@` followed by part of its title to pick one from
+the same server, or on web and desktop drag a thread out of the sidebar and drop it on the
+composer; a multi-selection drops together. The chip shows the thread's current title and
+opens it when selected. Your prompt only carries a reference: the agent reads the thread's
+history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
+thread does not change it, and the agent cannot send messages to it unless you ask.
 
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing
@@ -211,50 +266,22 @@ If nothing on the device can show a format, save or share it to open it elsewher
 Select an image or video attachment or link to preview it. Playback support depends
 on your browser or device; save an unsupported video to open it in another app.
 
-On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from a new thread to
-start it in the background. T3 Code opens another new thread and shows an **Open** action for the
-thread that started. The new thread keeps the selected workspace mode and base branch. If **New
-worktree** is selected, each background thread creates its own worktree.
+On web and desktop, right-click media to save it or copy its path or URL. On mobile,
+touch and hold an image or video thumbnail and choose **Save or share**. On iOS,
+return to the thumbnail to open this menu after watching a full-screen video.
+
+File links refer to the environment's machine, including when you connect remotely.
+Previews use the original file, even outside the workspace. Moving or deleting it
+can break the preview, so save a copy if you need to keep it.
 
 Each message shows its timestamp and its Copy and Revert buttons when you hover over it. To keep
 them visible, turn on **Always show message timestamps** in **Settings → General**.
 
-## Sending while the agent is working
-
-You do not have to wait for the agent to finish before sending. A message sent
-mid-turn is held and delivered when the current turn ends; it is never mixed
-into the answer already in progress.
-
-A held message does not appear in the conversation. It waits in a strip just
-above the message box, showing a count of what is queued; opening the strip
-lists each message in the order it will be sent. It joins the conversation when
-it is actually delivered, so what you see in the thread is what the agent has
-seen.
-
-### Taking a message back
-
-In the strip, a held message can be pulled back into the message box for
-editing. Its text is added to whatever you have already typed rather than
-replacing it. Attachments are not brought back and need attaching again.
-
-If the agent has already been handed the message, taking it back is no longer
-possible and T3 Code says so. The message is a normal message from then on.
-
-Recall is available with Claude. Other providers pass a held message straight
-through to the agent rather than holding it in a queue T3 Code can reach into,
-so their held messages are listed but cannot be taken back.
-
-Stopping the agent discards anything still waiting, so use Stop when you want to
-change direction rather than add to what was asked. A discarded message stays
-visible in the conversation as something you typed; it is simply never
-answered.
-
-### Escape
+## Escape
 
 `Escape` walks the same ladder the Stop button does, without reaching for the
-mouse. While a message is still waiting, `Escape` takes the most recent one
-back into the message box. Once nothing is waiting, `Escape` stops the agent,
-and a second deliberate press force-stops the session.
+mouse. The first press stops the agent, and a second deliberate press
+force-stops the session.
 
 The second press has to be a deliberate one. A press that lands immediately
 after the first is treated as a slip and ignored, and holding `Escape` down does
@@ -278,13 +305,6 @@ that row costs space you would rather give to the conversation.
 The row stays visible until you hide it, and the choice is remembered on that device only, so a
 phone can keep it hidden while a desktop keeps it open. While the row is hidden, the folder button
 still shows whether the thread is running in a worktree or in the local checkout.
-On web and desktop, right-click media to save it or copy its path or URL. On mobile,
-touch and hold an image or video thumbnail and choose **Save or share**. On iOS,
-return to the thumbnail to open this menu after watching a full-screen video.
-
-File links refer to the environment's machine, including when you connect remotely.
-Previews use the original file, even outside the workspace. Moving or deleting it
-can break the preview, so save a copy if you need to keep it.
 
 ## Files outside the workspace
 

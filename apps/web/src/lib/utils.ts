@@ -34,6 +34,8 @@ export function getLocalFileManagerName(platform: string): string {
   return "Files";
 }
 
+// FORK-ONLY: upstream removed this with its web send path; the sidebar thread
+// Queue's queued sends still mint temporary worktree branch names with it.
 export function randomHex(byteLength: number): string {
   return Encoding.encodeHex(globalThis.crypto.getRandomValues(new Uint8Array(byteLength)));
 }

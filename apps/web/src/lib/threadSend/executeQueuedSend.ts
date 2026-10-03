@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import type { StartThreadTurnInput } from "@t3tools/client-runtime/state/threads";
 import type { MessageId, ThreadId } from "@t3tools/contracts";
 
 import { markPromotedDraftThreadByRef, useComposerDraftStore } from "../../composerDraftStore";
@@ -23,7 +24,7 @@ export type QueuedSendOutcome =
 export interface QueuedSendCommands extends ThreadSettingsCommands {
   startThreadTurn(value: {
     environmentId: QueuedSendSnapshot["environmentId"];
-    input: Record<string, unknown>;
+    input: StartThreadTurnInput;
   }): Promise<AtomCommandResult<unknown, unknown>>;
 }
 

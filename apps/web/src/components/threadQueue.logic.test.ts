@@ -43,8 +43,9 @@ function shell(
     archivedAt: null,
     settledOverride: null,
     pinnedAt: null,
-    session: null,
-    latestTurn: null,
+    runtime: null,
+    latestRun: null,
+    pendingBackgroundTasks: [],
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
@@ -53,15 +54,15 @@ function shell(
 }
 
 const running = {
-  threadId: ThreadId.make("x"),
   status: "running" as const,
+  activeRunId: "turn-1" as never,
   providerName: "codex",
   providerInstanceId: ProviderInstanceId.make("codex"),
-  runtimeMode: "full-access" as const,
-  activeTurnId: "turn-1" as never,
   lastError: null,
   updatedAt: iso(-1_000),
 };
+/** Post-settlement background work: v2 parks the runtime at "idle" (the V1 "monitoring"). */
+const monitoring = { ...running, status: "idle" as const, activeRunId: null };
 
 const entry = (id: string): ThreadQueueEntry => ({
   environmentId: env,
@@ -95,7 +96,7 @@ const sel = (instanceId: string) => ({ instanceId, model: "m" }) as never;
 const on = (instanceId: string, overrides: Partial<EnvironmentThreadShell> = {}) =>
   shell(`busy-${instanceId}-${Math.random()}`, {
     modelSelection: sel(instanceId),
-    session: { ...running, providerInstanceId: ProviderInstanceId.make(instanceId) },
+    runtime: { ...running, providerInstanceId: ProviderInstanceId.make(instanceId) },
     ...overrides,
   });
 
@@ -104,40 +105,40 @@ describe("nextThreadQueueAction", () => {
     expect(
       decide([
         shell("ready"),
-        shell("failed", { session: { ...running, status: "error" } }),
-        shell("asking", { hasPendingUserInput: true, session: running }),
+        shell("failed", { runtime: { ...running, status: "failed" } }),
+        shell("asking", { hasPendingUserInput: true, runtime: running }),
       ]),
     ).toBe("claim");
   });
 
   it("waits when a working or monitoring thread fills the only slot", () => {
-    expect(decide([shell("ready"), shell("busy", { session: running })])).toBe("wait");
-    expect(decide([shell("pinned", { pinnedAt: iso(-5), session: running })])).toBe("wait");
-    expect(decide([shell("watching", { backgroundLiveness: "monitoring" })])).toBe("wait");
+    expect(decide([shell("ready"), shell("busy", { runtime: running })])).toBe("wait");
+    expect(decide([shell("pinned", { pinnedAt: iso(-5), runtime: running })])).toBe("wait");
+    expect(decide([shell("watching", { runtime: monitoring })])).toBe("wait");
   });
 
   it("counts every non-archived busy thread, whatever its section", () => {
     expect(
       decide([
-        shell("snoozed", { snoozedUntil: iso(60_000), snoozedAt: iso(-5), session: running }),
+        shell("snoozed", { snoozedUntil: iso(60_000), snoozedAt: iso(-5), runtime: running }),
       ]),
     ).toBe("wait");
-    expect(
-      decide([shell("settled", { settledOverride: "settled", backgroundLiveness: "monitoring" })]),
-    ).toBe("wait");
-    expect(decide([shell("archived", { archivedAt: iso(-5), session: running })])).toBe("claim");
+    expect(decide([shell("settled", { settledOverride: "settled", runtime: monitoring })])).toBe(
+      "wait",
+    );
+    expect(decide([shell("archived", { archivedAt: iso(-5), runtime: running })])).toBe("claim");
   });
 
   it("sends while busy < slots, skipping busy entries", () => {
-    const busyQueued = shell("queued-1", { session: running });
+    const busyQueued = shell("queued-1", { runtime: running });
     expect(decide([busyQueued])).toBe("wait"); // slots 1, one busy
     expect(nextThreadQueueAction({ ...base(), threads: [busyQueued], slots: 2 })).toEqual({
       kind: "claim",
       key: "env-1:queued-2",
     });
-    expect(decide([busyQueued, shell("other", { session: running })], { slots: 2 })).toBe("wait");
+    expect(decide([busyQueued, shell("other", { runtime: running })], { slots: 2 })).toBe("wait");
     expect(
-      decide([shell("x", { session: running }), shell("y", { session: running })], { slots: 1 }),
+      decide([shell("x", { runtime: running }), shell("y", { runtime: running })], { slots: 1 }),
     ).toBe("wait"); // slots below busy
   });
 
@@ -212,7 +213,7 @@ describe("nextThreadQueueAction", () => {
     const switched = shell("switched", {
       modelSelection: sel(b),
       latestUserMessageAt: iso(-500),
-      session: { ...running, status: "starting", providerInstanceId: a },
+      runtime: { ...running, status: "starting", providerInstanceId: a },
     });
     const input = {
       perProvider: true,
@@ -224,16 +225,16 @@ describe("nextThreadQueueAction", () => {
     const idleOld = shell("switched", {
       modelSelection: sel(b),
       latestUserMessageAt: iso(-500),
-      latestTurn: null,
-      session: { ...running, status: "ready", activeTurnId: null, providerInstanceId: a },
+      latestRun: null,
+      runtime: { ...running, status: "completed", activeRunId: null, providerInstanceId: a },
     });
     expect(decide([idleOld], input)).toBe("wait");
   });
 
   it("waits on a thread whose message was accepted but not yet picked up", () => {
-    expect(
-      decide([shell("accepted", { latestUserMessageAt: iso(-2_000), latestTurn: null })]),
-    ).toBe("wait");
+    expect(decide([shell("accepted", { latestUserMessageAt: iso(-2_000), latestRun: null })])).toBe(
+      "wait",
+    );
   });
 
   it("does nothing while paused or empty", () => {
@@ -256,78 +257,48 @@ describe("nextThreadQueueAction", () => {
     it("holds the next entry until the sent message lands on the thread", () => {
       const before = shell("sent", { latestUserMessageAt: iso(-3_600_000) });
       expect(decide([before], { inFlight: claim() })).toBe("wait");
-      const landed = shell("sent", { latestUserMessageAt: iso(-100), session: running });
+      const landed = shell("sent", { latestUserMessageAt: iso(-100), runtime: running });
       expect(decide([landed], { inFlight: claim() })).toBe("clear-in-flight");
     });
 
     it("a landed but idle send with the same turn holds the claim; a failed start releases it", () => {
       // Completed after the message landed (clock skew), so the thread reads idle.
       const prior = {
-        turnId: "turn-1" as never,
-        state: "completed" as const,
+        runId: "turn-1" as never,
+        status: "completed" as const,
         requestedAt: iso(-9_000),
         startedAt: iso(-8_000),
         completedAt: iso(-50),
         assistantMessageId: null,
       };
       const inFlight = claim({ priorTurnId: "turn-1" as never });
-      const idleSession = { ...running, status: "ready" as const, activeTurnId: null };
+      const idleSession = { ...running, status: "completed" as const, activeRunId: null };
       const idle = shell("sent", {
         latestUserMessageAt: iso(-100),
-        latestTurn: prior,
-        session: idleSession,
+        latestRun: prior,
+        runtime: idleSession,
       });
       expect(isQueueBusy(idle, iso(0))).toBe(false);
       expect(decide([idle], { inFlight })).toBe("wait");
       const failed = shell("sent", {
         latestUserMessageAt: iso(-100),
-        latestTurn: prior,
-        session: { ...running, status: "error", activeTurnId: null, updatedAt: iso(-50) },
+        latestRun: prior,
+        runtime: { ...running, status: "failed", activeRunId: null, updatedAt: iso(-50) },
       });
       expect(decide([failed], { inFlight })).toBe("clear-in-flight");
       const nextTurn = shell("sent", {
         latestUserMessageAt: iso(-100),
-        latestTurn: { ...prior, turnId: "turn-2" as never },
-        session: idleSession,
+        latestRun: { ...prior, runId: "turn-2" as never },
+        runtime: idleSession,
       });
       expect(decide([nextTurn], { inFlight })).toBe("clear-in-flight");
-    });
-
-    it("a re-sent thread whose previous turn failed holds the claim until the session changes", () => {
-      // The message lands while the session still reads the old error: the server has
-      // not yet moved it to "starting", so that error says nothing about this send.
-      const prior = {
-        turnId: "turn-1" as never,
-        state: "error" as const,
-        requestedAt: iso(-9_000),
-        startedAt: iso(-8_000),
-        completedAt: iso(-7_000),
-        assistantMessageId: null,
-      };
-      const oldError = { ...running, status: "error" as const, activeTurnId: null };
-      const inFlight = claim({
-        priorTurnId: "turn-1" as never,
-        priorSessionUpdatedAt: oldError.updatedAt,
-      });
-      const stale = shell("sent", {
-        latestUserMessageAt: iso(-100),
-        latestTurn: prior,
-        session: oldError,
-      });
-      expect(decide([stale], { inFlight })).toBe("wait");
-      const freshError = shell("sent", {
-        latestUserMessageAt: iso(-100),
-        latestTurn: prior,
-        session: { ...oldError, updatedAt: iso(-50) },
-      });
-      expect(decide([freshError], { inFlight })).toBe("clear-in-flight");
     });
 
     it("a draft's thread appearing counts as landed", () => {
       const inFlight = claim({ priorUserMessageAt: null });
       expect(decide([], { inFlight })).toBe("wait");
       expect(
-        decide([shell("sent", { latestUserMessageAt: iso(-100), session: running })], {
+        decide([shell("sent", { latestUserMessageAt: iso(-100), runtime: running })], {
           inFlight,
         }),
       ).toBe("clear-in-flight");
@@ -359,7 +330,7 @@ describe("nextThreadQueueAction", () => {
     };
     const moved = shell("moved", {
       modelSelection: sel(b),
-      session: { ...running, providerInstanceId: a },
+      runtime: { ...running, providerInstanceId: a },
     });
     expect(decide([moved], { ...opts, entries: [entry("q")], targetInstanceOf: () => b })).toBe(
       "claim",
@@ -384,7 +355,7 @@ describe("nextThreadQueueAction", () => {
   it("a busy thread whose message and turn are unchanged has not landed the sent message", () => {
     const stale = shell("sent", {
       latestUserMessageAt: iso(-100),
-      session: running,
+      runtime: running,
     });
     expect(
       decide([stale], {
@@ -405,19 +376,19 @@ describe("nextThreadQueueAction", () => {
     // A sent, message landed, session not yet running: A is still busy.
     const accepted = shell("A", { latestUserMessageAt: iso(-1_000) });
     expect(decide([accepted], { entries: [entry("B")] })).toBe("wait");
-    const working = shell("A", { latestUserMessageAt: iso(-1_000), session: running });
+    const working = shell("A", { latestUserMessageAt: iso(-1_000), runtime: running });
     expect(decide([working], { entries: [entry("B")] })).toBe("wait");
     const done = shell("A", {
       latestUserMessageAt: iso(-60_000),
-      latestTurn: {
-        turnId: "turn-1" as never,
-        state: "completed",
+      latestRun: {
+        runId: "turn-1" as never,
+        status: "completed",
         requestedAt: iso(-60_000),
         startedAt: iso(-59_000),
         completedAt: iso(-1_000),
         assistantMessageId: null,
       },
-      session: { ...running, status: "ready", activeTurnId: null },
+      runtime: { ...running, status: "completed", activeRunId: null },
     });
     expect(decide([done], { entries: [entry("B")] })).toBe("claim");
   });

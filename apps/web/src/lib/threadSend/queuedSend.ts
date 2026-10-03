@@ -51,7 +51,7 @@ import {
   NO_PROVIDER_MODEL_SELECTION,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { isLatestTurnSettled } from "../../session-logic";
+import { isLatestRunSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { buildMessageContext } from "../composerContextRecords";
 import { composeTurnStart, type TurnStartBootstrap } from "./composeTurnStart";
@@ -174,7 +174,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
         runtimeMode: draftSession.runtimeMode,
         interactionMode: draftSession.interactionMode,
         createdAt: draftSession.createdAt,
-        session: null,
+        runtime: null,
       }
     : {
         modelSelection: shell!.modelSelection,
@@ -183,7 +183,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
         runtimeMode: shell!.runtimeMode,
         interactionMode: shell!.interactionMode,
         createdAt: shell!.createdAt,
-        session: shell!.session,
+        runtime: shell!.runtime,
       };
   const projectDefaultModelSelection =
     project.defaultModelSelection ?? settings.defaultModelSelection;
@@ -196,7 +196,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   const selectedProviderByThread = draft?.activeProvider ?? null;
   const lockedProvider = deriveLockedProviderForThread({
     started: !isLocalDraftThread,
-    sessionProviderName: thread.session?.providerName ?? null,
+    sessionProviderName: thread.runtime?.providerName ?? null,
     selectedProvider: selectedProviderByThread,
     threadProvider:
       thread.modelSelection.instanceId ?? projectDefaultModelSelection?.instanceId ?? null,
@@ -206,12 +206,12 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     entries,
     candidateInstanceIds: [
       selectedProviderByThread,
-      thread.session?.providerInstanceId,
+      thread.runtime?.providerInstanceId,
       thread.modelSelection.instanceId,
       projectDefaultModelSelection?.instanceId,
     ],
     lockedProvider,
-    lockedInstanceId: thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+    lockedInstanceId: thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId,
   });
   if (!selectedProviderEntry) {
     return { kind: "refused", reason: `No provider is available for this thread. ${OPEN_TO_SEND}` };
@@ -262,7 +262,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     shouldShowPlanFollowUpPrompt({
       pendingUserInputCount: 0,
       interactionMode,
-      latestTurnSettled: isLatestTurnSettled(shell.latestTurn, shell.session),
+      latestTurnSettled: isLatestRunSettled(shell.latestRun, shell.runtime),
       hasActionableProposedPlan: shell.hasActionableProposedPlan,
       hasComposerAttachments: false,
     })

@@ -14,15 +14,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import {
-  resolveThreadDetailRef,
-  useEnvironmentThreadRefs,
-  useThread,
-  useThreadDetail,
-  useThreadRefs,
-  useThreadShell,
-  useThreadStatus,
-} from "../state/entities";
+import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
@@ -30,7 +22,6 @@ import {
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
-import { resolveThreadSyncPhase } from "../threadSync";
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -63,16 +54,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     : null;
   const serverThreadRef: ScopedThreadRef | null =
     target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
-  const draftThread = useComposerDraftStore((store) =>
-    serverThreadRef ? store.getDraftThreadByRef(serverThreadRef) : null,
-  );
-  // FORK: a draft's thread id does not exist on the server until the first send,
-  // and a draft's persisted `promotedTo` can outlive the server's memory of the
-  // thread (a start that never landed, a rebuilt database). Subscribing to either
-  // without the shell confirming it opens an unbounded retry loop, so both wait
-  // for the shell; a plain server thread is unaffected.
-  const waitForShell = target.kind === "draft" || draftThread !== null;
-  const serverThread = useThread(serverThreadRef, { waitForShell });
+  const serverThread = useThreadShell(serverThreadRef);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
   );
@@ -88,16 +70,12 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const shell = useEnvironmentQuery(
     serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
   );
-  const serverThreadShell = useThreadShell(serverThreadRef);
-  const serverThreadDetail = useThreadDetail(
-    resolveThreadDetailRef(serverThreadRef, {
-      shellExists: serverThreadShell !== null,
-      waitForShell,
-    }),
-  );
-  const serverThreadStatus = useThreadStatus(serverThreadRef);
+  const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const draftThread = useComposerDraftStore((store) =>
+    serverThreadRef ? store.getDraftThreadByRef(serverThreadRef) : null,
+  );
   const promotedDraftId = useComposerDraftStore((store) =>
     target.kind === "server" ? store.getDraftIdByRef(target.threadRef) : null,
   );
@@ -122,17 +100,11 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
-    serverThreadShellExists: serverThreadShell !== null,
-    serverThreadDetailExists: serverThreadDetail !== null,
-    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    serverThreadExists: serverThreadShell !== null,
+    serverThreadDeleted: serverThreadShell?.deletedAt != null,
     draftThreadExists: draftThread !== null,
   });
-  const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
-  });
-  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 
   useEffect(() => {
@@ -213,7 +185,6 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         routeKind="server"
-        threadSyncPhase={threadSyncPhase}
       />
     );
   }
