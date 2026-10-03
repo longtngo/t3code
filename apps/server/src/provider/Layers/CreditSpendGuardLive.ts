@@ -141,6 +141,9 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
      *   interrupt sweeper then stops it.
      * - A continuation after a server restart that this refuses fails visibly and is not
      *   retried (limit auto-resume is: its worker asks `cachedRefusalFor` first).
+     * - A limit resume whose pre-send fresh read takes over 5 s can still be sent and then
+     *   refused here, which ends its recovery; treating a credit refusal as retryable would
+     *   close that, but would also auto-resume user messages this guard refused.
      * - A full window with no reset time stays blocked until a probe publishes a new
      *   reading; nothing else can tell when it ends.
      * - A shared read that hangs holds its slot until the probe's 25 s timeout ends it;
