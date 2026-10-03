@@ -12,6 +12,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -26,6 +27,7 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { getUserQueuedThreadRuns } from "@t3tools/client-runtime/state/thread-workflows";
 import * as DateTime from "effect/DateTime";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
@@ -47,9 +49,14 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftThreadState,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import type { DeliveredTurn, QueuedTurn } from "../rpc/commandOutbox";
 import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import { filterTerminalContextsWithText, type TerminalContextDraft } from "../lib/terminalContext";
@@ -1487,13 +1494,9 @@ export function canQueueOfflineTurn(input: {
    * queue instead, leaving the text in the composer.
    */
   readonly modesMatchThread: boolean;
-  /**
-   * Whether a turn is already queued for this thread. Only one is allowed:
-   * replayed turn-starts are dispatched back to back on reconnect, and the
-   * Cursor and Grok adapters fold a second turn-start into the turn already
-   * running — so N queued messages would come back as one merged answer.
-   */
-  readonly alreadyQueuedForThread: boolean;
+  // No per-thread limit: replays dispatch with `queue`, which v2 turns into
+  // `queue_after_active`, so each queued message becomes its own run, in order.
+  // (The V1 limit existed because Cursor and Grok merged back-to-back turn-starts.)
 }): boolean {
   return (
     input.hasText &&
@@ -1503,8 +1506,7 @@ export function canQueueOfflineTurn(input: {
     input.contextCount === 0 &&
     !input.needsWorktree &&
     !input.hasPendingProgress &&
-    input.modesMatchThread &&
-    !input.alreadyQueuedForThread
+    input.modesMatchThread
   );
 }
 
@@ -1530,6 +1532,8 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
   readonly hasActiveThread: boolean;
   readonly isSendBusy: boolean;
   readonly isConnecting: boolean;
+  /** A rewind is restoring this thread's composer; a send now would race it. */
+  readonly isRevertingCheckpoint: boolean;
   readonly threadDetailLoading: boolean;
   /** Load balancing reads client settings, so a send must not race their hydration. */
   readonly settingsHydrated: boolean;
@@ -1543,6 +1547,7 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
     !input.hasActiveThread ||
     input.isSendBusy ||
     input.isConnecting ||
+    input.isRevertingCheckpoint ||
     !input.settingsHydrated ||
     input.threadDetailLoading ||
     input.sendInFlight ||
@@ -1558,9 +1563,6 @@ export function shouldAbortSendBeforeOfflineQueue(input: {
  */
 export function offlineQueueRefusalReason(input: OfflineQueueInput): string {
   const reconnectFirst = "Reconnect to send it.";
-  if (input.alreadyQueuedForThread) {
-    return `A message is already waiting to send on this thread. ${reconnectFirst}`;
-  }
   if (input.attachmentCount > 0 || input.contextCount > 0) {
     return `Attachments and context can't be queued while disconnected. ${reconnectFirst}`;
   }
@@ -1642,4 +1644,176 @@ export function restorePlanFollowUpComposer(input: {
     prompt: input.snapshot.prompt,
     detectTrigger: true,
   });
+}
+
+/** The run statuses a rewind rolls back (CheckpointRollbackService); queued and live runs stay. */
+const REWIND_DISCARDED_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "interrupted",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * FORK: how many messages an "Edit from here" rewind to `turnCount` removes from the thread:
+ * every message of a settled run above `turnCount`, the edited message included. Runs already
+ * rolled back are gone, and queued runs survive the rewind, so neither counts. The rewind's target is in
+ * the loaded window, so every newer run is too and the count is exact.
+ */
+export function countRevertDiscardedMessages(
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs"> | null,
+  turnCount: number,
+): number {
+  if (projection === null) return 0;
+  const discardedRunIds = new Set(
+    projection.runs
+      .filter((run) => run.ordinal > turnCount && REWIND_DISCARDED_RUN_STATUSES.has(run.status))
+      .map((run) => run.id),
+  );
+  return projection.messages.filter(
+    (message) => message.runId !== null && discardedRunIds.has(message.runId),
+  ).length;
+}
+
+/**
+ * FORK: claims the thread's rewind slot, or returns false when a rewind already holds it.
+ * Reads the live store rather than a render's `isRevertingCheckpoint`: a second click that
+ * lands before the re-render (a double click, or one queued behind a confirm await) still sees
+ * the claim, so one confirmation cannot dispatch two rewinds or restore the prompt twice.
+ */
+export function claimThreadRewind(routeThreadKey: string): boolean {
+  let claimed = false;
+  useComposerDraftStore.setState((store) => {
+    if (store.rewindingThreadKeys.has(routeThreadKey)) return {};
+    claimed = true;
+    return { rewindingThreadKeys: new Set(store.rewindingThreadKeys).add(routeThreadKey) };
+  });
+  return claimed;
+}
+
+/** FORK: queued messages Escape can take back: the user's own, never automatic deliveries. */
+export function escapeRecallableQueuedCount(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null,
+): number {
+  return projection === null ? 0 : getUserQueuedThreadRuns(projection).length;
+}
+
+/**
+ * FORK: what Escape's recall rung did. Only `nothing` (no message of the user's in the queue)
+ * may fall through to Stop: Escape must never stop the turn while the user is backing out of a
+ * queued-message edit, or while a queue row is still saving.
+ */
+export type QueuedRecallOutcome = "opened" | "editOpen" | "busy" | "nothing";
+
+/**
+ * FORK: Escape's recall rung over upstream's queue strip. An open edit is cancelled through the
+ * strip's own cancel path; otherwise the newest queued message is opened for editing, which the
+ * strip declines while one of its rows is busy.
+ */
+export function recallLatestQueuedMessage(input: {
+  readonly editOpen: boolean;
+  readonly queuedMessageCount: number;
+  readonly cancelEdit: () => void;
+  readonly editLatest: () => boolean;
+}): QueuedRecallOutcome {
+  if (input.editOpen) {
+    input.cancelEdit();
+    return "editOpen";
+  }
+  if (input.queuedMessageCount === 0) return "nothing";
+  return input.editLatest() ? "opened" : "busy";
+}
+
+/**
+ * FORK: the composer's window Escape handler. Walks `nextEscapeAction`; the recall rung's
+ * outcome decides the rest, and only a recall that found nothing at all falls through to Stop.
+ */
+export function createChatEscapeHandler(deps: {
+  readonly isChatSurfaceActive: () => boolean;
+  readonly hasRunningTurn: boolean;
+  readonly hasPendingQuestion: boolean;
+  readonly queuedMessageCount: number;
+  readonly recallQueuedMessage: () => QueuedRecallOutcome;
+  readonly stop: () => void;
+}): (
+  event: Pick<
+    KeyboardEvent,
+    "key" | "defaultPrevented" | "repeat" | "isComposing" | "preventDefault"
+  >,
+) => void {
+  return (event) => {
+    if (event.key !== "Escape") return;
+    const action = nextEscapeAction({
+      isChatSurfaceActive: deps.isChatSurfaceActive(),
+      alreadyHandled: event.defaultPrevented,
+      isAutoRepeat: event.repeat,
+      isComposing: event.isComposing,
+      hasRunningTurn: deps.hasRunningTurn,
+      hasPendingQuestion: deps.hasPendingQuestion,
+      heldMessageCount: deps.queuedMessageCount,
+      recallSupported: true,
+    });
+    if (action === "recall") {
+      const outcome = deps.recallQueuedMessage();
+      if (outcome === "opened" || outcome === "editOpen") {
+        event.preventDefault();
+        return;
+      }
+      if (outcome === "busy") return;
+      // outcome === "nothing": the count was stale; behave as if nothing was queued.
+      if (!deps.hasRunningTurn) return;
+    } else if (action !== "stop") {
+      return;
+    }
+    event.preventDefault();
+    deps.stop();
+  };
+}
+
+/**
+ * FORK offline outbox: every message id the server already holds for a thread. A message the
+ * server queued behind a running turn has no turn item yet, so the timeline's own turn-item
+ * dedupe misses it; its run's `userMessageId` and the message rows still name it.
+ */
+export function serverHeldMessageIds(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null,
+  committedMessageIds: Iterable<string>,
+): ReadonlySet<string> {
+  const ids = new Set<string>(committedMessageIds);
+  for (const message of projection?.messages ?? []) ids.add(message.id);
+  for (const run of projection?.runs ?? []) ids.add(run.userMessageId);
+  return ids;
+}
+
+/**
+ * FORK offline outbox: the thread's queued and just-delivered turns as pending user bubbles,
+ * minus any the server already holds (it then renders them itself, as a turn or a queue row).
+ */
+export function outboxTimelineMessages(input: {
+  readonly threadId: string | null;
+  readonly queue: ReadonlyArray<QueuedTurn>;
+  readonly delivered: ReadonlyArray<DeliveredTurn>;
+  readonly serverMessageIds: ReadonlySet<string>;
+}): ReadonlyArray<ChatMessage> {
+  const pending = [
+    ...input.queue
+      .filter((queued) => queued.threadId === input.threadId)
+      .map((queued) => ({
+        messageId: queued.messageId,
+        text: queued.input.message.text,
+        enqueuedAt: queued.enqueuedAt,
+      })),
+    ...input.delivered.filter((delivered) => delivered.threadId === input.threadId),
+  ];
+  return pending
+    .filter((entry) => !input.serverMessageIds.has(entry.messageId))
+    .map((entry) => ({
+      id: entry.messageId,
+      role: "user",
+      text: entry.text,
+      runId: null,
+      streaming: false,
+      createdAt: entry.enqueuedAt,
+      updatedAt: entry.enqueuedAt,
+    }));
 }

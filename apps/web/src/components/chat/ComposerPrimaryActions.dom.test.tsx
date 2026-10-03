@@ -41,6 +41,7 @@ function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
       sendDisabledReason: null,
       isConnecting: false,
       isEnvironmentUnavailable: false,
+      isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: false,
       onPreviousPendingQuestion: () => {},
@@ -71,6 +72,7 @@ function renderRunning(options?: {
       sendDisabledReason: null,
       isConnecting: false,
       isEnvironmentUnavailable: false,
+      isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: options?.hasSendableContent ?? false,
       onPreviousPendingQuestion: () => {},
@@ -85,7 +87,13 @@ function renderStandaloneStop() {
   return renderRunning();
 }
 
-function renderSendButton(sendDisabledReason: string | null = null) {
+function renderSendButton(
+  sendDisabledReason: string | null = null,
+  connection: { readonly isEnvironmentUnavailable: boolean; readonly isSendBlocked: boolean } = {
+    isEnvironmentUnavailable: false,
+    isSendBlocked: false,
+  },
+) {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -97,7 +105,7 @@ function renderSendButton(sendDisabledReason: string | null = null) {
       isSendBusy: false,
       sendDisabledReason,
       isConnecting: false,
-      isEnvironmentUnavailable: false,
+      ...connection,
       isPreparingWorktree: false,
       hasSendableContent: true,
       onPreviousPendingQuestion: () => {},
@@ -113,6 +121,26 @@ afterEach(() => {
 });
 
 describe("ComposerPrimaryActions", () => {
+  // FORK (inv 4b, offline outbox): a disconnect must leave Send live so the message can be
+  // queued; on the phone the button is the only submit path. Only a hard block disables it.
+  it("keeps Send live while disconnected and says the message will queue", async () => {
+    const view = await renderSendButton(null, {
+      isEnvironmentUnavailable: true,
+      isSendBlocked: false,
+    });
+    const send = view.find<HTMLButtonElement>('[aria-label="Queue message to send on reconnect"]');
+    expect(send).not.toBeNull();
+    expect(send?.disabled).toBe(false);
+  });
+
+  it("disables Send when sending is blocked outright", async () => {
+    const view = await renderSendButton(null, {
+      isEnvironmentUnavailable: false,
+      isSendBlocked: true,
+    });
+    expect(view.find<HTMLButtonElement>('[aria-label="Submit message"]')?.disabled).toBe(true);
+  });
+
   it("disables and labels the send button while feedback is uploading", async () => {
     const view = await renderSendButton("Sending feedback");
 
@@ -197,6 +225,7 @@ function renderIdleHidden(options: {
       sendDisabledReason: null,
       isConnecting: false,
       isEnvironmentUnavailable: false,
+      isSendBlocked: false,
       isPreparingWorktree: false,
       hasSendableContent: options.hasSendableContent,
       onPreviousPendingQuestion: () => {},

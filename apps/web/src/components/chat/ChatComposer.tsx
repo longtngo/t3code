@@ -87,11 +87,10 @@ import {
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
 import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
+import type { QueuedRecallOutcome } from "../ChatView.logic";
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
-  isChatSurfaceFocused,
-  nextEscapeAction,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -273,6 +272,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { useChatEscapeKey } from "./useChatEscapeKey";
 import {
   ComposerControl,
   ComposerControlIcon,
@@ -1384,6 +1384,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   sendDisabledReason: string | null;
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
+  /** FORK (inv 4b): no provider or no project; distinct from a disconnect, which queues. */
+  isSendBlocked: boolean;
   hasSendableContent: boolean;
   canResume: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
@@ -1429,6 +1431,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         sendDisabledReason={props.sendDisabledReason}
         isConnecting={props.isConnecting}
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
+        isSendBlocked={props.isSendBlocked}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
         canResume={props.canResume}
@@ -1675,6 +1678,10 @@ export interface ChatComposerProps {
   onInterrupt: () => void;
   /** FORK Stop ladder: what the Stop button shows. */
   stopRung: StopRung;
+  /** FORK: messages waiting in the server queue; Escape takes the newest back first. */
+  queuedMessageCount: number;
+  /** FORK: opens the newest queued message in the composer; false when it cannot right now. */
+  onRecallQueuedMessage: () => QueuedRecallOutcome;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
@@ -3023,9 +3030,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    // FORK (inv 4b): a disconnect leaves Send live; the message queues for reconnect.
+    // Resume cannot queue, so only it stays disabled while disconnected.
+    (showResumeAction && environmentUnavailable !== null) ||
     (!composerSendState.hasSendableContent && !showResumeAction);
-  const collapsedComposerPrimaryActionLabel = showResumeAction ? "Resume thread" : "Send message";
+  const collapsedComposerPrimaryActionLabel = showResumeAction
+    ? "Resume thread"
+    : environmentUnavailable !== null
+      ? "Queue message to send on reconnect"
+      : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -6327,39 +6340,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
-  /**
-   * FORK: Escape walks the same Stop ladder the button does, so two deliberate
-   * presses force-stop and a held key (auto-repeat) never reaches the hard rung.
-   * Scoped by focus: every overlay that owns Escape takes focus out of this form,
-   * and `document.body` counts as the chat (clicking the transcript leaves focus
-   * there). Bubble phase, so a handler that already claimed the press wins. The
-   * fork's "recall a held message" rung is gone with its client queue.
-   */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const action = nextEscapeAction({
-        isChatSurfaceActive: isChatSurfaceFocused({
-          activeElement: document.activeElement,
-          bodyElement: document.body,
-          composerRoot: composerFormRef.current,
-          hasOpenDialog: document.querySelector('[data-slot="dialog-popup"]') !== null,
-        }),
-        alreadyHandled: event.defaultPrevented,
-        isAutoRepeat: event.repeat,
-        isComposing: event.isComposing,
-        hasRunningTurn: canInterrupt,
-        hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
-        heldMessageCount: 0,
-        recallSupported: false,
-      });
-      if (action !== "stop") return;
-      event.preventDefault();
-      handleInterruptPrimaryAction();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePendingApproval, canInterrupt, handleInterruptPrimaryAction, pendingUserInputs.length]);
+  // FORK: Escape walks the Stop ladder and the server queue; see useChatEscapeKey.
+  useChatEscapeKey(props, {
+    composerFormRef,
+    canInterrupt,
+    hasPendingQuestion: activePendingApproval !== null || pendingUserInputs.length > 0,
+  });
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);
@@ -6941,11 +6927,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               isSendBusy={isSendBusy}
                               sendDisabledReason={sendDisabledReason}
                               isConnecting={isConnecting}
-                              isEnvironmentUnavailable={
-                                environmentUnavailable !== null ||
-                                noProviderAvailable ||
-                                projectSelectionRequired
-                              }
+                              isEnvironmentUnavailable={environmentUnavailable !== null}
+                              isSendBlocked={noProviderAvailable || projectSelectionRequired}
                               isPreparingWorktree={false}
                               hasSendableContent={false}
                               preserveComposerFocusOnPointerDown
@@ -7700,11 +7683,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       isSendBusy={isSendBusy}
                       sendDisabledReason={sendDisabledReason}
                       isConnecting={isConnecting}
-                      isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
-                      }
+                      isEnvironmentUnavailable={environmentUnavailable !== null}
+                      isSendBlocked={noProviderAvailable || projectSelectionRequired}
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
@@ -7842,11 +7822,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isSendBusy={isSendBusy}
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
-                    isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
-                    }
+                    isEnvironmentUnavailable={environmentUnavailable !== null}
+                    isSendBlocked={noProviderAvailable || projectSelectionRequired}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     canResume={showResumeAction}
