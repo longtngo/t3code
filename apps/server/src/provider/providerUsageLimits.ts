@@ -57,6 +57,13 @@ export function makeUnavailableUsageLimits(input: {
  * An `unsupported` snapshot stays unsupported: an account that cannot have
  * subscription windows will not start reporting them mid-turn.
  */
+/**
+ * How stale a confirmed-unchanged reading may get before a runtime update re-stamps it.
+ * Kept well under the credit guard's 60 s re-read age, so a turn that keeps reporting
+ * the same numbers never looks stale to it.
+ */
+export const RESTAMP_INTERVAL_MS = 30_000;
+
 export function applyUsageLimitsUpdate(input: {
   readonly previous: ServerProviderUsageLimits | undefined;
   readonly update: ProviderUsageLimitsUpdate;
@@ -89,7 +96,12 @@ export function applyUsageLimitsUpdate(input: {
     }
   }
   if (!changed && previous !== undefined && previous.unavailable === undefined) {
-    return previous;
+    // The provider just confirmed these numbers, so the reading is current. Re-stamp it,
+    // but at most every RESTAMP_INTERVAL_MS: Codex repeats this on every token tick, and
+    // each new snapshot is published to every client.
+    return Date.parse(input.checkedAt) - Date.parse(previous.checkedAt) >= RESTAMP_INTERVAL_MS
+      ? { ...previous, checkedAt: input.checkedAt }
+      : previous;
   }
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),

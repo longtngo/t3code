@@ -19,8 +19,10 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -42,6 +44,8 @@ export const FRESH_READ_MAX_AGE_MS = 60_000;
  * slowest observed read. The clock starts when the read is issued, at turn start.
  */
 export const FRESH_READ_TIMEOUT = Duration.seconds(5);
+/** Bound on one sweep interrupt dispatch, as on the fork; a timed-out one is retried. */
+export const INTERRUPT_DISPATCH_TIMEOUT = Duration.seconds(30);
 
 /**
  * Whether a turn start should re-read this instance's usage before deciding.
@@ -66,7 +70,39 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
   Effect.gen(function* () {
     const providerRegistry = yield* ProviderRegistry;
     const serverSettings = yield* ServerSettingsService;
+    const scope = yield* Effect.scope;
     const freshReadTimeout = options?.freshReadTimeout ?? FRESH_READ_TIMEOUT;
+
+    // One fresh read per instance at a time: concurrent near-limit starts share it, and a
+    // caller that stops waiting leaves it running so its result still lands for the next.
+    // `None` means the read failed; the caller then keeps the reading it already had.
+    const inFlight = new Map<
+      ProviderInstanceId,
+      Deferred.Deferred<Option.Option<ReadonlyArray<ServerProvider>>>
+    >();
+    const sharedFreshRead = (instanceId: ProviderInstanceId) =>
+      Effect.gen(function* () {
+        const existing = inFlight.get(instanceId);
+        if (existing !== undefined) return existing;
+        const deferred = Deferred.makeUnsafe<Option.Option<ReadonlyArray<ServerProvider>>>();
+        inFlight.set(instanceId, deferred);
+        yield* providerRegistry.refreshInstance(instanceId, { fresh: true }).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.succeedSome(exit.value)
+              : Effect.logWarning("credit-spend-guard.fresh-read-failed", {
+                  instanceId,
+                  cause: Cause.pretty(exit.cause),
+                }).pipe(Effect.as(Option.none<ReadonlyArray<ServerProvider>>())),
+          ),
+          Effect.flatMap((result) => Deferred.succeed(deferred, result)),
+          Effect.onInterrupt(() => Deferred.succeed(deferred, Option.none())),
+          Effect.ensuring(Effect.sync(() => inFlight.delete(instanceId))),
+          Effect.forkIn(scope),
+        );
+        return deferred;
+      });
 
     const refusalFor = Effect.fn("CreditSpendGuard.refusalFor")(function* (
       instanceId: ProviderInstanceId,
@@ -87,17 +123,11 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
       const limits = providers.find((entry) => entry.instanceId === instanceId)?.usageLimits;
       if (needsFreshUsageRead(limits, yield* Clock.currentTimeMillis)) {
         // Fail-open by choice: a read that fails or outlasts the timeout keeps the
-        // reading we already had, which still blocks if it already says 100%.
-        const fresh = yield* providerRegistry.refreshInstance(instanceId, { fresh: true }).pipe(
+        // reading we already had, which still blocks if it says 100% for a window
+        // that has not reset yet.
+        const fresh = yield* Deferred.await(yield* sharedFreshRead(instanceId)).pipe(
           Effect.timeoutOption(freshReadTimeout),
-          Effect.catchCauseIf(
-            (cause) => !Cause.hasInterruptsOnly(cause),
-            (cause) =>
-              Effect.logWarning("credit-spend-guard.fresh-read-failed", {
-                instanceId,
-                cause: Cause.pretty(cause),
-              }).pipe(Effect.as(Option.none<ReadonlyArray<ServerProvider>>())),
-          ),
+          Effect.map(Option.flatten),
         );
         if (Option.isSome(fresh)) {
           providers = fresh.value;
@@ -110,6 +140,7 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
         allowSpendingCredits: false,
         providers,
         instanceId,
+        nowMs: yield* Clock.currentTimeMillis,
       });
       if (reason !== null) {
         yield* Effect.logInfo("credit-spend-guard.turn-refused", { instanceId, reason });
@@ -123,9 +154,10 @@ export const makeCreditSpendGuard = (options?: { readonly freshReadTimeout?: Dur
 export const layer = Layer.effect(CreditSpendGuard, makeCreditSpendGuard());
 
 /**
- * Interrupts the runs active on an instance when it becomes blocked, with the reason
- * as the visible interrupt message. Upstream's interrupt already holds the thread's
- * queued runs, so nothing queued behind it is sent into the limit.
+ * Stops the runs active on an instance when it becomes blocked, the way the user's own
+ * Stop does: the cooperative rung (the server escalates if the turn does not settle) with
+ * the queue held, so nothing queued behind it is sent into the limit. The reason is the
+ * visible interrupt message.
  *
  * Edge-triggered: an instance is swept once per blocked spell. A sweep that could not
  * reach every run is retried on the next provider or settings change.
@@ -136,12 +168,14 @@ export const runCreditSpendSweep = Effect.fn("CreditSpendGuard.sweep")(function*
   readonly swept: Ref.Ref<ReadonlySet<ProviderInstanceId>>;
 }) {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const nowMs = yield* Clock.currentTimeMillis;
   const blocked = new Map<ProviderInstanceId, string>();
   for (const provider of input.providers) {
     const reason = creditSpendBlockedReason({
       allowSpendingCredits: input.allowSpendingCredits,
       providers: input.providers,
       instanceId: provider.instanceId,
+      nowMs,
     });
     if (reason !== null) blocked.set(provider.instanceId, reason);
   }
@@ -171,15 +205,19 @@ export const runCreditSpendSweep = Effect.fn("CreditSpendGuard.sweep")(function*
           : undefined;
         if (reason === undefined) continue;
         yield* threads
-          .interruptThread({
-            projectId: thread.projectId,
+          .dispatch({
+            type: "run.interrupt",
             // One id per run: a retried sweep replays the receipt instead of interrupting twice.
             commandId: CommandId.make(`credit-spend-guard:interrupt:${run.id}`),
             threadId: thread.id,
             runId: run.id,
             reason,
+            holdQueue: true,
+            mode: "cooperative",
           })
           .pipe(
+            // A wedged dispatch must not stall the sweep for every other run.
+            Effect.timeout(INTERRUPT_DISPATCH_TIMEOUT),
             Effect.tap(() =>
               Effect.logInfo("credit-spend-guard.turn-interrupted", {
                 threadId: thread.id,

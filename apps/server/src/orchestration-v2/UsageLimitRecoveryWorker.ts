@@ -1,9 +1,15 @@
-import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
+import {
+  CommandId,
+  MessageId,
+  type OrchestrationV2Command,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -71,10 +77,25 @@ export function limitRecoveryCommand(
   };
 }
 
-const makeSweep = Effect.gen(function* () {
+export const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const creditSpendGuard = yield* CreditSpendGuard;
+  // "Allow to spend credits" refusing the resume now: skip it instead of sending a turn the
+  // start gate would fail as a non-limit error, which would drop the thread out of recovery
+  // for good. The thread stays a candidate, so the next sweep (every 5 s) tries again.
+  const resumeRefused = (threadId: ThreadId) =>
+    threads.getThreadShell(threadId).pipe(
+      Effect.orElseSucceed(() => null),
+      Effect.flatMap((shell) =>
+        shell === null
+          ? Effect.succeed(false)
+          : creditSpendGuard
+              .refusalFor(shell.providerInstanceId)
+              .pipe(Effect.map((reason) => reason !== null)),
+      ),
+    );
   return Effect.fn("UsageLimitRecoveryWorker.sweep")(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
@@ -92,6 +113,7 @@ const makeSweep = Effect.gen(function* () {
         preferences.snoozeLimitedThreads,
       );
       if (command === null) continue;
+      if (command.type === "message.dispatch" && (yield* resumeRefused(thread.id))) continue;
       yield* threads.dispatch(command).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {

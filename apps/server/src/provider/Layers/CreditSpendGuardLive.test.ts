@@ -6,6 +6,7 @@ import {
   RunId,
   ThreadId,
   type OrchestrationV2Run,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -14,13 +15,19 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
+import { OrchestratorDispatchError } from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { CreditSpendGuard } from "../Services/CreditSpendGuard.ts";
 import { ProviderRegistry } from "../Services/ProviderRegistry.ts";
 import {
+  interruptSweeperLive,
   makeCreditSpendGuard,
   needsFreshUsageRead,
   runCreditSpendSweep,
@@ -57,7 +64,12 @@ const provider = (
 interface RegistryStub {
   readonly providers: ReadonlyArray<ServerProvider>;
   /** What a fresh read returns, and how long it takes in real time. */
-  readonly fresh?: { readonly providers: ReadonlyArray<ServerProvider>; readonly delayMs: number };
+  readonly fresh?: {
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly delayMs: number;
+    /** The read dies (not a timeout) after the delay. */
+    readonly fails?: boolean;
+  };
 }
 
 const guardFor = (
@@ -73,6 +85,7 @@ const guardFor = (
         expect(refreshOptions).toEqual({ fresh: true });
         if (stub.fresh === undefined) return yield* Effect.die("no fresh read expected");
         yield* Effect.sleep(Duration.millis(stub.fresh.delayMs));
+        if (stub.fresh.fails === true) return yield* Effect.die("probe crashed");
         return stub.fresh.providers;
       }),
   });
@@ -91,7 +104,12 @@ const guardFor = (
     Effect.gen(function* () {
       return yield* (yield* CreditSpendGuard).refusalFor(instanceId);
     }).pipe(Effect.provide(layer));
-  return { refusalFor, freshReads };
+  /** Several calls against ONE guard instance, so they can share its in-flight read. */
+  const withGuard = <A, E>(f: (guard: CreditSpendGuard["Service"]) => Effect.Effect<A, E>) =>
+    Effect.gen(function* () {
+      return yield* f(yield* CreditSpendGuard);
+    }).pipe(Effect.provide(layer));
+  return { refusalFor, withGuard, freshReads };
 };
 
 describe("CreditSpendGuard.refusalFor", () => {
@@ -201,6 +219,89 @@ describe("CreditSpendGuard.refusalFor", () => {
   );
 });
 
+describe("CreditSpendGuard.refusalFor after a reset and on failed reads", () => {
+  const isoAhead = (ms: number) => isoAgo(-ms);
+  const windowAt = (instanceId: ProviderInstanceId, checkedAt: string, resetsAt: string) =>
+    ({
+      ...provider(instanceId, 100, checkedAt),
+      usageLimits: {
+        checkedAt,
+        windows: [
+          { id: "five_hour", kind: "session", label: "Session", usedPercent: 100, resetsAt },
+        ],
+      },
+    }) as unknown as ServerProvider;
+
+  it.live("allows a recent 100% reading whose window reset 10 s ago, without a re-read", () =>
+    Effect.gen(function* () {
+      const guard = guardFor(
+        { providers: [windowAt(claudeA, isoAgo(30_000), isoAgo(10_000))] },
+        {},
+      );
+      expect(yield* guard.refusalFor(claudeA)).toBeNull();
+      expect(guard.freshReads).toEqual([]);
+      // Control: the same reading with the reset still ahead refuses.
+      const ahead = guardFor(
+        { providers: [windowAt(claudeA, isoAgo(30_000), isoAhead(60_000))] },
+        {},
+      );
+      expect(yield* ahead.refusalFor(claudeA)).toContain("100% of Session");
+    }),
+  );
+
+  it.live("allows a stale 100% past its reset when the fresh read times out", () =>
+    Effect.gen(function* () {
+      const guard = guardFor(
+        {
+          providers: [windowAt(claudeA, isoAgo(10 * 60_000), isoAgo(60_000))],
+          fresh: { providers: [provider(claudeA, 100)], delayMs: 2_000 },
+        },
+        { freshReadTimeout: Duration.millis(100) },
+      );
+      expect(yield* guard.refusalFor(claudeA)).toBeNull();
+      expect(guard.freshReads).toEqual([claudeA]);
+    }),
+  );
+
+  it.live("keeps the existing reading, promptly, when the fresh read fails outright", () =>
+    Effect.gen(function* () {
+      const failing = (usedPercent: number) =>
+        guardFor(
+          {
+            providers: [provider(claudeA, usedPercent, isoAgo(10 * 60_000))],
+            fresh: { providers: [provider(claudeA, 0)], delayMs: 50, fails: true },
+          },
+          { freshReadTimeout: Duration.seconds(3) },
+        );
+      const started = yield* Clock.currentTimeMillis;
+      expect(yield* failing(95).refusalFor(claudeA)).toBeNull();
+      // A failure ends the wait at once instead of running out the 3 s timeout.
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_500);
+      expect(yield* failing(100).refusalFor(claudeA)).toContain("100% of Weekly");
+    }),
+  );
+
+  it.live("shares one fresh read across five concurrent near-limit starts", () =>
+    Effect.gen(function* () {
+      const guard = guardFor(
+        {
+          providers: [provider(claudeA, 99, isoAgo(10 * 60_000))],
+          fresh: { providers: [provider(claudeA, 100)], delayMs: 300 },
+        },
+        { freshReadTimeout: Duration.seconds(2) },
+      );
+      const reasons = yield* guard.withGuard((service) =>
+        Effect.all(
+          Array.from({ length: 5 }, () => service.refusalFor(claudeA)),
+          { concurrency: "unbounded" },
+        ),
+      );
+      expect(guard.freshReads).toEqual([claudeA]);
+      expect(reasons.every((reason) => reason?.includes("100% of Weekly"))).toBe(true);
+    }),
+  );
+});
+
 describe("needsFreshUsageRead", () => {
   const now = Date.parse("2026-10-03T12:00:00.000Z");
   const limits = (usedPercent: number, checkedAt: string) => ({
@@ -232,8 +333,9 @@ describe("runCreditSpendSweep", () => {
       status: "running",
     }) as unknown as OrchestrationV2Run;
 
-  const harness = (failInterruptsFor: ReadonlySet<string> = new Set()) => {
-    const interrupts: Array<{ runId: string; commandId: string; reason: string | undefined }> = [];
+  type Interrupt = Extract<OrchestrationV2ServerCommand, { readonly type: "run.interrupt" }>;
+  const harness = (behaviour: { readonly fail?: string; readonly hang?: string } = {}) => {
+    const interrupts: Array<Interrupt> = [];
     const runs = new Map([
       ["thread-a", run("run-a", claudeA)],
       ["thread-b", run("run-b", claudeB)],
@@ -253,39 +355,27 @@ describe("runCreditSpendSweep", () => {
           archivedThreads: [],
         } as never),
       getThreadRecords: (threadId) => Effect.succeed({ runs: [runs.get(threadId)!] } as never),
-      interruptThread: (input) =>
-        failInterruptsFor.has(String(input.runId))
-          ? Effect.sync(() => {
-              interrupts.push({
-                runId: String(input.runId),
-                commandId: String(input.commandId),
-                reason: input.reason,
-              });
-            }).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  new ThreadManagement.ThreadManagementThreadNotFoundError({
-                    projectId,
-                    threadId: input.threadId,
-                  }),
-                ),
-              ),
-            )
-          : Effect.sync(() => {
-              interrupts.push({
-                runId: String(input.runId),
-                commandId: String(input.commandId),
-                reason: input.reason,
-              });
-              return { type: "no_active_run" } as const;
-            }),
+      dispatch: (command) =>
+        Effect.gen(function* () {
+          if (command.type !== "run.interrupt") return yield* Effect.die("unexpected command");
+          interrupts.push(command);
+          if (String(command.runId) === behaviour.hang) return yield* Effect.never;
+          if (String(command.runId) === behaviour.fail) {
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "refused",
+            });
+          }
+          return { sequence: 1, storedEvents: [] };
+        }),
     });
-    return { threads, interrupts };
+    return { threads, interrupts, runIds: () => interrupts.map((entry) => String(entry.runId)) };
   };
 
-  it.effect("interrupts every run on the newly blocked instance, once", () =>
+  it.effect("stops every run on the newly blocked instance once, like the user's Stop", () =>
     Effect.gen(function* () {
-      const { threads, interrupts } = harness();
+      const { threads, interrupts, runIds } = harness();
       const swept = yield* Ref.make<ReadonlySet<ProviderInstanceId>>(new Set());
       const sweep = (providers: ReadonlyArray<ServerProvider>) =>
         runCreditSpendSweep({ allowSpendingCredits: false, providers, swept }).pipe(
@@ -293,10 +383,13 @@ describe("runCreditSpendSweep", () => {
         );
 
       yield* sweep([provider(claudeA, 100), provider(claudeB, 40)]);
-      expect(interrupts.map((entry) => entry.runId)).toEqual(["run-a", "run-a2"]);
-      expect(interrupts[0]?.commandId).toBe(
-        String(CommandId.make("credit-spend-guard:interrupt:run-a")),
-      );
+      expect(runIds()).toEqual(["run-a", "run-a2"]);
+      expect(interrupts[0]).toMatchObject({
+        commandId: CommandId.make("credit-spend-guard:interrupt:run-a"),
+        // The cooperative rung with the queue held: queued messages stay queued.
+        mode: "cooperative",
+        holdQueue: true,
+      });
       expect(interrupts[0]?.reason).toContain("100% of Weekly");
 
       // Still blocked: edge-triggered, so no second interrupt.
@@ -325,7 +418,7 @@ describe("runCreditSpendSweep", () => {
 
   it.effect("retries an instance whose interrupt failed, without skipping its other runs", () =>
     Effect.gen(function* () {
-      const { threads, interrupts } = harness(new Set(["run-a"]));
+      const { threads, runIds } = harness({ fail: "run-a" });
       const swept = yield* Ref.make<ReadonlySet<ProviderInstanceId>>(new Set());
       const sweep = runCreditSpendSweep({
         allowSpendingCredits: false,
@@ -334,15 +427,83 @@ describe("runCreditSpendSweep", () => {
       }).pipe(Effect.provide(threads));
 
       yield* sweep;
-      // The failed run did not stop the sweep reaching the second run on the instance.
-      expect(interrupts.map((entry) => entry.runId)).toEqual(["run-a", "run-a2"]);
+      expect(runIds()).toEqual(["run-a", "run-a2"]);
       yield* sweep;
-      expect(interrupts.map((entry) => entry.runId)).toEqual([
-        "run-a",
-        "run-a2",
-        "run-a",
-        "run-a2",
-      ]);
+      expect(runIds()).toEqual(["run-a", "run-a2", "run-a", "run-a2"]);
+    }),
+  );
+
+  it.effect("gives up on a wedged interrupt after 30 s and retries it next sweep", () =>
+    Effect.gen(function* () {
+      const { threads, runIds } = harness({ hang: "run-a" });
+      const swept = yield* Ref.make<ReadonlySet<ProviderInstanceId>>(new Set());
+      const sweep = runCreditSpendSweep({
+        allowSpendingCredits: false,
+        providers: [provider(claudeA, 100)],
+        swept,
+      }).pipe(Effect.provide(threads));
+
+      const fiber = yield* Effect.forkChild(sweep);
+      yield* TestClock.adjust("29 seconds");
+      expect(runIds()).toEqual(["run-a"]);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(fiber);
+      // The wedged run did not stall the next one, and its instance is swept again.
+      expect(runIds()).toEqual(["run-a", "run-a2"]);
+      expect(yield* Ref.get(swept)).toEqual(new Set());
+    }),
+  );
+});
+
+describe("interruptSweeperLive", () => {
+  it.effect("sweeps when the published usage changes", () =>
+    Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+      const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([provider(claudeA, 40)]);
+      const interrupted = yield* Queue.unbounded<string>();
+      const layer = interruptSweeperLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderRegistry)({
+              getProviders: Ref.get(providers),
+              streamChanges: Stream.fromQueue(changes),
+            }),
+            ServerSettings.layerTest({ allowSpendingCredits: false }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  schemaVersion: 1,
+                  snapshotSequence: 0,
+                  threads: [
+                    {
+                      id: ThreadId.make("thread-a"),
+                      projectId: ProjectId.make("project"),
+                      activeRunId: RunId.make("run-a"),
+                    },
+                  ],
+                  archivedThreads: [],
+                } as never),
+              getThreadRecords: () =>
+                Effect.succeed({
+                  runs: [
+                    { id: RunId.make("run-a"), providerInstanceId: claudeA, status: "running" },
+                  ],
+                } as never),
+              dispatch: (command) =>
+                Queue.offer(
+                  interrupted,
+                  command.type === "run.interrupt" ? String(command.runId) : "?",
+                ).pipe(Effect.as({ sequence: 1, storedEvents: [] })),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const blocked = [provider(claudeA, 100)];
+        yield* Ref.set(providers, blocked);
+        yield* Queue.offer(changes, blocked);
+        expect(yield* Queue.take(interrupted)).toBe("run-a");
+      }).pipe(Effect.provide(layer));
     }),
   );
 });

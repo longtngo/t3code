@@ -37,6 +37,18 @@ describe("applyUsageLimitsUpdate", () => {
     expect(next).toBe(published);
   });
 
+  it("re-stamps an unchanged reading the provider confirms once it is 30 s old", () => {
+    // The credit guard re-reads usage older than 60 s; a turn that keeps reporting the
+    // same numbers must keep the reading current without republishing on every tick.
+    const confirm = (at: string) =>
+      applyUsageLimitsUpdate({ previous: published, checkedAt: at, update: { windows: [weekly] } });
+    expect(confirm("2026-09-03T12:00:29.999Z")).toBe(published);
+    expect(confirm("2026-09-03T12:00:30.000Z")).toEqual({
+      ...published,
+      checkedAt: "2026-09-03T12:00:30.000Z",
+    });
+  });
+
   it("upserts by id and keeps the reset a percent-only update omits", () => {
     const next = applyUsageLimitsUpdate({
       previous: published,
