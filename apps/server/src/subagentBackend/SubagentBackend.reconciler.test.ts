@@ -3,11 +3,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { readBackendFile, subagentBackendReconciler, writeBackendFile } from "./SubagentBackend.ts";
 import { SubagentLiveThreads } from "./SubagentLiveThreads.ts";
@@ -42,9 +44,15 @@ const CURSOR = {
 /** The reconciler reconciles thread files too, so it needs the live-thread set and the
  * threads dir. No threads: this file's subject is the global record. */
 const noLiveThreadsLayer = Layer.mock(SubagentLiveThreads)({ list: Effect.succeed([]) });
+/** No provider publishes usage, so the credit block never applies here. */
+const noProvidersLayer = Layer.mock(ProviderRegistry)({
+  getProviders: Effect.succeed([]),
+  streamChanges: Stream.empty,
+});
 const supportLayer = Layer.mergeAll(
   noLiveThreadsLayer,
   serverConfigLayerTest("/tmp", { prefix: "sbt-reconciler-" }),
+  noProvidersLayer,
 );
 
 describe("subagentBackendReconciler", () => {

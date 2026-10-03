@@ -14,6 +14,7 @@ import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
 import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels } from "./cursorModels.ts";
 import { SubagentLiveThreads } from "./SubagentLiveThreads.ts";
@@ -117,9 +118,15 @@ const refBackedSettingsLayer = (ref: Ref.Ref<ServerSettings>) =>
  * and the threads dir. No threads here: the fan-out is covered in
  * `SubagentBackend.thread.test.ts`; these tests are about the global record. */
 const noLiveThreadsLayer = Layer.mock(SubagentLiveThreads)({ list: Effect.succeed([]) });
+/** No provider publishes usage, so the credit block never applies here. */
+const noProvidersLayer = Layer.mock(ProviderRegistry)({
+  getProviders: Effect.succeed([]),
+  streamChanges: Stream.empty,
+});
 const supportLayer = Layer.mergeAll(
   noLiveThreadsLayer,
   serverConfigLayerTest("/tmp", { prefix: "sbt-set-" }),
+  noProvidersLayer,
 );
 
 describe("setBackend", () => {
