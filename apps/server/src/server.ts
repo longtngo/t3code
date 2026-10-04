@@ -69,7 +69,6 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
-import { CrewLayerLive } from "./crew/CrewLayer.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
@@ -564,11 +563,6 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   CreditSpendGuardLive.interruptSweeperLive,
   ReplayMarkers.layer,
 ).pipe(
-  // FORK: crew orchestration — the MCP tools' CrewService, the panel's CrewDirectory,
-  // the delivery sweep ServerRuntimeStartup starts, and the CrewRoles the awareness
-  // relay above reads. Below the relay so it can provide into it; above the
-  // orchestration services it is built on.
-  Layer.provideMerge(CrewLayerLive),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   // The turn-start and client-intake gates for "Allow to spend credits".

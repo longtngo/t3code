@@ -165,7 +165,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -186,7 +185,6 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
-      "crew",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
@@ -201,7 +199,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -225,7 +222,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -253,7 +249,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
-      hasCrew: true,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -276,7 +271,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -290,18 +284,12 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: true,
-      hasCrew: true,
       hasAllowSpendingCredits: true,
       hasOfferThreadCompaction: true,
       hasJiraTicketLinks: false,
     });
     expect(without.some((item) => item.id === "subagent-offload")).toBe(false);
     expect(with_.some((item) => item.id === "subagent-offload")).toBe(true);
-    // Crew rides the same gate for the same reason: an older server strips the
-    // unknown `enableCrew` key from the patch, so an ungated row would accept
-    // the flip and silently snap back.
-    expect(without.some((item) => item.id === "crew")).toBe(false);
-    expect(with_.some((item) => item.id === "crew")).toBe(true);
     // The same silent-snap-back gate: an older server strips the unknown
     // `allowSpendingCredits` key from the patch, so an ungated row would accept the flip
     // and revert with no error — and here the direction it reverts to is "keep spending".
@@ -321,7 +309,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
     };
@@ -460,7 +447,6 @@ describe("searchSettings", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,
@@ -561,7 +547,6 @@ describe("auto-settlement search availability", () => {
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
       hasSubagentBackendThreadModes: false,
-      hasCrew: false,
       hasAllowSpendingCredits: false,
       hasOfferThreadCompaction: false,
       hasJiraTicketLinks: false,

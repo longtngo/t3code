@@ -228,7 +228,6 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceQueue from "./diagnostics/ResourceQueue.ts";
 import { readCursorUsage } from "./subagentBackend/cursorUsageRead.ts";
 import * as SubagentBackend from "./subagentBackend/SubagentBackend.ts";
-import * as CrewDirectory from "./crew/CrewDirectory.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -1343,7 +1342,6 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceQueue = yield* ResourceQueue.ResourceQueue;
       const webPushRelay = yield* WebPushRelay.WebPushRelay;
-      const crewDirectory = yield* CrewDirectory.CrewDirectory;
       // The toggle fails safe like the rest of this feature (see SubagentBackend.ts's
       // module doc): an unreadable flag file or settings store degrades to this
       // rather than surfacing a protocol error the client has nothing to do with -
@@ -2738,34 +2736,6 @@ const makeWsRpcLayer = (
             registerPushSubscription(input.subscription).pipe(
               Effect.map((outcome) => ({ ok: outcome === "registered" })),
             ),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.crewList]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.crewList,
-            crewDirectory.list().pipe(Effect.map((tasks) => ({ tasks }))),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.crewTeardown]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.crewTeardown,
-            crewDirectory.teardown({ taskId: input.taskId }).pipe(Effect.as({ ok: true as const })),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.crewAnswer]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.crewAnswer,
-            crewDirectory
-              .answer({ reportId: input.reportId, text: input.text })
-              .pipe(Effect.as({ ok: true as const })),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.crewForgetWorktree]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.crewForgetWorktree,
-            crewDirectory
-              .forgetWorktree({ taskId: input.taskId })
-              .pipe(Effect.as({ ok: true as const })),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subagentBackendGet]: (input) =>

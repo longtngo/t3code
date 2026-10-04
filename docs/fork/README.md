@@ -57,7 +57,7 @@ Earlier: 2026-09-10 (34th reconcile, 17 commits). Concentrated in
 link work (#10839 + #10875 + #10870 + #11007 + #11045) touched 172 files in a single commit,
 added `projection_thread_pull_requests` (a table), `ThreadPullRequestLink` (a contract), three
 new `thread.pull-request-*` events, and derived the legacy `linkedPullRequest` from the new
-array. Everything the fork holds on a thread shell — `crewRole`, `titleRegenerationFailedAt`,
+array. Everything the fork holds on a thread shell — `titleRegenerationFailedAt`,
 `hasPendingBackgroundTask` — had to be re-grafted onto upstream's rewritten builders in
 `ProjectionSnapshotQuery.ts`, because upstream re-indented those blocks and git aligned the
 fork's un-indented version against them, cutting each conflict marker off mid-object.
@@ -103,7 +103,7 @@ their **filename** numbers (`49` then `50`), which on this fork are unrelated mi
 test finds nothing or the wrong table. Retarget it to the applied ids rather than deleting it, and
 give it a control asserting the column or table is ABSENT at the previous id; without that control
 it passes whether or not the renumbering is right. The tell: an arriving migration whose test names
-an id below the fork's current maximum. Migration and crew tests use
+an id below the fork's current maximum. Migration tests use
 `NodeSqliteClient.layer({ filename: ":memory:" })`; effect removed `layerMemory()`.
 
 **The rule: never renumber an applied id — it has already run on live databases. Give the
@@ -228,10 +228,10 @@ whole, including that setting and its keybindings (invariants 50 and 52 are reti
 ### 5b. The fork's footer panels live inside upstream's `SidebarUtilityMenu`
 
 Upstream `#7153` extracted the sidebar footer into `SidebarUtilityMenu` and reused it from
-`SettingsSidebarNav`. Four fork panels (`SidebarLocalModels`, `SidebarResourceQueue`,
-`SidebarCrew`, `SidebarSubagentBackend`) live **inside that component**, along with the shared
+`SettingsSidebarNav`. Three fork panels (`SidebarLocalModels`, `SidebarResourceQueue`,
+`SidebarSubagentBackend`) live **inside that component**, along with the shared
 open state and the `relative` row wrapper the status panels anchor to. `SidebarChromeFooter` keeps
-only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the four out of
+only `SidebarProviderUpdatePill` and `SidebarUpdateArchitectureWarning`. Keeping the three out of
 the menu would have hidden them on the settings page, which is the one surface upstream added.
 
 `SettingsSidebarNav.tsx`'s row is `items-end`, not upstream's `items-center`: these panels open
@@ -242,8 +242,8 @@ upward and anchor on the row's bottom edge. Upstream #9563 wrapped `T3ConnectSid
 router hook in the utility menu breaks it with "No X export is defined on the mock" rather than
 with anything about panels. Add the export; the test's subject still applies.
 
-Probe: `grep -cE '<Sidebar(SubagentBackend|LocalModels|ResourceQueue|Crew)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
-is `4`.
+Probe: `grep -cE '<Sidebar(SubagentBackend|LocalModels|ResourceQueue)\b' apps/web/src/components/sidebar/SidebarChrome.tsx`
+is `3`.
 
 ### 5c. RETIRED with orchestrator v2: boot reconciliation
 
@@ -1167,8 +1167,7 @@ data (`Sidebar.logic.ts`, `vitals.ts`) are not linted, and upstream keeps raw co
 
 ### 60. RETIRED with orchestrator v2: the unaliased V1 thread-list query
 
-`ProjectionSnapshotQuery.ts` is gone. v2's shell has no crew column; the web reads crew roles
-through `crew.list` (`apps/server/src/crew/CrewRoles.ts`).
+`ProjectionSnapshotQuery.ts` is gone.
 
 ### 61. The watch re-scan backstop is forked at startup and keeps all three steps
 
@@ -1180,18 +1179,6 @@ a layer, for the TestClock reason under invariant 18. A reconcile must keep its 
 wiring: the integration test that checked the startup line went with V1. Probe:
 `grep -cE '^ +(serverSettings|keybindings)\.rescan,|^ +environmentTheme\.current,' apps/server/src/serverRuntimeStartup.ts`
 is `3`.
-
-### 62. A crewmate is marked by its branch, and every surface asks `isCrewBranch`
-
-v2's thread shell has no crew field, so a crewmate's thread is recognised by its branch,
-`crew/<taskId>` with a lowercase UUIDv4 task id. `isCrewBranch` (`packages/contracts/src/crew.ts`)
-is the one exact pattern; a user's own `crew/my-feature` does not match. Server and clients all call
-it: crew refusals (`CrewService`), push and notification silence (`WebPushRelay`,
-`useThreadCompletionNotifications`), and the checkout offers in `BranchToolbar.logic.ts` and mobile's
-`new-task-context-presentation.ts`. The last two, and their test files, are upstream's, so a
-rewrite there can drop the call and its fork-added test case together, with no conflict. Probe:
-`git grep -c 'isCrewBranch(' -- apps ':!*.test.*'` lists those 5 files, one call each, and
-`git grep -n '"crew/"' -- apps packages ':!*.test.*'` finds no ad-hoc prefix check.
 
 ### 63. The subagent dispatch instruction is fixed per conversation
 

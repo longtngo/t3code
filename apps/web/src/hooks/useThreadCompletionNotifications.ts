@@ -17,23 +17,19 @@
  *
  * Mount once near the app root (inside the router + atom registry).
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { isCrewBranch, type ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
-import { crewRolesByThread } from "@t3tools/client-runtime/state/crew";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 import { useClientSettings, usePrimarySettings } from "./useSettings";
 import { useThreadShells } from "../state/entities";
-import { usePrimaryEnvironmentId } from "../state/environments";
-import { useCrew } from "./useCrew";
 import {
   classifyThreadCompletion,
   notifyThreadCompletions,
   registerThreadNotificationHost,
   type ThreadBackgroundLiveness,
-  type ThreadCompletion,
 } from "../lib/notifier";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 
@@ -130,91 +126,42 @@ export function useThreadCompletionNotifications(): void {
   const categoriesBox = useRef(categories);
   categoriesBox.current = categories;
 
-  // Crew threads never notify (the bridge hears from its crewmates through crew
-  // reports instead). A crewmate is recognised exactly from its own shell's `crew/`
-  // branch, on any environment. Only a bridge needs `crew.list`: read from the
-  // primary environment's shared atom, which refreshes every 60s, hidden tab included.
-  // Held in a ref like `categories`.
-  const crewEnvironmentId = usePrimaryEnvironmentId();
-  const { tasks: crewTasks } = useCrew(crewEnvironmentId, false);
-  const crewRoles = useMemo(() => crewRolesByThread(crewTasks ?? []), [crewTasks]);
-  const crewRolesBox = useRef({ environmentId: crewEnvironmentId, roles: crewRoles });
-  crewRolesBox.current = { environmentId: crewEnvironmentId, roles: crewRoles };
-
   const threads = useThreadShells();
   // Per (environment:thread) previous latest-turn state, so we can detect the
   // running -> terminal edge across renders without any server/RPC changes.
   const previousStatesRef = useRef<Map<string, string | null>>(new Map());
 
   useEffect(() => {
-    const completions = collectThreadCompletions({
-      previous: previousStatesRef.current,
-      threads,
-      crewEnvironmentId: crewRolesBox.current.environmentId,
-      crewRoles: crewRolesBox.current.roles,
-    });
-    for (const { environmentId, completion } of completions) {
-      notifyThreadCompletions({
-        environmentId,
-        completions: [completion],
-        enabled: enabledBox.current,
-        categories: categoriesBox.current,
+    const previous = previousStatesRef.current;
+    const seen = new Set<string>();
+    for (const shell of threads) {
+      const key = `${shell.environmentId}:${shell.id}`;
+      seen.add(key);
+      // Absent key => first observation => `undefined`, which never fires.
+      const previousState = previous.has(key) ? (previous.get(key) ?? null) : undefined;
+      const nextState = latestRunNotificationState(shell);
+      const completion = classifyThreadCompletion({
+        threadId: shell.id,
+        previousState,
+        nextTurnId: shell.latestRun?.runId ?? null,
+        nextState,
+        title: shell.title,
       });
+      if (completion) {
+        notifyThreadCompletions({
+          environmentId: shell.environmentId,
+          completions: [{ ...completion, backgroundLiveness: backgroundLivenessOf(shell) }],
+          enabled: enabledBox.current,
+          categories: categoriesBox.current,
+        });
+      }
+      previous.set(key, nextState);
+    }
+    // Prune threads that dropped out so the map cannot grow unbounded.
+    for (const key of previous.keys()) {
+      if (!seen.has(key)) {
+        previous.delete(key);
+      }
     }
   }, [threads]);
-}
-
-/**
- * Advance the per-thread previous-state map over the current shells and return the
- * running -> terminal edges to notify. Crew threads (by the primary environment's
- * role map) yield none. Mutates `previous`, pruning threads that dropped out so the
- * map cannot grow unbounded.
- */
-export function collectThreadCompletions(input: {
-  readonly previous: Map<string, string | null>;
-  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly crewEnvironmentId: string | null;
-  readonly crewRoles: ReadonlyMap<string, string>;
-}): Array<{
-  environmentId: EnvironmentThreadShell["environmentId"];
-  completion: ThreadCompletion;
-}> {
-  const { previous, threads } = input;
-  const out: Array<{
-    environmentId: EnvironmentThreadShell["environmentId"];
-    completion: ThreadCompletion;
-  }> = [];
-  const seen = new Set<string>();
-  for (const shell of threads) {
-    const key = `${shell.environmentId}:${shell.id}`;
-    seen.add(key);
-    // Absent key => first observation => `undefined`, which never fires.
-    const previousState = previous.has(key) ? (previous.get(key) ?? null) : undefined;
-    const nextState = latestRunNotificationState(shell);
-    const completion = classifyThreadCompletion({
-      threadId: shell.id,
-      previousState,
-      nextTurnId: shell.latestRun?.runId ?? null,
-      nextState,
-      title: shell.title,
-      crewRole: isCrewBranch(shell.branch)
-        ? "crewmate"
-        : shell.environmentId === input.crewEnvironmentId
-          ? input.crewRoles.get(shell.id)
-          : undefined,
-    });
-    if (completion) {
-      out.push({
-        environmentId: shell.environmentId,
-        completion: { ...completion, backgroundLiveness: backgroundLivenessOf(shell) },
-      });
-    }
-    previous.set(key, nextState);
-  }
-  for (const key of previous.keys()) {
-    if (!seen.has(key)) {
-      previous.delete(key);
-    }
-  }
-  return out;
 }

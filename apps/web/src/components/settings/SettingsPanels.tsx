@@ -649,7 +649,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
         ? ["Agent browser access"]
         : []),
-      ...(settings.enableCrew !== DEFAULT_UNIFIED_SETTINGS.enableCrew ? ["Crew"] : []),
       ...(settings.allowSpendingCredits !== DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits
         ? ["Allow to spend credits"]
         : []),
@@ -676,7 +675,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.diffColorScheme,
       settings.chatWidth,
       settings.enableAgentBrowserAccess,
-      settings.enableCrew,
       settings.allowSpendingCredits,
       settings.offerThreadCompaction,
       settings.jiraBaseUrl,
@@ -858,9 +856,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       // name, so a user restoring defaults is told the agent regains access
       // rather than discovering it later.
       enableAgentBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess,
-      // Restored off, like every other default. Crewmates already dispatched
-      // keep running; the switch only bounds new dispatches.
-      enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew,
       allowSpendingCredits: DEFAULT_UNIFIED_SETTINGS.allowSpendingCredits,
       offerThreadCompaction: DEFAULT_UNIFIED_SETTINGS.offerThreadCompaction,
       jiraBaseUrl: DEFAULT_UNIFIED_SETTINGS.jiraBaseUrl,
@@ -2274,11 +2269,6 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.offerThreadCompaction === true,
     );
-  const supportsCrew =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.crew === true,
-    );
 
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
@@ -2901,36 +2891,6 @@ export function GeneralSettingsPanel() {
             />
           }
         />
-
-        {supportsCrew ? (
-          <SettingsRow
-            serverScoped
-            {...searchableSetting("crew")}
-            description="Let a thread dispatch crewmates: separate agent threads, each in its own worktree, that report back here when they finish. Off means no new crewmates can be dispatched."
-            status={
-              settings.enableCrew
-                ? undefined
-                : "Any crewmate still running keeps working, and you can still answer it or tear it down from the Crew panel. Its progress reports stop interrupting your threads until this is back on."
-            }
-            resetAction={
-              settings.enableCrew !== DEFAULT_UNIFIED_SETTINGS.enableCrew ? (
-                <SettingResetButton
-                  label="crew"
-                  onClick={() =>
-                    updateSettings({ enableCrew: DEFAULT_UNIFIED_SETTINGS.enableCrew })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.enableCrew}
-                onCheckedChange={(checked) => updateSettings({ enableCrew: Boolean(checked) })}
-                aria-label="Enable crew"
-              />
-            }
-          />
-        ) : null}
 
         <SettingsRow
           {...searchableSetting("send-shortcut")}

@@ -6,7 +6,7 @@
 
 `SidebarSubagentBackend` mounts in `SidebarChromeFooter` only, so the settings page — which
 renders `SidebarUtilityMenu` and nothing else of the footer — never shows it. The fork's other
-footer panels (`SidebarLocalModels`, `SidebarResourceQueue`, `SidebarCrew`) live inside the
+footer panels (`SidebarLocalModels`, `SidebarResourceQueue`) live inside the
 utility menu for exactly that reason (registry §5b). Move it there.
 
 Baseline @ 8537c8bad: the `SidebarUtilityMenu` function body contains `<SidebarSubagentBackend`
@@ -32,8 +32,8 @@ element instead, and two assertions are added: rendering `SidebarUtilityMenu` it
 footer, which mounts the panel today and would make the assertion vacuous) contains the marker,
 and rendering the footer contains it exactly once (a forgotten footer mount would double it).
 Both were checked to fail on today's tree in a static-render prototype.
-`docs/fork/README.md` §5b is rewritten: four panels live inside the menu (`SidebarLocalModels`,
-`SidebarResourceQueue`, `SidebarCrew`, `SidebarSubagentBackend`), and the footer keeps only the
+`docs/fork/README.md` §5b is rewritten: three panels live inside the menu (`SidebarLocalModels`,
+`SidebarResourceQueue`, `SidebarSubagentBackend`), and the footer keeps only the
 two update pills — its current "bare `<SidebarUtilityMenu />`" clause is already false.
 
 ## Surfaces

@@ -49,7 +49,7 @@ numbering below cites its invariants (I1–I13) and premises (P1–P17).
 - Modify: `packages/contracts/src/settings.ts` (add to `ServerSettings` beside
   `subagentBackendEnabled` at `:1658`; add to `ServerSettingsPatch` beside `:1944`)
 - Modify: `packages/contracts/src/environment.ts` (add to `ExecutionEnvironmentCapabilities` beside
-  `crew` at `:161-165`)
+  `subagentBackendThreadModes`)
 - Modify: `apps/server/src/environment/ServerEnvironment.ts:240` (advertise it)
 - Test: `packages/contracts/src/settings.test.ts`
 - Test: `apps/server/src/environment/ServerEnvironment.test.ts:179`
@@ -146,7 +146,7 @@ In `ServerSettingsPatch`, after `subagentBackendThreadModes` (`:1947`):
 
 - [ ] **Step 4: Add the capability**
 
-In `packages/contracts/src/environment.ts`, after the `crew` entry (`:165`):
+In `packages/contracts/src/environment.ts`, after the `subagentBackendThreadModes` entry:
 
 ```ts
   /** Server honours `allowSpendingCredits` and refuses turns on a provider at 100%. Absent on
@@ -156,7 +156,7 @@ In `packages/contracts/src/environment.ts`, after the `crew` entry (`:165`):
   allowSpendingCredits: Schema.optionalKey(Schema.Boolean),
 ```
 
-In `apps/server/src/environment/ServerEnvironment.ts`, after `crew: true,` (`:241`):
+In `apps/server/src/environment/ServerEnvironment.ts`, after `subagentBackendThreadModes: true,`:
 
 ```ts
       allowSpendingCredits: true,
@@ -1447,7 +1447,7 @@ git commit -m "feat(server): withhold Cursor subagent offload when credits are b
 - [ ] **Step 1: Write the failing test**
 
 In `apps/web/src/components/settings/settingsSearch.test.ts`, extend the existing capability-gate
-test (`:218-231`) with the same two assertions the crew row has:
+test (`:218-231`) with the same two assertions the subagent row has:
 
 ```ts
 // The same silent-snap-back gate: an older server strips the unknown
@@ -1470,7 +1470,7 @@ Expected: FAIL — no item with that id.
 
 - [ ] **Step 3: Add the search item and its gate**
 
-`settingsSearch.ts` — beside `requiresCrew` (`:62`): `readonly requiresAllowSpendingCredits?: boolean;`
+`settingsSearch.ts` — beside `requiresSubagentBackendThreadModes`: `readonly requiresAllowSpendingCredits?: boolean;`
 In the catalog, beside `subagent-offload` (`:342-349`):
 
 ```ts
@@ -1489,7 +1489,7 @@ In the availability type and the filter (`:941-942`):
       (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
 ```
 
-`useAvailableSettingsSearchItems.ts` — beside `hasCrew` (`:49`):
+`useAvailableSettingsSearchItems.ts` — beside `hasSubagentBackendThreadModes`:
 
 ```ts
         hasAllowSpendingCredits: environments.some(

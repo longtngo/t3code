@@ -1,14 +1,4 @@
-import { isCrewBranch } from "@t3tools/contracts";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
-
-/**
- * Whether a thread row offers "New thread on <branch>". Not for a crewmate's kept
- * `crew/<taskId>` branch: starting from it would check that branch out in the main
- * checkout, which it was never meant for.
- */
-export function canStartNewThreadOnBranch(branch: string | null | undefined): branch is string {
-  return typeof branch === "string" && branch.length > 0 && !isCrewBranch(branch);
-}
 
 type WorkspaceMode = "local" | "worktree";
 

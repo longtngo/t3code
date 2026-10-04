@@ -5,7 +5,6 @@ import type {
   ProjectId,
   WorktreeSubmodules,
 } from "@t3tools/contracts";
-import { isCrewBranch } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
@@ -284,12 +283,6 @@ export function resolveLocalCheckoutBranchMismatch(input: {
     return null;
   }
   if (!activeThreadBranch || !currentGitBranch || activeThreadBranch === currentGitBranch) {
-    return null;
-  }
-  // FORK: a torn-down crewmate keeps its `crew/<taskId>` branch as a marker after its
-  // worktree is forgotten. That branch was never meant for the main checkout, so offering
-  // to switch the main checkout to it is wrong.
-  if (isCrewBranch(activeThreadBranch)) {
     return null;
   }
   return { threadBranch: activeThreadBranch, currentBranch: currentGitBranch };

@@ -49,17 +49,12 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 ## Fork additions
 
 Concepts this fork adds on top of upstream. Sources: [SubagentBackend.ts](../../apps/server/src/subagentBackend/SubagentBackend.ts),
-[ThreadBackendPath.ts](../../apps/server/src/subagentBackend/ThreadBackendPath.ts),
-[CrewService.ts](../../apps/server/src/crew/CrewService.ts), [CrewSweep.ts](../../apps/server/src/crew/CrewSweep.ts).
+[ThreadBackendPath.ts](../../apps/server/src/subagentBackend/ThreadBackendPath.ts).
 
-| Term              | Meaning                                                                                                                                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Subagent offload  | Where a coding agent dispatches its subagents, chosen per machine and per thread. Resolution order: master switch, then thread mode (`inherit`/`on`/`off`), then the machine-global record.        |
-| Crew              | The set of agent threads one thread dispatched to work in parallel, each in its own git worktree. Off by default behind the `enableCrew` server setting.                                           |
-| Crewmate          | A thread dispatched by another thread. Runs its own provider session on its own branch and worktree, and reports back through `crew_report`. It may not dispatch its own crew; nesting is refused. |
-| Bridge            | The thread that dispatched a crewmate. Reports flow crewmate to bridge, answers flow bridge to crewmate. A thread's `crewRole` is derived from task rows, not stored on the thread.                |
-| Delivery sweep    | The 60s pass that carries reports to their destination and stamps them handled. While `enableCrew` is off it narrows to answers only, and forks a zombie scan that is deliberately not gated.      |
-| Environment theme | A per-environment colour applied across clients so multiple connected environments stay visually distinct.                                                                                         |
+| Term              | Meaning                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subagent offload  | Where a coding agent dispatches its subagents, chosen per machine and per thread. Resolution order: master switch, then thread mode (`inherit`/`on`/`off`), then the machine-global record. |
+| Environment theme | A per-environment colour applied across clients so multiple connected environments stay visually distinct.                                                                                  |
 
 ## Pull requests
 

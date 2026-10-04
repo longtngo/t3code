@@ -1,3 +1,4 @@
+// Crew orchestration was removed; kept so migration ids stay contiguous. Its tables are unused.
 /**
  * Adds `crew_tasks` and `crew_reports`: the durable record of crew orchestration.
  *

@@ -219,19 +219,6 @@ export function readEnvironmentSupportsLocalOnlyStatus(environmentId: Environmen
   );
 }
 
-/** Whether the environment's server understands `enableCrew` and serves the
-    `crew.*` RPCs. An older one has never heard of `crew.list`, and the panel and
-    the command palette both poll it on a timer, so an ungated client sends a
-    request a minute per environment that can only fail. Same version-skew
-    contract as the rest: missing reads as unsupported. */
-export function useEnvironmentSupportsCrew(environmentId: EnvironmentId | null): boolean {
-  const serverConfigs = useServerConfigs();
-  return (
-    environmentId != null &&
-    serverConfigs.get(environmentId)?.environment.capabilities.crew === true
-  );
-}
-
 /** Whether the environment's server serves `thread.backgroundTasks.list`: `null` until its
     server config arrives, like the plan-history check below. */
 export function useEnvironmentSupportsThreadBackgroundTasks(

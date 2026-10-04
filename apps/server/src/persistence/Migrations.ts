@@ -107,6 +107,7 @@ import Migration0049 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts
 // Upstream's 043 (V1 threads.unsettled_at, #8231) likewise takes the next
 // free id (50) rather than its filename number.
 import Migration0050 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
+// Crew orchestration was removed; 51 stays registered (ids are positional) and its tables are unused.
 import Migration0051 from "./Migrations/051_CrewTasks.ts";
 // Upstream's 044 (clear automatic project model defaults) and 045
 // (projection_projects auto-pull columns) arrive after the fork already deployed

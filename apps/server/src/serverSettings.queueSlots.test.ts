@@ -103,9 +103,9 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
     Effect.gen(function* () {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.getRawSettings;
-      const external = '{"enableCrew": true, "allowSpendingCredits": false}\n';
+      const external = '{"enableAgentDeviceAccess": true, "allowSpendingCredits": false}\n';
       NodeFS.writeFileSync(settingsPath, external);
       const { result, emitted } = yield* withEmits(
         Effect.flip(settings.updateSettings({ queueSlots: { slots: 4 } })),
@@ -147,7 +147,7 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
         )
         VALUES ('thread-cursor', 'ready', 'cursor', 'cursor', '2026-08-25T00:00:00.000Z')
       `;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.getRawSettings;
       yield* settings.updateSettings({ queueSlotsImport: Q });
       assert.isTrue((yield* settings.getSettings).providers.cursor.enabled);
@@ -160,9 +160,12 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
     Effect.gen(function* () {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.getRawSettings;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true, "allowSpendingCredits": false}\n');
+      NodeFS.writeFileSync(
+        settingsPath,
+        '{"enableAgentDeviceAccess": true, "allowSpendingCredits": false}\n',
+      );
       yield* settings.rescan;
       // The client pairs a partial patch with its whole local value; a partial onto none fails normalize.
       yield* settings.updateSettings({ queueSlotsImport: Q, queueSlots: { slots: 4 } });

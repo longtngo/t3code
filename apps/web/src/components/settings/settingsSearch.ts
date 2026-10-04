@@ -72,7 +72,6 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
   readonly requiresSubagentBackendThreadModes?: boolean;
-  readonly requiresCrew?: boolean;
   readonly requiresAllowSpendingCredits?: boolean;
   readonly requiresOfferThreadCompaction?: boolean;
   readonly requiresJiraTicketLinks?: boolean;
@@ -88,7 +87,6 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly hasSubagentBackendThreadModes: boolean;
-  readonly hasCrew: boolean;
   readonly hasAllowSpendingCredits: boolean;
   readonly hasOfferThreadCompaction: boolean;
   readonly hasJiraTicketLinks: boolean;
@@ -425,13 +423,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Collapse composer on scroll",
     to: "/settings/general",
     searchTerms: ["composer rest resting scroll wheel conversation timeline shrink minimize"],
-  },
-  {
-    id: "crew",
-    title: "Crew",
-    to: "/settings/general",
-    requiresCrew: true,
-    searchTerms: ["crewmate delegate dispatch parallel worktree bridge teardown"],
   },
   {
     id: "send-shortcut",
@@ -1131,7 +1122,6 @@ export function filterAvailableSettingsSearchItems(
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
       (!item.requiresSubagentBackendThreadModes || availability.hasSubagentBackendThreadModes) &&
-      (!item.requiresCrew || availability.hasCrew) &&
       (!item.requiresAllowSpendingCredits || availability.hasAllowSpendingCredits) &&
       (!item.requiresOfferThreadCompaction || availability.hasOfferThreadCompaction) &&
       (!item.requiresJiraTicketLinks || availability.hasJiraTicketLinks),

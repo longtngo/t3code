@@ -397,7 +397,7 @@ function pendingThreadTitleGenerationEffect(
   };
 }
 
-export const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
+const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 
 function isBlockingRun(run: OrchestrationV2Run): boolean {
   return (

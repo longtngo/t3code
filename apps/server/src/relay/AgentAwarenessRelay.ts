@@ -49,7 +49,6 @@ import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environme
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import { CrewRoles } from "../crew/CrewRoles.ts";
 import { forkParked } from "../serverActivation.ts";
 
 export class AgentAwarenessRelay extends Context.Service<
@@ -371,7 +370,6 @@ export const make = Effect.gen(function* () {
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
-  const crewRoles = yield* CrewRoles;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
   const cloudLinkKeyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
@@ -524,21 +522,6 @@ export const make = Effect.gen(function* () {
     // domain event, so materializing the full shell here would make the cost
     // of one thread's activity proportional to how many threads exist.
     const threadShell = yield* threads.getThreadShell(threadId);
-
-    // FORK: crew threads are not the operator's agent activity — a fleet of crewmates
-    // would otherwise publish as a fleet of the operator's own sessions. Any role counts,
-    // `crewmate-closed` included: teardown closes the row before it archives the thread,
-    // and the run settles in between.
-    const crewRole = yield* crewRoles.roleOf(threadId);
-    if (crewRole !== null) {
-      yield* Effect.logInfo("crew.notification.suppressed.agent-awareness", {
-        environmentId,
-        threadId,
-        crewRole,
-        code: "crew.notification.suppressed.agent-awareness",
-      });
-      return;
-    }
     const thread =
       threadShell === null || threadShell.archivedAt !== null
         ? Option.none<OrchestrationV2ThreadShell>()

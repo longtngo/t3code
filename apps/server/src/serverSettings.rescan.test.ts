@@ -55,10 +55,10 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
       yield* settings.getRawSettings;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(emitted.length, 1);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
       assert.equal(count("watch rescan applied a change the file watcher had not delivered"), 1);
     }).pipe(Effect.provide(layer())),
   );
@@ -68,7 +68,7 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       logs.length = 0;
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
       const unchanged = yield* withEmits(Effect.all([settings.rescan, settings.rescan]));
       assert.equal(unchanged.emitted.length, 0);
@@ -85,7 +85,7 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       assert.equal(broken.emitted.length, 0);
       assert.equal(count("failed to parse settings.json"), 1);
       // I6: last good value kept
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
 
@@ -94,15 +94,15 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       logs.length = 0;
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
       NodeFS.rmSync(settingsPath);
       NodeFS.mkdirSync(settingsPath);
       yield* Effect.all([settings.rescan, settings.rescan, settings.rescan]);
       assert.equal(count("settings file unreadable"), 1);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
       NodeFS.rmdirSync(settingsPath);
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": false}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": false}\n');
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(count("settings file readable again"), 1);
       assert.equal(emitted.length, 1);
@@ -121,10 +121,10 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       logs.length = 0;
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
       logs.length = 0;
-      NodeFS.writeFileSync(settingsPath, '{\n  "enableCrew":   true\n}\n');
+      NodeFS.writeFileSync(settingsPath, '{\n  "enableAgentDeviceAccess":   true\n}\n');
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(emitted.length, 0);
       assert.equal(count("watch rescan applied a change the file watcher had not delivered"), 0);
@@ -164,7 +164,7 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       );
       assert.equal(broken.emitted.length, 0);
       assert.equal(count("failed to parse settings.json"), 1);
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(emitted.length, 1);
     }).pipe(Effect.provide(layer())),
@@ -177,29 +177,32 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       yield* settings.getRawSettings;
       const { emitted } = yield* withEmits(
         Effect.gen(function* () {
-          yield* Effect.all([settings.updateSettings({ enableCrew: true }), settings.rescan], {
-            concurrency: "unbounded",
-          });
+          yield* Effect.all(
+            [settings.updateSettings({ enableAgentDeviceAccess: true }), settings.rescan],
+            {
+              concurrency: "unbounded",
+            },
+          );
           yield* settings.rescan;
         }),
       );
       assert.equal(emitted.length, 1);
       assert.equal(count("watch rescan applied a change the file watcher had not delivered"), 0);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
   it.effect("a self-write forgets the old bytes, so restoring them is applied", () =>
     Effect.gen(function* () {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      const first = '{"enableCrew": true}\n';
+      const first = '{"enableAgentDeviceAccess": true}\n';
       NodeFS.writeFileSync(settingsPath, first);
       yield* settings.rescan;
-      yield* settings.updateSettings({ enableCrew: false });
+      yield* settings.updateSettings({ enableAgentDeviceAccess: false });
       NodeFS.writeFileSync(settingsPath, first);
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(emitted.length, 1);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
 
@@ -247,7 +250,7 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       const settings = yield* ServerSettingsModule.ServerSettingsService;
       const sql = yield* SqlClient.SqlClient;
       yield* settings.getRawSettings;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* sql`ALTER TABLE projection_thread_sessions RENAME TO hidden_sessions`;
       yield* settings.rescan;
       yield* settings.rescan;
@@ -255,7 +258,7 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
       yield* sql`ALTER TABLE hidden_sessions RENAME TO projection_thread_sessions`;
       const { emitted } = yield* withEmits(settings.rescan);
       assert.equal(emitted.length, 1);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
 
@@ -263,16 +266,16 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
     Effect.gen(function* () {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
       NodeFS.rmSync(settingsPath);
       const missing = yield* withEmits(Effect.all([settings.rescan, settings.rescan]));
       assert.equal(missing.emitted.length, 0);
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": false}\n');
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": false}\n');
       const recreated = yield* withEmits(settings.rescan);
       assert.equal(recreated.emitted.length, 1);
-      assert.isFalse((yield* settings.getRawSettings).enableCrew);
+      assert.isFalse((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
 
@@ -280,14 +283,14 @@ it.layer(NodeServices.layer)("settings rescan", (it) => {
     Effect.gen(function* () {
       const { settingsPath } = yield* ServerConfig.ServerConfig;
       const settings = yield* ServerSettingsModule.ServerSettingsService;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": false}\n');
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": false}\n');
       yield* settings.start; // invalidate + lookup outside refresh
-      assert.isFalse((yield* settings.getRawSettings).enableCrew);
-      NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+      assert.isFalse((yield* settings.getRawSettings).enableAgentDeviceAccess);
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
       yield* settings.rescan;
-      assert.isTrue((yield* settings.getRawSettings).enableCrew);
+      assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     }).pipe(Effect.provide(layer())),
   );
 });
@@ -299,9 +302,9 @@ it.live("a watch event applies an untrusted file the timer would skip", () =>
     const { settingsPath } = yield* ServerConfig.ServerConfig;
     const settings = yield* ServerSettingsModule.ServerSettingsService;
     NodeFS.mkdirSync(NodePath.dirname(settingsPath), { recursive: true });
-    NodeFS.writeFileSync(settingsPath, '{"enableCrew": true}\n');
+    NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
     yield* settings.start;
-    assert.isTrue((yield* settings.getRawSettings).enableCrew);
+    assert.isTrue((yield* settings.getRawSettings).enableAgentDeviceAccess);
     const changes = yield* settings.subscribeChanges;
     const seen = yield* Queue.unbounded<unknown>();
     yield* changes.pipe(
@@ -320,6 +323,6 @@ it.live("a watch event applies an untrusted file the timer would skip", () =>
       // Surviving events arrive many seconds late under load; stays under the 120 s test timeout.
       Effect.timeout("90 seconds"),
     );
-    assert.isFalse((yield* settings.getRawSettings).enableCrew);
+    assert.isFalse((yield* settings.getRawSettings).enableAgentDeviceAccess);
   }).pipe(Effect.scoped, Effect.provide(Layer.provideMerge(layer(), NodeServices.layer))),
 );

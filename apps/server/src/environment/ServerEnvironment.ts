@@ -247,8 +247,6 @@ export const make = Effect.gen(function* () {
       // FORK: the subagent dispatch toggle and per-thread offload (Claude processes).
       subagentBackend: true,
       subagentBackendThreadModes: true,
-      // FORK: `enableCrew` and the crew.* RPCs.
-      crew: true,
       jiraTicketLinks: true,
       // FORK: refuses turns on an instance at 100% while the switch is off (CreditSpendGuard).
       allowSpendingCredits: true,

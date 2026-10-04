@@ -2,13 +2,11 @@ import * as NodeCrypto from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
 import {
-  CrewTaskId,
   EventId,
   EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   RuntimeRequestId,
@@ -36,13 +34,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { CrewRepository, CrewRepositoryLive } from "../crew/CrewRepository.ts";
-import { CrewRoles, CrewRolesLive } from "../crew/CrewRoles.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
@@ -59,9 +51,7 @@ import {
   classifyPushEdge,
   filterEdgesByCategory,
   isAllowedPushEndpoint,
-  make,
   makeWebPushRelay,
-  type WebPushRelayCrewRoleOf,
   type WebPushRelayThreads,
 } from "./WebPushRelay.ts";
 
@@ -347,9 +337,6 @@ const makeHarness = (input: {
   readonly onDelete?: (endpoint: string) => Effect.Effect<void>;
   readonly threads: WebPushRelayThreads;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
-  readonly crewRoleOf?: WebPushRelayCrewRoleOf;
-  /** Build through the production `make` (services from context) instead of the factory. */
-  readonly production?: boolean;
 }) =>
   Effect.gen(function* () {
     const harness: Harness = { sent: [], deleted: [] };
@@ -361,19 +348,7 @@ const makeHarness = (input: {
         Effect.map((status) => HttpClientResponse.fromWeb(request, new Response(null, { status }))),
       ),
     );
-    const build = input.production
-      ? make.pipe(
-          Effect.provideService(
-            ThreadManagement.ThreadManagementService,
-            input.threads as unknown as ThreadManagement.ThreadManagementService["Service"],
-          ),
-          Effect.provideService(
-            CrewRoles,
-            CrewRoles.of({ roleOf: input.crewRoleOf ?? (() => Effect.succeed(null)) }),
-          ),
-        )
-      : makeWebPushRelay(input.threads, input.crewRoleOf);
-    const relay = yield* build.pipe(
+    const relay = yield* makeWebPushRelay(input.threads).pipe(
       Effect.provideService(
         ServerSecretStore.ServerSecretStore,
         ServerSecretStore.ServerSecretStore.of({
@@ -455,118 +430,6 @@ describe("WebPushRelay", () => {
       yield* relay.drain;
       assert.deepEqual(harness.sent, []);
     }).pipe(Effect.scoped),
-  );
-
-  it.effect("pushes nothing for a crewmate, and still pushes for a user's own crew/ branch", () =>
-    Effect.gen(function* () {
-      // Multi-unit: a crewmate (exact crew/<uuid> branch) and a user thread on crew/my-feature.
-      const crewmate = ThreadId.make("push-crewmate");
-      const userThread = ThreadId.make("push-user-crew-branch");
-      const { relay, harness } = yield* makeHarness({
-        subscriptions: [subscription(FCM)],
-        threads: {
-          streamDomainEvents: Stream.empty,
-          getThreadShell: (threadId) =>
-            Effect.succeed(
-              shell({
-                id: threadId,
-                branch:
-                  threadId === crewmate
-                    ? "crew/3f2b8c1e-9a4d-4e7f-b6a1-0c5d2e8f9a7b"
-                    : "crew/my-feature",
-              } as never),
-            ),
-        },
-      });
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-crew"), threadId: crewmate })));
-      yield* relay.handleEvent({ ...requestUpdated(), threadId: crewmate });
-      yield* relay.handleEvent(
-        runUpdated(run({ id: RunId.make("run-user"), threadId: userThread })),
-      );
-      yield* relay.drain;
-      assert.deepEqual(harness.sent, [FCM]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("the production relay reads crew roles from the CrewRoles service", () =>
-    Effect.gen(function* () {
-      const lead = ThreadId.make("push-production-lead");
-      const { relay, harness } = yield* makeHarness({
-        production: true,
-        subscriptions: [subscription(FCM)],
-        threads: stubThreads(shell({ id: lead })),
-        crewRoleOf: (threadId) => Effect.succeed(threadId === lead ? "bridge" : null),
-      });
-      yield* relay.handleEvent(
-        runUpdated(run({ id: RunId.make("run-prod-lead"), threadId: lead })),
-      );
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-prod-plain") })));
-      yield* relay.drain;
-      assert.deepEqual(harness.sent, [FCM]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("a torn-down crewmate (closed row, branch already gone) still pushes nothing", () =>
-    Effect.gen(function* () {
-      // Teardown closes the row before the interrupted run settles; any role counts.
-      const closed = ThreadId.make("push-crewmate-closed");
-      const { relay, harness } = yield* makeHarness({
-        subscriptions: [subscription(FCM)],
-        threads: stubThreads(shell({ id: closed })),
-        crewRoleOf: (threadId) => Effect.succeed(threadId === closed ? "crewmate-closed" : null),
-      });
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-closed"), threadId: closed })));
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-plain") })));
-      yield* relay.drain;
-      assert.deepEqual(harness.sent, [FCM]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("pushes nothing for a crew lead, and notifies again once its crew tasks close", () =>
-    Effect.gen(function* () {
-      // Roles come from the real crew repository: an open task makes `lead` a bridge.
-      yield* runMigrations({});
-      const repository = yield* CrewRepository;
-      const lead = ThreadId.make("push-lead");
-      const task = {
-        taskId: CrewTaskId.make("push-task-1"),
-        parentThreadId: lead,
-        crewThreadId: ThreadId.make("push-crewmate-1"),
-        projectId: ProjectId.make("push-project"),
-        baseRef: null,
-        branch: "crew/3f2b8c1e-9a4d-4e7f-b6a1-0c5d2e8f9a7b",
-        worktreePath: "/tmp/push-crew-1",
-        provider: ProviderDriverKind.make("claudeAgent"),
-        status: "open" as const,
-        createdAt: "2026-10-03T00:00:00.000Z",
-        updatedAt: "2026-10-03T00:00:00.000Z",
-      };
-      yield* repository.insertTask(task);
-      const crewRoles = yield* CrewRoles;
-      const { relay, harness } = yield* makeHarness({
-        subscriptions: [subscription(FCM)],
-        threads: stubThreads(shell({ id: lead })),
-        crewRoleOf: crewRoles.roleOf,
-      });
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-lead-1"), threadId: lead })));
-      yield* relay.drain;
-      assert.deepEqual(harness.sent, []);
-
-      // Every crew task of this lead closes: it is an ordinary thread again.
-      yield* repository.closeTask({ taskId: task.taskId, updatedAt: "2026-10-03T00:01:00.000Z" });
-      yield* relay.handleEvent(runUpdated(run({ id: RunId.make("run-lead-2"), threadId: lead })));
-      yield* relay.drain;
-      assert.deepEqual(harness.sent, [FCM]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        CrewRolesLive.pipe(
-          Layer.provideMerge(CrewRepositoryLive),
-          Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
-          Layer.provideMerge(NodeServices.layer),
-        ),
-      ),
-    ),
   );
 
   it.effect("still sends queued pushes at shutdown, but none for the runs it cancels", () =>

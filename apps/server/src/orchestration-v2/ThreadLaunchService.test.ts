@@ -1179,36 +1179,52 @@ it.effect("keeps an explicit branch name instead of generating one", () =>
   }),
 );
 
-// FORK: crew names its worktrees by task id, so the row it reserves holds the real path.
-it.effect("honours an explicit worktree path and defaults to the driver's location", () =>
+// FORK: archiving a thread while its worktree is being created must not write the
+// worktree back onto it or go on to run setup.
+it.effect("leaves a thread archived during worktree creation without a worktree", () =>
   Effect.gen(function* () {
-    const harness = makeHarness();
+    const entered = yield* Deferred.make<void>();
+    const allow = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: (input) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(allow)),
+          Effect.as({
+            worktree: {
+              path: "/repo-worktrees/feature",
+              refName: input.newRefName,
+              headSha: "abc",
+            },
+          } as never),
+        ),
+    });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
-      yield* launches.launch(
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
         launchInput({
-          command: "command:launch:explicit-path",
-          thread: "thread:launch:explicit-path",
-          message: "Build the feature",
-          workspace: {
-            type: "worktree",
-            baseRef: "main",
-            branch: "crew/task-1",
-            path: "/tmp/worktrees/crew/task-1",
-          },
-        }),
-      );
-      yield* launches.launch(
-        launchInput({
-          command: "command:launch:derived-path",
-          thread: "thread:launch:derived-path",
+          command: "command:launch:archived-during-setup",
+          thread: "thread:launch:archived-during-setup",
           message: "Build the feature",
           workspace: { type: "worktree", baseRef: "main", branch: "my-feature" },
         }),
       );
-      yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 2));
-      const paths = harness.createWorktree.mock.calls.map((call) => call[0]?.path);
-      assert.deepEqual(paths.toSorted(), ["/tmp/worktrees/crew/task-1", null].toSorted());
+      yield* Deferred.await(entered);
+      yield* threads.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("command:launch:archived-during-setup:archive"),
+        threadId: launched.threadId,
+      });
+      yield* Deferred.succeed(allow, undefined);
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.runs[0]?.status !== "preparing")),
+      );
+      const after = yield* threads.getThreadProjection(launched.threadId);
+      assert.notEqual(after.thread.archivedAt, null);
+      assert.equal(after.thread.worktreePath, null);
+      assert.equal(harness.runSetup.mock.calls.length, 0);
     }).pipe(Effect.provide(harness.layer));
   }),
 );

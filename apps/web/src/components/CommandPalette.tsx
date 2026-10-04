@@ -109,8 +109,6 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useCrew } from "../hooks/useCrew";
-import { crewEnvironment } from "../state/crew";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -723,13 +721,6 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const crewEnvironmentId = primaryEnvironmentId;
-  // `fast: false` — the palette does not need a 5s cadence, and this poll runs
-  // for as long as the palette is mounted.
-  const { tasks: crewTasks } = useCrew(crewEnvironmentId, false);
-  const crewTeardownCommand = useAtomCommand(crewEnvironment.teardown, {
-    label: "crew:teardown:palette",
-  });
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -1872,31 +1863,6 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
-
-  // Crew teardown is here as well as in the sidebar's crew panel so a crewmate
-  // holding a slot can be stopped from the keyboard, wherever the operator is.
-  // The palette has no registration API, so this is an edit rather than a plugin.
-  for (const task of crewTasks ?? []) {
-    if (task.status !== "open") continue;
-    actionItems.push({
-      kind: "action",
-      value: `action:crew-teardown:${task.taskId}`,
-      searchTerms: ["crew", "teardown", "stop crewmate", task.branch],
-      title: (
-        <>
-          Tear down crew <span className="font-semibold">{task.branch}</span>
-        </>
-      ),
-      icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        if (crewEnvironmentId == null) return;
-        await crewTeardownCommand({
-          environmentId: crewEnvironmentId,
-          input: { taskId: task.taskId },
-        });
-      },
-    });
-  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

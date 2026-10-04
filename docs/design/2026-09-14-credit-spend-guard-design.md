@@ -69,7 +69,7 @@ The `gate` floor is recorded under Node **24.13.1**, which `package.json` pins, 
   `.some()` over connected environments while the panel gates with `.every()`
   (`useAvailableSettingsSearchItems.ts:45-50` vs `SettingsPanels.tsx:2229-2233`), so under mixed
   server versions a search hit can lead to a row that is hidden. That divergence is pre-existing and
-  shared with the crew and subagent rows; changing the shared filter would change their behaviour
+  shared with the subagent row; changing the shared filter would change its behaviour
   too. Identical for a single-environment user, which is the common case. Follow-up in section 13.
 
 **Consumers and siblings of the mechanism (Hard Rule 12)**
@@ -363,7 +363,7 @@ Costs the pillar sweep asked to be named, since there was no performance section
 | I7  | **Never** interrupt a thread on an instance that is not newly blocked, and never one with no active turn.                                                                                | **Multi-unit** test: three threads — one on the blocked instance mid-turn, one on the blocked instance idle, one on a _second_ instance mid-turn — assert exactly one interrupt, for the first.                                                                                                                                                                                                                                                                                  |
 | I8  | **Never** let one bad tick end the guard fiber, and never let a failed tick change the blocked memo.                                                                                     | Test: first tick's settings read fails, assert `prevBlocked` unchanged and the second tick still processes.                                                                                                                                                                                                                                                                                                                                                                      |
 | I10 | **Never** let a bootstrap `thread.turn.start` create a thread, worktree, or setup-script run when the instance is blocked.                                                               | Test: blocked instance + `bootstrap.createThread` → the RPC fails and no `thread.create` event was dispatched. Moving the gate below the bootstrap branch turns it red.                                                                                                                                                                                                                                                                                                          |
-| I11 | **Never** ship the Settings row without its capability: against a server that does not advertise `allowSpendingCredits`, the row is absent.                                              | `settingsSearch.test.ts` parallel to the existing crew/subagent silent-failure gate at `:224-230`, **plus** an explicit `expect(capabilities.allowSpendingCredits).toBe(true)` in `ServerEnvironment.test.ts`. The second is not redundant: the compat lens checked, and that test asserts a _subset_ of capabilities (`:165-181`) — `crew` is not asserted at all — so adding the schema field and forgetting to advertise it would pass today. "+ its test" was doing no work. |
+| I11 | **Never** ship the Settings row without its capability: against a server that does not advertise `allowSpendingCredits`, the row is absent.                                              | `settingsSearch.test.ts` parallel to the existing subagent silent-failure gate at `:224-230`, **plus** an explicit `expect(capabilities.allowSpendingCredits).toBe(true)` in `ServerEnvironment.test.ts`. The second is not redundant: the compat lens checked, and that test asserts a _subset_ of capabilities (`:165-181`) — some flags are not asserted at all — so adding the schema field and forgetting to advertise it would pass today. "+ its test" was doing no work. |
 | I12 | **Eventually** — an instance that became blocked has its running turns interrupted, even if the tick that first saw it could not read the projection.                                    | Test: tick 1 blocks A and its `getShellSnapshot` fails; tick 2 succeeds → assert the interrupt is dispatched on tick 2. Deleting `interruptPending` turns it red — the safety lens wrote this test and ran both arms (`useInterruptPending: false` → 0 interrupts on tick 2).                                                                                                                                                                                                    |
 | I13 | **Never** write more than one "Credit limit reached" activity entry per interrupted turn, however many retry ticks the instance's debt survives.                                         | **Multi-unit** test: two threads on one blocked instance, thread 1's interrupt dispatch fails every tick, run three ticks → assert thread 2 has exactly one activity entry and thread 1 has exactly one. Removing the `announced` guard turns it red.                                                                                                                                                                                                                            |
 
@@ -424,7 +424,7 @@ user docs will state.
   capability-gated. Error state is the refusal message on the turn and the Queue's existing paused
   state. No loading state: the row reads the already-loaded settings snapshot. Multi-environment
   writes fan out per `scopedSettings.ts:232-237`; a row is hidden unless **every** connected
-  environment advertises the capability, matching the crew and subagent gates.
+  environment advertises the capability, matching the subagent gate.
 - **Security and privacy** — none. Writing needs the existing settings write scope
   (`RpcAuthorization.ts:51-52`); the guard is read-only over settings. The refusal message names the
   provider instance, which on a single-user local server is exactly what the user needs to act.
@@ -490,7 +490,7 @@ user docs will state.
   `BackgroundTaskRecoveryWatchdog.ts:60`, and this design's). Pre-existing duplication this design
   adds to rather than fixes, deliberately: deduping one of two while filing the other is churn.
 - **Align `useAvailableSettingsSearchItems`'s `.some()` filter with the panel's `.every()` gate.**
-  Pre-existing, shared with the crew and subagent rows; only observable across mixed-version
+  Pre-existing, shared with the subagent row; only observable across mixed-version
   multi-environment connections.
 - **Composer pre-flight indicator** — show that sends are blocked and why before the attempt.
 - **Mobile Settings row** — same scope decision as the Task list and Background tab work.

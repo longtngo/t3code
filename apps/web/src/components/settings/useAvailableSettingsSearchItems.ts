@@ -63,9 +63,6 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
           (environment) =>
             environment.serverConfig?.environment.capabilities.subagentBackendThreadModes === true,
         ),
-        hasCrew: environments.some(
-          (environment) => environment.serverConfig?.environment.capabilities.crew === true,
-        ),
         hasAllowSpendingCredits: environments.some(
           (environment) =>
             environment.serverConfig?.environment.capabilities.allowSpendingCredits === true,
