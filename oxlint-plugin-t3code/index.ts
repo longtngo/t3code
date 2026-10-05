@@ -9,6 +9,7 @@ import noMobileUniwindThemeEscapeHatches from "./rules/no-mobile-uniwind-theme-e
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noTestInLoop from "./rules/no-test-in-loop.ts";
 import noUnsafeStreamAggregate from "./rules/no-unsafe-stream-aggregate.ts";
+import noUnscopedHas from "./rules/no-unscoped-has.ts";
 
 export default definePlugin({
   meta: {
@@ -24,5 +25,6 @@ export default definePlugin({
     "no-native-title-tooltip": noNativeTitleTooltip,
     "no-test-in-loop": noTestInLoop,
     "no-unsafe-stream-aggregate": noUnsafeStreamAggregate,
+    "no-unscoped-has": noUnscopedHas,
   },
 });

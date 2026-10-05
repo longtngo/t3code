@@ -32,6 +32,49 @@ export type ThreadActionMenuId =
   | "archive"
   | "delete";
 
+export type DraftActionMenuId =
+  | "queue"
+  | "unqueue"
+  | "copy"
+  | "copy-path"
+  | "copy-branch"
+  | "project-settings"
+  | "discard";
+
+/** Right-click menu for an unsent draft row in the sidebar. */
+export function buildDraftActionMenuItems(options: {
+  readonly isQueued: boolean;
+  readonly hasPath: boolean;
+  readonly hasBranch: boolean;
+  readonly hasProject: boolean;
+}): ReadonlyArray<ContextMenuItem<DraftActionMenuId>> {
+  return [
+    queueMenuItem(options.isQueued),
+    {
+      id: "copy",
+      label: "Copy",
+      icon: "copy",
+      disabled: !options.hasPath && !options.hasBranch,
+      children: [
+        ...(options.hasPath ? [{ id: "copy-path" as const, label: "Path", icon: "folder" }] : []),
+        ...(options.hasBranch
+          ? [{ id: "copy-branch" as const, label: "Branch", icon: "git-branch" }]
+          : []),
+      ],
+    },
+    ...(options.hasProject
+      ? [{ id: "project-settings" as const, label: "Project settings", icon: "settings" }]
+      : []),
+    {
+      id: "discard",
+      label: "Discard draft",
+      icon: "trash",
+      destructive: true,
+      separatorBefore: true,
+    },
+  ];
+}
+
 export interface ThreadActionMenuState {
   readonly branch: string | null;
   /**
@@ -205,22 +248,6 @@ export function buildThreadActionMenuItems(
       label: "Delete",
       destructive: true,
       icon: "trash",
-    },
-  ];
-}
-
-/** Context menu for a draft row (Not started, or a queued draft): the hover buttons' actions, reachable by long-press on touch. */
-export function buildDraftActionMenuItems(input: {
-  readonly isQueued: boolean;
-}): ReadonlyArray<ContextMenuItem<"queue" | "unqueue" | "discard">> {
-  return [
-    queueMenuItem(input.isQueued),
-    {
-      id: "discard",
-      label: "Discard draft",
-      icon: "trash",
-      destructive: true,
-      separatorBefore: true,
     },
   ];
 }

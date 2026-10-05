@@ -395,6 +395,7 @@ const makeHarness = (options?: {
               messages: Stream.fromQueue(sdkMessages),
               offer: () => Effect.void,
               setModel: () => Effect.void,
+              setPermissionMode: () => Effect.void,
               interrupt: Deferred.succeed(interruptRequested, undefined),
               close: Effect.void,
               ...(getContextUsage === undefined ? {} : { getContextUsage }),

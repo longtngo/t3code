@@ -17,7 +17,7 @@ import {
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {
-  it.each(["report.html", "report.HTM", "document.pdf?download=1"])(
+  it.each(["report.html", "report.HTM", "document#draft.pdf", "reports?old/document.pdf"])(
     "recognizes browser preview path %s",
     (path) => {
       expect(isWorkspaceBrowserPreviewPath(path)).toBe(true);
@@ -29,7 +29,9 @@ describe("workspace file previews", () => {
     "icon.png",
     "photo.JPEG",
     "animation.gif",
-    "vector.svg#mark",
+    "vector#mark.svg",
+    "photo?edited.JPEG",
+    "images#archive/icon.png",
     "texture.webp",
     "image.avif",
   ])("recognizes image preview path %s", (path) => {
@@ -37,12 +39,19 @@ describe("workspace file previews", () => {
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
   });
 
-  it.each(["README.md", "src/index.ts", "image.png.ts", "png"])(
-    "rejects non-preview path %s",
-    (path) => {
-      expect(isWorkspacePreviewEntryPath(path)).toBe(false);
-    },
-  );
+  it.each([
+    "README.md",
+    "src/index.ts",
+    "image.png.ts",
+    "png",
+    "image.png#notes.txt",
+    "image.svg?notes.txt",
+    "document.pdf?download=1",
+    "report.html#notes.txt",
+    "image%2Epng",
+  ])("rejects non-preview path %s", (path) => {
+    expect(isWorkspacePreviewEntryPath(path)).toBe(false);
+  });
 
   it("serves audio in place from the host like video and browser documents", () => {
     expect(isWorkspaceAudioPreviewPath("notes/recording.WAV")).toBe(true);
@@ -88,13 +97,15 @@ describe("workspace text viewer extensions", () => {
 });
 
 describe("workspace video preview paths", () => {
-  it("recognises the five video extensions, case-insensitively and past a query string", () => {
+  it("recognises the five video extensions, case-insensitively, on the literal filename", () => {
     expect(isWorkspaceVideoPreviewPath("/Users/me/demo.mp4")).toBe(true);
     expect(isWorkspaceVideoPreviewPath("/Users/me/demo.WEBM")).toBe(true);
     expect(isWorkspaceVideoPreviewPath("/Users/me/clip.mov")).toBe(true);
     expect(isWorkspaceVideoPreviewPath("/Users/me/clip.m4v")).toBe(true);
     expect(isWorkspaceVideoPreviewPath("/Users/me/clip.ogv")).toBe(true);
-    expect(isWorkspaceVideoPreviewPath("/Users/me/demo.mp4?raw=1")).toBe(true);
+    // Callers pass filesystem paths, so `?` and `#` are filename characters.
+    expect(isWorkspaceVideoPreviewPath("/Users/me/demo#v2.mp4")).toBe(true);
+    expect(isWorkspaceVideoPreviewPath("/Users/me/demo.mp4?raw=1")).toBe(false);
   });
 
   it("rejects non-video paths, including lookalikes", () => {
@@ -132,23 +143,15 @@ describe("media path parsing", () => {
     expect(mediaKindFromPath(source)).toBe(kind);
   });
 
-  // FORK: the third column is retargeted. Upstream's `isWorkspaceVideoPreviewPath`
-  // reads the literal filename, so a trailing `#t=2` keeps it a video and a bare
-  // `recording#take2.mp4` is one too. This fork's predicate strips the query and
-  // fragment first, because its own viewer appends `?raw=1` to every media URL
-  // (asserted above). The `mediaKindFromPath` column is upstream's, unchanged.
   it.each([
-    ["recording.mp4#t=2", "video", true],
+    ["recording.mp4#t=2", "video", false],
     ["recording%2Emp4", "video", false],
-    ["recording#take2.mp4", null, false],
-    ["recording?take2.mp4", null, false],
-  ])(
-    "parses authored URLs while the viewer predicate strips query and fragment in %s",
-    (source, kind, literalVideo) => {
-      expect(mediaKindFromPath(source)).toBe(kind);
-      expect(isWorkspaceVideoPreviewPath(source)).toBe(literalVideo);
-    },
-  );
+    ["recording#take2.mp4", null, true],
+    ["recording?take2.mp4", null, true],
+  ])("distinguishes authored URLs from literal filenames in %s", (source, kind, literalVideo) => {
+    expect(mediaKindFromPath(source)).toBe(kind);
+    expect(isWorkspaceVideoPreviewPath(source)).toBe(literalVideo);
+  });
 });
 
 describe("attachment preview classification", () => {

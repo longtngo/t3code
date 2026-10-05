@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
@@ -35,7 +37,7 @@ import {
   formatModelSelectionEffort,
   type ProviderSubagentStatus,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { formatModelSlugName } from "@t3tools/shared/model";
+import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
 import { isProviderNativeSubagentThread } from "@t3tools/contracts";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
@@ -92,6 +94,10 @@ import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import {
+  clearThreadComposerError,
+  threadComposerErrorsAtom,
+} from "../../state/thread-composer-error";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
@@ -103,6 +109,7 @@ import type {
   ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
@@ -132,6 +139,7 @@ import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import type { StopRung } from "@t3tools/client-runtime/state/stop-ladder";
+import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -306,6 +314,11 @@ const USER_INPUT_TOGGLE_TIMING = {
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const navigation = useNavigation();
+  const { session: voiceInputSession } = useGlobalVoiceInput();
+  const reportedModelSelection = useThreadReportedModelSelection({
+    environmentId: props.environmentId,
+    threadId: props.selectedThread.id,
+  });
   const deviceState = useEnvironmentQuery(
     deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
   );
@@ -358,6 +371,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
   const queuedCount = useThreadQueuedCount({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
@@ -472,11 +486,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {
-        kind: "waiting",
+        kind: "background",
         label: pendingBackgroundWork.title,
         accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items
           .map((item) => item.label)
           .join(", ")}`,
+        waiting: pendingBackgroundWork.waiting,
       };
     }
     return null;
@@ -763,8 +778,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const providerSubagentProvider = props.serverConfig?.providers.find(
     (provider) => provider.instanceId === props.selectedThread.modelSelection.instanceId,
   );
+  // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
+  const providerSubagentModelSlug = providerSubagentProvider
+    ? resolveSelectableModel(
+        providerSubagentProvider.driver,
+        props.selectedThread.modelSelection.model,
+        providerSubagentProvider.models,
+      )
+    : null;
   const providerSubagentCatalogModel = providerSubagentProvider?.models.find(
-    (model) => model.slug === props.selectedThread.modelSelection.model,
+    (model) => model.slug === providerSubagentModelSlug,
   );
   const workspaceContentWidth = useWorkspaceContentWidth();
   // Clearing animated width can retain the unfolded width after Android resumes folded.
@@ -1158,7 +1181,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   >
                     <ComposerQueuedEditBanner
                       saving={props.isSavingQueuedEdit}
-                      onCancel={props.onCancelQueuedRunEdit}
+                      onCancel={() => {
+                        voiceInputSession.cancel(props.composerDraftKey);
+                        props.onCancelQueuedRunEdit();
+                      }}
                     />
                   </Animated.View>
                 ) : null}
@@ -1174,6 +1200,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     onDismiss={() => props.onDismissFeedback(submission.id)}
                   />
                 ))}
+                {composerError !== null ? (
+                  <Animated.View
+                    className="shrink-0"
+                    entering={FadeInDown.duration(180)}
+                    exiting={FadeOut.duration(120)}
+                  >
+                    <ComposerErrorNotice
+                      message={composerError}
+                      onDismiss={() => clearThreadComposerError(selectedThreadKey)}
+                    />
+                  </Animated.View>
+                ) : null}
                 {usageLimitsReport && activeUserInputRequestId === null ? (
                   <Animated.View
                     className="shrink-0 px-4 pb-3"
@@ -1273,6 +1311,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       effortLabel={formatModelSelectionEffort(
                         props.selectedThread.modelSelection,
                         providerSubagentProvider?.models,
+                        reportedModelSelection,
                       )}
                       status={props.providerSubagentStatus ?? null}
                       onOpenParent={
@@ -1289,6 +1328,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 ) : (
                   <>
                     <ThreadComposer
+                      reportedModelSelection={reportedModelSelection}
                       editorRef={composerEditorRef}
                       draftMessage={props.draftMessage}
                       draftAttachments={props.draftAttachments}

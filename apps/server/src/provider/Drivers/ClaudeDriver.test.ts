@@ -121,6 +121,7 @@ describe("ClaudeDriver offerThreadCompaction wiring", () => {
               messages: Stream.never,
               offer: () => Effect.void,
               setModel: () => Effect.void,
+              setPermissionMode: () => Effect.void,
               interrupt: Effect.void,
               close: Effect.void,
             };

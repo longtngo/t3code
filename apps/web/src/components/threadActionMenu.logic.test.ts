@@ -179,19 +179,32 @@ describe("buildThreadActionMenuItems", () => {
 });
 
 describe("buildDraftActionMenuItems", () => {
-  it("offers removal only for a queued draft", () => {
-    expect(buildDraftActionMenuItems({ isQueued: false }).map((item) => item.id)).toEqual([
+  const base = { isQueued: false, hasPath: true, hasBranch: true, hasProject: true };
+
+  it("offers queueing, or removal for a queued draft, first", () => {
+    expect(buildDraftActionMenuItems(base)[0]?.id).toBe("queue");
+    expect(buildDraftActionMenuItems({ ...base, isQueued: true })[0]?.id).toBe("unqueue");
+    expect(buildDraftActionMenuItems(base).map((item) => item.id)).toEqual([
       "queue",
-      "discard",
-    ]);
-    expect(buildDraftActionMenuItems({ isQueued: true }).map((item) => item.id)).toEqual([
-      "unqueue",
+      "copy",
+      "project-settings",
       "discard",
     ]);
   });
 
-  it("styles discard as the destructive action, set apart", () => {
-    expect(buildDraftActionMenuItems({ isQueued: false })[1]).toMatchObject({
+  it("offers only the copy values the draft has", () => {
+    const items = buildDraftActionMenuItems({ ...base, hasPath: false });
+    expect(items[1]).toMatchObject({ id: "copy", disabled: false });
+    expect(items[1]?.children?.map((item) => item.id)).toEqual(["copy-branch"]);
+
+    const noCopy = buildDraftActionMenuItems({ ...base, hasPath: false, hasBranch: false });
+    expect(noCopy[1]).toMatchObject({ id: "copy", disabled: true, children: [] });
+  });
+
+  it("drops project settings without a project and keeps discard last, set apart", () => {
+    const items = buildDraftActionMenuItems({ ...base, hasBranch: false, hasProject: false });
+    expect(items.map((item) => item.id)).toEqual(["queue", "copy", "discard"]);
+    expect(items.at(-1)).toMatchObject({
       label: "Discard draft",
       destructive: true,
       separatorBefore: true,

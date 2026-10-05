@@ -1,4 +1,8 @@
-import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import {
+  EnvironmentAuthorizationError,
+  ORCHESTRATION_V2_WS_METHODS,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
@@ -96,6 +100,7 @@ export class EnvironmentRpcSubscriptionObserver extends Context.Reference<{
 }) {}
 
 export const isRpcClientError = Schema.is(RpcClientError.RpcClientError);
+const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 
 export type EnvironmentRpcInput<TTag extends EnvironmentRpcTag> = Parameters<RpcMethod<TTag>>[0];
 
@@ -196,6 +201,12 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
+  /**
+   * First delay before resubscribing on the same session after an expected
+   * failure. Each consecutive failure doubles it up to 30 seconds, and the
+   * first value from a healthy stream resets it. Authorization failures are
+   * not retried; they wait for the next session or `resubscribe` signal.
+   */
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
   /**
@@ -437,7 +448,12 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                           Stream.drain,
                         );
                         const retryAfter = options.retryExpectedFailureAfter;
-                        if (retryAfter === undefined) {
+                        // An authorization failure does not heal by retrying.
+                        const isAuthorizationFailure = cause.reasons.some(
+                          (reason) =>
+                            reason._tag === "Fail" && isEnvironmentAuthorizationError(reason.error),
+                        );
+                        if (retryAfter === undefined || isAuthorizationFailure) {
                           return handled;
                         }
                         // Backed off and capped. A permanent "no" from the

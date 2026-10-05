@@ -24,7 +24,11 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
 
-import { expandHomePath } from "../../pathExpansion.ts";
+import { makeClaudeEnvironment } from "./ClaudeHome.ts";
+
+type ClaudeSkillsConfig = Pick<ClaudeSettings, "homePath"> & {
+  readonly configDirPath?: string | undefined;
+};
 
 type ClaudeSkillScope = "user" | "project";
 
@@ -75,11 +79,28 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
     return { kind: "missing" };
   }
 
+  const frontmatter = match[1] ?? "";
   let parsed: unknown;
   try {
-    parsed = parseYamlDocument(match[1] ?? "");
+    parsed = parseYamlDocument(frontmatter);
   } catch {
-    return { kind: "malformed" };
+    // Claude Code accepts plain scalars containing `: `. Repair only those,
+    // leaving comments and YAML structure for the full-document parser.
+    const repaired = frontmatter.replace(
+      /^([\w-]+:[ \t]*)([^\r\n]*)/gm,
+      (line, prefix: string, value: string) => {
+        const scalar = value.split(/[ \t]+#/)[0] ?? "";
+        if (!/:[ \t]/.test(scalar) || /^(?:["'[\]{}|>&*!#%@`]|[-?:](?:[ \t]|$))/.test(scalar)) {
+          return line;
+        }
+        return `${prefix}${JSON.stringify(scalar)}${value.slice(scalar.length)}`;
+      },
+    );
+    try {
+      parsed = parseYamlDocument(repaired);
+    } catch {
+      return { kind: "malformed" };
+    }
   }
   if (typeof parsed !== "object" || parsed === null) {
     return { kind: "malformed" };
@@ -268,31 +289,29 @@ const readSkillOverrides = Effect.fn("readSkillOverrides")(function* (
 });
 
 /**
- * Resolve the Claude config directory the CLI would use, matching the
- * precedence the spawned CLI sees: the instance's `homePath` (exported as
- * `CLAUDE_CONFIG_DIR` by `makeClaudeEnvironment`), then a `CLAUDE_CONFIG_DIR`
- * already present in the process environment, then `~/.claude`.
+ * Resolve the Claude config directory the CLI would use, from the environment
+ * `makeClaudeEnvironment` builds for it. FORK (invariant 40): `homePath` is
+ * `HOME` and `configDirPath` is `CLAUDE_CONFIG_DIR`, and a blank `configDirPath`
+ * scrubs an inherited one, so the directory is the env's `CLAUDE_CONFIG_DIR`,
+ * else `<HOME>/.claude`.
  */
 const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
+  config: ClaudeSkillsConfig,
   environment: NodeJS.ProcessEnv,
   cwd?: string,
 ): Effect.fn.Return<string, never, Path.Path> {
   const path = yield* Path.Path;
-  const homePath = config.homePath.trim();
-  if (homePath.length > 0) {
-    return path.resolve(expandHomePath(homePath));
-  }
+  const cliEnvironment = yield* makeClaudeEnvironment(config, environment);
   // No tilde expansion here: the spawned CLI receives this env var verbatim
   // (env vars are never shell-expanded), so a literal `~` must stay literal
   // for discovery to scan the same directory the runtime would. A relative
   // value is resolved against the workspace cwd — the subprocess's own cwd —
   // for the same reason.
-  const environmentConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  const environmentConfigDir = cliEnvironment.CLAUDE_CONFIG_DIR?.trim() ?? "";
   if (environmentConfigDir.length > 0) {
     return cwd ? path.resolve(cwd, environmentConfigDir) : path.resolve(environmentConfigDir);
   }
-  return path.join(NodeOS.homedir(), ".claude");
+  return path.join(cliEnvironment.HOME?.trim() || NodeOS.homedir(), ".claude");
 });
 
 /**
@@ -306,7 +325,7 @@ const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(funct
  * Claude Code resolves elsewhere.
  */
 export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
+  config: ClaudeSkillsConfig,
   cwd?: string,
   environment?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path> {

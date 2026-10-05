@@ -37,6 +37,7 @@ import { EnvironmentThemeService } from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
@@ -252,6 +253,7 @@ it.live("the startup finalizer silences web push before shutdown cancels running
       Layer.succeed(GitVcsDriver.GitVcsDriver, stub()),
       Layer.succeed(HttpServer.HttpServer, stub()),
       Layer.succeed(EffectWorker.OrchestrationEffectWorkerV2, stub()),
+      Layer.succeed(Orchestrator.OrchestratorV2, stub()),
       Layer.succeed(Path.Path, stub()),
       Layer.succeed(ProjectService.ProjectService, stub()),
       Layer.succeed(ProjectStore.ProjectStoreV2, stub()),
