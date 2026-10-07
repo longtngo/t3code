@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
+  removeSentThreadFromQueue,
   useThreadQueueStore,
   type ThreadQueueEntry,
   type ThreadQueueInFlight,
@@ -405,9 +406,13 @@ describe("claimAndSendQueueEntry", () => {
   function deps(overrides: Partial<Parameters<typeof claimAndSendQueueEntry>[0]> = {}) {
     const snapshots: Array<{ entry: ThreadQueueEntry; branch: string | null }> = [];
     const failures: string[] = [];
+    const empties: string[] = [];
+    const titles: string[] = [];
     return {
       snapshots,
       failures,
+      empties,
+      titles,
       deps: {
         key: "env-1:A",
         claimId: "claim-1",
@@ -423,6 +428,10 @@ describe("claimAndSendQueueEntry", () => {
         reportFailure: (_entry: ThreadQueueEntry, _title: string, message: string) => {
           failures.push(message);
         },
+        reportEmpty: (value: ThreadQueueEntry, title: string) => {
+          empties.push(`${value.environmentId}:${value.threadId}`);
+          titles.push(title);
+        },
         ...overrides,
       },
     };
@@ -437,7 +446,7 @@ describe("claimAndSendQueueEntry", () => {
     expect(run.snapshots).toMatchObject([{ entry: { threadId: "B" }, branch: "branch-of-B" }]);
     const state = useThreadQueueStore.getState();
     expect(state.entries.map((value) => value.threadId)).toEqual(["A"]);
-    expect(state.inFlight?.sentAt).not.toBeNull();
+    expect(state.inFlight?.sentAt).toEqual(expect.any(Number));
     expect(state.inFlight?.priorSessionUpdatedAt).toBe("session-at-claim");
   });
 
@@ -469,7 +478,7 @@ describe("claimAndSendQueueEntry", () => {
     });
     await claimAndSendQueueEntry(run.deps);
     expect(run.snapshots).toMatchObject([{ entry: { threadId: "A" }, branch: null }]);
-    expect(useThreadQueueStore.getState().inFlight?.sentAt).not.toBeNull();
+    expect(useThreadQueueStore.getState().inFlight?.sentAt).toEqual(expect.any(Number));
   });
 
   it("a branch read that never returns sends with no branch after the read limit", async () => {
@@ -482,10 +491,17 @@ describe("claimAndSendQueueEntry", () => {
       await vi.advanceTimersByTimeAsync(1);
       await sending;
       expect(run.snapshots).toMatchObject([{ entry: { threadId: "A" }, branch: null }]);
-      expect(useThreadQueueStore.getState().inFlight?.sentAt).not.toBeNull();
+      expect(useThreadQueueStore.getState().inFlight?.sentAt).toEqual(expect.any(Number));
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("an entry gone before its claim sends nothing", async () => {
+    const run = deps({ key: "env-1:gone" });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.snapshots).toEqual([]);
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
   });
 
   it("a claim taken over by another tab during the settle sends nothing", async () => {
@@ -498,6 +514,262 @@ describe("claimAndSendQueueEntry", () => {
     });
     await claimAndSendQueueEntry(run.deps);
     expect(run.snapshots).toEqual([]);
+  });
+
+  it("a hand send while the queued send is going out keeps the claim, even if it fails", async () => {
+    const run = deps({
+      send: async () => {
+        // The hand send fails: its release must not free the queue's own send.
+        removeSentThreadFromQueue("env-1:A", null)();
+        return { kind: "sent" };
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({ claimId: "claim-1" });
+    expect(useThreadQueueStore.getState().inFlight?.sentAt).toEqual(expect.any(Number));
+  });
+
+  it("names an empty draft by its prose, not by a context link's raw text", async () => {
+    const draft = (prompt: string) =>
+      deps({
+        readSnapshot: () => ({ shell: null, draft: { prompt } }) as unknown as QueuedSendSnapshot,
+        send: async () => ({ kind: "empty" }),
+      });
+    const linkOnly = draft("[Terminal 1 lines 1-2](t3-context://v1/terminal/ctx-1)");
+    await claimAndSendQueueEntry(linkOnly.deps);
+    const withProse = draft("[Terminal 1 lines 1-2](t3-context://v1/terminal/ctx-1) check this");
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: ThreadId.make("A"), draftId: null });
+    await claimAndSendQueueEntry(withProse.deps);
+    const long = draft("x".repeat(80));
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: ThreadId.make("A"), draftId: null });
+    await claimAndSendQueueEntry(long.deps);
+    const quoted = draft(
+      "[Assistant quote](t3-citation://v1/a/b/c?text=quoted+words&start=0&end=12&prefix=&suffix=) fix it",
+    );
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: ThreadId.make("A"), draftId: null });
+    await claimAndSendQueueEntry(quoted.deps);
+    // The composer's rule: citations read as their words, 50 characters, then an ellipsis.
+    expect([...linkOnly.titles, ...withProse.titles, ...long.titles, ...quoted.titles]).toEqual([
+      "New thread",
+      "check this",
+      `${"x".repeat(50)}...`,
+      "quoted words fix it",
+    ]);
+    const named = deps({
+      readSnapshot: () =>
+        ({ shell: { title: "Thread A" }, draft: { prompt: "" } }) as unknown as QueuedSendSnapshot,
+      send: async () => ({ kind: "empty" }),
+    });
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: ThreadId.make("A"), draftId: null });
+    await claimAndSendQueueEntry(named.deps);
+    expect(named.titles).toEqual(["Thread A"]);
+  });
+
+  it("a throw once the claim is held pauses the queue and reports it", async () => {
+    const run = deps({
+      readSnapshot: () => {
+        throw new Error("snapshot broke");
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: true,
+      inFlight: null,
+      lastFailure: { threadKey: "env-1:A", message: "snapshot broke" },
+    });
+    expect(run.failures).toEqual(["snapshot broke"]);
+  });
+
+  it("a send that fails after its claim was cleared still pauses and says so", async () => {
+    const lose = () => {
+      // The abandon cap cleared the claim and another entry was claimed while the send was out.
+      const queue = useThreadQueueStore.getState();
+      queue.clearInFlight("claim-1");
+      queue.claimEntry({
+        key: "env-1:B",
+        claimId: "next",
+        now: 1,
+        resolve: (entry) => ({
+          entry,
+          prior: { userMessageAt: null, turnId: null, sessionUpdatedAt: null },
+        }),
+      });
+    };
+    const failed = deps({
+      send: async () => {
+        lose();
+        return { kind: "failed", message: "server gone" };
+      },
+    });
+    await claimAndSendQueueEntry(failed.deps);
+    expect(failed.failures).toEqual(["server gone"]);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: true,
+      lastFailure: { message: "server gone" },
+      inFlight: { claimId: "next" },
+    });
+
+    useThreadQueueStore.setState({
+      entries: [entry("A")],
+      paused: false,
+      inFlight: null,
+      lastFailure: null,
+    });
+    const thrown = deps({
+      send: async () => {
+        lose();
+        throw new Error("socket closed");
+      },
+    });
+    await claimAndSendQueueEntry(thrown.deps);
+    expect(thrown.failures).toEqual(["socket closed"]);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: true,
+      lastFailure: { message: "socket closed" },
+    });
+  });
+
+  it("a refused storage write still tells the user why the send failed", async () => {
+    const { fail } = useThreadQueueStore.getState();
+    useThreadQueueStore.setState({
+      fail: () => {
+        throw new Error("QuotaExceededError");
+      },
+    });
+    try {
+      const run = deps({ send: async () => ({ kind: "failed", message: "server gone" }) });
+      await expect(claimAndSendQueueEntry(run.deps)).rejects.toThrow("QuotaExceededError");
+      expect(run.failures).toEqual(["server gone"]);
+    } finally {
+      useThreadQueueStore.setState({ fail });
+    }
+  });
+
+  it("a refused storage write still says an empty draft left the queue", async () => {
+    const { clearInFlight } = useThreadQueueStore.getState();
+    useThreadQueueStore.setState({
+      clearInFlight: () => {
+        throw new Error("QuotaExceededError");
+      },
+    });
+    try {
+      const run = deps({ send: async () => ({ kind: "empty" }) });
+      await expect(claimAndSendQueueEntry(run.deps)).rejects.toThrow("QuotaExceededError");
+      expect(run.empties).toEqual(["env-1:A"]);
+    } finally {
+      useThreadQueueStore.setState({ clearInFlight });
+    }
+  });
+
+  it("a notice that throws still records the outcome in the store", async () => {
+    const boom = () => {
+      throw new Error("toast broke");
+    };
+    const failed = deps({
+      send: async () => ({ kind: "failed", message: "server gone" }),
+      reportFailure: boom,
+    });
+    await expect(claimAndSendQueueEntry(failed.deps)).rejects.toThrow("toast broke");
+    expect(useThreadQueueStore.getState()).toMatchObject({ paused: true, inFlight: null });
+
+    useThreadQueueStore.setState({
+      entries: [entry("A")],
+      paused: false,
+      inFlight: null,
+      lastFailure: null,
+    });
+    const empty = deps({ send: async () => ({ kind: "empty" }), reportEmpty: boom });
+    await expect(claimAndSendQueueEntry(empty.deps)).rejects.toThrow("toast broke");
+    expect(useThreadQueueStore.getState()).toMatchObject({ paused: false, inFlight: null });
+  });
+
+  it("a throw before the send starts says nothing once the claim is not ours to send", async () => {
+    const cases = {
+      cleared: () => useThreadQueueStore.getState().clearInFlight("claim-1"),
+      "taken over by a hand send": () => removeSentThreadFromQueue("env-1:A", null),
+    };
+    for (const [name, lose] of Object.entries(cases)) {
+      useThreadQueueStore.setState({
+        entries: [entry("A")],
+        paused: false,
+        inFlight: null,
+        lastFailure: null,
+      });
+      const run = deps({
+        settle: async () => {
+          lose();
+          throw new Error("rehydrate broke");
+        },
+      });
+      await claimAndSendQueueEntry(run.deps);
+      expect({
+        name,
+        failures: run.failures,
+        paused: useThreadQueueStore.getState().paused,
+      }).toEqual({
+        name,
+        failures: [],
+        paused: false,
+      });
+    }
+  });
+
+  it("a throw after another tab took the claim leaves that tab's claim alone", async () => {
+    const run = deps({
+      settle: async () => {
+        useThreadQueueStore.setState((state) => ({
+          inFlight: state.inFlight && { ...state.inFlight, claimId: "other-tab" },
+        }));
+        throw new Error("rehydrate broke");
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: false,
+      inFlight: { claimId: "other-tab" },
+    });
+    expect(run.failures).toEqual([]);
+  });
+
+  it("an empty draft leaves for Active with a notice and does not pause the queue", async () => {
+    const run = deps({ send: async () => ({ kind: "empty" }) });
+    await claimAndSendQueueEntry(run.deps);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: false,
+      inFlight: null,
+      lastFailure: null,
+    });
+    expect(run.empties).toEqual(["env-1:A"]);
+    expect(run.failures).toEqual([]);
+  });
+
+  it("a hand send during the branch read takes the claim over: nothing sent, nothing said", async () => {
+    let sends = 0;
+    const run = deps({
+      readGitBranch: async () => {
+        removeSentThreadFromQueue("env-1:A", null);
+        return null;
+      },
+      send: async () => {
+        sends += 1;
+        return { kind: "empty" };
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(sends).toBe(0);
+    expect(run.empties).toEqual([]);
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      paused: false,
+      inFlight: { claimId: "claim-1", handSent: true, sentAt: expect.any(Number) },
+    });
   });
 
   it("a refused or throwing send pauses the queue and reports why", async () => {

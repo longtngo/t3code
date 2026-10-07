@@ -9541,7 +9541,7 @@ export default function ChatView(props: ChatViewProps) {
       if (composerRef.current?.validateProviderInput(outgoingFollowUpText) === false) {
         return;
       }
-      removeSentThreadFromQueue(routeThreadKey, draftId);
+      const releaseQueueSlot = removeSentThreadFromQueue(routeThreadKey, draftId);
       // The composer is cleared before the send resolves, so hold everything it carried: a
       // transient failure must give the prose and its context back, as the ordinary send does.
       // Snapshot exactly what was sent, copied, so later mutations cannot alias the backup.
@@ -9564,6 +9564,7 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode: followUp.interactionMode,
       });
       if (!followUpSent) {
+        releaseQueueSlot();
         promptRef.current = followUpPromptSnapshot;
         composerTerminalContextsRef.current = [...followUpTerminalContexts];
         restorePlanFollowUpComposer({
@@ -10217,7 +10218,7 @@ export default function ChatView(props: ChatViewProps) {
         }),
       );
     }
-    removeSentThreadFromQueue(routeThreadKey, draftId);
+    const releaseQueueSlot = removeSentThreadFromQueue(routeThreadKey, draftId);
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
@@ -10451,6 +10452,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      releaseQueueSlot();
       if (submissionIntent === "background" && draftId && draftThread) {
         restoreFailedBackgroundDraftThread(
           draftId,

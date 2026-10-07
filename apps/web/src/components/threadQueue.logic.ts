@@ -7,6 +7,9 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import { truncate } from "@t3tools/shared/String";
+import { stripInlineContextReferences } from "../lib/composerContextReferences";
 import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
@@ -56,6 +59,9 @@ export const QUEUE_CLAIM_ABANDON_MS = 5 * 60_000;
 export const QUEUE_SENT_LANDING_CAP_MS = 2 * 60_000;
 /** A branch read waits behind pulls on the same checkout; past this the send goes without one. */
 export const QUEUE_BRANCH_READ_TIMEOUT_MS = 5_000;
+
+export const QUEUE_EMPTY_DRAFT_MESSAGE =
+  "There is nothing to send, so it left the queue. Open the thread to write the message.";
 
 export type ThreadQueueAction =
   | { readonly kind: "wait" }
@@ -181,6 +187,8 @@ export async function claimAndSendQueueEntry(deps: {
   ) => QueuedSendSnapshot;
   readonly send: (snapshot: QueuedSendSnapshot) => Promise<QueuedSendOutcome>;
   readonly reportFailure: (entry: ThreadQueueEntry, title: string, message: string) => void;
+  /** An empty draft leaves the queue for Active without pausing it (the queue's original rule). */
+  readonly reportEmpty: (entry: ThreadQueueEntry, title: string) => void;
 }): Promise<void> {
   const claim = useThreadQueueStore.getState().claimEntry({
     key: deps.key,
@@ -191,26 +199,44 @@ export async function claimAndSendQueueEntry(deps: {
       return { entry, prior: deps.prior(entry) };
     },
   });
+  // Nothing was claimed: the entry left meanwhile.
   if (claim === null) return;
-  // Last writer wins across tabs: keep going only if the stored claim is still this one.
-  await deps.settle();
-  if (useThreadQueueStore.getState().inFlight?.claimId !== deps.claimId) return;
-
   const { entry } = claim;
-  // A failed or slow read sends without a branch, so the thread keeps the one it has.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const branch = await Promise.race([
-    deps.readGitBranch(entry).catch(() => null),
-    new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), QUEUE_BRANCH_READ_TIMEOUT_MS);
-    }),
-  ]);
-  clearTimeout(timer);
-  const snapshot = deps.readSnapshot(entry, branch);
-  const title =
-    snapshot.shell?.title ?? (snapshot.draft?.prompt.trim().slice(0, 40) || "New thread");
+  let title = "New thread";
+  // Once this tab starts the send, its outcome is this tab's to report, claim or no claim.
+  let started = false;
   let outcome: QueuedSendOutcome;
+  // Anything that throws once the claim is held fails it visibly: a held claim nobody runs
+  // would otherwise leave the queue silently at the abandon cap.
   try {
+    // Last writer wins across tabs: keep going only if the stored claim is still this one.
+    await deps.settle();
+    if (useThreadQueueStore.getState().inFlight?.claimId !== deps.claimId) return;
+
+    // A failed or slow read sends without a branch, so the thread keeps the one it has.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const branch = await Promise.race([
+      deps.readGitBranch(entry).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), QUEUE_BRANCH_READ_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    // A hand send during the branch read took the claim over; nothing is left to send.
+    const current = useThreadQueueStore.getState().inFlight;
+    if (current?.claimId !== deps.claimId || current.sentAt !== null) return;
+    useThreadQueueStore.getState().markSending(deps.claimId, Date.now());
+    started = true;
+    const snapshot = deps.readSnapshot(entry, branch);
+    // The composer's own title rule for a new thread.
+    title =
+      snapshot.shell?.title ??
+      (truncate(
+        assistantCitationsToPlainText(
+          stripInlineContextReferences(snapshot.draft?.prompt ?? ""),
+        ).trim(),
+      ) ||
+        "New thread");
     outcome = await deps.send(snapshot);
   } catch (error) {
     outcome = {
@@ -223,14 +249,32 @@ export async function claimAndSendQueueEntry(deps: {
     case "sent":
       queue.markSent(deps.claimId, Date.now());
       return;
+    // Tell the user before writing the store, and write it even if telling throws: a refused
+    // storage write must not swallow the notice, and a notice must not skip the write.
     case "empty":
-      queue.clearInFlight(deps.claimId);
+      try {
+        deps.reportEmpty(entry, title);
+      } finally {
+        queue.clearInFlight(deps.claimId);
+      }
       return;
     case "refused":
     case "failed": {
+      // Before this send started, only a claim still ours and unsent is ours to fail: another
+      // tab's, a hand send's take-over, or one already cleared is not.
+      if (
+        !started &&
+        (queue.inFlight?.claimId !== deps.claimId || queue.inFlight.sentAt !== null)
+      ) {
+        return;
+      }
       const message = outcome.kind === "refused" ? outcome.reason : outcome.message;
-      queue.fail(deps.claimId, { threadKey: threadQueueEntryKey(entry), title, message });
-      deps.reportFailure(entry, title, message);
+      try {
+        deps.reportFailure(entry, title, message);
+      } finally {
+        queue.fail(deps.claimId, { threadKey: threadQueueEntryKey(entry), title, message });
+      }
+      return;
     }
   }
 }

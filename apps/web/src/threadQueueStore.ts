@@ -41,6 +41,10 @@ export interface ThreadQueueInFlight {
   readonly priorSessionUpdatedAt: string | null;
   /** Set once the send settled as sent; the wait for the landed message starts here. */
   readonly sentAt: number | null;
+  /** Set when the send starts: from then on the draft is the queue's, and a hand send cannot release it. */
+  readonly sendingAt?: number;
+  /** A hand send took this claim over; the composer releases it if that send fails. */
+  readonly handSent?: true;
 }
 
 /** The sent thread's state at claim time, stored flat on the claim as its `prior*` fields. */
@@ -73,9 +77,10 @@ interface ThreadQueueState {
     /** The entry as it will be sent (a draft may have moved machine) and its thread's state now. */
     resolve: (entry: ThreadQueueEntry) => { entry: ThreadQueueEntry; prior: ThreadQueuePrior };
   }) => ThreadQueueInFlight | null;
+  readonly markSending: (claimId: string, now: number) => void;
   readonly markSent: (claimId: string, now: number) => void;
   readonly clearInFlight: (claimId: string) => void;
-  /** Clears the claim, pauses the queue, and records why. */
+  /** Pauses the queue and records why; clears the claim if it is still this one. */
   readonly fail: (claimId: string, failure: ThreadQueueFailure) => void;
 }
 
@@ -131,20 +136,27 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
         set({ entries: state.entries.filter((entry) => entry !== target), inFlight });
         return inFlight;
       },
-      markSent: (claimId, now) =>
+      markSending: (claimId, now) =>
         set((state) =>
           state.inFlight?.claimId === claimId
-            ? { inFlight: { ...state.inFlight, sentAt: now } }
+            ? { inFlight: { ...state.inFlight, sendingAt: now } }
             : state,
         ),
+      markSent: (claimId, now) =>
+        set((state) => {
+          if (state.inFlight?.claimId !== claimId) return state;
+          // The queue's own send went out, whatever a stale tab wrote meanwhile.
+          const { handSent: _handSent, ...claim } = state.inFlight;
+          return { inFlight: { ...claim, sentAt: now } };
+        }),
       clearInFlight: (claimId) =>
         set((state) => (state.inFlight?.claimId === claimId ? { inFlight: null } : state)),
       fail: (claimId, failure) =>
-        set((state) =>
-          state.inFlight?.claimId === claimId
-            ? { inFlight: null, paused: true, lastFailure: failure }
-            : state,
-        ),
+        set((state) => ({
+          inFlight: state.inFlight?.claimId === claimId ? null : state.inFlight,
+          paused: true,
+          lastFailure: failure,
+        })),
     }),
     {
       name: THREAD_QUEUE_STORAGE_KEY,
@@ -162,9 +174,28 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
   ),
 );
 
-/** A thread the user sent by hand leaves the queue (a draft may have moved machine since it joined). */
-export function removeSentThreadFromQueue(threadKey: string, draftId: DraftId | null): void {
+/**
+ * A thread the user sent by hand leaves the queue (a draft may have moved machine since it joined).
+ * A claim on it whose send has not started is taken over: marked sent by hand, so no tab sends it
+ * again and every tab holds the slot until that message lands. Call the returned function when
+ * the hand send fails: it frees the slot that claim still holds.
+ */
+export function removeSentThreadFromQueue(threadKey: string, draftId: DraftId | null): () => void {
   const store = useThreadQueueStore.getState();
+  let takenClaimId: string | null = null;
+  const claim = store.inFlight;
+  if (
+    claim !== null &&
+    claim.sendingAt === undefined &&
+    claim.sentAt === null &&
+    (threadQueueEntryKey(claim.entry) === threadKey ||
+      (draftId !== null && claim.entry.draftId === draftId))
+  ) {
+    takenClaimId = claim.claimId;
+    useThreadQueueStore.setState({
+      inFlight: { ...claim, sentAt: Date.now(), handSent: true },
+    });
+  }
   for (const entry of store.entries) {
     if (
       threadQueueEntryKey(entry) === threadKey ||
@@ -173,6 +204,13 @@ export function removeSentThreadFromQueue(threadKey: string, draftId: DraftId | 
       store.remove(threadQueueEntryKey(entry));
     }
   }
+  return () => {
+    // clearInFlight only clears this claim; a queue send that went out has dropped handSent.
+    const queue = useThreadQueueStore.getState();
+    if (takenClaimId !== null && queue.inFlight?.handSent === true) {
+      queue.clearInFlight(takenClaimId);
+    }
+  };
 }
 
 /**

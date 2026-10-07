@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type ThreadContextRecord,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -17,6 +18,9 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { executeQueuedSend, type QueuedSendCommands } from "./executeQueuedSend";
+import { terminalContextReference } from "../composerContextRecords";
+import { formatInlineContextReference } from "../composerContextReferences";
+import type { TerminalContextDraft } from "../terminalContext";
 import { planQueuedSend, queuedSendInstanceId, type QueuedSendSnapshot } from "./queuedSend";
 
 const env = EnvironmentId.make("env-1");
@@ -141,6 +145,74 @@ describe("planQueuedSend", () => {
     expect(planQueuedSend(serverSnapshot()).kind).toBe("empty");
     useComposerDraftStore.getState().setPrompt(threadRef, "   ");
     expect(planQueuedSend(serverSnapshot()).kind).toBe("empty");
+  });
+
+  it("a draft holding only a thread link sends it as context, as Send does", () => {
+    const record = {
+      version: 1,
+      kind: "thread",
+      contextId: "ctx-thread-1",
+      label: "Other thread",
+      environmentId: env,
+      threadId: ThreadId.make("thread-other"),
+      title: "Other thread",
+    } as ThreadContextRecord;
+    useComposerDraftStore.getState().setThreadContexts(threadRef, [record]);
+    const plan = planQueuedSend(serverSnapshot());
+    expect(plan.kind).toBe("send");
+    expect(plan.kind === "send" && plan.messageContext?.records).toEqual([record]);
+  });
+
+  it("sends every thread link, and drops an expired terminal chip from the text as Send does", () => {
+    const link = (n: number) =>
+      ({
+        version: 1,
+        kind: "thread",
+        contextId: `ctx-thread-${n}`,
+        label: `Other thread ${n}`,
+        environmentId: env,
+        threadId: ThreadId.make(`thread-other-${n}`),
+        title: `Other thread ${n}`,
+      }) as ThreadContextRecord;
+    const expired: TerminalContextDraft = {
+      id: "t-1",
+      threadId,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      terminalId: "term-1",
+      terminalLabel: "Terminal 1",
+      lineStart: 1,
+      lineEnd: 2,
+      text: "",
+    };
+    const store = useComposerDraftStore.getState();
+    store.setThreadContexts(threadRef, [link(1), link(2)]);
+    store.setTerminalContexts(threadRef, [expired]);
+    const chip = formatInlineContextReference(terminalContextReference(expired));
+    store.setPrompt(threadRef, `look ${chip}`);
+    const plan = planQueuedSend(serverSnapshot());
+    expect(plan.kind).toBe("send");
+    if (plan.kind !== "send") return;
+    expect(plan.messageContext?.records).toEqual([link(1), link(2)]);
+    expect(plan.outgoingMessageText).toBe("look");
+  });
+
+  it("keeps a live terminal chip in the queued text", () => {
+    const live: TerminalContextDraft = {
+      id: "t-2",
+      threadId,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      terminalId: "term-1",
+      terminalLabel: "Terminal 1",
+      lineStart: 1,
+      lineEnd: 2,
+      text: "npm test\nok",
+    };
+    const store = useComposerDraftStore.getState();
+    store.setTerminalContexts(threadRef, [live]);
+    const chip = formatInlineContextReference(terminalContextReference(live));
+    store.setPrompt(threadRef, `look ${chip}`);
+    const plan = planQueuedSend(serverSnapshot());
+    expect(plan.kind === "send" && plan.outgoingMessageText).toContain(chip);
   });
 
   it("a follow-up sends the draft text with the thread's provider and no bootstrap", () => {
@@ -297,6 +369,57 @@ describe("executeQueuedSend", () => {
     expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.prompt).toBe(
       "run the tests",
     );
+  });
+
+  it("a failed start gives a thread link back with the draft", async () => {
+    const record = {
+      version: 1,
+      kind: "thread",
+      contextId: "ctx-thread-1",
+      label: "Other thread",
+      environmentId: env,
+      threadId: ThreadId.make("thread-other"),
+      title: "Other thread",
+    } as ThreadContextRecord;
+    useComposerDraftStore.getState().setThreadContexts(threadRef, [record]);
+    const snapshot = serverSnapshot();
+    const { commands } = recordingCommands({ failStart: true });
+
+    await executeQueuedSend(snapshot, planQueuedSend(snapshot), commands, ids);
+
+    const restored = useComposerDraftStore.getState().getComposerDraft(threadRef);
+    expect(restored?.threadContexts).toEqual([record]);
+    expect(restored?.prompt).toBe(snapshot.draft?.prompt);
+  });
+
+  it("a failed start keeps a thread link added while it was in flight", async () => {
+    const link = (n: number) =>
+      ({
+        version: 1,
+        kind: "thread",
+        contextId: `ctx-thread-${n}`,
+        label: `Other thread ${n}`,
+        environmentId: env,
+        threadId: ThreadId.make(`thread-other-${n}`),
+        title: `Other thread ${n}`,
+      }) as ThreadContextRecord;
+    useComposerDraftStore.getState().setPrompt(threadRef, "run the tests");
+    const snapshot = serverSnapshot();
+    const { commands } = recordingCommands({ failStart: true });
+    const start = commands.startThreadTurn;
+    // A link pasted with no text (appendReference: false) while the send is out.
+    commands.startThreadTurn = async (value) => {
+      useComposerDraftStore
+        .getState()
+        .addThreadContexts(threadRef, [link(2)], { appendReference: false });
+      return start(value);
+    };
+
+    await executeQueuedSend(snapshot, planQueuedSend(snapshot), commands, ids);
+
+    const current = useComposerDraftStore.getState().getComposerDraft(threadRef);
+    expect(current?.threadContexts).toEqual([link(2)]);
+    expect(current?.prompt).toBe("");
   });
 
   it("a sent draft is marked promoted so its row leaves Not started", async () => {

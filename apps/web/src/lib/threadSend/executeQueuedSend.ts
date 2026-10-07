@@ -104,12 +104,14 @@ export async function executeQueuedSend(
     (current?.prompt ?? "").length === 0 &&
     (current?.terminalContexts.length ?? 0) === 0 &&
     (current?.previewAnnotations.length ?? 0) === 0 &&
-    (current?.reviewComments.length ?? 0) === 0;
+    (current?.reviewComments.length ?? 0) === 0 &&
+    (current?.threadContexts.length ?? 0) === 0;
   if (draft && untouched) {
     store.setPrompt(target, draft.prompt);
     store.setTerminalContexts(target, draft.terminalContexts);
     store.setPreviewAnnotations(target, draft.previewAnnotations);
     store.setReviewComments(target, draft.reviewComments);
+    store.setThreadContexts(target, draft.threadContexts);
   }
 
   if (isAtomCommandInterrupted(failure)) {

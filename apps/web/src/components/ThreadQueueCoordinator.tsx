@@ -36,7 +36,11 @@ import {
 } from "../threadQueueStore";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import { visibleQueueInstanceIds } from "./queueSlotSources";
-import { claimAndSendQueueEntry, nextThreadQueueAction } from "./threadQueue.logic";
+import {
+  claimAndSendQueueEntry,
+  nextThreadQueueAction,
+  QUEUE_EMPTY_DRAFT_MESSAGE,
+} from "./threadQueue.logic";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 /** How long a claiming tab waits for another tab's competing claim to land in storage. */
@@ -201,6 +205,28 @@ export function ThreadQueueCoordinator() {
     [isEnvironmentConnected],
   );
 
+  const openEntry = useCallback(
+    (entry: ThreadQueueEntry) => ({
+      children: "Open",
+      onClick: () => {
+        if (
+          entry.draftId !== null &&
+          readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId)) === null
+        ) {
+          void navigate({
+            to: "/draft/$draftId",
+            params: buildDraftThreadRouteParams(entry.draftId),
+          });
+          return;
+        }
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(entry.environmentId, entry.threadId)),
+        });
+      },
+    }),
+    [navigate],
+  );
   const reportFailure = useCallback(
     (entry: ThreadQueueEntry, title: string, message: string) => {
       toastManager.add(
@@ -208,29 +234,24 @@ export function ThreadQueueCoordinator() {
           type: "error",
           title: `Queued send failed: ${title}`,
           description: `${message} The queue is paused.`,
-          actionProps: {
-            children: "Open",
-            onClick: () => {
-              if (
-                entry.draftId !== null &&
-                readThreadShell(scopeThreadRef(entry.environmentId, entry.threadId)) === null
-              ) {
-                void navigate({
-                  to: "/draft/$draftId",
-                  params: buildDraftThreadRouteParams(entry.draftId),
-                });
-                return;
-              }
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: buildThreadRouteParams(scopeThreadRef(entry.environmentId, entry.threadId)),
-              });
-            },
-          },
+          actionProps: openEntry(entry),
         }),
       );
     },
-    [navigate],
+    [openEntry],
+  );
+  const reportEmpty = useCallback(
+    (entry: ThreadQueueEntry, title: string) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: `Nothing to send: ${title}`,
+          description: QUEUE_EMPTY_DRAFT_MESSAGE,
+          actionProps: openEntry(entry),
+        }),
+      );
+    },
+    [openEntry],
   );
 
   const runQueuedSend = useCallback(
@@ -267,10 +288,12 @@ export function ThreadQueueCoordinator() {
             { messageId: newMessageId(), now: () => new Date().toISOString(), newThreadId },
           ),
         reportFailure,
+        reportEmpty,
       }),
     [
       isEnvironmentConnected,
       readGitBranch,
+      reportEmpty,
       reportFailure,
       setThreadInteractionMode,
       setThreadRuntimeMode,
@@ -299,9 +322,20 @@ export function ThreadQueueCoordinator() {
     }
     if (action.kind !== "claim" || sendingRef.current) return;
     sendingRef.current = true;
-    void runQueuedSend(action.key).finally(() => {
-      sendingRef.current = false;
-    });
+    void runQueuedSend(action.key).then(
+      () => {
+        sendingRef.current = false;
+        // Decide again at once: changes that arrived mid-send were skipped, and a claim that
+        // is still held (sent, or taken over by a hand send) simply keeps waiting.
+        setTick((value) => value + 1);
+      },
+      (error: unknown) => {
+        // The claim step, or a refused storage write, threw (a held claim fails visibly):
+        // retry at the next tick rather than spin.
+        sendingRef.current = false;
+        console.error("Queued send failed unexpectedly", error);
+      },
+    );
   }, [
     entries,
     inFlight,

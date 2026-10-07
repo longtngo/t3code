@@ -91,6 +91,85 @@ describe("threadQueueStore", () => {
     expect(keys()).toEqual(["env-1:thread-C"]);
   });
 
+  it("a hand send takes over a claim whose send has not started, matched by thread or draft", () => {
+    const store = useThreadQueueStore.getState();
+    store.enqueue(a);
+    store.enqueue(b);
+    store.claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("one");
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({
+      claimId: "one",
+      sentAt: expect.any(Number),
+      handSent: true,
+    });
+    store.clearInFlight("one");
+    store.claimEntry({ key: "env-1:thread-B", claimId: "two", now: 2, resolve: resolveWith() });
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("two");
+    // The draft moved machine after it was claimed: only its draft id still matches.
+    removeSentThreadFromQueue("env-2:thread-moved", DraftId.make("draft-B"));
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({
+      claimId: "two",
+      handSent: true,
+    });
+  });
+
+  it("a hand send leaves a claim alone once its send has started or landed", () => {
+    const store = useThreadQueueStore.getState();
+    store.enqueue(a);
+    store.enqueue(c);
+    store.claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    store.markSending("one", 2);
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({ claimId: "one", sentAt: null });
+    store.clearInFlight("one");
+    // A claim an older tab wrote: sent, with no sending mark.
+    store.claimEntry({ key: "env-1:thread-C", claimId: "two", now: 3, resolve: resolveWith() });
+    store.markSent("two", 4);
+    removeSentThreadFromQueue("env-1:thread-C", null);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({ claimId: "two", sentAt: 4 });
+  });
+
+  it("a failed hand send frees the slot its taken-over claim held, and nothing else", () => {
+    const store = useThreadQueueStore.getState();
+    store.enqueue(a);
+    store.enqueue(c);
+    store.claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    removeSentThreadFromQueue("env-1:thread-A", null)();
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
+
+    // Nothing was taken over: releasing leaves another thread's claim alone.
+    store.claimEntry({ key: "env-1:thread-C", claimId: "two", now: 2, resolve: resolveWith() });
+    removeSentThreadFromQueue("env-1:thread-A", null)();
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("two");
+
+    // A late release from an earlier hand send leaves a later hand send's claim alone.
+    store.clearInFlight("two");
+    store.enqueue(a);
+    store.claimEntry({ key: "env-1:thread-A", claimId: "three", now: 3, resolve: resolveWith() });
+    const earlier = removeSentThreadFromQueue("env-1:thread-A", null);
+    earlier();
+    store.enqueue(a);
+    store.claimEntry({ key: "env-1:thread-A", claimId: "four", now: 4, resolve: resolveWith() });
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    earlier();
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({
+      claimId: "four",
+      handSent: true,
+    });
+    store.clearInFlight("four");
+    store.enqueue(c);
+    store.claimEntry({ key: "env-1:thread-C", claimId: "two", now: 2, resolve: resolveWith() });
+
+    // A stale tab took over a claim whose send then went out: the queue's send keeps it.
+    const release = removeSentThreadFromQueue("env-1:thread-C", null);
+    store.markSent("two", 5);
+    expect(useThreadQueueStore.getState().inFlight?.sentAt).toBe(5);
+    expect(useThreadQueueStore.getState().inFlight).not.toHaveProperty("handSent");
+    release();
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("two");
+  });
+
   it("a failed send pauses the queue with the reason, and resuming clears it", () => {
     const store = useThreadQueueStore.getState();
     store.enqueue(a);

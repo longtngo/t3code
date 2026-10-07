@@ -74,6 +74,8 @@ const fixture = vi.hoisted(() => {
     presentationById: new Map([[env, { connection: { phase: "connected" } }]]),
     commandCalls: [] as Array<{ label: string; value: unknown }>,
     primary: null as { environmentId: string } | null,
+    /** Runs as each command lands, before it resolves. */
+    onCommand: null as ((label: string, value: unknown) => void) | null,
   };
 });
 
@@ -108,6 +110,7 @@ vi.mock("../state/server", async (importOriginal) => {
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: { label: string }) => async (value: unknown) => {
     fixture.commandCalls.push({ label: command.label, value });
+    fixture.onCommand?.(command.label, value);
     const { AsyncResult } = await import("effect/reactivity");
     // A settings write is the queue-slot import; the server accepts it.
     const patch = (value as { input?: { patch?: { queueSlotsImport?: unknown } } }).input?.patch;
@@ -121,7 +124,11 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { primaryServerConfigAtom } from "../state/server";
 import { renderDom } from "../testing/renderDom";
-import { useThreadQueueStore, type ThreadQueueEntry } from "../threadQueueStore";
+import {
+  removeSentThreadFromQueue,
+  useThreadQueueStore,
+  type ThreadQueueEntry,
+} from "../threadQueueStore";
 import { ThreadQueueCoordinator } from "./ThreadQueueCoordinator";
 
 const env = fixture.env as ThreadQueueEntry["environmentId"];
@@ -136,6 +143,7 @@ beforeEach(() => {
   localStorage.clear();
   fixture.commandCalls.length = 0;
   fixture.primary = null;
+  fixture.onCommand = null;
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -181,6 +189,122 @@ describe("ThreadQueueCoordinator per-provider slots", () => {
     expect(useThreadQueueStore.getState().entries.map((entry) => entry.threadId)).toEqual([
       "queued-a",
     ]);
+  });
+});
+
+describe("ThreadQueueCoordinator after an entry leaves unsent", () => {
+  it("sends the next entry at once instead of waiting for the next tick", async () => {
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    // queued-b has no draft (it leaves for Active); queued-a has text and a free codex slot.
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue");
+    const queue = useThreadQueueStore.getState();
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-b"), draftId: null });
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-a"), draftId: null });
+
+    let started!: () => void;
+    const sent = new Promise<void>((resolve) => (started = resolve));
+    const unsubscribe = useThreadQueueStore.subscribe((state) => {
+      if (state.inFlight?.sentAt != null) started();
+    });
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      await sent;
+    } finally {
+      vi.useRealTimers();
+      unsubscribe();
+    }
+    expect(startedThreadIds()).toEqual(["queued-a"]);
+  });
+});
+
+describe("ThreadQueueCoordinator with two entries on one instance", () => {
+  const [other] = fixture.threads;
+  const otherRuntime = other!.runtime;
+  const running = (id: string) => ({ ...otherRuntime!, activeRunId: `turn-${id}` });
+  // React renders between steps, so each re-decision runs at its own fake time.
+  const elapse = async (ms: number) => {
+    for (let at = 0; at < ms; at += 100) await act(() => vi.advanceTimersByTimeAsync(100));
+  };
+  beforeEach(() => {
+    // Both entries are codex threads, both idle.
+    other!.runtime = null;
+    const drafts = useComposerDraftStore.getState();
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue a");
+    drafts.setPrompt(scopeThreadRef(env, threadId("busy-on-a")), "continue other");
+    const queue = useThreadQueueStore.getState();
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-a"), draftId: null });
+    queue.enqueue({ environmentId: env, threadId: threadId("busy-on-a"), draftId: null });
+    vi.useFakeTimers({ toFake: ["setTimeout", "setInterval", "Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const thread of fixture.threads) {
+      thread.runtime = null;
+      thread.branch = null;
+      thread.latestUserMessageAt = "2026-09-13T10:00:00.000Z";
+    }
+    other!.runtime = otherRuntime;
+  });
+
+  it("with two slots, sends the second as soon as the first goes out, not at the next tick", async () => {
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    // A started thread reads busy before its send returns, as a fast server reports it.
+    fixture.onCommand = (_label, value) => {
+      const input = (value as { input?: { threadId?: string; message?: unknown } }).input;
+      const thread = fixture.threads.find((shell) => shell.id === input?.threadId);
+      if (input?.message === undefined || !thread) return;
+      thread.runtime = running(thread.id);
+      thread.latestUserMessageAt = "2026-09-13T11:00:00.000Z";
+    };
+    await renderDom(<ThreadQueueCoordinator />);
+    // Two claim settles, well inside one 15 s tick.
+    await elapse(2_000);
+    expect(startedThreadIds()).toEqual(["queued-a", "busy-on-a"]);
+  });
+
+  it("a claim step that throws waits for the next tick instead of retrying at once", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempts = 0;
+    const { claimEntry } = useThreadQueueStore.getState();
+    useThreadQueueStore.setState({
+      claimEntry: () => {
+        attempts += 1;
+        throw new Error("claim broke");
+      },
+    });
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      await elapse(2_000);
+      expect(attempts).toBe(1);
+      await elapse(15_000);
+      expect(attempts).toBe(2);
+    } finally {
+      error.mockRestore();
+      useThreadQueueStore.setState({ claimEntry });
+    }
+  });
+
+  it("with one slot, a hand send during the branch read holds the slot: the next entry waits", async () => {
+    // The user sends queued-a by hand while the queue reads its branch; it has not read busy yet.
+    fixture.threads[1]!.branch = "main" as never;
+    fixture.onCommand = (label) => {
+      if (!label.includes("refresh") || fixture.onCommand === null) return;
+      fixture.onCommand = null;
+      useComposerDraftStore
+        .getState()
+        .clearComposerContent(scopeThreadRef(env, threadId("queued-a")));
+      removeSentThreadFromQueue(`${env}:queued-a`, null);
+    };
+    await renderDom(<ThreadQueueCoordinator />);
+    await elapse(5_000);
+    expect(startedThreadIds()).toEqual([]);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({
+      entry: { threadId: "queued-a" },
+      handSent: true,
+    });
   });
 });
 

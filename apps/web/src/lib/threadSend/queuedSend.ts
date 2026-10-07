@@ -53,7 +53,8 @@ import {
 } from "../../providerInstances";
 import { isLatestRunSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
-import { buildMessageContext } from "../composerContextRecords";
+import { buildMessageContext, terminalContextReference } from "../composerContextRecords";
+import { removeInlineContextReference } from "../composerContextReferences";
 import { composeTurnStart, type TurnStartBootstrap } from "./composeTurnStart";
 
 /** Everything a queued send reads, gathered from stores by the caller. */
@@ -129,11 +130,14 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   const files = draft?.files ?? [];
   const previewAnnotations = draft?.previewAnnotations ?? [];
   const reviewComments = draft?.reviewComments ?? [];
+  const threadContexts = draft?.threadContexts ?? [];
+  const terminalContexts = draft?.terminalContexts ?? [];
+  // Counts what ChatView's Send counts, thread links included.
   const sendState = deriveComposerSendState({
     prompt,
     imageCount: images.length + files.length,
-    terminalContexts: draft?.terminalContexts ?? [],
-    elementContextCount: previewAnnotations.length + reviewComments.length,
+    terminalContexts,
+    elementContextCount: previewAnnotations.length + reviewComments.length + threadContexts.length,
   });
   if (!sendState.hasSendableContent) return { kind: "empty" };
 
@@ -284,8 +288,16 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
           ) ?? true,
       })
     : "local";
+  // Expired terminal excerpts are not sent; their chips leave the text with them (as ChatView).
+  const promptForSend = terminalContexts
+    .filter((context) => !sendState.sendableTerminalContexts.includes(context))
+    .reduce(
+      (text, context) =>
+        removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
+      prompt,
+    );
   const composed = composeTurnStart({
-    prompt,
+    prompt: promptForSend,
     trimmedPrompt: trimmed,
     images: [],
     files: [],
@@ -314,6 +326,7 @@ export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
     terminalContexts: sendState.sendableTerminalContexts,
     reviewComments,
     previewAnnotations,
+    threadContexts,
     attachments: [],
   });
   if (composed.missingWorktreeBaseBranch) {
