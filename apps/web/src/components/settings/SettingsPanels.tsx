@@ -1,6 +1,8 @@
 import { SettingsGroup } from "./SettingsGroup";
+import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
+import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
@@ -42,8 +44,6 @@ import {
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_USAGE_PACE_TOLERANCE,
-  MIN_CLOSED_TAB_UNDO_LIMIT,
-  MAX_CLOSED_TAB_UNDO_LIMIT,
   MAX_USAGE_PACE_TOLERANCE,
   type ResponseStreamingMode,
   MIN_TERMINAL_FONT_SIZE,
@@ -560,9 +560,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance
         ? ["Pace tolerance"]
         : []),
-      ...(settings.closedTabUndoLimit !== DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit
-        ? ["Closed tabs to remember"]
-        : []),
       ...(settings.notificationMode !== DEFAULT_UNIFIED_SETTINGS.notificationMode
         ? ["Thread notifications"]
         : []),
@@ -814,7 +811,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
-      closedTabUndoLimit: DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
@@ -906,6 +902,7 @@ function BackgroundActivityAdvancedDialog({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  const canWriteSettings = useScopedSettingsWriteAllowed();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
@@ -924,7 +921,7 @@ function BackgroundActivityAdvancedDialog({
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open && canWriteSettings} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Background Activity</DialogTitle>
@@ -933,7 +930,10 @@ function BackgroundActivityAdvancedDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <div className="overflow-hidden rounded-xl border bg-card text-card-foreground">
+          <fieldset
+            disabled={!canWriteSettings}
+            className="min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground"
+          >
             <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium">Shared policy</div>
@@ -1155,11 +1155,12 @@ function BackgroundActivityAdvancedDialog({
                 </label>
               ))}
             </div>
-          </div>
+          </fieldset>
         </DialogPanel>
         <DialogFooter>
           <Button
             variant="outline"
+            disabled={!canWriteSettings}
             onClick={() => updateSettings(resetBackgroundActivitySettings())}
           >
             Reset all
@@ -2691,31 +2692,6 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
-          {...searchableSetting("closed-tab-undo-limit")}
-          description="How many closed right-panel tabs each thread remembers for Undo closed tab, on this device."
-          resetAction={
-            settings.closedTabUndoLimit !== DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit ? (
-              <SettingResetButton
-                label="closed tabs to remember"
-                onClick={() =>
-                  updateSettings({
-                    closedTabUndoLimit: DEFAULT_UNIFIED_SETTINGS.closedTabUndoLimit,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <BoundedIntegerInput
-              value={settings.closedTabUndoLimit}
-              min={MIN_CLOSED_TAB_UNDO_LIMIT}
-              max={MAX_CLOSED_TAB_UNDO_LIMIT}
-              ariaLabel="Closed tabs to remember"
-              onCommit={(closedTabUndoLimit) => updateSettings({ closedTabUndoLimit })}
-            />
-          }
-        />
-        <SettingsRow
           {...searchableSetting("hide-whitespace-changes")}
           description="Set whether the diff panel ignores whitespace-only edits by default."
           resetAction={
@@ -3557,6 +3533,19 @@ export function GeneralSettingsPanel() {
             {IS_NIGHTLY_BUILD ? <NightlyMobileBetaRow /> : null}
           </>
         )}
+        <SettingsRow
+          {...searchableSetting("privacy-policy")}
+          description="How we handle your data, including the anonymous usage data T3 Code collects."
+          control={
+            <Button
+              render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
+              size="sm"
+              variant="outline"
+            >
+              View policy
+            </Button>
+          }
+        />
       </SettingsSection>
       <SettingsSection title="Diagnostics">
         <SettingsRow

@@ -21,7 +21,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusResult,
   VcsStatusStreamEvent,
-  VcsStatusSubscribeInput,
+  VcsStatusSubscriptionInput,
 } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -187,7 +187,7 @@ function isThreadWorking(thread: OrchestrationV2ThreadShell, nowMs: number): boo
   );
 }
 
-export const autoPullPolicyLayer = Layer.effect(
+export const layerAutoPullPolicy = Layer.effect(
   VcsAutoPullPolicy,
   Effect.gen(function* () {
     const projects = yield* ProjectStore.ProjectStoreV2;
@@ -262,7 +262,7 @@ export class VcsStatusBroadcaster extends Context.Service<
       cwd: string,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
     readonly streamStatus: (
-      input: VcsStatusSubscribeInput,
+      input: VcsStatusSubscriptionInput,
       options?: StreamStatusOptions,
     ) => Stream.Stream<VcsStatusStreamEvent, GitManagerServiceError>;
   }
@@ -784,11 +784,7 @@ export const make = Effect.gen(function* () {
         const initialLocal = yield* getOrLoadLocalStatus(cwd);
         const cachedStatus = yield* getCachedStatus(cwd);
         const initialRemote = cachedStatus?.remote?.value ?? null;
-        // A local-only subscriber never starts a poller, so it also has none to
-        // release; retain and release must stay symmetric or the refcount drops
-        // below what other subscribers hold and stops their polling too.
-        const pollsRemote = input.localOnly !== true;
-        if (pollsRemote) {
+        if (input.includeRemote !== false) {
           yield* retainRemotePoller(
             cwd,
             input.cwd,
@@ -797,10 +793,10 @@ export const make = Effect.gen(function* () {
             cachedStatus?.remote === null || cachedStatus?.remote === undefined,
           );
         }
-
-        const release = pollsRemote
-          ? releaseRemotePoller(cwd, input.cwd).pipe(Effect.ignore, Effect.asVoid)
-          : Effect.void;
+        const release =
+          input.includeRemote === false
+            ? Effect.void
+            : releaseRemotePoller(cwd, input.cwd).pipe(Effect.ignore, Effect.asVoid);
 
         return Stream.concat(
           Stream.make({

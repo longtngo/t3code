@@ -111,27 +111,12 @@ export const VcsStatusInput = Schema.Struct({
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
-/**
- * `localOnly` asks the server not to poll this repository's remote for the
- * lifetime of the subscription.
- *
- * A workspace project watches every attached repository at once so the diff
- * panel can show which ones changed. Remote status reaches the network, so
- * subscribing to seven repositories the ordinary way would start seven
- * periodic fetches — the shape of the fetch storm that once pegged the CPU and
- * made the backend read as unresponsive. Only the repository the user has
- * expanded needs ahead/behind counts and pull request state.
- *
- * The flag suppresses this subscription's own poller, not remote data as such:
- * if another subscriber is already polling the same directory, its updates
- * still arrive here, which is strictly more information and never a fetch this
- * subscription caused.
- */
-export const VcsStatusSubscribeInput = Schema.Struct({
-  cwd: TrimmedNonEmptyStringSchema,
-  localOnly: Schema.optional(Schema.Boolean),
+export const VcsStatusSubscriptionInput = Schema.Struct({
+  ...VcsStatusInput.fields,
+  /** Passive observers receive cached remote status without retaining its refresh loop. */
+  includeRemote: Schema.optional(Schema.Boolean),
 });
-export type VcsStatusSubscribeInput = typeof VcsStatusSubscribeInput.Type;
+export type VcsStatusSubscriptionInput = typeof VcsStatusSubscriptionInput.Type;
 
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -388,6 +373,28 @@ export const VcsPullResult = Schema.Struct({
 export type VcsPullResult = typeof VcsPullResult.Type;
 
 // RPC / domain errors
+
+// Well-known git failures, recognized from stderr at the driver and carried as
+// a closed set of diagnostic tags. Git's stderr itself stays off the error: it
+// echoes argv and remote URLs, which can hold credentials. The tag names the
+// cause for logs and callers; it does not select a message.
+export const GitCommandFailureReason = Schema.Literals([
+  "authentication_failed",
+  "branch_already_exists",
+  "branch_checked_out_in_worktree",
+  "host_key_unverified",
+  "not_a_repository",
+  "path_already_exists",
+  "remote_unreachable",
+  "tag_would_be_clobbered",
+  // FORK: set by the driver, not from stderr: a host-overload timeout or a fork/exec spawn
+  // failure. These are the only transient reasons (`vcs/gitRetry.ts` retries on them); `detail`
+  // is prose and must not be matched on.
+  "timeout",
+  "spawn",
+]);
+export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
+
 export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitCommandError", {
   operation: Schema.String,
   command: Schema.String,
@@ -397,20 +404,13 @@ export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitC
   stdoutLength: Schema.optional(Schema.Number),
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
+  reason: Schema.optional(GitCommandFailureReason),
   detail: Schema.String,
-  /**
-   * Why the command failed, in a form code can branch on.
-   *
-   * `detail` is prose for a human and has been rewritten more than once;
-   * deciding whether to retry by matching strings against it is how a guard
-   * silently stops guarding. Absent on failures that predate this field and on
-   * an ordinary non-zero exit, neither of which is retryable.
-   */
-  reason: Schema.optional(Schema.Literals(["timeout", "spawn"])),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
-    return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}`;
+    const reason = this.reason === undefined ? "" : ` (${this.reason})`;
+    return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}${reason}`;
   }
 }
 

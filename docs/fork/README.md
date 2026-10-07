@@ -31,6 +31,27 @@ units rather than merged. The server core is `apps/server/src/orchestration-v2/`
 what a fork feature did, upstream's version was adopted and the entry below is marked RETIRED with
 what superseded it. Every probe below was re-run against the ported tree.
 
+The 45th reconcile (2026-10-07, 188 commits) brought effect 4.0.1 stable (`effect/unstable/*`
+imports are now `effect/*`) and upstream's flattening of `Services/` and `Layers/` into one module
+per service, with layers named `layer`/`layerXyz`. Fork-only services stay at their old
+`Services/`/`Layers/` paths and import the flattened upstream modules. Upstream's `ws.ts` now
+instruments RPCs in group middleware, so the fork's handlers were ported onto upstream's file
+without wrappers, and each fork method needs an entry in `RPC_AGGREGATES`
+(`observability/RpcInstrumentation.ts`) and `RPC_REQUIRED_SCOPES` (`auth/RpcAuthorization.ts`).
+Upstream's `includeRemote: false` vcs status subscription replaced the fork's `localOnly` flag;
+the fork keeps the `vcsLocalOnlyStatus` capability as the "this server honours it" signal.
+Upstream's compact-and-send replaced the fork's resume compaction banner, still gated by the
+fork's **Offer to compact threads** setting. The fork's `"timeout"` and `"spawn"` git failure
+reasons moved into upstream's `GitCommandFailureReason`.
+Startup auto-pull is upstream's (#14912): it runs after activation instead of the fork's
+bounded, awaited phase, so `autoPullProjects` asks `VcsAutoPullPolicy.isIdle` per root and skips a
+busy checkout. The policy is a `Context.Reference` that defaults to "idle", so `server.ts` provides
+`layerVcsAutoPullPolicy` to both the broadcaster and the startup layer; a consumer it misses pulls
+under running threads with nothing failing. The fork's "Undo closed tab" stack and its
+`closedTabUndoLimit` setting are retired for upstream's reopen-closed-view shortcut (#15207).
+Upstream #10298 bound a JS boolean in `AuthPairingLinks.consumeAvailable`, which `node:sqlite`
+rejects, breaking every pairing-code exchange; it binds `1`/`0` here.
+
 The 43rd reconcile (2026-10-02, 55 commits) stopped at `e0db2a5e58`, just before #2829. Upstream's
 beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block renders above it,
 and its resting-section rule keeps `sidebarRestingSection` with Working as the inbox's fold.
@@ -79,8 +100,9 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current (orchestrator-v2 port): 65 entries, ids 1-65, unique and monotonic. Upstream's v2 schema
-`055_OrchestrationV2` is applied id **64** and `056_RemoveRedundantProjectionIndexes` is **65**.
+Current: 67 entries, ids 1-67, unique and monotonic. Upstream's v2 schema
+`055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
+`057_ScheduledTaskWebhooks` is **66** and `058_WebhookRelayDeliveries` is **67**.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
@@ -96,7 +118,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `65 65 ok` and `1`.
+Expect `67 67 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -217,6 +239,15 @@ stay green. Mobile has upstream's own outbox (`apps/mobile/src/state/thread-outb
 There is no one-message-per-thread limit on v2: replays dispatch with `queue`
 (`queue_after_active`), so each becomes its own run, in order. Storage version 2 migrates v1
 entries (same shape) by adding `dispatchMode: "queue"`; any other version is dropped.
+
+Upstream's permission gating (#9786) also disables Send and returns early from `onSend` when the
+environment session lacks `orchestration:operate`, and that session is an HTTP fetch revalidated
+every 30 s. A refresh that fails offline would read as "no permission" and make the outbox
+unreachable. `sessionResultGrantsScope` (`packages/client-runtime/src/state/sessionScope.ts`, its own module
+because tests mock `state/session` whole), used by
+both web and mobile `sessionHasScope`, keeps the cached scopes only for a refresh that never reached
+the server (a timeout, a fetch error with no response, or a relay token renewal that could not
+reach the relay); any answer revokes them.
 
 ### 5. RETIRED with orchestrator v2: a mid-turn send queues by default, upstream's way
 
@@ -488,7 +519,9 @@ fork-only — upstream has no patch-parity test — so every `ServerSettings` fi
 without a `ServerSettingsPatch` counterpart arrives as a red test in `packages/contracts`, with
 nothing in the conflict markers to warn you.** Decide writer-ownership, then either mirror it or
 list it here. The 42nd reconcile mirrored upstream's `providers.codex.setupMode`: the server reads it
-as the default Codex instance's fallback, so a dropped patch would silently lose the mode.
+as the default Codex instance's fallback, so a dropped patch would silently lose the mode. The 45th
+listed upstream's `previousWorktreesDirectories`, which `applyServerSettingsPatch` maintains when
+`worktreesDirectory` changes.
 
 ### 11. One `environmentId` for markdown rendered without a thread
 

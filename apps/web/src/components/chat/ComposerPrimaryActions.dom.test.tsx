@@ -26,6 +26,7 @@ function renderPendingActions(isRunning: boolean, stopRung: StopRung = "idle") {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
+      canOperateThread: true,
       pendingAction: {
         questionIndex: 0,
         isLastQuestion: true,
@@ -63,6 +64,7 @@ function renderRunning(options?: {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
+      canOperateThread: true,
       pendingAction: null,
       isRunning: true,
       canInterrupt: true,
@@ -97,6 +99,7 @@ function renderSendButton(
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
+      canOperateThread: true,
       pendingAction: null,
       isRunning: false,
       canInterrupt: false,
@@ -215,6 +218,7 @@ function renderIdleHidden(options: {
   return renderDom(
     createElement(ComposerPrimaryActions, {
       compact: true,
+      canOperateThread: true,
       hideIdleSend: true,
       pendingAction: null,
       isRunning: options.isRunning,

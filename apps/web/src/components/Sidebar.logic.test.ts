@@ -4,7 +4,7 @@ import { deriveActiveWorkStartedAt } from "../session-logic.ts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
   archiveSelectedThreadEntries,
@@ -1485,16 +1485,20 @@ describe("planSidebarThreadDrop", () => {
       activeReorderableKeys: new Set(["a3"]),
     };
     expect(plan(input).kind).toBe("move-active");
-    expect(
-      plan({
-        ...input,
-        activeKeysById: new Map([
-          ["a1", null],
-          ["a2", "m"],
-          ["a3", "t"],
-        ]),
-      }),
-    ).toEqual({ kind: "none" });
+    // Upstream #16291: a keyless row leaves the plan instead of refusing it, so
+    // only the moved row is written.
+    const keyed = plan({
+      ...input,
+      activeKeysById: new Map([
+        ["a1", null],
+        ["a2", "m"],
+        ["a3", "t"],
+      ]),
+    });
+    expect(keyed.kind).toBe("move-active");
+    if (keyed.kind === "move-active") {
+      expect(keyed.assignments.map(({ id }) => id)).toEqual(["a3"]);
+    }
     expect(plan({ ...input, activeReorderableKeys: new Set() })).toEqual({ kind: "none" });
   });
 
@@ -1578,21 +1582,30 @@ describe("planSidebarThreadDrop", () => {
       order: ["p1", "p3", "a1", "p2"],
     },
     { activeKey: "p1", activeSection: "pinned" as const, order: ["p3", "p1", "p2"] },
-  ])("rejects $activeSection drops that require rewriting a disabled neighbor", (source) => {
-    expect(
-      plan({
-        activeKey: source.activeKey,
-        activeSection: source.activeSection,
-        target: { section: "pinned", pinnedOrder: source.order },
-        pinnedOrder: ["p1", "p3", "p2"],
-        pinnedKeysById: new Map([
-          ["p1", "f"],
-          ["p2", null],
-          ["p3", "t"],
-        ]),
-        reorderableKeys: new Set(["p1", "p3", source.activeKey]),
-      }),
-    ).toEqual({ kind: "none" });
+  ])("never rewrites a disabled neighbor on a $activeSection drop", (source) => {
+    // Upstream #16291: the keyless, unwritable p2 leaves the plan rather than refusing it.
+    const writable = new Set(["p1", "p3", source.activeKey]);
+    const result = plan({
+      activeKey: source.activeKey,
+      activeSection: source.activeSection,
+      target: { section: "pinned", pinnedOrder: source.order },
+      pinnedOrder: ["p1", "p3", "p2"],
+      pinnedKeysById: new Map([
+        ["p1", "f"],
+        ["p2", null],
+        ["p3", "t"],
+      ]),
+      reorderableKeys: writable,
+    });
+    expect(result.kind).not.toBe("none");
+    const written =
+      result.kind === "reorder-pinned"
+        ? result.assignments
+        : result.kind === "pin"
+          ? result.extraAssignments
+          : [];
+    expect(written.every(({ id }) => writable.has(id))).toBe(true);
+    expect(written.some(({ id }) => id === "p2")).toBe(false);
   });
 
   it("rewrites the section when a foreign thread lands next to a keyless pin", () => {
@@ -3083,6 +3096,50 @@ describe("Working shelf (beta)", () => {
         activeOrder: ["a1", "a2", "p1"],
       });
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
+    });
+
+    it("arranges the rows it can write when another row's server cannot store an order", () => {
+      // None of the rows has a key yet, so the drop needs keys for its
+      // neighbors too. "offline" sits on a server that cannot take them.
+      const plan = planSidebarThreadDrop({
+        activeKey: "a2",
+        activeSection: "active",
+        target: {
+          section: "active",
+          pinnedOrder: [],
+          activeOrder: ["offline", "a2", "a1"],
+        },
+        pinnedOrder: [],
+        pinnedKeysById: new Map(),
+        activeOrder: ["offline", "a1", "a2"],
+        activeKeysById: new Map([
+          ["offline", null],
+          ["a1", null],
+          ["a2", null],
+        ]),
+        activeReorderableKeys: new Set(["a1", "a2"]),
+      });
+      expect(plan.kind).toBe("move-active");
+      if (plan.kind !== "move-active") return;
+      expect(plan.assignments.map(({ id }) => id)).toEqual(["a2", "a1"]);
+      const [a2, a1] = plan.assignments.map(({ orderKey }) => orderKey);
+      expect(a2! < a1!).toBe(true);
+
+      // A keyed row on that server still sorts by its key, so it stays a bound.
+      const above = planSidebarThreadDrop({
+        activeKey: "a2",
+        activeSection: "active",
+        target: { section: "active", pinnedOrder: [], activeOrder: ["a2", "offline"] },
+        pinnedOrder: [],
+        pinnedKeysById: new Map(),
+        activeOrder: ["offline", "a2"],
+        activeKeysById: new Map([
+          ["offline", "m"],
+          ["a2", "t"],
+        ]),
+        activeReorderableKeys: new Set(["a2"]),
+      });
+      expect(above.kind === "move-active" && above.assignments[0]!.orderKey < "m").toBe(true);
     });
 
     it("only changes lifecycle when the inbox is time-ordered", () => {

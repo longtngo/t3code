@@ -3,15 +3,15 @@ import { EventId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 
-it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(
+it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)))(
   "ProjectStoreV2",
   (it) => {
     it.effect("stores a model selection without options as JSON without an options key", () =>
@@ -47,7 +47,6 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(
           FROM projection_projects
           WHERE project_id = ${projectId}
         `;
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         assert.strictEqual(rows[0]?.defaultModelSelection, JSON.stringify(modelSelection));
         assert.deepStrictEqual(
           Option.getOrNull(yield* projects.get(projectId))?.defaultModelSelection,
@@ -101,7 +100,6 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)))(
           integrationBranch: "main",
         };
         const api = { id: "m-api", path: "/tmp/api", title: "api", integrationBranch: "develop" };
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         const legacyJson = JSON.stringify([warehouse, api]);
         yield* sql`UPDATE projection_projects SET members_json = ${legacyJson} WHERE project_id = ${projectId}`;
         assert.deepStrictEqual(yield* membersOf(), [warehouse, api]);

@@ -16,7 +16,7 @@
  * unchanged, so a fork DB that already applied "034_PushSubscriptions" keeps its
  * table (CREATE TABLE IF NOT EXISTS) and only records the new id as applied.
  */
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";
 
 export default Effect.gen(function* () {

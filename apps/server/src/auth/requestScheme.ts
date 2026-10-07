@@ -1,4 +1,4 @@
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 const firstHeaderValue = (value: string | undefined): string | undefined => {
   const first = value?.split(",")[0]?.trim();

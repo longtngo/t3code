@@ -103,7 +103,7 @@ function WorkspaceRepoTab({
   readonly repo: WorkspaceRepo;
   readonly report: WorkspaceMemberBranchReport | null;
 }) {
-  // A server that does not honour `localOnly` drops the flag and starts a
+  // A server that does not honour `includeRemote: false` drops the flag and starts a
   // remote poller for this subscription instead. Seven attached repositories
   // would then fetch seven remotes on a timer, which is the shape of the fetch
   // storm that once made this backend read as unresponsive — so against such a
@@ -113,7 +113,7 @@ function WorkspaceRepoTab({
     supportsLocalOnlyStatus
       ? vcsEnvironment.status({
           environmentId,
-          input: { cwd: repo.cwd, localOnly: true },
+          input: { cwd: repo.cwd, includeRemote: false },
         })
       : null,
   );

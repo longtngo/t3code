@@ -2,6 +2,7 @@ import type { PreviewSessionSnapshot } from "@t3tools/contracts";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { renderDom } from "../testing/renderDom";
 
 import { RightPanelTabs } from "./RightPanelTabs";
@@ -31,6 +32,15 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
   return renderDom(
     <RightPanelTabs
       mode="sheet"
+      keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+      getShortcutContext={() => ({
+        terminalFocus: false,
+        terminalOpen: false,
+        previewFocus: false,
+        previewOpen: false,
+        isWeb: true,
+        isDesktop: false,
+      })}
       surfaces={surfaces}
       environmentId={null}
       activeSurfaceId={surfaces[0]!.id}
@@ -54,7 +64,6 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       onAddFiles={() => undefined}
       onAddTasks={() => undefined}
       onAddBackground={() => undefined}
-      onUndoClosedTab={() => undefined}
       onAddDevice={() => undefined}
       onRenameDevice={() => undefined}
       liveBackgroundCount={0}
@@ -66,7 +75,6 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       pullRequestsAvailable={false}
       tasksAvailable={false}
       backgroundAvailable={false}
-      closedTabCount={0}
       deviceAvailable={false}
     >
       <div>content</div>

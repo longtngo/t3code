@@ -132,7 +132,7 @@ export function ThreadQueueCoordinator() {
   const refreshLocalStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
     reportFailure: false,
   });
-  // Read once at send time. A server that does not honour `localOnly` gets a full status refresh
+  // Read once at send time. A server that does not honour `includeRemote: false` gets a full status refresh
   // for this one checkout, not a remote poller.
   const readGitBranch = useCallback(
     async (entry: ThreadQueueEntry) => {

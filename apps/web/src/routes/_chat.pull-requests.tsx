@@ -2215,6 +2215,8 @@ function PullRequestsRouteView() {
           <RightPanelTabs
             mode="inline"
             open={rightPanelState.isOpen}
+            keybindings={keybindings}
+            getShortcutContext={getShortcutContext}
             widthStorageKey="t3code:pull-request-panel-width"
             // Default to roughly half the viewport: the PR list needs more
             // room than a chat, so the 540px chat-preview default squashes
@@ -2254,7 +2256,6 @@ function PullRequestsRouteView() {
             onAddPullRequests={() => undefined}
             onAddTasks={() => undefined}
             onAddBackground={() => undefined}
-            onUndoClosedTab={() => undefined}
             onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
@@ -2264,7 +2265,6 @@ function PullRequestsRouteView() {
             pullRequestsAvailable={false}
             tasksAvailable={false}
             backgroundAvailable={false}
-            closedTabCount={0}
             deviceAvailable={false}
             liveBackgroundCount={0}
             pullRequestStatusSeeds={listedPullRequestTabStatuses}

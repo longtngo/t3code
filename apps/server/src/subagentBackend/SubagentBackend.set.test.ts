@@ -14,7 +14,7 @@ import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
 import { layerTest as serverConfigLayerTest } from "../config.ts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels } from "./cursorModels.ts";
 import { SubagentLiveThreads } from "./SubagentLiveThreads.ts";

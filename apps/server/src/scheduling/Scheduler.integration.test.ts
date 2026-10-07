@@ -2,7 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Duration from "effect/Duration";
 import * as Logger from "effect/Logger";
 import { type ServerProvider } from "@t3tools/contracts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { makeCreditSpendGuard } from "../provider/Layers/CreditSpendGuardLive.ts";
 import { assert, expect, it } from "@effect/vitest";
 import {
@@ -20,15 +20,16 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as UsageLimitRecoveryWorker from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { creditSpendGuardAllowAll } from "../orchestration-v2/ProviderTurnStartService.testkit.ts";
 import { CreditSpendGuard } from "../provider/Services/CreditSpendGuard.ts";
@@ -92,7 +93,7 @@ it.effect.each(["on time", "after restart"])(
       const current = yield* Ref.make(thread);
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
       const receipts = yield* Queue.unbounded<"task" | "retry">();
-      const dependencies = Layer.mergeAll(
+      const layerDependencies = Layer.mergeAll(
         NodeCrypto.layer,
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({
           launch: () =>
@@ -121,11 +122,12 @@ it.effect.each(["on time", "after restart"])(
         Layer.mock(ServerSettings.ServerSettingsService)({
           getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
         }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
       );
-      const workers = Layer.mergeAll(
+      const layerWorkers = Layer.mergeAll(
         ScheduledTasks.layer,
-        UsageLimitRecoveryWorker.workerLive,
-      ).pipe(Layer.provide(dependencies), Layer.provide(Scheduler.layer));
+        UsageLimitRecoveryWorker.layer,
+      ).pipe(Layer.provide(layerDependencies), Layer.provide(Scheduler.layer));
       yield* Effect.gen(function* () {
         const tasks = yield* ScheduledTasks.ScheduledTaskService;
         const { task } = yield* tasks.upsert({
@@ -158,8 +160,8 @@ it.effect.each(["on time", "after restart"])(
           usageLimitRecoveryRequestId: thread.limitRecovery!.requestId,
           text: "Continue where you left off.",
         });
-      }).pipe(Effect.provide(workers));
-    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+      }).pipe(Effect.provide(layerWorkers));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
 it.effect("retries a limit resume the credit gate refused once spending is allowed", () =>
@@ -270,7 +272,7 @@ it.effect("retries a limit resume the credit gate refused once spending is allow
       });
     }).pipe(
       Effect.provide(
-        UsageLimitRecoveryWorker.workerLive.pipe(
+        UsageLimitRecoveryWorker.layer.pipe(
           Layer.provide(dependencies),
           Layer.provide(Scheduler.layer),
         ),
@@ -436,7 +438,7 @@ it.effect(
         assert.deepEqual(after.sort(), ["message.dispatch:a", "message.dispatch:b"]);
       }).pipe(
         Effect.provide(
-          UsageLimitRecoveryWorker.workerLive.pipe(
+          UsageLimitRecoveryWorker.layer.pipe(
             Layer.provide(deps),
             Layer.provide(Scheduler.layer),
             Layer.provide(Logger.layer([logCounter], { mergeWithExisting: false })),
@@ -580,7 +582,7 @@ const recoveryHarness = (input: {
     const logger = Logger.make(({ message }) => {
       logs.push(String(Array.isArray(message) ? message[0] : message));
     });
-    const worker = UsageLimitRecoveryWorker.workerLive.pipe(
+    const worker = UsageLimitRecoveryWorker.layer.pipe(
       Layer.provide(deps),
       Layer.provide(Scheduler.layer),
       Layer.provide(Logger.layer([logger], { mergeWithExisting: false })),

@@ -25,7 +25,7 @@ import { OrchestratorDispatchError } from "../../orchestration-v2/Orchestrator.t
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { CreditSpendGuard } from "../Services/CreditSpendGuard.ts";
-import { ProviderRegistry } from "../Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../ProviderRegistry.ts";
 import {
   interruptSweeperLive,
   makeCreditSpendGuard,

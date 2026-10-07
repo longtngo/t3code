@@ -32,7 +32,7 @@ export const creditSpendIntakeAllowAll = Layer.merge(
 );
 
 /** Turn-start dependencies a harness does not exercise: worktree repair and the credit gate. */
-export const providerTurnStartTestDependencies = Layer.mergeAll(
+export const layer = Layer.mergeAll(
   Layer.mock(GitWorkflow.GitWorkflowService)({
     pruneWorktrees: () => Effect.void,
     createWorktree: () => Effect.succeed({} as never),

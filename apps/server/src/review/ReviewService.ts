@@ -40,10 +40,9 @@ export class ReviewService extends Context.Service<
  * Restoring it as a real boundary would mean sourcing the roots from the
  * projects projection (workspace roots + attached members + thread worktrees),
  * and it still would not bound anything: `projectsReadTrustedFile` reads any
- * file the process can read under `orchestration:read`, a *weaker* scope than
- * the `review:write` these RPCs require, and both live in
- * `AuthStandardClientScopes`. What authorizes a review read is that scope, the
- * same as every sibling VCS RPC.
+ * file the process can read under `filesystem:read`, the same scope these RPCs
+ * require. What authorizes a review read is that scope, the same as every
+ * sibling filesystem RPC.
  *
  * @public Service construction is part of the canonical Effect module API.
  */

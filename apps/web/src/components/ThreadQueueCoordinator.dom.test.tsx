@@ -2,7 +2,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { QueueSlotSettings } from "@t3tools/contracts";
-import { type Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { type Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -92,7 +92,7 @@ vi.mock("../state/entities", () => ({
   readEnvironmentSupportsLocalOnlyStatus: () => false,
 }));
 vi.mock("../state/server", async (importOriginal) => {
-  const { Atom } = await import("effect/unstable/reactivity");
+  const { Atom } = await import("effect/reactivity");
   const { DEFAULT_SERVER_SETTINGS } = await import("@t3tools/contracts");
   const primaryServerConfigAtom = Atom.make<{ settings: Record<string, unknown> } | null>(null);
   return {
@@ -108,7 +108,7 @@ vi.mock("../state/server", async (importOriginal) => {
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: { label: string }) => async (value: unknown) => {
     fixture.commandCalls.push({ label: command.label, value });
-    const { AsyncResult } = await import("effect/unstable/reactivity");
+    const { AsyncResult } = await import("effect/reactivity");
     // A settings write is the queue-slot import; the server accepts it.
     const patch = (value as { input?: { patch?: { queueSlotsImport?: unknown } } }).input?.patch;
     return AsyncResult.success(

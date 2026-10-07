@@ -72,7 +72,7 @@ const TestLayer = WorkspaceMemberHooks.live.pipe(
   ),
   Layer.provideMerge(WorkspaceMemberBranches.layer),
   Layer.provideMerge(VcsDriverRegistry.layer),
-  Layer.provideMerge(Layer.mergeAll(GitVcsDriver.vcsLayer, GitVcsDriver.layer)),
+  Layer.provideMerge(Layer.mergeAll(GitVcsDriver.layerVcs, GitVcsDriver.layer)),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-member-hooks-test-" })),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),

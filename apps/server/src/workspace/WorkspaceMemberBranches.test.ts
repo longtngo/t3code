@@ -22,7 +22,7 @@ const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
 
 const TestLayer = WorkspaceMemberBranches.layer.pipe(
   Layer.provideMerge(VcsDriverRegistry.layer),
-  Layer.provideMerge(Layer.mergeAll(GitVcsDriver.vcsLayer, GitVcsDriver.layer)),
+  Layer.provideMerge(Layer.mergeAll(GitVcsDriver.layerVcs, GitVcsDriver.layer)),
   Layer.provide(ServerConfigLayer),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),

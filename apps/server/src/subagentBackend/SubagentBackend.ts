@@ -48,7 +48,7 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import { cursorOffloadBlockedReason } from "../provider/creditSpendGuard.ts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
 import { cursorTotalUsageLimits } from "./cursorUsageRead.ts";

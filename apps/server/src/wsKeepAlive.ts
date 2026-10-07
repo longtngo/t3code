@@ -1,4 +1,4 @@
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 /**
  * Idle time before the OS sends its first TCP keepalive probe on a websocket

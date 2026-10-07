@@ -7,7 +7,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpClient, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpServer, HttpServerResponse } from "effect/http";
 
 import { HostProcessPlatform } from "../hostProcess.ts";
 import { layerTestLoopback } from "./loopbackHttpServer.ts";

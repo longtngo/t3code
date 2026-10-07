@@ -8,8 +8,6 @@ import type {
 import { Smartphone, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { closedTabFor, useClosedTabsStore } from "~/closedTabsStore";
-import { useClientSettings } from "~/hooks/useSettings";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore, type RightPanelSurface } from "~/rightPanelStore";
 import { Button } from "~/components/ui/button";
@@ -48,7 +46,6 @@ export function DevicePanel(props: {
   const [operationError, setOperationError] = useState<string | null>(null);
   const [pendingDevice, setPendingDevice] = useState<DeviceSummary | null>(null);
   const pendingDeviceKey = pendingDevice ? deviceKey(pendingDevice) : null;
-  const closedTabUndoLimit = useClientSettings((s) => s.closedTabUndoLimit);
 
   const hostDisabled = state.hostStatus === "disabled";
 
@@ -106,9 +103,6 @@ export function DevicePanel(props: {
   };
 
   const closeTab = () => {
-    useClosedTabsStore
-      .getState()
-      .push(props.threadRef, [closedTabFor(props.surface, null)], closedTabUndoLimit);
     useRightPanelStore.getState().closeSurface(props.threadRef, props.surface.id);
   };
   // Floating the device closes the panel, like the browser's floating preview.

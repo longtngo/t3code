@@ -34,7 +34,7 @@ import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
 const unrelatedProject = Option.some({
   workspaceRoot: "/nonexistent/t3-rollback-project",
 } as never);
-const checkpointRollbackServiceLayer = CheckpointRollbackService.layer.pipe(
+const layerCheckpointRollbackService = CheckpointRollbackService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
@@ -63,7 +63,7 @@ it.effect("rejects a non-ready checkpoint before opening a session or restoring 
     checkpoints: [{ id: checkpointId, scopeId, status: "stale" }],
     checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
   } as unknown as OrchestrationV2ThreadProjection;
-  const testLayer = checkpointRollbackServiceLayer.pipe(
+  const layerTest = layerCheckpointRollbackService.pipe(
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
@@ -106,7 +106,7 @@ it.effect("rejects a non-ready checkpoint before opening a session or restoring 
     assert.equal(resolveRuntimePolicy.mock.calls.length, 0);
     assert.equal(open.mock.calls.length, 0);
     assert.equal(restore.mock.calls.length, 0);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("rejects a rollback when another provider thread became active", () => {
@@ -141,7 +141,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
     checkpoints: [{ id: checkpointId, scopeId, status: "ready" }],
     checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
   } as unknown as OrchestrationV2ThreadProjection;
-  const testLayer = checkpointRollbackServiceLayer.pipe(
+  const layerTest = layerCheckpointRollbackService.pipe(
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
@@ -184,7 +184,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
     assert.equal(resolveRuntimePolicy.mock.calls.length, 0);
     assert.equal(open.mock.calls.length, 0);
     assert.equal(restore.mock.calls.length, 0);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("rejects a rollback when provider selection changed before execution", () => {
@@ -222,7 +222,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
     checkpoints: [{ id: checkpointId, scopeId, status: "ready" }],
     checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
   } as unknown as OrchestrationV2ThreadProjection;
-  const testLayer = checkpointRollbackServiceLayer.pipe(
+  const layerTest = layerCheckpointRollbackService.pipe(
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
@@ -265,7 +265,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
     assert.equal(resolveRuntimePolicy.mock.calls.length, 0);
     assert.equal(open.mock.calls.length, 0);
     assert.equal(restore.mock.calls.length, 0);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("reports a missing provider turn as a structured rollback failure", () => {
@@ -294,7 +294,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
     attempts: [],
     providerTurns: [],
   } as unknown as OrchestrationV2ThreadProjection;
-  const testLayer = checkpointRollbackServiceLayer.pipe(
+  const layerTest = layerCheckpointRollbackService.pipe(
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
@@ -339,7 +339,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
     );
     assert.equal(error.cause, undefined);
     assert.equal(restore.mock.calls.length, 0);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect.each([
@@ -399,7 +399,7 @@ it.effect.each([
         activeAttemptId: `attempt-${ordinal}`,
       })),
     } as unknown as OrchestrationV2ThreadProjection;
-    const testLayer = checkpointRollbackServiceLayer.pipe(
+    const layerTest = layerCheckpointRollbackService.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(CheckpointService.CheckpointServiceV2)({
@@ -497,7 +497,7 @@ it.effect.each([
         calls,
         restoreFiles ? ["provider", "files", "projection"] : ["provider", "projection"],
       );
-    }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.provide(layerTest));
   },
 );
 

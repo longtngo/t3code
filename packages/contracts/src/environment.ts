@@ -126,6 +126,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
+  /** Server honors the `worktreesDirectory` setting. */
+  worktreesDirectory: Schema.optionalKey(Schema.Boolean),
   /** Server persists the opt-in for continuing interrupted threads after restarts. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
@@ -183,7 +185,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
-  /** Server honours `localOnly` on a vcs status subscription, i.e. it will
+  /** Server honours `includeRemote: false` on a vcs status subscription, i.e. it will
       read the working tree without starting a remote poller. Absent on older
       servers, which silently drop the flag and start one poller per attached
       repository — a workspace of seven would fetch seven remotes on a timer.
@@ -235,6 +237,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** Server hosts preview tabs in its own headless Chromium (`runtime:
+      "server"`) and streams them over `/api/preview-stream`. Clients
+      without a local browser runtime open server tabs here. */
+  serverBrowser: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -256,6 +262,17 @@ export const RepositoryIdentityLocator = Schema.Struct({
 });
 export type RepositoryIdentityLocator = typeof RepositoryIdentityLocator.Type;
 
+/**
+ * The checkout's own remote when it names a different repository than the canonical one, such as
+ * a fork that tracks its upstream. Clients group and label by it so a fork stays distinct from the
+ * repository it forked, while pull request features keep the canonical identity.
+ */
+export const RepositoryOrigin = Schema.Struct({
+  canonicalKey: TrimmedNonEmptyString,
+  displayName: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type RepositoryOrigin = typeof RepositoryOrigin.Type;
+
 export const RepositoryIdentity = Schema.Struct({
   canonicalKey: TrimmedNonEmptyString,
   locator: RepositoryIdentityLocator,
@@ -266,8 +283,21 @@ export const RepositoryIdentity = Schema.Struct({
   provider: Schema.optionalKey(TrimmedNonEmptyString),
   owner: Schema.optionalKey(TrimmedNonEmptyString),
   name: Schema.optionalKey(TrimmedNonEmptyString),
+  origin: Schema.optionalKey(RepositoryOrigin),
 });
 export type RepositoryIdentity = typeof RepositoryIdentity.Type;
+
+/** Key clients group checkouts by: a fork's own remote, otherwise the canonical repository. */
+export function repositoryGroupingKeyOf(identity: RepositoryIdentity): string {
+  return identity.origin?.canonicalKey ?? identity.canonicalKey;
+}
+
+/** Label clients show for a checkout's repository, matching `repositoryGroupingKeyOf`. */
+export function repositoryGroupingDisplayNameOf(identity: RepositoryIdentity): string | undefined {
+  return identity.origin
+    ? (identity.origin.displayName ?? identity.origin.canonicalKey)
+    : identity.displayName;
+}
 
 export const ScopedProjectRef = Schema.Struct({
   environmentId: EnvironmentId,

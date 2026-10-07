@@ -19,7 +19,7 @@
  * `boot_id` is a per-process UUID minted at startup. A row whose `boot_id`
  * differs from the current process's is owned by a dead process → orphaned.
  */
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";
 
 export default Effect.gen(function* () {

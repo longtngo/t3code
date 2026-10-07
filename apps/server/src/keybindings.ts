@@ -515,17 +515,21 @@ const make = Effect.gen(function* () {
   // `raw` is the file's bytes behind `state`, or undefined when unknown, so the rescan re-reads.
   // Unlike settings, an untrusted timer skip records nothing here: a malformed file logs nothing,
   // so re-decoding it each tick is silent.
-  const resolvedConfigCache = yield* Cache.make<
+  // A failed read is not kept: the next read retries instead of replaying the failure.
+  const resolvedConfigCache = yield* Cache.makeWith<
     typeof resolvedConfigCacheKey,
     { readonly raw: string | null | undefined; readonly state: KeybindingsConfigState },
     KeybindingsConfigError
-  >({
-    capacity: 1,
-    lookup: () =>
+  >(
+    () =>
       readKeybindingsRaw.pipe(
         Effect.flatMap((raw) => loadConfigState(raw).pipe(Effect.map((state) => ({ raw, state })))),
       ),
-  });
+    {
+      capacity: 1,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+    },
+  );
 
   const loadConfigStateFromCacheOrDisk = Cache.get(
     resolvedConfigCache,

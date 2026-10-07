@@ -3,7 +3,7 @@ import * as NodeHttp from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpServer } from "effect/unstable/http";
+import { FetchHttpClient, HttpServer } from "effect/http";
 
 /**
  * `NodeHttpServer.layerTest` bound to 127.0.0.1 instead of every interface.

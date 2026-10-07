@@ -15,6 +15,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 
 import * as ServerConfig from "./config.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -198,150 +199,49 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
   }),
 );
 
-describe("startup auto-pull budget", () => {
-  const captureLogs = () => {
-    const logs: Array<{ readonly message: unknown }> = [];
-    const logger = Logger.make(({ message }) => {
-      logs.push({ message });
-    });
-    return { logs, layer: Logger.layer([logger], { mergeWithExisting: false }) };
-  };
-
-  /** The `{ totalRoots, completedRoots }` payload of the budget warning, if it was logged. */
-  const budgetWarning = (logs: ReadonlyArray<{ readonly message: unknown }>) => {
-    const parts = logs.flatMap((entry) =>
-      Array.isArray(entry.message) ? entry.message : [entry.message],
-    );
-    if (!parts.some((part) => typeof part === "string" && part.includes("startup budget"))) {
-      return undefined;
-    }
-    return parts.find(
-      (part): part is { budgetMs: number; totalRoots: number; completedRoots: number } =>
-        typeof part === "object" && part !== null && "completedRoots" in part,
-    );
-  };
-
-  it.effect("counts every root it finished, including skipped and failed ones", () =>
+describe("startup auto-pull busy checkouts", () => {
+  // Startup auto-pull runs after activation, so a resumed thread may already be
+  // working in a root; pulling would move HEAD under it.
+  it.effect("skips a root the auto-pull policy reports busy and pulls an idle one", () =>
     Effect.gen(function* () {
+      const pulled: Array<string> = [];
+      const asked: Array<ReadonlyArray<string>> = [];
       const git = {
-        statusDetails: (cwd: string) =>
+        statusDetails: () =>
           Effect.succeed({
             isRepo: true,
             isDefaultBranch: true,
             hasUpstream: true,
             hasWorkingTreeChanges: false,
             aheadCount: 0,
-            // `/current` is already up to date, so its body returns before pulling.
-            behindCount: cwd === "/current" ? 0 : 1,
+            behindCount: 1,
           } as never),
         pullCurrentBranch: (cwd: string) =>
-          cwd === "/broken"
-            ? Effect.fail(new Error("remote exploded") as never)
-            : Effect.succeed({
-                status: "pulled" as const,
-                refName: "main",
-                upstreamRef: "origin/main",
-              }),
+          Effect.sync(() => {
+            pulled.push(cwd);
+            return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+          }),
       } as unknown as GitVcsDriver.GitVcsDriver["Service"];
       const project = (workspaceRoot: string) =>
         ({ id: ProjectId.make(workspaceRoot), workspaceRoot }) as never;
-      // Auto-pull moved off the project aggregate onto scoped server settings
-      // (upstream #10636), so the opt-in has to come from the overrides record -
-      // a legacy `autoPull: true` on the project is read by nothing and the phase
-      // silently finds zero roots.
-      const settings = {
+
+      yield* ServerRuntimeStartup.autoPullProjects([project("/busy"), project("/idle")], {
         ...DEFAULT_SERVER_SETTINGS,
-        projectSettingsOverrides: {
-          "/clean": { defaultAutoPull: true },
-          "/current": { defaultAutoPull: true },
-          "/broken": { defaultAutoPull: true },
-        },
-      };
-
-      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
-        total: 0,
-        completed: 0,
-      });
-      yield* ServerRuntimeStartup.autoPullProjects(
-        [project("/clean"), project("/current"), project("/broken")],
-        settings,
-        progress,
-      ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
-
-      // A failed root and a skipped root are both roots the phase is done with, so
-      // the count answers "how far did it get", not "how many pulls succeeded".
-      assert.deepStrictEqual(yield* Ref.get(progress), { total: 3, completed: 3 });
-    }),
-  );
-
-  it.effect("a phase that finishes inside its budget logs nothing", () =>
-    Effect.gen(function* () {
-      const capture = captureLogs();
-      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
-        total: 2,
-        completed: 2,
-      });
-
-      yield* ServerRuntimeStartup.runBoundedAutoPull(
-        Effect.void,
-        progress,
-        Duration.seconds(20),
-      ).pipe(Effect.provide(capture.layer));
-
-      assert.strictEqual(budgetWarning(capture.logs), undefined);
-    }),
-  );
-
-  it.effect("a phase that exceeds its budget warns with how far it got", () =>
-    Effect.gen(function* () {
-      const capture = captureLogs();
-      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
-        total: 0,
-        completed: 0,
-      });
-      // Set once the roots are known, exactly as `autoPullProjects` does, so the
-      // warning reports a partially-finished phase rather than an empty one.
-      const phase = Ref.set(progress, { total: 7, completed: 3 }).pipe(
-        Effect.andThen(Effect.never),
+        defaultAutoPull: true,
+      }).pipe(
+        Effect.provideService(GitVcsDriver.GitVcsDriver, git),
+        Effect.provideService(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+          isEnabled: () => Effect.succeed(true),
+          isIdle: (cwds) =>
+            Effect.sync(() => {
+              asked.push(cwds);
+              return !cwds.includes("/busy");
+            }),
+        }),
       );
 
-      const fiber = yield* ServerRuntimeStartup.runBoundedAutoPull(
-        phase,
-        progress,
-        Duration.seconds(20),
-      ).pipe(Effect.provide(capture.layer), Effect.forkChild);
-      yield* TestClock.adjust("21 seconds");
-      yield* Fiber.join(fiber);
-
-      assert.deepStrictEqual(budgetWarning(capture.logs), {
-        budgetMs: 20_000,
-        totalRoots: 7,
-        completedRoots: 3,
-      });
-    }),
-  );
-
-  it.effect("exceeding the budget interrupts the phase rather than leaving it running", () =>
-    Effect.gen(function* () {
-      const interrupted = yield* Ref.make(false);
-      const progress = yield* Ref.make<ServerRuntimeStartup.AutoPullProgress>({
-        total: 1,
-        completed: 0,
-      });
-      // Standing in for a live `git` child: if the bound merely stopped waiting, this
-      // would never run and the process would keep writing past the activation fence.
-      const phase = Effect.never.pipe(Effect.onInterrupt(() => Ref.set(interrupted, true)));
-
-      const fiber = yield* ServerRuntimeStartup.runBoundedAutoPull(
-        phase,
-        progress,
-        Duration.seconds(20),
-      ).pipe(Effect.forkChild);
-      yield* TestClock.adjust("21 seconds");
-      // Joining rather than awaiting: a timeout must not turn startup into a failure.
-      yield* Fiber.join(fiber);
-
-      assert.isTrue(yield* Ref.get(interrupted));
+      assert.deepStrictEqual(pulled, ["/idle"]);
+      assert.deepStrictEqual(asked.toSorted(), [["/busy"], ["/idle"]]);
     }),
   );
 });

@@ -86,9 +86,14 @@ your own Claude Code configuration file. Change it here instead. To switch autom
 off altogether, set `autoCompactEnabled` to `false` in your Claude Code settings file, which T3
 Code never overrides.
 
-On web and desktop, when you return to an older Claude thread with a large context, T3 Code
-offers to compact the conversation before you continue. You can also select **Compact context**
-from the context meter. On every client, you can enter `/compact` in the message composer, and
+You can also send `/compact` in an existing conversation. Web and desktop offer
+**Compact context** from the context meter. When you return to a large thread
+after more than an hour, the send button changes to **Compact and send**: Enter
+summarizes the history first, then sends your message. To keep the full history
+for that message, open the menu next to the button and choose **Send with full
+history**. Turn the offer off in **Settings → General → Offer to compact threads**.
+See [commands and skills](./composer.md#commands-and-skills) for using
+composer commands.
 
 ## Usage limits
 

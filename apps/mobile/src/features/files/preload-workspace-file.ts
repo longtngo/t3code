@@ -1,3 +1,5 @@
+import { AuthFilesystemReadScope } from "@t3tools/contracts";
+import { readEnvironmentScope } from "../../state/session";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -24,7 +26,10 @@ export function preloadWorkspaceFileContents(input: {
   readonly relativePath: string;
   readonly theme: ReviewDiffTheme;
 }): void {
-  if (rendersFromAssetUrl(input.relativePath)) {
+  if (
+    !readEnvironmentScope(input.environmentId, AuthFilesystemReadScope) ||
+    rendersFromAssetUrl(input.relativePath)
+  ) {
     return;
   }
 

@@ -23,7 +23,7 @@ import {
 } from "@t3tools/contracts";
 
 import { ServerConfig, layerTest as serverConfigLayerTest } from "../config.ts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { ServerSettingsService, layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import {
   CREDIT_BLOCK_RECONCILED,

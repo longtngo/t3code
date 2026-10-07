@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - token minting is synchronous on the request path.
 /**
  * Short-lived capability tokens that let a SANDBOXED viewer document load its own
  * relative assets.

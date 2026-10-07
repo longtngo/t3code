@@ -9,6 +9,7 @@ import type {
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Crypto from "effect/Crypto";
 import {
   ClaudeSettings,
   MessageId,
@@ -42,7 +43,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../config.ts";
-import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../../provider/ProviderRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import { SubagentBackendLive } from "../../subagentBackend/SubagentBackend.ts";
 import {
@@ -377,6 +378,7 @@ const makeHarness = (options?: {
       environment: {},
       attachmentsDir,
       fileSystem,
+      crypto: yield* Crypto.Crypto,
       path: yield* Path.Path,
       idAllocator,
       ...(options?.offerThreadCompaction === undefined

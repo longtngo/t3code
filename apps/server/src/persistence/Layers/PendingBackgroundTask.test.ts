@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 
 import { PendingBackgroundTaskRepository } from "../Services/PendingBackgroundTask.ts";
 import { PendingBackgroundTaskRepositoryLive } from "./PendingBackgroundTask.ts";
-import { SqlitePersistenceMemory } from "./Sqlite.ts";
+import { layerMemory as SqlitePersistenceMemory } from "../Sqlite.ts";
 
 const layer = it.layer(
   PendingBackgroundTaskRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),

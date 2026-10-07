@@ -3,7 +3,7 @@ import type { ServerProvider, ServerProviderUsageLimits } from "@t3tools/contrac
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { cursorUsageFromProviders, readCursorUsage } from "./cursorUsageRead.ts";
 
 const provider = (

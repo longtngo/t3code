@@ -1,5 +1,6 @@
 import { EnvironmentId, type ThreadPullRequestLink } from "@t3tools/contracts";
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { renderDom } from "../testing/renderDom";
@@ -100,6 +101,15 @@ function renderTabs(
   return renderDom(
     <RightPanelTabs
       mode="inline"
+      keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+      getShortcutContext={() => ({
+        terminalFocus: false,
+        terminalOpen: false,
+        previewFocus: false,
+        previewOpen: false,
+        isWeb: true,
+        isDesktop: false,
+      })}
       surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
       environmentId={null}
       activeSurfaceId={previewSurface.id}
@@ -127,7 +137,6 @@ function renderTabs(
       onAddFiles={() => undefined}
       onAddTasks={() => undefined}
       onAddBackground={() => undefined}
-      onUndoClosedTab={() => undefined}
       onAddDevice={() => undefined}
       liveBackgroundCount={0}
       browserAvailable
@@ -138,7 +147,6 @@ function renderTabs(
       pullRequestsAvailable={false}
       tasksAvailable={false}
       backgroundAvailable={false}
-      closedTabCount={0}
       deviceAvailable={false}
     >
       <div>content</div>

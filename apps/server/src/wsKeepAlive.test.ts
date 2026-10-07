@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import { WEBSOCKET_KEEPALIVE_IDLE_MS, enableWebSocketKeepAlive } from "./wsKeepAlive.ts";
 

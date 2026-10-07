@@ -1,4 +1,4 @@
-import type { OtlpTracer } from "effect/unstable/observability";
+import type { OtlpTracer } from "effect/observability";
 
 /**
  * Enough of a rejected OTLP body to debug the decode, without the body itself.

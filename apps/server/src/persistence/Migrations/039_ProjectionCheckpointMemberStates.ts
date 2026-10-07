@@ -10,7 +10,7 @@
  * captured under. `'[]'` would instead assert "there were no members", which is
  * a different and possibly false statement.
  */
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";
 
 export default Effect.gen(function* () {

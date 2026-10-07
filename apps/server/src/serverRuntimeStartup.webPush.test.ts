@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - fixtures need createECDH for real push keys.
 import * as NodeCrypto from "node:crypto";
 
 import { assert, it } from "@effect/vitest";
@@ -24,9 +25,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpServer from "effect/unstable/http/HttpServer";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpServer from "effect/http/HttpServer";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -45,7 +46,7 @@ import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeReco
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { PushSubscriptionRepository } from "./persistence/Services/PushSubscription.ts";
 import * as WebPushRelay from "./push/WebPushRelay.ts";
-import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "./provider/ProviderRegistry.ts";
 import { SubagentLiveThreads } from "./subagentBackend/SubagentLiveThreads.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";

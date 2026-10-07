@@ -39,6 +39,21 @@ let nextResult:
   | { _tag: "Success"; value: undefined }
   | { _tag: "Failure"; cause: Cause.Cause<unknown> } = { _tag: "Success", value: undefined };
 
+// Upstream gates project edits on the operate scope; this suite runs fully granted.
+vi.mock("../../state/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/session")>();
+  const { AuthStandardClientScopes } = await import("@t3tools/contracts");
+  const granted = new Set<string>(AuthStandardClientScopes);
+  const hasScope = (environmentId: unknown, scope: string) =>
+    environmentId !== null && granted.has(scope);
+  return {
+    ...actual,
+    useEnvironmentScope: hasScope,
+    readEnvironmentScope: hasScope,
+    useEnvironmentsWithScope: (environments: ReadonlyArray<{ environmentId: string }>) =>
+      new Set(environments.map(({ environmentId }) => environmentId)),
+  };
+});
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => (input: unknown) => {
     dispatched.push(input);

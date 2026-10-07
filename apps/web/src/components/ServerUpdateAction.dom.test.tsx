@@ -1,8 +1,9 @@
 import { act, type ComponentProps } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import type { EnvironmentId, ServerInstallation } from "@t3tools/contracts";
+import { AuthSessionState, type EnvironmentId, type ServerInstallation } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
@@ -10,6 +11,8 @@ const testState = vi.hoisted(() => ({
   toast: vi.fn(),
   clipboard: vi.fn(),
   continueThreadsAfterServerUpdate: false,
+  session: null as AsyncResult.AsyncResult<AuthSessionState, Error> | null,
+  sessionAtom: Symbol("session"),
 }));
 
 vi.mock("~/hooks/useCopyToClipboard", () => ({
@@ -25,6 +28,13 @@ vi.mock("~/hooks/useSettings", () => ({
     _environmentId: EnvironmentId,
     selector: (settings: { continueThreadsAfterServerUpdate: boolean }) => unknown,
   ) => selector({ continueThreadsAfterServerUpdate: testState.continueThreadsAfterServerUpdate }),
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => testState.session }));
+vi.mock("~/rpc/atomRegistry", () => ({
+  appAtomRegistry: { get: () => testState.session },
+}));
+vi.mock("~/state/session", () => ({
+  environmentSession: { sessionStateAtom: () => testState.sessionAtom },
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: { updateServer: Symbol("updateServer") },
@@ -70,6 +80,8 @@ async function renderAction(
   );
 }
 
+const decodeSessionState = Schema.decodeUnknownSync(AuthSessionState);
+
 async function clickUpdate(view: Awaited<ReturnType<typeof renderDom>>): Promise<void> {
   await view.click(view.find("button"));
   await flushPromises();
@@ -80,12 +92,83 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve();
 }
 
+const legacyAuth = {
+  policy: "remote-reachable",
+  bootstrapMethods: ["one-time-token"],
+  sessionMethods: ["bearer-access-token"],
+  sessionCookieName: "t3_session",
+} as const;
+
+const currentSession = {
+  authenticated: true,
+  scopes: ["environment:maintain"],
+  auth: {
+    ...legacyAuth,
+    serverUpdateScope: "environment:maintain",
+  },
+} as const satisfies AuthSessionState;
+
 describe("ServerUpdateAction", () => {
   beforeEach(() => {
     testState.updateServer.mockReset();
     testState.toast.mockReset();
     testState.clipboard.mockReset();
     testState.continueThreadsAfterServerUpdate = false;
+    testState.session = AsyncResult.success(currentSession);
+  });
+
+  it.each([
+    { serverUpdateScope: undefined, scopes: ["orchestration:operate"], allowed: true },
+    { serverUpdateScope: undefined, scopes: ["orchestration:read"], allowed: false },
+    {
+      serverUpdateScope: "environment:maintain",
+      scopes: ["orchestration:operate"],
+      allowed: false,
+    },
+    {
+      serverUpdateScope: "environment:maintain",
+      scopes: ["environment:maintain"],
+      allowed: true,
+    },
+  ] as const)(
+    "uses the advertised update scope $serverUpdateScope with grant $scopes",
+    async ({ serverUpdateScope, scopes, allowed }) => {
+      testState.session = AsyncResult.success(
+        decodeSessionState({
+          ...currentSession,
+          scopes,
+          auth: {
+            ...legacyAuth,
+            ...(serverUpdateScope === undefined ? {} : { serverUpdateScope }),
+          },
+        }),
+      );
+      testState.updateServer.mockResolvedValue(
+        AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
+      );
+
+      await clickUpdate(await renderAction());
+
+      expect(testState.updateServer).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
+
+  it("keeps a known grant usable while the session refreshes", async () => {
+    testState.session = AsyncResult.waiting(AsyncResult.success(currentSession));
+    testState.updateServer.mockResolvedValue(
+      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
+    );
+
+    await clickUpdate(await renderAction());
+
+    expect(testState.updateServer).toHaveBeenCalledOnce();
+  });
+
+  it("does not dispatch an update after maintenance access is removed", async () => {
+    const view = await renderAction();
+    testState.session = AsyncResult.success({ ...currentSession, scopes: [] });
+    await clickUpdate(view);
+    expect(testState.updateServer).not.toHaveBeenCalled();
   });
 
   it.each([

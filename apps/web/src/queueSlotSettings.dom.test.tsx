@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { QueueSlotSettings } from "@t3tools/contracts";
-import { type Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { type Atom, AtomRegistry } from "effect/reactivity";
 import { act, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -21,7 +21,7 @@ vi.mock("./state/environments", () => ({
 }));
 vi.mock("./state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./state/server")>();
-  const { Atom, AsyncResult } = await import("effect/unstable/reactivity");
+  const { Atom, AsyncResult } = await import("effect/reactivity");
   const { DEFAULT_SERVER_SETTINGS } = await import("@t3tools/contracts");
   const primaryServerConfigAtom = Atom.make<{ settings: Record<string, unknown> } | null>(null);
   const { Cause } = await import("effect");

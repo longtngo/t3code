@@ -32,7 +32,7 @@ import * as ThreadManagement from "../../orchestration-v2/ThreadManagementServic
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { creditSpendBlockedReason } from "../creditSpendGuard.ts";
 import { CreditSpendGuard } from "../Services/CreditSpendGuard.ts";
-import { ProviderRegistry } from "../Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../ProviderRegistry.ts";
 
 /** A window at or above this share is close enough to 100% that a stale reading matters. */
 export const NEAR_LIMIT_PERCENT = 90;

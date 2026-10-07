@@ -20,7 +20,7 @@
  * `base_ref` is nullable: a task may be rooted at the project's current HEAD rather
  * than at a named ref. `reply_to` is nullable because most reports are not answers.
  */
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Effect from "effect/Effect";
 
 export default Effect.gen(function* () {

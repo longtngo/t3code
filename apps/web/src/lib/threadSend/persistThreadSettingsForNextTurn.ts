@@ -9,7 +9,7 @@ import {
   mapAtomCommandResult,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { resolveThreadMetadataUpdateForNextTurn } from "../../components/ChatView.logic";
 

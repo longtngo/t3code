@@ -23,7 +23,7 @@ import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
 const driver = ProviderDriverKind.make("codex");
@@ -133,11 +133,9 @@ it.live.each([
           }),
       };
       const now = yield* DateTime.now;
-      const layer = makeOrchestratorV2ReplayLayerWithRegistry(
-        { name },
-        ProviderAdapterRegistry.makeSingleLayer(adapter),
-        { runEffectWorker: false },
-      );
+      const layer = layerWithRegistry({ name }, ProviderAdapterRegistry.layerSingle(adapter), {
+        runEffectWorker: false,
+      });
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;

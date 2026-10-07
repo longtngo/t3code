@@ -17,7 +17,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
@@ -25,8 +25,8 @@ import * as ClaudeAdapterV2 from "../../orchestration-v2/Adapters/ClaudeAdapterV
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import * as ProviderEventLoggers from "../Layers/ProviderEventLoggers.ts";
-import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
+import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
+import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { ClaudeDriver, getCachedCapabilitiesDroppingMisses } from "./ClaudeDriver.ts";
 

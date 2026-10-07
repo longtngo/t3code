@@ -11,6 +11,7 @@ import type {
   PreviewSessionSnapshot,
   ProjectId,
   PullRequestState,
+  ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -37,7 +38,6 @@ import {
   ListTodo,
   Plus,
   TerminalSquare,
-  Undo2,
 } from "lucide-react";
 import { Volume2, VolumeOff } from "lucide";
 import {
@@ -47,6 +47,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -57,6 +58,7 @@ import { basenamePathSegment } from "~/filePathDisplay";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
+import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -99,6 +101,8 @@ interface RightPanelTabsProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
   open?: boolean;
+  keybindings: ResolvedKeybindingsConfig;
+  getShortcutContext: () => ShortcutMatchContext;
   /** Forwarded to PreviewPanelShell so this surface persists its own width. */
   widthStorageKey?: string;
   /** Forwarded to PreviewPanelShell as the initial width before a user resize. */
@@ -142,7 +146,6 @@ interface RightPanelTabsProps {
   onAddPullRequests: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
-  onUndoClosedTab: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -152,8 +155,6 @@ interface RightPanelTabsProps {
   pullRequestsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
-  /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
-  closedTabCount: number;
   deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running top-level background tasks; badges the Background row in the empty state. */
@@ -189,7 +190,6 @@ const SURFACE_DISABLED_REASONS = {
   pullRequests: "No linked pull requests are available for this thread.",
   tasks: "The task list is only available from a thread.",
   background: "Background tasks are only available from a thread.",
-  undoClosedTab: "No recently closed tabs.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -215,7 +215,6 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: "No linked pull requests available.",
   tasks: "Available from a thread.",
   background: "Available from a thread.",
-  undoClosedTab: "No recently closed tabs.",
   device: "Available from a thread.",
 } as const;
 
@@ -357,7 +356,6 @@ function RightPanelEmptyState(props: {
   onAddPullRequests: () => void;
   onAddTasks: () => void;
   onAddBackground: () => void;
-  onUndoClosedTab: () => void;
   onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
@@ -367,8 +365,6 @@ function RightPanelEmptyState(props: {
   pullRequestsAvailable: boolean;
   tasksAvailable: boolean;
   backgroundAvailable: boolean;
-  /** Tabs this thread can reopen with "Undo closed tab"; 0 disables the row. */
-  closedTabCount: number;
   deviceAvailable: boolean;
   liveBackgroundCount: number;
   taskCompletedCount?: number | undefined;
@@ -446,15 +442,6 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.background,
       onClick: props.onAddBackground,
       badgeCount: props.liveBackgroundCount,
-    },
-    {
-      label: "Undo closed tab",
-      icon: Undo2,
-      shortcut: "U",
-      available: props.closedTabCount > 0,
-      disabledReason: SURFACE_UNAVAILABLE_HINTS.undoClosedTab,
-      onClick: props.onUndoClosedTab,
-      badgeCount: 0,
     },
     {
       label: "Device",
@@ -915,6 +902,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
+  const addSurfaceTriggerRef = useRef<HTMLButtonElement>(null);
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   // The desktop tab bar is a window drag region; while a tab is lifted it must
@@ -931,6 +919,30 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     canScrollLeft: false,
     canScrollRight: false,
   });
+
+  if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
+
+  const onNewSurfaceKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) return;
+    if (
+      resolveShortcutCommand(event, props.keybindings, {
+        context: { ...props.getShortcutContext(), rightPanelOpen: true },
+      }) !== "rightPanel.new"
+    )
+      return;
+    if (!addSurfaceMenuOpen && document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      addSurfaceTriggerRef.current?.focus();
+      setAddSurfaceMenuOpen(true);
+    }
+  });
+  useEffect(() => {
+    if (props.open === false) return;
+    document.addEventListener("keydown", onNewSurfaceKeyDown, true);
+    return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
+  }, [props.open]);
 
   const updateTabScrollState = useCallback(() => {
     const viewport = tabScrollViewport(tabListRef.current);
@@ -1027,14 +1039,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.backgroundAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.background,
       onClick: props.onAddBackground,
-    },
-    {
-      label: "Undo closed tab",
-      icon: Undo2,
-      shortcut: "U",
-      available: props.closedTabCount > 0,
-      disabledReason: SURFACE_DISABLED_REASONS.undoClosedTab,
-      onClick: props.onUndoClosedTab,
     },
     {
       label: "Device",
@@ -1424,9 +1428,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 })}
               </SortableContext>
             </DndContext>
-            {props.surfaces.length > 0 ? (
+            {props.open !== false ? (
               <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
                 <MenuTrigger
+                  ref={addSurfaceTriggerRef}
                   render={
                     <Button
                       aria-label="Add panel surface"
@@ -1582,7 +1587,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequests={props.onAddPullRequests}
             onAddTasks={props.onAddTasks}
             onAddBackground={props.onAddBackground}
-            onUndoClosedTab={props.onUndoClosedTab}
             onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
@@ -1592,7 +1596,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             pullRequestsAvailable={props.pullRequestsAvailable}
             tasksAvailable={props.tasksAvailable}
             backgroundAvailable={props.backgroundAvailable}
-            closedTabCount={props.closedTabCount}
             deviceAvailable={props.deviceAvailable}
             liveBackgroundCount={props.liveBackgroundCount}
             taskCompletedCount={props.taskCompletedCount}

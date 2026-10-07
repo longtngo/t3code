@@ -19,7 +19,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 
 /** The Cursor window that is the plan total, as `cursorUsageResponseToLimits` names it. */
 const CURSOR_TOTAL_WINDOW_ID = "totalPercentUsed";

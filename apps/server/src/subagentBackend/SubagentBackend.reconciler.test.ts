@@ -9,7 +9,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { layerTest as serverConfigLayerTest } from "../config.ts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { readBackendFile, subagentBackendReconciler, writeBackendFile } from "./SubagentBackend.ts";
 import { SubagentLiveThreads } from "./SubagentLiveThreads.ts";

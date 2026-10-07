@@ -20,13 +20,14 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Tracer from "effect/Tracer";
 import {
   HttpClient,
   HttpClientRequest,
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
@@ -34,7 +35,6 @@ import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
 import * as ServerConfig from "./config.ts";
 
 import {
-  browserApiCorsLayer,
   assetFileResponse,
   assetResponseByteCap,
   assetResponseHeaders,
@@ -46,26 +46,65 @@ import {
   downloadContentDisposition,
   isGrantableViewerAssetDirectory,
   resolveViewerAssetGrantDecision,
-  httpCompressionLayer,
   isLoopbackHostname,
   logRouteRefusals,
   resolveDevRedirectUrl,
-  staticAndDevRouteLayer,
+  withUntracedRequests,
 } from "./http.ts";
+import * as ServerHttp from "./http.ts";
+
+describe("untraced requests", () => {
+  it.effect("drops the HTTP server span for browser trace exports, query string included", () => {
+    const spanNames: Array<string> = [];
+    return Effect.gen(function* () {
+      const layerRoutes = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const router = yield* HttpRouter.HttpRouter;
+          yield* router.add("POST", "/api/observability/v1/traces", HttpServerResponse.empty());
+          yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
+        }),
+      );
+      const services = yield* Layer.build(
+        withUntracedRequests(HttpRouter.serve(layerRoutes, { disableListenLog: true })).pipe(
+          Layer.provideMerge(NodeHttpServer.layerTest),
+        ),
+      );
+      const client = Context.get(services, HttpClient.HttpClient);
+
+      yield* client.post("/api/observability/v1/traces");
+      yield* client.post("/api/observability/v1/traces?x=1");
+      expect(spanNames).toEqual([]);
+
+      yield* client.get("/api/environment");
+      expect(spanNames).toContain("http.server GET");
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(
+        Tracer.Tracer,
+        Tracer.make({
+          span: (options) => {
+            if (options.kind === "server") spanNames.push(options.name);
+            return new Tracer.NativeSpan(options);
+          },
+        }),
+      ),
+    );
+  });
+});
 
 describe("browser API CORS", () => {
   it("accepts protocol negotiation with authenticated browser headers", async () => {
-    const routeLayer = Layer.effectDiscard(
+    const layerRoute = Layer.effectDiscard(
       Effect.gen(function* () {
         const router = yield* HttpRouter.HttpRouter;
         yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
       }),
     );
-    const appLayer = Layer.merge(routeLayer, browserApiCorsLayer).pipe(
+    const layerApp = Layer.merge(layerRoute, ServerHttp.layerBrowserApiCors).pipe(
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "http-cors-test-" })),
       Layer.provide(NodeServices.layer),
     );
-    const { handler, dispose } = HttpRouter.toWebHandler(appLayer, { disableLogger: true });
+    const { handler, dispose } = HttpRouter.toWebHandler(layerApp, { disableLogger: true });
 
     try {
       const response = await handler(
@@ -99,7 +138,7 @@ describe("browser API CORS", () => {
   });
 });
 
-const fileResponseLayer = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
 
 /**
  * Retargeted from upstream #8919's `assetFileResponse` tests. Workspace assets take
@@ -164,15 +203,17 @@ describe("asset byte ranges (retargeted from upstream #8919)", () => {
 const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (staticDir: string) {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const appLayer = Layer.merge(staticAndDevRouteLayer, httpCompressionLayer).pipe(
-    Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
-    Layer.provideMerge(NodeHttpPlatform.layer),
-    Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
-    Layer.provideMerge(Layer.succeed(Path.Path, path)),
-  );
+  const layerApp = Layer.merge(
+    ServerHttp.layerStaticAndDevRoute,
+    ServerHttp.layerHttpCompression,
+  ).pipe(Layer.provideMerge(NodeHttpPlatform.layer));
+  // HttpRouter.serve reuses services from the layers around it before the
+  // app's own, and NodeHttpServer.layerTest brings a real FileSystem, so the
+  // caller's FileSystem and static directory go between the two.
   const services = yield* Layer.build(
-    HttpRouter.serve(appLayer, { disableListenLog: true }).pipe(
+    HttpRouter.serve(layerApp, { disableListenLog: true }).pipe(
+      Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
+      Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
       Layer.provideMerge(NodeHttpServer.layerTest),
     ),
   );
@@ -392,7 +433,7 @@ describe("video asset byte ranges", () => {
         }
         expect(yield* Effect.promise(() => response.text())).toBe(expected);
       }
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect(
@@ -437,7 +478,7 @@ describe("video asset byte ranges", () => {
             );
           }
         }
-      }).pipe(Effect.provide(fileResponseLayer)),
+      }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("streams guarded file ranges, including suffixes and conditional requests", () =>
@@ -477,7 +518,7 @@ describe("video asset byte ranges", () => {
           expect(response.headers.get("content-length")).toBe(String(expected.length));
         expect(yield* Effect.promise(() => response.text())).toBe(expected);
       }
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("keeps attachment media out of the cache once its signed URL expires", () =>
@@ -495,7 +536,7 @@ describe("video asset byte ranges", () => {
       );
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("accept-ranges")).toBe("bytes");
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("closes guarded descriptors after full, HEAD, rejected, and cancelled responses", () =>
@@ -542,7 +583,7 @@ describe("video asset byte ranges", () => {
         );
         expect(file.handle.fd).toBe(-1);
       }
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("streams exactly the requested bytes and leaves full downloads intact", () =>
@@ -595,7 +636,7 @@ describe("video asset byte ranges", () => {
       expect(image.status).toBe(200);
       expect(image.headers.has("accept-ranges")).toBe(false);
       expect(yield* Effect.promise(() => image.text())).toBe("0123456789");
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect(
@@ -625,7 +666,7 @@ describe("video asset byte ranges", () => {
         expect(download.status).toBe(200);
         expect(download.headers.get("content-disposition")).toContain("attachment;");
         expect(yield* Effect.promise(() => download.text())).toBe("0123456789");
-      }).pipe(Effect.provide(fileResponseLayer)),
+      }).pipe(Effect.provide(layerFileResponse)),
   );
 });
 
@@ -896,14 +937,14 @@ describe("assetResponseHeaders", () => {
       assetResponseHeaders("/attachments/upload.bin", { mimeType: "text/html" }),
     ).toMatchObject({
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
+      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups",
     });
   });
   it("serves HTML assets as utf-8 inside a sandboxed origin", () => {
     for (const path of ["/workspace/page.html", "/workspace/PAGE.HTM", "/tmp/report.html"]) {
       expect(assetResponseHeaders(path)).toMatchObject({
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups",
       });
     }
   });
@@ -1367,7 +1408,7 @@ describe("logRouteRefusals", () => {
   it("wraps every byte-serving route, and leaves the static route alone", () => {
     const source = NodeFS.readFileSync(new URL("./http.ts", import.meta.url), "utf8");
     for (const [layer, prefix] of [
-      ["export const assetRouteLayer", "ASSET_ROUTE_PREFIX"],
+      ["export const layerAssetRoute", "ASSET_ROUTE_PREFIX"],
       ["export const viewerRouteLayer", "VIEWER_ROUTE_PREFIX"],
       ["export const viewerAssetRouteLayer", "VIEWER_ASSET_ROUTE_PREFIX"],
     ] as const) {
@@ -1378,7 +1419,7 @@ describe("logRouteRefusals", () => {
     }
     // The static route 404s constantly in normal operation — wrapping it would
     // turn ordinary traffic into a warning stream.
-    const staticStart = source.indexOf("export const staticAndDevRouteLayer");
+    const staticStart = source.indexOf("export const layerStaticAndDevRoute");
     expect(staticStart).toBeGreaterThan(-1);
     expect(source.slice(staticStart)).not.toContain("logRouteRefusals");
   });
