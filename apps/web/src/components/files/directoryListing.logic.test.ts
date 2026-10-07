@@ -13,10 +13,21 @@ describe("workspaceListingPath", () => {
     );
   });
 
-  it("does not double the separator, whichever side carries it", () => {
+  it("does not double a separator cwd already ends with", () => {
     expect(workspaceListingPath("/Users/me/proj/", "src")).toBe("/Users/me/proj/src");
-    expect(workspaceListingPath("/Users/me/proj", "/src")).toBe("/Users/me/proj/src");
-    expect(workspaceListingPath("/Users/me/proj//", "//src")).toBe("/Users/me/proj/src");
+  });
+
+  it("lists an absolute path where it is, inside the project or out", () => {
+    // The panel reads an absolute path as one, so the folder fallback must not
+    // graft it under cwd (`/proj/Users/me/reports`, which does not exist).
+    expect(workspaceListingPath("/Users/me/proj", "/Users/me/reports/2026-10")).toBe(
+      "/Users/me/reports/2026-10",
+    );
+    expect(workspaceListingPath("/Users/me/proj", "/Users/me/proj/src")).toBe("/Users/me/proj/src");
+    expect(workspaceListingPath("C:\\Users\\me\\proj", "D:\\notes")).toBe("D:\\notes");
+    expect(workspaceListingPath("C:\\Users\\me\\proj", "\\\\server\\share")).toBe(
+      "\\\\server\\share",
+    );
   });
 
   it("joins a Windows cwd with the separator it already uses", () => {

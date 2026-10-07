@@ -9,6 +9,8 @@
  * @module directoryListing.logic
  */
 
+import { isAbsolutePath } from "~/terminal-links";
+
 /**
  * Whether a `filesystem.browse` success is actually a folder listing.
  *
@@ -52,14 +54,18 @@ function withForwardSlashes(path: string): string {
 }
 
 /**
- * Absolute path of the folder a workspace-relative read was aimed at.
+ * Absolute path of the folder a failed read was aimed at: an absolute path as
+ * given, a relative one joined under the panel's `cwd`.
  *
- * Built from the panel's own `cwd`, never from a path the server resolved: the
+ * Never built from a path the server resolved: the
  * server realpaths, so a project under a symlinked root (`/tmp`, `/var`, a
  * linked home) would come back with a prefix that no longer matches `cwd`, and
  * every file picked out of the listing would lose its workspace-relative path.
  */
 export function workspaceListingPath(cwd: string, relativePath: string): string {
+  // The server reads an absolute path as one (a chat chip outside the project), so
+  // the listing must name that same folder.
+  if (isAbsolutePath(relativePath)) return relativePath;
   const root = trimTrailingSeparators(cwd);
   return `${root}${separatorOf(cwd)}${relativePath.replace(/^[/\\]+/, "")}`;
 }

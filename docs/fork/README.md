@@ -1134,7 +1134,11 @@ optional, or every checkpoint captured without members stops decoding.
 Upstream #10909 answers "a chat link to a folder" by hiding the preview pane and revealing the
 folder in the workspace tree (`file.isNotFile`, `previewPath`). The fork's `1d1b15f84` answers the
 same failure with a browsable listing in the preview pane (`useDirectoryListingQuery`), which also
-works for a host path outside the workspace - upstream's leaves those on a read error. The 38th
+works for a host path outside the workspace - upstream's leaves those on a read error. That case
+needs `workspaceListingPath` to return an absolute path as given: since #9140 chat chips outside
+the project reach this panel absolute, and grafting them under cwd broke it from the reconcile of
+2026-09-02 until 2026-10-07 (probe: `directoryListing.logic.test.ts`, "lists an absolute path
+where it is"). The 38th
 reconcile kept `FilePreviewPanel.tsx` byte-identical to `personal`. The 42nd grafted #12449's
 `resolveFilePreviewPath` into it: a link to the workspace root opens the explorer. The rest of #10909
 (`projectFilesQueryState.isNotFile`, `FileBrowserPanel` reveal, `rightPanelStore` trailing-slash

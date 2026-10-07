@@ -1145,9 +1145,9 @@ export default function FilePreviewPanel({
     attachment === undefined && relativePath !== null && !isMedia && !isPdf,
   );
   // Same rule as the trusted viewer: a failed read is a directory candidate, and
-  // asking for the listing is the test. Rooted at this panel's own cwd + relative
-  // path rather than anything the server resolved, so children relativize back
-  // against `cwd` cleanly even when the project sits under a symlink.
+  // asking for the listing is the test. Rooted at the path as the panel holds it
+  // (an absolute host path as is, a relative one under cwd), never one the server
+  // resolved, so children relativize back against `cwd` even under a symlink.
   const listingPath =
     relativePath && file.error && file.data === null
       ? workspaceListingPath(cwd, relativePath)
