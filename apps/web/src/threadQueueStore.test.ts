@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId } from "./composerDraftStore";
+import { SLOW_RPC_ACK_THRESHOLD_MS } from "./rpc/requestLatencyState";
 import {
   threadQueueEntryKey,
   type ThreadQueueEntry,
@@ -599,7 +600,7 @@ describe("queue modes", () => {
     await vi.waitFor(() =>
       expect(server.document.inFlight).toMatchObject({ claimId: "two", handSent: true }),
     );
-    expect(store().pending).toEqual([]);
+    await idle();
   });
 
   // A claim's waiter gives up when server mode ends, so its write must not follow.
@@ -1243,6 +1244,287 @@ describe("server mode", () => {
     expect(server.document.lastFailure?.message).toHaveLength(
       THREAD_QUEUE_FAILURE_MESSAGE_MAX_LENGTH,
     );
+  });
+});
+
+// A connected server that never answers a write must not hold the chain, the claims waiting on
+// it, or the coordinator. The write may still have landed, so it is given up like a failed
+// request and never re-run: a re-run could undo another device's later change.
+describe("a write that gets no reply", () => {
+  const BOUND = SLOW_RPC_ACK_THRESHOLD_MS;
+  const never = () => new Promise<ThreadQueueSetResult>(() => {});
+  const threadIds = (entries: ReadonlyArray<{ threadId: string }>) =>
+    entries.map((e) => e.threadId);
+  /** The first write is applied by the server, but its reply never comes. */
+  function landsButNoReply(server: CasServer) {
+    let first = true;
+    return async (input: ThreadQueueSetInput) => {
+      const reply = server.apply(input);
+      if (!first) return reply;
+      first = false;
+      return never();
+    };
+  }
+
+  it("is given up after the bound and reported, and the change queued behind it still goes", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let hangNext = true;
+    let calls = 0;
+    const { reportFailure } = enterServer(server, {
+      write: async (input) => {
+        calls += 1;
+        if (hangNext) {
+          hangNext = false;
+          return never();
+        }
+        return server.apply(input);
+      },
+    });
+    store().enqueue(a);
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(BOUND - 1);
+    expect(calls).toBe(1);
+    expect(store().pending).toHaveLength(2);
+    expect(reportFailure).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store().pending).toEqual([]);
+    expect(calls).toBe(2);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(threadIds(server.document.entries)).toEqual(["thread-C"]);
+    expect(threadIds(store().entries)).toEqual(["thread-C"]);
+  });
+
+  // A slow server, not a dead one: the given-up write is applied before or after the bound.
+  // Either way it is never sent again, and the server ends with what actually landed.
+  it.each([
+    ["before", 0, ["thread-A", "thread-C"]],
+    ["after", BOUND + 5_000, ["thread-C"]],
+  ])("a slow write applied %s the bound is not sent again", async (_when, applyAfterMs, landed) => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let slowNext = true;
+    enterServer(server, {
+      write: (input) => {
+        if (!slowNext) return Promise.resolve(server.apply(input));
+        slowNext = false;
+        const applied = applyAfterMs === 0 ? server.apply(input) : null;
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(applied ?? server.apply(input)), BOUND + 5_000);
+        });
+      },
+    });
+    store().enqueue(a);
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(BOUND + 5_000);
+    expect(store().pending).toEqual([]);
+    expect(server.writes.filter((w) => threadIds(w.state.entries)[0] === "thread-A")).toHaveLength(
+      applyAfterMs === 0 ? 2 : 1,
+    );
+    expect(threadIds(server.document.entries)).toEqual(landed);
+    store().receiveDocument(server.document, server.now);
+    expect(threadIds(store().entries)).toEqual(landed);
+  });
+
+  // The measured slowest comparable server write is 2.2 s; one minute is far past any bound the
+  // queue should wait. A bound of 1 ms or 1 h fails one of the two.
+  it("a write answered in 2.2 s is sent once; one with no reply is given up within a minute", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let replyMs: number | null = 2_200;
+    const { reportFailure } = enterServer(server, {
+      write: (input) => {
+        if (replyMs === null) return never();
+        const reply = server.apply(input);
+        return new Promise((resolve) => setTimeout(() => resolve(reply), replyMs!));
+      },
+    });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(2_200);
+    expect(server.writes).toHaveLength(1);
+    expect(store().pending).toEqual([]);
+    expect(reportFailure).not.toHaveBeenCalled();
+
+    replyMs = null;
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(store().pending).toEqual([]);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves no timer behind when a write fails or is answered", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let fail = true;
+    enterServer(server, {
+      write: async (input) => {
+        if (fail) throw new Error("socket closed");
+        return server.apply(input);
+      },
+    });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store().pending).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    fail = false;
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(threadIds(server.document.entries)).toEqual(["thread-C"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a claim whose write never reached the server gives up after the bound", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let hangNext = false;
+    enterServer(server, {
+      write: async (input) => {
+        if (hangNext) {
+          hangNext = false;
+          return never();
+        }
+        return server.apply(input);
+      },
+    });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    hangNext = true;
+    claimA();
+    let settled: boolean | undefined;
+    void store()
+      .confirmClaim("mine")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(BOUND - 1);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+    expect(server.document).toMatchObject({
+      inFlight: null,
+      entries: [expect.objectContaining(a)],
+    });
+    expect(store()).toMatchObject({ inFlight: null, entries: [expect.objectContaining(a)] });
+  });
+
+  it("a claim that landed without a reply is won after the bound, and sent once", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let write = (input: ThreadQueueSetInput) => Promise.resolve(server.apply(input));
+    enterServer(server, { write: (input) => write(input) });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    write = landsButNoReply(server);
+    claimA();
+    let settled: boolean | undefined;
+    void store()
+      .confirmClaim("mine")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(BOUND);
+    expect(settled).toBe(true);
+    expect(server.writes.filter((w) => w.state.inFlight?.claimId === "mine")).toHaveLength(1);
+    expect(server.document).toMatchObject({ entries: [], inFlight: { claimId: "mine" } });
+  });
+
+  // The claim landed but its reply was lost; the re-send that would settle it then hangs.
+  it("a lost-reply re-send that gets no reply is sent again", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let mode: "ok" | "lose" | "hang" = "ok";
+    let calls = 0;
+    enterServer(server, {
+      write: async (input) => {
+        calls += 1;
+        if (mode === "hang") {
+          mode = "ok";
+          return never();
+        }
+        const reply = server.apply(input);
+        if (mode === "lose") {
+          mode = "hang";
+          throw new Error("socket closed");
+        }
+        return reply;
+      },
+    });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    mode = "lose";
+    claimA();
+    let settled: boolean | undefined;
+    void store()
+      .confirmClaim("mine")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(0);
+    const afterLoss = calls;
+    await vi.advanceTimersByTimeAsync(BOUND);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toBe(afterLoss + 1);
+    expect(settled).toBe(true);
+  });
+
+  it("against a server that never answers, each change is given up once and nothing is re-sent", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let calls = 0;
+    const { reportFailure } = enterServer(server, {
+      write: async () => {
+        calls += 1;
+        return never();
+      },
+    });
+    store().enqueue(a);
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(2 * BOUND);
+    expect(calls).toBe(2);
+    expect(store().pending).toEqual([]);
+    expect(reportFailure).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4 * BOUND);
+    expect(calls).toBe(2);
+  });
+
+  // A write landed but its reply never came; another device changed the queue before the bound.
+  // The given-up write must not be applied again over that change.
+  it.each([
+    ["the live document arrives", true],
+    ["no document arrives", false],
+  ])("a thread another device sent and cleared is not queued again (%s)", async (_n, deliver) => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    enterServer(server, { write: landsButNoReply(server) });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(threadIds(server.document.entries)).toEqual(["thread-A"]);
+    if (deliver) store().receiveDocument(server.document, server.now);
+    // Another device claims A, sends it, and clears the claim.
+    server.replace({ entries: [] });
+    server.replace({ inFlight: null });
+    if (deliver) store().receiveDocument(server.document, server.now);
+    await vi.advanceTimersByTimeAsync(BOUND + 10);
+    expect(threadIds(server.document.entries)).toEqual([]);
+  });
+
+  it("a thread the phone removes at 10 s is not queued again", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    enterServer(server, { write: landsButNoReply(server) });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(10_000);
+    server.replace({ entries: [] });
+    await vi.advanceTimersByTimeAsync(BOUND);
+    expect(server.writes.map((w) => w.expectedRevision)).toEqual([0]);
+    expect(threadIds(server.document.entries)).toEqual([]);
+  });
+
+  it("another device's resume at 10 s is not paused again", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    enterServer(server, { write: landsButNoReply(server) });
+    store().setPaused(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(server.document.paused).toBe(true);
+    server.replace({ paused: false });
+    await vi.advanceTimersByTimeAsync(BOUND);
+    expect(server.document.paused).toBe(false);
   });
 });
 

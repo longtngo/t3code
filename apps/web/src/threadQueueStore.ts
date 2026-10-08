@@ -29,6 +29,7 @@ import type { DraftId } from "./composerDraftStore";
 import { isHostedStaticApp } from "./hostedPairing";
 import { resolveStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
+import { SLOW_RPC_ACK_THRESHOLD_MS } from "./rpc/requestLatencyState";
 import { isLocalEnvironmentDisabled } from "./localEnvironment";
 import {
   QUEUE_SLOT_SETTINGS_STORAGE_KEY,
@@ -194,6 +195,27 @@ let connection: ThreadQueueConnection = {
 };
 let writer: ThreadQueueWriter | null = null;
 let chainRunning = false;
+
+/**
+ * `writer.write`, rejecting once the app's slow-request mark passes without a reply (about 7x the
+ * slowest comparable server write seen live; a socket loss fails sooner on its own). The write may
+ * still land, so the timeout takes the failed-request path and is never re-run: a re-run could
+ * undo another device's later change. The subscription shows what landed. The request itself is
+ * abandoned, not cancelled (the RPC command has no cancel), and stays on the slow-request toast.
+ */
+function writeWithin(
+  active: ThreadQueueWriter,
+  input: ThreadQueueSetInput,
+): Promise<ThreadQueueSetResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`No reply to a queue write within ${SLOW_RPC_ACK_THRESHOLD_MS} ms.`)),
+      SLOW_RPC_ACK_THRESHOLD_MS,
+    );
+  });
+  return Promise.race([active.write(input), timeout]).finally(() => clearTimeout(timer));
+}
 /** `kind:claimId` of claim and sending-mark writes whose request failed; the server may hold them. */
 const lostReplies = new Set<string>();
 let nextChangeId = 0;
@@ -399,7 +421,7 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
       /**
        * Writes this tab's changes one at a time. Each is re-run on the newest document until it
        * lands or has nothing left to do; a conflict means another writer made progress. Only a
-       * failed request drops a change.
+       * failed request (including one with no reply in time) drops a change.
        */
       const runChain = async (): Promise<void> => {
         if (chainRunning) return;
@@ -426,7 +448,11 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
             }
             let reply: ThreadQueueSetResult;
             try {
-              reply = await active.write({ bootId, expectedRevision: revision, state: next });
+              reply = await writeWithin(active, {
+                bootId,
+                expectedRevision: revision,
+                state: next,
+              });
             } catch (error) {
               // The RPC client encodes before sending: a claim it cannot encode never reaches the
               // server, and the next attempt would be the same, blocking the queue's head. Its
@@ -484,7 +510,7 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
           if (holds(state.server?.inFlight)) return true;
           if (!lost || state.readOnly || state.server === null || active === null) return false;
           try {
-            const reply = await active.write({
+            const reply = await writeWithin(active, {
               bootId: state.server.bootId,
               expectedRevision: state.server.revision,
               state: dataOf(state.server),
