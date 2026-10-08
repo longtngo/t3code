@@ -26,7 +26,7 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { threadQueueEntryKey } from "../threadQueueRules";
+import { queueAndWake, threadQueueEntryKey } from "../threadQueueRules";
 import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
@@ -637,47 +637,29 @@ export type SidebarSnoozeOutcome =
 /**
  * A drop on the Snoozed shelf: the menu's 1-hour snooze, resolved at release. `liveSection`
  * is where the thread rests now, read from live state, so a thread a peer snoozed mid-drag is
- * never re-snoozed. A Queue row leaves the Queue only once the snooze succeeded, and the
- * notice's Undo puts it back.
+ * never re-snoozed. The snooze itself (`snoozeThread`) takes a Queue row out of the Queue once
+ * it landed, and its Undo puts it back, exactly as the menu's Snooze does.
  */
 export async function runSidebarSnoozeDrop(input: {
   readonly drag: Pick<SidebarDragOrigin, "fromQueue">;
   readonly liveSection: SidebarSection;
   /** `checkThreadOperations` for the thread: false (already reported) refuses the snooze. */
   readonly checkOperate: () => boolean;
-  readonly snooze: (
-    snoozedUntil: string,
-    undoAlso: (() => void) | undefined,
-  ) => Promise<SidebarSnoozeOutcome>;
+  readonly snooze: (snoozedUntil: string) => Promise<SidebarSnoozeOutcome>;
+  /** Only for a Queue row that is already snoozed: no new wake time, it just leaves the Queue. */
   readonly unqueue: () => void;
-  readonly requeue: () => void;
   /** The snooze failed. */
   readonly reportFailure: (error: unknown) => void;
-  /** Undo woke the thread but could not put it back in the Queue. */
-  readonly reportRequeueFailure: (error: unknown) => void;
 }): Promise<void> {
-  const { fromQueue } = input.drag;
   if (input.liveSection === "snoozed") {
-    if (fromQueue) input.unqueue();
+    if (input.drag.fromQueue) input.unqueue();
     return;
   }
   // A thread this connection cannot operate says so, like every other drop, and stays queued.
   if (!input.checkOperate()) return;
   const hour = resolveSnoozePresets(new Date()).find((preset) => preset.id === "hour")!;
-  // A throw out of Undo's follow-up would reject the notice's undo after the wake succeeded.
-  const requeue = () => {
-    try {
-      input.requeue();
-    } catch (error) {
-      input.reportRequeueFailure(error);
-    }
-  };
-  const outcome = await input.snooze(hour.snoozedUntil, fromQueue ? requeue : undefined);
-  if (outcome.status === "success") {
-    if (fromQueue) input.unqueue();
-  } else if (outcome.status === "failure") {
-    input.reportFailure(outcome.error);
-  }
+  const outcome = await input.snooze(hour.snoozedUntil);
+  if (outcome.status === "failure") input.reportFailure(outcome.error);
 }
 
 /** A drop on the Queue. From Snoozed it is "Wake & queue": queue it, then wake it, or a send
@@ -693,7 +675,11 @@ export async function runSidebarEnqueueDrop(input: {
 }): Promise<void> {
   // A queued thread this connection cannot operate would only fail at send.
   if (!input.checkOperate()) return;
-  if (input.enqueue() && input.liveSection === "snoozed") await input.wake();
+  await queueAndWake({
+    snoozed: input.liveSection === "snoozed",
+    enqueue: input.enqueue,
+    wake: input.wake,
+  });
 }
 
 export function resolveSidebarDropTarget(
@@ -803,8 +789,8 @@ export type SidebarThreadDropPlan =
           membership and clears pin, settle and snooze itself, so the clear flags stay false. */
       readonly joinsSection?: string;
     }
-  /** `unsnooze`: the server's settle keeps a snooze, so a drop out of Snoozed also wakes. */
-  | { readonly kind: "settle"; readonly unsnooze: boolean }
+  /** `settleThread` also wakes a snoozed thread, so a drop out of Snoozed needs no wake step. */
+  | { readonly kind: "settle" }
   /** A queued section member dropped on Active: clear what outranks membership, nothing else. */
   | {
       readonly kind: "unpark";
@@ -1102,9 +1088,7 @@ export function planSidebarThreadDrop(input: {
       };
     }
     case "settled":
-      return activeSection === "settled"
-        ? { kind: "none" }
-        : { kind: "settle", unsnooze: activeSection === "snoozed" };
+      return activeSection === "settled" ? { kind: "none" } : { kind: "settle" };
     case "pinned": {
       const order = target.pinnedOrder;
       // Dropped back where it started: nothing to write.
@@ -1478,8 +1462,7 @@ export async function runSidebarDropCommands(
 ): Promise<void> {
   switch (plan.kind) {
     case "settle":
-      if (!(await commands.settle())) return;
-      if (plan.unsnooze) await commands.unsnooze();
+      await commands.settle();
       return;
     case "unpark":
       if (plan.unpin && !(await commands.unpin())) return;

@@ -270,7 +270,9 @@ export function useThreadActionMenu(input: {
             return;
           case "queue":
           case "unqueue":
-            runThreadQueueMenuAction(action, thread);
+            await runThreadQueueMenuAction(action, thread, () =>
+              reportFailure("Failed to wake thread", () => unsnoozeThread(threadRef)),
+            );
             return;
           case "unpin": {
             await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));

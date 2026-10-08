@@ -9,8 +9,13 @@ import { toastManager } from "../components/ui/toast";
 import { useThreadUndoNotice } from "./showThreadUndoNotice";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryServerConfigAtom } from "../state/server";
+import { useThreadQueueStore } from "../threadQueueStore";
+import type { DraftId } from "../composerDraftStore";
+import { QUEUE_SENDING_MESSAGE, SNOOZE_QUEUE_READ_ONLY_MESSAGE } from "../threadQueueAdd";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
 const shellPresent = vi.hoisted(() => ({ value: true }));
+const supportsSnooze = vi.hoisted(() => ({ value: true }));
 const commands = vi.hoisted(() => ({
   pin: vi.fn(),
   unpin: vi.fn(),
@@ -68,7 +73,7 @@ vi.mock("../state/entities", async (original) => ({
   readEnvironmentSupportsPinning: () => true,
   readEnvironmentSupportsPinReorder: () => true,
   readEnvironmentSupportsSettlement: () => true,
-  readEnvironmentSupportsSnooze: () => true,
+  readEnvironmentSupportsSnooze: () => supportsSnooze.value,
   readEnvironmentSupportsSidebarSections: () => true,
   readThreadShell: () => (shellPresent.value ? threadShell : null),
 }));
@@ -120,7 +125,12 @@ beforeEach(() => {
   threadShell.snoozedUntil = null;
   threadShell.sidebarSectionId = null;
   shellPresent.value = true;
+  supportsSnooze.value = true;
 });
+/** Lets an un-awaited follow-up (the wake after a settle) finish. */
+async function flushMicrotasks() {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
 afterEach(() => {
   vi.runAllTimers();
   vi.useRealTimers();
@@ -220,6 +230,76 @@ describe("settle and snooze Undo", () => {
     });
   });
 
+  it("wakes a snoozed thread once it settled, as a drop from Snoozed to Settled does", async () => {
+    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    const order: string[] = [];
+    commands.settle.mockImplementation(async () => {
+      order.push("settle");
+      return AsyncResult.success(undefined);
+    });
+    commands.unsnooze.mockImplementation(async () => {
+      order.push("unsnooze");
+      return AsyncResult.success(undefined);
+    });
+    const result = await useThreadActions().settleThread(target);
+    expect(result._tag).toBe("Success");
+    expect(order).toEqual(["settle", "unsnooze"]);
+    expect(commands.unsnooze).toHaveBeenCalledWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, reason: "user" },
+    });
+    // The notice's Undo puts the snooze back.
+    expect(useThreadUndoNotice.getState().notice).toMatchObject({ action: "Settled" });
+  });
+
+  it("leaves an awake thread's snooze alone, and wakes nothing when the settle failed", async () => {
+    await useThreadActions().settleThread(target);
+    // An expired snooze is not snoozed.
+    threadShell.snoozedUntil = "2000-01-01T00:00:00.000Z";
+    await useThreadActions().settleThread(target);
+    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    commands.settle.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    await useThreadActions().settleThread(target);
+    expect(commands.unsnooze).not.toHaveBeenCalled();
+  });
+
+  it("says when the wake after a settle failed, but not when it was interrupted", async () => {
+    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    commands.unsnooze.mockResolvedValueOnce(AsyncResult.failure(Cause.interrupt()));
+    expect((await useThreadActions().settleThread(target))._tag).toBe("Success");
+    await flushMicrotasks();
+    expect(add).not.toHaveBeenCalled();
+    commands.unsnooze.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    expect((await useThreadActions().settleThread(target))._tag).toBe("Success");
+    await flushMicrotasks();
+    expect(add.mock.calls.map(([toast]) => toast.title)).toEqual(["Failed to wake thread"]);
+  });
+
+  it("returns once the settle landed, without waiting for the wake, so navigation is not held", async () => {
+    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    let finishWake: (value: unknown) => void = () => {};
+    commands.unsnooze.mockReturnValueOnce(new Promise((resolve) => (finishWake = resolve)));
+    const settled = useThreadActions().settleThread(target);
+    const winner = await Promise.race([
+      settled.then(() => "settled"),
+      flushMicrotasks().then(() => "still waiting"),
+    ]);
+    expect(winner).toBe("settled");
+    expect(commands.unsnooze).toHaveBeenCalledOnce();
+    finishWake(AsyncResult.success(undefined));
+  });
+
+  it("wakes through unsnoozeThread's checks: a server without snooze gets no wake", async () => {
+    threadShell.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    supportsSnooze.value = false;
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().settleThread(target);
+    await flushMicrotasks();
+    expect(commands.settle).toHaveBeenCalledOnce();
+    expect(commands.unsnooze).not.toHaveBeenCalled();
+  });
+
   it("expires an older unpin Undo when the thread is settled", async () => {
     const actions = useThreadActions();
     await actions.unpinThread(target);
@@ -241,27 +321,146 @@ describe("settle and snooze Undo", () => {
       input: { threadId: target.threadId, reason: "user" },
     });
   });
+});
 
-  it("runs a drop's follow-up once the notice woke the thread", async () => {
-    const undoAlso = vi.fn();
-    await useThreadActions().snoozeThread(target, new Date(Date.now() + 60_000).toISOString(), {
-      undoAlso,
+describe("Snooze on a queued thread", () => {
+  const entry = {
+    environmentId: target.environmentId,
+    threadId: target.threadId,
+    draftId: null,
+    addedAt: 1,
+    ownerId: "device",
+    label: "Thread",
+  };
+  const other = { ...entry, threadId: ThreadId.make("other"), label: "Other" };
+  const queuedThreadIds = () =>
+    useThreadQueueStore.getState().entries.map((candidate) => candidate.threadId);
+  const inHour = () => new Date(Date.now() + 3_600_000).toISOString();
+
+  beforeEach(() => {
+    useThreadQueueStore.setState({
+      mode: "local",
+      readOnly: false,
+      entries: [entry, other],
+      inFlight: null,
     });
-    expect(undoAlso).not.toHaveBeenCalled();
-    await currentUndo()();
-    expect(commands.unsnooze).toHaveBeenCalledOnce();
-    expect(undoAlso).toHaveBeenCalledOnce();
+  });
+  afterEach(() => {
+    useThreadQueueStore.setState({ entries: [], inFlight: null });
   });
 
-  it("skips the follow-up when the wake fails", async () => {
-    vi.spyOn(toastManager, "add").mockReturnValue("toast");
-    commands.unsnooze.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("nope"))));
-    const undoAlso = vi.fn();
-    await useThreadActions().snoozeThread(target, new Date(Date.now() + 60_000).toISOString(), {
-      undoAlso,
+  it("leaves the Queue once the snooze landed, as a drop from the Queue to Snooze does", async () => {
+    let queuedAtSnooze: string[] = [];
+    commands.snooze.mockImplementation(async () => {
+      queuedAtSnooze = queuedThreadIds();
+      return AsyncResult.success(undefined);
+    });
+    await useThreadActions().snoozeThread(target, inHour());
+    expect(queuedAtSnooze).toEqual(["thread", "other"]);
+    expect(queuedThreadIds()).toEqual(["other"]);
+  });
+
+  it("stays queued when the snooze failed or was interrupted", async () => {
+    commands.snooze.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    await useThreadActions().snoozeThread(target, inHour());
+    commands.snooze.mockResolvedValueOnce(AsyncResult.failure(Cause.interrupt()));
+    await useThreadActions().snoozeThread(target, inHour());
+    expect(queuedThreadIds()).toEqual(["thread", "other"]);
+  });
+
+  it("Undo wakes it and puts it back at the end of the Queue, draft and label kept", async () => {
+    useThreadQueueStore.setState({ entries: [{ ...entry, draftId: "draft-1" as DraftId }, other] });
+    await useThreadActions().snoozeThread(target, inHour());
+    await currentUndo()();
+    expect(commands.unsnooze).toHaveBeenCalledOnce();
+    expect(queuedThreadIds()).toEqual(["other", "thread"]);
+    expect(useThreadQueueStore.getState().entries[1]).toMatchObject({
+      label: "Thread",
+      draftId: "draft-1",
+    });
+  });
+
+  it("Undo does not queue again a thread a peer's queue already sent", async () => {
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().snoozeThread(target, inHour());
+    // A peer's coordinator claimed and sent it before our removal landed.
+    useThreadQueueStore.setState({
+      inFlight: { entry, claimId: "claim", claimedAt: 4, sentAt: 5 } as never,
     });
     await currentUndo()();
-    expect(undoAlso).not.toHaveBeenCalled();
+    expect(commands.unsnooze).toHaveBeenCalledOnce();
+    expect(queuedThreadIds()).toEqual(["other"]);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("Undo puts nothing in the Queue when the wake failed, or when it was not queued", async () => {
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    commands.unsnooze.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    await useThreadActions().snoozeThread(target, inHour());
+    await currentUndo()();
+    expect(queuedThreadIds()).toEqual(["other"]);
+    await useThreadActions().snoozeThread(target, inHour());
+    await currentUndo()();
+    expect(queuedThreadIds()).toEqual(["other"]);
+  });
+
+  it("Undo still re-queues when the only claim is an earlier send that was already there", async () => {
+    // This thread was sent before and the user queued it again; that send has not landed yet.
+    useThreadQueueStore.setState({
+      inFlight: { entry, claimId: "earlier", claimedAt: 1, sentAt: 2 } as never,
+    });
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    // Two callers snooze both queued threads; one Undo restores both.
+    await Promise.all([
+      useThreadActions().snoozeThread(target, inHour()),
+      useThreadActions().snoozeThread({ ...target, threadId: other.threadId }, inHour()),
+    ]);
+    expect(queuedThreadIds()).toEqual([]);
+    await currentUndo()();
+    expect(commands.unsnooze).toHaveBeenCalledTimes(2);
+    expect(queuedThreadIds().toSorted()).toEqual(["other", "thread"]);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("Undo of a thread a peer is still sending says so rather than queueing it twice", async () => {
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().snoozeThread(target, inHour());
+    useThreadQueueStore.setState({
+      inFlight: { entry, claimId: "claim", claimedAt: 4, sentAt: null } as never,
+    });
+    await currentUndo()();
+    expect(queuedThreadIds()).toEqual(["other"]);
+    expect(add.mock.calls.map(([toast]) => toast.title)).toEqual([QUEUE_SENDING_MESSAGE]);
+  });
+
+  it("refuses while the Queue is read-only: it could not leave, and its send would wake it", async () => {
+    // A user's change to a read-only server queue is dropped.
+    useThreadQueueStore.setState({ mode: "server", readOnly: true });
+    const result = await useThreadActions().snoozeThread(target, inHour());
+    expect(result._tag).toBe("Failure");
+    expect(result._tag === "Failure" && (squashAtomCommandFailure(result) as Error).message).toBe(
+      SNOOZE_QUEUE_READ_ONLY_MESSAGE,
+    );
+    expect(commands.snooze).not.toHaveBeenCalled();
+    expect(useThreadUndoNotice.getState().notice?.action).not.toBe("Snoozed");
+    expect(queuedThreadIds()).toEqual(["thread", "other"]);
+    // A thread that is not queued snoozes as usual.
+    useThreadQueueStore.setState({ entries: [other] });
+    expect((await useThreadActions().snoozeThread(target, inHour()))._tag).toBe("Success");
+  });
+
+  it("an Undo whose re-queue throws still wakes it, and says the queue failed", async () => {
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().snoozeThread(target, inHour());
+    useThreadQueueStore.setState({
+      enqueue: () => {
+        throw new Error("queue store gone");
+      },
+    });
+    await currentUndo()();
+    expect(commands.unsnooze).toHaveBeenCalledOnce();
+    // The wake succeeded, so this is not "Failed to wake thread".
+    expect(add.mock.calls.map(([toast]) => toast.title)).toEqual(["Failed to queue thread"]);
   });
 });
 
@@ -314,6 +513,23 @@ describe("Move to section", () => {
     expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(false);
     appAtomRegistry.set(configAtom, sections([]));
     expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(false);
+  });
+
+  it("an interrupted step says nothing, like every other interrupted thread action", async () => {
+    appAtomRegistry.set(configAtom, sections(["focus"]));
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    const actions = useThreadActions();
+    commands.setSection.mockResolvedValueOnce(AsyncResult.failure(Cause.interrupt()));
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(false);
+    commands.unpin.mockResolvedValueOnce(AsyncResult.failure(Cause.interrupt()));
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(true);
+    expect(add).not.toHaveBeenCalled();
+    // The same steps failing for real are reported.
+    commands.unpin.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    await actions.moveThreadToSidebarSection(target, "focus", "Focus");
+    expect(add.mock.calls.map(([toast]) => toast.title)).toEqual([
+      "Moved to Focus, but couldn't unpin",
+    ]);
   });
 
   it("an unknown thread is not joined (refused, not unchanged)", async () => {

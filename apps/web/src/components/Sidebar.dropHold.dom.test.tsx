@@ -223,9 +223,10 @@ describe("the drop runs its commands inside the hold", () => {
 
   it("a settle runs the settle alone", async () => {
     const fakes = commands();
-    await runSidebarDropCommands({ kind: "settle", unsnooze: false }, fakes);
+    await runSidebarDropCommands({ kind: "settle" }, fakes);
     expect(fakes.settle).toHaveBeenCalledOnce();
-    for (const other of [fakes.unpin, fakes.reorderActive, fakes.reorderPinned]) {
+    // From Snoozed too: `settleThread` wakes it, so the drop sends no wake of its own.
+    for (const other of [fakes.unpin, fakes.unsnooze, fakes.reorderActive, fakes.reorderPinned]) {
       expect(other).not.toHaveBeenCalled();
     }
   });
@@ -339,24 +340,5 @@ describe("the drop runs its commands inside the hold", () => {
     for (const other of [fakes.clearSection, fakes.unpin, fakes.unsettle, fakes.unsnooze]) {
       expect(other).not.toHaveBeenCalled();
     }
-  });
-
-  it("a settle from Snoozed wakes after the settle, and only if it landed", async () => {
-    const calls: string[] = [];
-    const fakes = commands({
-      settle: vi.fn(async () => {
-        calls.push("settle");
-        return true;
-      }),
-      unsnooze: vi.fn(async () => {
-        calls.push("unsnooze");
-        return true;
-      }),
-    });
-    await runSidebarDropCommands({ kind: "settle", unsnooze: true }, fakes);
-    expect(calls).toEqual(["settle", "unsnooze"]);
-    const refused = commands({ settle: vi.fn(async () => false) });
-    await runSidebarDropCommands({ kind: "settle", unsnooze: true }, refused);
-    expect(refused.unsnooze).not.toHaveBeenCalled();
   });
 });

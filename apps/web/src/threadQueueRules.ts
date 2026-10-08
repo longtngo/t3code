@@ -110,13 +110,30 @@ function withEntries(
     : { ...state, entries };
 }
 
+/** The queue's claim (from this device or a peer) holds this thread: being sent, or sent and not
+    yet seen landing. */
+export function isClaimedThread(state: Pick<ThreadQueueData, "inFlight">, key: string): boolean {
+  const claim = state.inFlight;
+  return claim !== null && threadQueueEntryKey(claim.entry) === key;
+}
+
 /**
  * The claim holding this thread has not been sent yet, so its draft is still the queue's: adding
  * the thread again would queue the same draft twice. Once sent, the composer holds a new message.
  */
 export function isSendingThread(state: Pick<ThreadQueueData, "inFlight">, key: string): boolean {
-  const claim = state.inFlight;
-  return claim !== null && claim.sentAt === null && threadQueueEntryKey(claim.entry) === key;
+  return isClaimedThread(state, key) && state.inFlight!.sentAt === null;
+}
+
+/** "Add to queue" on a snoozed thread is "Wake & queue": queue it, then wake it only once the
+    Queue took it, or its send would find it snoozed. A refused add (already said why) wakes
+    nothing. */
+export async function queueAndWake(input: {
+  readonly snoozed: boolean;
+  readonly enqueue: () => boolean;
+  readonly wake: () => Promise<unknown>;
+}): Promise<void> {
+  if (input.enqueue() && input.snoozed) await input.wake();
 }
 
 const sameFailure = (a: ThreadQueueFailure | null, b: ThreadQueueFailure | null) =>

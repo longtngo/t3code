@@ -9,7 +9,11 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  effectiveSnoozed,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
   AuthOrchestrationOperateScope,
@@ -66,6 +70,11 @@ import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import {
+  SNOOZE_QUEUE_READ_ONLY_MESSAGE,
+  leaveQueueForSnooze,
+  queueRefusesSnooze,
+} from "../threadQueueAdd";
 import { useClientSettings } from "./useSettings";
 import * as ThreadUndo from "./threadUndo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
@@ -106,6 +115,18 @@ export class ThreadSnoozeUnsupportedError extends Schema.TaggedError<ThreadSnooz
 ) {
   override get message(): string {
     return "This environment's server does not support snoozing yet. Update the server to use Snooze.";
+  }
+}
+
+export class ThreadSnoozeQueueReadOnlyError extends Schema.TaggedError<ThreadSnoozeQueueReadOnlyError>()(
+  "ThreadSnoozeQueueReadOnlyError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return SNOOZE_QUEUE_READ_ONLY_MESSAGE;
   }
 }
 
@@ -788,6 +809,27 @@ export function useThreadActions() {
     [pinThread, unpinThreadMutation],
   );
 
+  const unsnoozeThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      if (!readEnvironmentSupportsSnooze(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadSnoozeUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      ThreadUndo.invalidate("snooze", scopedThreadKey(target));
+      return unsnoozeThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, reason: "user" },
+      });
+    },
+    [unsnoozeThreadMutation],
+  );
+
   const settleThread = useCallback(
     async (target: ScopedThreadRef) => {
       // Version skew: never send the command to a server that predates it —
@@ -803,14 +845,15 @@ export function useThreadActions() {
         );
       }
       const resolved = resolveThreadTarget(target);
-      const wokeAt = resolved
-        ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
-        : null;
-      // Settling also drops the pin and the snooze server-side, so Undo
-      // has to put those back as well.
+      const now = new Date().toISOString();
+      const wokeAt = resolved ? threadWokeAt(resolved.thread, { now }) : null;
+      // The server's settle drops the pin but keeps the snooze, so a snoozed thread would stay
+      // on the Snoozed shelf: it is woken below once the settle landed, as a drop from Snoozed
+      // to Settled does. Undo puts both back.
       const pinOrderKey = resolved?.thread.pinnedAt != null ? resolved.thread.pinOrderKey : null;
       const wasPinned = resolved?.thread.pinnedAt != null;
       const snoozedUntil = resolved?.thread.snoozedUntil ?? null;
+      const wakeAfterSettle = resolved !== null && effectiveSnoozed(resolved.thread, { now });
       // An older unpin/snooze Undo would re-pin or re-snooze, and the server
       // treats either as a promotion that un-settles; settling supersedes them.
       ThreadUndo.invalidate("pin", scopedThreadKey(target));
@@ -850,6 +893,21 @@ export function useThreadActions() {
         },
         failureTitle: "Failed to undo settle",
       });
+      // Not awaited: the caller navigates on the settle alone, as the drop always did. The wake is
+      // sent before Undo can be clicked, so the server still applies it first.
+      if (wakeAfterSettle) {
+        void unsnoozeThread(target).then((woke) => {
+          if (woke._tag === "Success" || isAtomCommandInterrupted(woke)) return;
+          const error = squashAtomCommandFailure(woke);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to wake thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        });
+      }
       return result;
     },
     [
@@ -859,6 +917,7 @@ export function useThreadActions() {
       settleThreadMutation,
       snoozeThreadMutation,
       unsettleThread,
+      unsnoozeThread,
     ],
   );
 
@@ -948,27 +1007,6 @@ export function useThreadActions() {
     [setThreadSidebarSectionMutation],
   );
 
-  const unsnoozeThread = useCallback(
-    async (target: ScopedThreadRef) => {
-      if (!readEnvironmentSupportsSnooze(target.environmentId)) {
-        return AsyncResult.failure(
-          Cause.fail(
-            new ThreadSnoozeUnsupportedError({
-              environmentId: target.environmentId,
-              threadId: target.threadId,
-            }),
-          ),
-        );
-      }
-      ThreadUndo.invalidate("snooze", scopedThreadKey(target));
-      return unsnoozeThreadMutation({
-        environmentId: target.environmentId,
-        input: { threadId: target.threadId, reason: "user" },
-      });
-    },
-    [unsnoozeThreadMutation],
-  );
-
   /**
    * Move to section / Move to Active: membership first, then clear what outranks it, and toast
    * the step that failed. `sectionName` is null for Active. The unpin offers no Undo: re-pinning
@@ -1031,11 +1069,7 @@ export function useThreadActions() {
   );
 
   const snoozeThread = useCallback(
-    async (
-      target: ScopedThreadRef,
-      snoozedUntil: string,
-      options?: { readonly undoAlso?: (() => void) | undefined },
-    ) => {
+    async (target: ScopedThreadRef, snoozedUntil: string) => {
       // Version skew: never send the command to a server that predates it.
       if (!readEnvironmentSupportsSnooze(target.environmentId)) {
         return AsyncResult.failure(
@@ -1061,6 +1095,18 @@ export function useThreadActions() {
           ),
         );
       }
+      // A queued thread leaves the Queue when it snoozes; a read-only Queue cannot let it go,
+      // and its send would wake it. The drag never offers this drop.
+      if (queueRefusesSnooze(scopedThreadKey(target))) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadSnoozeQueueReadOnlyError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
       const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
       const result = await snoozeThreadMutation({
         environmentId: target.environmentId,
@@ -1070,14 +1116,15 @@ export function useThreadActions() {
         action.finish();
         return result;
       }
+      // Every snooze, menu or drop, takes the thread out of the Queue; Undo puts it back.
+      const requeue = leaveQueueForSnooze(scopedThreadKey(target));
       // Snooze hides the row, so keep its confirmation in the sidebar.
       showThreadUndoNotice({
         action: "Snoozed",
         claim: action,
-        // A drop from the Queue also puts the thread back in the Queue, once it is awake.
         undo: async () => {
           const woke = await unsnoozeThread(target);
-          if (woke._tag === "Success") options?.undoAlso?.();
+          if (woke._tag === "Success") requeue?.();
           return woke;
         },
         failureTitle: "Failed to wake thread",

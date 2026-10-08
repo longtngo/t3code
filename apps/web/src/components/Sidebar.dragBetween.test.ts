@@ -552,16 +552,10 @@ describe("custom sections take drops", () => {
     expect(sidebarDropUnqueue(false, joins)).toBeNull();
   });
 
-  it("a settle from Snoozed plans the wake the server's settle does not do", () => {
+  it("a settle from Snoozed plans the settle alone: settleThread wakes it", () => {
     const settled = { section: "settled", pinnedOrder: ["p1"], activeOrder: ["a1", "a2"] } as const;
-    expect(plan(at("z1", "snoozed"), source(), settled)).toEqual({
-      kind: "settle",
-      unsnooze: true,
-    });
-    expect(plan(at("a1", "active"), source(), settled)).toEqual({
-      kind: "settle",
-      unsnooze: false,
-    });
+    expect(plan(at("z1", "snoozed"), source(), settled)).toEqual({ kind: "settle" });
+    expect(plan(at("a1", "active"), source(), settled)).toEqual({ kind: "settle" });
     expect(plan(at("s1", "settled"), source({ settledOverride: "settled" }), settled)).toEqual({
       kind: "none",
     });
@@ -1319,14 +1313,12 @@ describe("a drop on the Snoozed shelf", () => {
         liveSection: input.liveSection ?? "active",
         // `checkThreadOperations`: false after it said "Thread action unavailable".
         checkOperate: () => input.operable ?? true,
-        snooze: async (snoozedUntil, undoAlso) => {
-          calls.push(`snooze ${snoozedUntil}${undoAlso === undefined ? "" : " +requeue on undo"}`);
+        snooze: async (snoozedUntil) => {
+          calls.push(`snooze ${snoozedUntil}`);
           return input.outcome ?? { status: "success" };
         },
         unqueue: () => calls.push("unqueue"),
-        requeue: () => calls.push("requeue"),
         reportFailure: (error) => calls.push(`failed: ${String(error)}`),
-        reportRequeueFailure: (error) => calls.push(`requeue failed: ${String(error)}`),
       });
     return { calls, run };
   }
@@ -1340,12 +1332,15 @@ describe("a drop on the Snoozed shelf", () => {
     expect(drop.calls).toEqual([`snooze ${RELEASE_PLUS_HOUR}`]);
   });
 
-  it("a Queue row leaves the Queue only after the snooze succeeded, and Undo re-queues it", async () => {
-    const drop = snoozeDrop({ fromQueue: true });
-    await drop.run();
-    expect(drop.calls).toHaveLength(2);
-    expect(drop.calls[0]).toMatch(/^snooze .* \+requeue on undo$/);
-    expect(drop.calls[1]).toBe("unqueue");
+  it("a Queue row or a main-list row only snoozes: snoozeThread unqueues, as for the menu", async () => {
+    for (const fromQueue of [true, false]) {
+      const drop = snoozeDrop({ fromQueue });
+      await drop.run();
+      expect([fromQueue, drop.calls.map((call) => call.split(" ")[0])]).toEqual([
+        fromQueue,
+        ["snooze"],
+      ]);
+    }
   });
 
   it.each([
@@ -1373,38 +1368,6 @@ describe("a drop on the Snoozed shelf", () => {
       await drop.run();
       expect([fromQueue, drop.calls]).toEqual([fromQueue, []]);
     }
-  });
-
-  it("a main-list row snoozes with no Queue follow-up", async () => {
-    const drop = snoozeDrop({ fromQueue: false });
-    await drop.run();
-    expect(drop.calls).toHaveLength(1);
-    expect(drop.calls[0]).not.toContain("requeue");
-  });
-
-  it("an Undo whose re-queue throws still settles, and reports it as a re-queue failure", async () => {
-    let undoAlso: (() => void) | undefined;
-    const failures: unknown[] = [];
-    const snoozeFailures: unknown[] = [];
-    await runSidebarSnoozeDrop({
-      drag: { fromQueue: true },
-      liveSection: "active",
-      checkOperate: () => true,
-      snooze: async (_snoozedUntil, also) => {
-        undoAlso = also;
-        return { status: "success" };
-      },
-      unqueue: () => {},
-      requeue: () => {
-        throw new Error("queue store gone");
-      },
-      // The wake succeeded, so this is not "Failed to snooze thread".
-      reportFailure: (error) => snoozeFailures.push(error),
-      reportRequeueFailure: (error) => failures.push(error),
-    });
-    expect(() => undoAlso?.()).not.toThrow();
-    expect(failures).toEqual([new Error("queue store gone")]);
-    expect(snoozeFailures).toEqual([]);
   });
 });
 
@@ -1469,7 +1432,7 @@ describe("the start of a place drop", () => {
     orderKey: "a0",
     extraAssignments: [],
   };
-  const settle: SidebarThreadDropPlan = { kind: "settle", unsnooze: false };
+  const settle: SidebarThreadDropPlan = { kind: "settle" };
   const unpark: SidebarThreadDropPlan = {
     kind: "unpark",
     unpin: true,

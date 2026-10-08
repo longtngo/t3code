@@ -4792,7 +4792,7 @@ export default function Sidebar() {
     async (
       threadRef: ScopedThreadRef,
       preset: Pick<SnoozePreset, "snoozedUntil">,
-      opts: { coSnoozingKeys?: ReadonlySet<string>; undoAlso?: (() => void) | undefined } = {},
+      opts: { coSnoozingKeys?: ReadonlySet<string> } = {},
     ) => {
       const threadKey = scopedThreadKey(threadRef);
       if (snoozingThreadKeysRef.current.has(threadKey)) {
@@ -4803,9 +4803,7 @@ export default function Sidebar() {
         // Snoozing the open thread moves you forward, same as settle —
         // both park the thread you're done with for now.
         const navigateAfterSnooze = planForwardNavigation(threadKey, opts.coSnoozingKeys);
-        const result = await snoozeThread(threadRef, preset.snoozedUntil, {
-          undoAlso: opts.undoAlso,
-        });
+        const result = await snoozeThread(threadRef, preset.snoozedUntil);
         if (result._tag === "Failure") {
           // Never navigate away from a thread that did not snooze.
           return isAtomCommandInterrupted(result)
@@ -4933,13 +4931,9 @@ export default function Sidebar() {
           drag,
           liveSection,
           checkOperate: () => checkThreadOperations([activeThread]),
-          snooze: (snoozedUntil, undoAlso) =>
-            performSnooze(threadRef, { snoozedUntil }, { undoAlso }),
+          snooze: (snoozedUntil) => performSnooze(threadRef, { snoozedUntil }),
           unqueue: () => useThreadQueueStore.getState().remove(activeKey),
-          // Undo of a Queue -> Snooze appends it to the Queue again; a full Queue says so.
-          requeue: () => void addToQueueOrSayWhy(queueEntry),
           reportFailure: errorToast("Failed to snooze thread"),
-          reportRequeueFailure: errorToast("Failed to queue thread"),
         });
         return;
       }
@@ -5635,7 +5629,9 @@ export default function Sidebar() {
             return;
           case "queue":
           case "unqueue":
-            runThreadQueueMenuAction(clicked.value, thread);
+            await runThreadQueueMenuAction(clicked.value, thread, async () =>
+              attemptUnsnooze(threadRef),
+            );
             return;
           case "unpin":
             attemptUnpin(threadRef);

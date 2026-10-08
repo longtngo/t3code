@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   sections: null as ReadonlyArray<{ id: string; name: string; createdAt: string }> | null,
   archivedAt: null as string | null,
   sectionId: null as string | null,
+  snoozedUntil: null as string | null,
   completed: deferred<void>(),
   toasts: [] as string[],
   legacySidebar: false,
@@ -80,6 +81,7 @@ vi.mock("../state/entities", () => ({
     latestRun: null,
     archivedAt: state.archivedAt,
     sidebarSectionId: state.sectionId,
+    snoozedUntil: state.snoozedUntil,
   }),
   useProjects: () => [{ id: "project", environmentId: "secondary" }],
 }));
@@ -201,6 +203,7 @@ beforeEach(() => {
   state.sections = null;
   state.archivedAt = null;
   state.sectionId = null;
+  state.snoozedUntil = null;
   state.completed = deferred<void>();
   state.toasts = [];
   state.legacySidebar = false;
@@ -305,6 +308,15 @@ describe("thread menu queue", () => {
       `enqueue ${JSON.stringify({ environmentId: "secondary", threadId: "thread", draftId: null, label: "Thread" })}`,
     ]);
     expect(state.toasts).toEqual([]);
+  });
+
+  it("on a snoozed thread queues it, then wakes it, like a drop from Snoozed on the Queue", async () => {
+    state.snoozedUntil = "2999-01-01T00:00:00.000Z";
+    await choose("queue");
+    expect(state.effects).toEqual([
+      `enqueue ${JSON.stringify({ environmentId: "secondary", threadId: "thread", draftId: null, label: "Thread" })}`,
+      "unsnoozeThread",
+    ]);
   });
 
   it("offers Remove from queue for a queued thread, and removes it", async () => {
