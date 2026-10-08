@@ -136,6 +136,7 @@ describe("buildSidebarListItems (today's layout)", () => {
       "sidebar-marker-pinned-divider",
       "sidebar-marker-active-placeholder",
       "a:1@active",
+      "sidebar-marker-snoozed-placeholder",
       "sidebar-marker-settled-header",
       "sidebar-marker-settled-placeholder",
     ]);
@@ -153,6 +154,7 @@ describe("custom sections in the sortable list", () => {
     kind: "marker",
     marker: "custom-header",
     sectionId,
+    collapsed: false,
   });
   const focus = customSidebarSection("focus");
   // Pinned p | Active a1 a2 | Focus c1 c2 | Settled s1
@@ -180,8 +182,8 @@ describe("custom sections in the sortable list", () => {
       snoozed: { total: 0, visible: [] },
       settled: { total: 0, visible: [] },
       custom: [
-        { id: "focus", visible: ["c:1"] },
-        { id: "empty", visible: [] },
+        { id: "focus", visible: ["c:1"], collapsed: false },
+        { id: "empty", visible: [], collapsed: false },
       ],
     });
     expect(built.map(sidebarListItemId)).toEqual([
@@ -191,15 +193,10 @@ describe("custom sections in the sortable list", () => {
       "sidebar-marker-custom-header-focus",
       "c:1",
       "sidebar-marker-custom-header-empty",
+      "sidebar-marker-snoozed-placeholder",
       "sidebar-marker-settled-header",
       "sidebar-marker-settled-placeholder",
     ]);
-  });
-
-  it("never resolves a drop into a custom section", () => {
-    expect(resolveSidebarDropTarget(items, "a:1", "c:1")).toBeNull();
-    expect(resolveSidebarDropTarget(items, "a:2", headerId)).toBeNull(); // from above: lands inside
-    expect(resolveSidebarDropTarget(items, "s:1", "c:2")).toBeNull();
   });
 
   it("a drag out of a custom section still resolves into Active, Pinned and Settled", () => {
@@ -237,8 +234,8 @@ describe("custom sections in the sortable list", () => {
     expect(resolveSidebarDropTarget(queued, "q:1", "a:2")?.section).toBe("active");
   });
 
-  it("custom ranks as Active for the drop badge", () => {
-    expect(resolveSidebarDropVerb(focus, "active")).toBeNull();
+  it("a member out to Active is a move; Pin and Settle keep their verbs", () => {
+    expect(resolveSidebarDropVerb(focus, "active")).toBe("move");
     expect(resolveSidebarDropVerb(focus, "active", true)).toBe("unqueue");
     expect(resolveSidebarDropVerb(focus, "pinned")).toBe("pin");
     expect(resolveSidebarDropVerb(focus, "settled")).toBe("settle");
@@ -387,6 +384,7 @@ describe("a drop into Active clears membership", () => {
       activeReorderableKeys: new Set(["a:1"]),
       activeTimeOrdered: false,
       customSectionIds: defined,
+      customOrders: new Map(),
     };
     const queued = { activeKey: "q:1", fromQueue: true } as const;
     const cases = [
@@ -398,6 +396,7 @@ describe("a drop into Active clears membership", () => {
       const source = {
         ...makeThreadFixture({ sidebarSectionId: "focus", ...lifecycle }),
         supportsSettlement: true,
+        supportsSections: true,
       };
       const plan = planSidebarThreadDrop(
         sidebarDropPlanInput(board, { ...queued, activeSection }, source, target),
@@ -438,6 +437,7 @@ describe("the pending-drop hold", () => {
       now: NOW,
       customSectionIds: defined,
       destinationKeys: ["a:1", "q:1"],
+      queued: false,
       keyByThread: new Map([
         ["a:1", "m"],
         ["q:1", null],
@@ -461,6 +461,7 @@ describe("the pending-drop hold", () => {
         now: NOW,
         customSectionIds: defined,
         destinationKeys: ["a:1", "q:1"],
+        queued: false,
         keyByThread: new Map([
           ["a:1", "m"],
           ["q:1", orderKey],
@@ -502,6 +503,7 @@ describe("the pending-drop hold", () => {
         now: NOW,
         customSectionIds: defined,
         destinationKeys: ["a:1", "q:1"],
+        queued: false,
         keyByThread: new Map([
           ["a:1", "m"],
           ["q:1", "t"],

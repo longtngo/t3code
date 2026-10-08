@@ -1518,9 +1518,18 @@ describe("planSidebarThreadDrop", () => {
 
   it("settles anything dropped on Settled except a settled thread", () => {
     const target = { section: "settled", pinnedOrder: ["p1", "p2", "p3"] } as const;
-    expect(plan({ activeKey: "a1", activeSection: "active", target })).toEqual({ kind: "settle" });
-    expect(plan({ activeKey: "p1", activeSection: "pinned", target })).toEqual({ kind: "settle" });
-    expect(plan({ activeKey: "z1", activeSection: "snoozed", target })).toEqual({ kind: "settle" });
+    expect(plan({ activeKey: "a1", activeSection: "active", target })).toEqual({
+      kind: "settle",
+      unsnooze: false,
+    });
+    expect(plan({ activeKey: "p1", activeSection: "pinned", target })).toEqual({
+      kind: "settle",
+      unsnooze: false,
+    });
+    expect(plan({ activeKey: "z1", activeSection: "snoozed", target })).toEqual({
+      kind: "settle",
+      unsnooze: true,
+    });
     expect(plan({ activeKey: "s1", activeSection: "settled", target })).toEqual({ kind: "none" });
   });
 
@@ -2833,6 +2842,7 @@ describe("dragging a Queue row", () => {
       items: sidebarDragListItems(items, drag),
       queuedKeys,
       queueDropId: QUEUE,
+      snoozeAllowed: true,
     });
   const candidate = (
     drag: SidebarDragOrigin,
@@ -2900,6 +2910,7 @@ describe("dragging a Queue row", () => {
         queuedKeys,
         queueDropId: QUEUE,
         queueWritable: false,
+        snoozeAllowed: true,
       });
     expect(readOnly(origin({}), "q2")).toEqual({ kind: "none" }); // reorder
     expect(readOnly(origin({}), "s1")).toEqual({ kind: "none" }); // drag out: no unqueue, no settle

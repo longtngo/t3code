@@ -2085,8 +2085,9 @@ function OpenCommandPaletteDialog(props: {
       entries: sidebarSectionMoveEntries(
         sectionMove.sections,
         sectionMove.currentSectionId,
-        (section) =>
-          moveThreadToSidebarSection(threadRef, section?.id ?? null, section?.name ?? null),
+        async (section) => {
+          await moveThreadToSidebarSection(threadRef, section?.id ?? null, section?.name ?? null);
+        },
       ),
     });
     if (picker !== null) actionItems.push(picker);

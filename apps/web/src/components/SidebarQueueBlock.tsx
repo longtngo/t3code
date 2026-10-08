@@ -1,10 +1,14 @@
-import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDownIcon, PauseIcon, PlayIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
+import {
+  animateSidebarLayoutChanges,
+  sidebarQueueRowDragDisabled,
+  type SidebarOptimisticDrop,
+} from "./Sidebar.logic";
 import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
 import { queueDeviceId, useThreadQueueStore } from "../threadQueueStore";
 import { QueueSlotsControl, useQueueSlots } from "./QueueSlotsControl";
@@ -28,14 +32,22 @@ export type QueueRowSortableBag = Pick<
 
 function SortableQueueRow(props: {
   id: string;
+  /** The header's preview shift, added to the row's own sortable transform. */
+  shiftY: number;
+  heldDrop: SidebarOptimisticDrop | null;
   children: (bag: QueueRowSortableBag) => ReactNode;
 }) {
-  const disabled = useThreadQueueStore((state) => state.readOnly);
+  const readOnly = useThreadQueueStore((state) => state.readOnly);
+  const disabled = sidebarQueueRowDragDisabled({ readOnly, drop: props.heldDrop });
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
     disabled,
   });
-  return props.children({ listeners, setNodeRef, transform, transition, isDragging });
+  const shifted =
+    props.shiftY === 0
+      ? transform
+      : { x: 0, scaleX: 1, scaleY: 1, ...transform, y: (transform?.y ?? 0) + props.shiftY };
+  return props.children({ listeners, setNodeRef, transform: shifted, transition, isDragging });
 }
 
 /**
@@ -53,6 +65,8 @@ export function SidebarQueueBlock(props: {
   dragging: boolean;
   /** Show the header alone: the drag preview needs the room the rows occupy. */
   collapse: boolean;
+  /** The sidebar drop still waiting to land, or null. */
+  heldDrop: SidebarOptimisticDrop | null;
   /** `note` is a line the row shows under its title, or null. */
   renderEntry: (
     entry: ThreadQueueEntry,
@@ -66,10 +80,20 @@ export function SidebarQueueBlock(props: {
   const readOnly = useThreadQueueStore((state) => state.readOnly);
   const queueSlots = useQueueSlots();
   const { expanded, onToggleExpanded: toggleExpanded } = props;
-  const { setNodeRef: setDropRef, isOver } = useDroppable({
+  // A drop zone listed after the rows in the main sortable context (`sidebarSortableIds`), never
+  // lifted. The drag preview moves it with the content above it, and the rows below follow it, or
+  // previewed rows cover its zone.
+  const {
+    setNodeRef: setDropRef,
+    isOver,
+    transform,
+    transition,
+  } = useSortable({
     id: QUEUE_DROP_ID,
-    disabled: readOnly,
+    disabled: { draggable: true, droppable: readOnly },
+    animateLayoutChanges: animateSidebarLayoutChanges,
   });
+  const shiftY = transform?.y ?? 0;
   const keys = props.entries.map(threadQueueEntryKey);
 
   if (props.entries.length === 0 && !props.dragging) return null;
@@ -104,8 +128,8 @@ export function SidebarQueueBlock(props: {
           // opens space where the Queue sits, and a zone that moves with it is a target the
           // pointer chases. It shares the free space with the shelves' own auto margin.
           // Above the sorting preview AND opaque. The preview moves rows by TRANSFORM, which cannot
-          // push this header aside: it is not a sortable item, just a plain li in normal flow. So
-          // whenever the list already scrolls at drag start the collapse below is skipped, the header
+          // push this header aside: it only takes the shift of the content above it, never a row's
+          // room. So whenever the list already scrolls at drag start the collapse below is skipped, the header
           // stays inline under the last Active row, and a shifted row lands on top of it - covering
           // 810 of 810 sampled header pixels and 100% of the Queue toggle.
           //
@@ -121,6 +145,7 @@ export function SidebarQueueBlock(props: {
           isOver && "border-primary/40 bg-primary/5",
         )}
         data-testid="sidebar-queue-header"
+        style={{ transform: CSS.Translate.toString(transform), transition }}
       >
         <div className="flex h-full w-full items-center gap-2 px-2 text-xs font-medium text-sidebar-muted-foreground/60">
           <button
@@ -176,7 +201,7 @@ export function SidebarQueueBlock(props: {
           {visibleEntries.map((entry) => {
             const key = threadQueueEntryKey(entry);
             return (
-              <SortableQueueRow key={key} id={key}>
+              <SortableQueueRow key={key} id={key} shiftY={shiftY} heldDrop={props.heldDrop}>
                 {(bag) => props.renderEntry(entry, bag, queuedOnAnotherDevice(entry))}
               </SortableQueueRow>
             );

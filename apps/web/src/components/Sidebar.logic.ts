@@ -1,3 +1,4 @@
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -14,6 +15,7 @@ import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
+  resolveSnoozePresets,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import { threadQueueEntryKey } from "../threadQueueRules";
 import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
@@ -127,11 +130,11 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 // Rows and section markers share one sortable list. The separators resolve
 // the lifecycle action; Sidebar.drag previews the resulting layout. Pinned
 // and active threads keep the dragged position; settled threads use time
-// order. Snoozed rows can leave the shelf, but dropping into it is not
-// supported because snoozing requires a wake time. The Working shelf (beta)
+// order. A drop on the Snoozed shelf snoozes for an hour: the shelf is a drop
+// zone like the Queue header, not a list target. The Working shelf (beta)
 // follows live status, so it is neither a drag source nor a destination.
 
-/** A user-defined section, by its settings id. Never a drag destination until sections accept drops. */
+/** A user-defined section, by its settings id. */
 export type CustomSidebarSection = `custom:${string}`;
 export type SidebarSection =
   | "pinned"
@@ -147,6 +150,11 @@ export function customSidebarSection(id: string): CustomSidebarSection {
 
 export function isCustomSidebarSection(section: SidebarSection): section is CustomSidebarSection {
   return section.startsWith("custom:");
+}
+
+/** The settings id of a custom section (`customSidebarSection`'s inverse). */
+export function customSidebarSectionId(section: CustomSidebarSection): string {
+  return section.slice("custom:".length);
 }
 
 type SidebarRestingSection = "snoozed" | "settled" | "pinned" | "active" | CustomSidebarSection;
@@ -217,6 +225,9 @@ export type SidebarListMarker =
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"
+  /** The empty Snoozed shelf: zero height at rest; while a row that may be snoozed is lifted, its
+      36px hint is a drop zone (the sortable node is the hint box above the li; see Sidebar.tsx). */
+  | "snoozed-placeholder"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
@@ -226,7 +237,13 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker }
-  | { readonly kind: "marker"; readonly marker: "custom-header"; readonly sectionId: string };
+  | {
+      readonly kind: "marker";
+      readonly marker: "custom-header";
+      readonly sectionId: string;
+      /** Collapsed: its header takes a drop into the section, even while the open row shows. */
+      readonly collapsed: boolean;
+    };
 
 export function customSectionHeaderId(sectionId: string): string {
   return `${SIDEBAR_MARKER_PREFIX}custom-header-${sectionId}`;
@@ -249,7 +266,11 @@ export function buildSidebarListItems(input: {
   readonly snoozed: SidebarShelfRows;
   readonly settled: SidebarShelfRows;
   /** Each defined section, in order, with its rendered rows (only the open thread while collapsed). */
-  readonly custom: ReadonlyArray<{ readonly id: string; readonly visible: readonly string[] }>;
+  readonly custom: ReadonlyArray<{
+    readonly id: string;
+    readonly visible: readonly string[];
+    readonly collapsed: boolean;
+  }>;
 }): SidebarListItem[] {
   const rows = (keys: readonly string[], section: SidebarSection): SidebarListItem[] =>
     keys.map((key) => ({ kind: "thread", key, section }));
@@ -270,7 +291,12 @@ export function buildSidebarListItems(input: {
   items.push({ kind: "marker", marker: "active-placeholder" });
   items.push(...rows(input.active, "active"));
   for (const section of input.custom) {
-    items.push({ kind: "marker", marker: "custom-header", sectionId: section.id });
+    items.push({
+      kind: "marker",
+      marker: "custom-header",
+      sectionId: section.id,
+      collapsed: section.collapsed,
+    });
     items.push(...rows(section.visible, customSidebarSection(section.id)));
   }
   if (input.working.total > 0) {
@@ -280,11 +306,31 @@ export function buildSidebarListItems(input: {
   if (input.snoozed.total > 0) {
     items.push({ kind: "marker", marker: "snoozed-header" });
     items.push(...rows(input.snoozed.visible, "snoozed"));
+  } else {
+    items.push({ kind: "marker", marker: "snoozed-placeholder" });
   }
   items.push({ kind: "marker", marker: "settled-header" });
   items.push({ kind: "marker", marker: "settled-placeholder" });
   items.push(...rows(input.settled.visible, "settled"));
   return items;
+}
+
+/** The Snoozed shelf as a drop zone, by sortable id: its header, the empty-shelf placeholder, and
+    every shelf row but the lifted one. They are pointer zones, hit where painted (like the Queue
+    header), never list targets: a snooze has no position. */
+export function sidebarSnoozeZoneIds(
+  items: readonly SidebarListItem[],
+  activeKey: string,
+): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (item.kind === "thread") {
+      if (item.section === "snoozed" && item.key !== activeKey) ids.push(item.key);
+    } else if (item.marker === "snoozed-header" || item.marker === "snoozed-placeholder") {
+      ids.push(sidebarMarkerId(item.marker));
+    }
+  }
+  return ids;
 }
 
 /** The section a slot belongs to, read off the markers around it: from
@@ -306,11 +352,13 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
 }
 
 /** Resolve the destination section and manual order from an arrayMove across
- * the separators. The working and snoozed shelves are never destinations. */
+ * the separators. The working and snoozed shelves are never list destinations. */
 export type SidebarDropTarget = {
-  readonly section: "pinned" | "active" | "settled";
+  readonly section: "pinned" | "active" | "settled" | CustomSidebarSection;
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
+  /** A custom section only: the visible member the row lands right after; null at its top. */
+  readonly customAfter?: string | null;
 };
 
 /** A queued thread is not a list row. Drops resolve as if it sat where the
@@ -327,10 +375,62 @@ export function withQueuedRow(
       item.kind === "marker" &&
       (item.marker === "custom-header" ||
         item.marker === "snoozed-header" ||
+        item.marker === "snoozed-placeholder" ||
         item.marker === "settled-header"),
   );
   const slot = shelf === -1 ? items.length : shelf;
   return [...items.slice(0, slot), { kind: "thread", key, section }, ...items.slice(slot)];
+}
+
+/** Where the Queue block renders during a drag, and whether a main-list drag collapses it to its
+    header. An empty Queue shows only its drop zone; inline above the custom sections that zone
+    would push them down at pickup, so it docks with the shelves instead. Docked above the
+    shelves in a scrolling list, it would still push down the rows above a pointer that lifted a
+    shelf row; then it goes after every row (`belowShelves`), reached by autoscroll. */
+export function sidebarQueuePlacement(input: {
+  readonly sectionCount: number;
+  readonly entryCount: number;
+  readonly dropShown: boolean;
+  readonly listScrolls: boolean;
+  /** The lifted row rests in Snoozed or Settled. */
+  readonly liftedFromShelf: boolean;
+}): {
+  readonly docksWithShelves: boolean;
+  readonly belowShelves: boolean;
+  readonly collapse: boolean;
+} {
+  const docksWithShelves = input.sectionCount === 0 || input.entryCount === 0;
+  return {
+    docksWithShelves,
+    belowShelves:
+      input.sectionCount > 0 &&
+      input.entryCount === 0 &&
+      input.listScrolls &&
+      input.liftedFromShelf,
+    collapse: input.dropShown && !input.listScrolls && docksWithShelves,
+  };
+}
+
+const NO_QUEUE_ENTRIES: readonly never[] = [];
+/** The entries the Queue block renders. Below the shelves it was empty at pickup and stays its
+    header alone for the drag: an entry that arrives mid-drag appears at the drop. */
+export function sidebarQueueBlockEntries<E>(
+  placement: { readonly belowShelves: boolean },
+  shown: readonly E[],
+): readonly E[] {
+  return placement.belowShelves ? NO_QUEUE_ENTRIES : shown;
+}
+
+/** The Queue entry count `sidebarQueuePlacement` reads during a drag. Counted from the entries the
+    Queue block shows (`sidebarShownQueueEntries`), not the store's: a join held on its way into a
+    section is still in the store but renders in the section. Frozen at pickup for the
+    whole drag (`pickupCount`), so the block neither appears, moves nor disappears mid-drag when
+    the Queue sends or fills: an emptied Queue keeps its header until the drop. */
+export function sidebarDragQueueEntryCount(
+  pickupCount: number | undefined,
+  shownEntries: readonly unknown[],
+): number {
+  return pickupCount ?? shownEntries.length;
 }
 
 /** A drag in progress, as the drop rules need it. */
@@ -341,6 +441,48 @@ export interface SidebarDragOrigin {
   readonly fromQueue: boolean;
   /** A queued row with no thread here (a draft, or another device's entry): it can only reorder inside the Queue. */
   readonly queuedDraft: boolean;
+}
+
+/** What a drag is over, as the drag state keeps it. */
+export interface SidebarDragOverState {
+  /** The list section a drop would land in, or null (nothing, the Queue, or a snooze zone). */
+  readonly targetSection: SidebarSection | null;
+  /** Over a Snoozed-shelf zone or the Queue header: what the badge and header accents read. */
+  readonly overZone: "snooze" | "queue" | null;
+  /** The last `over` that was a list row or marker, never a pointer zone (a snooze zone, the
+      Queue header), a Queue row or nothing. Over a zone the preview projects as this one,
+      since the shelves are bottom-anchored, and a zone that moves when hit oscillates. It lives
+      in the drag state because the sorting strategy is rebuilt on every over change. */
+  readonly stickyOverId: string | null;
+}
+
+export function nextSidebarDragOver(input: {
+  readonly current: SidebarDragOverState;
+  readonly overId: string | null;
+  readonly activeKey: string;
+  readonly items: readonly SidebarListItem[];
+  readonly queuedKeys: ReadonlySet<string>;
+  readonly queueDropId: string;
+}): SidebarDragOverState {
+  const { overId } = input;
+  if (overId !== null && sidebarSnoozeZoneIds(input.items, input.activeKey).includes(overId)) {
+    return { targetSection: null, overZone: "snooze", stickyOverId: input.current.stickyOverId };
+  }
+  const target =
+    overId === null || input.queuedKeys.has(overId)
+      ? null
+      : resolveSidebarDropTarget(input.items, input.activeKey, overId);
+  // Over anything that is not a list item dnd-kit leaves the rows at rest; a zone hit next must
+  // project as the last list over, not as the lifted row.
+  const listed =
+    overId !== null &&
+    !input.queuedKeys.has(overId) &&
+    input.items.some((item) => sidebarListItemId(item) === overId);
+  return {
+    targetSection: target?.section ?? null,
+    overZone: overId === input.queueDropId ? "queue" : null,
+    stickyOverId: listed ? overId : input.current.stickyOverId,
+  };
 }
 
 /** The list a drag resolves against: a Queue row joins it at the Queue's slot. */
@@ -363,6 +505,51 @@ export function sidebarDragLostItsRow(
   );
 }
 
+/** Whether the lifted row may be dropped on the Snoozed shelf. `supportsSnooze`: the
+    thread's server has `threadSnooze`; `canSnooze`: the client twin of the server's refusals
+    (pending approval or user input, a queued turn start); `canOperate`: this connection has
+    operate scope on the thread's environment. */
+export function sidebarSnoozeDropAllowed(input: {
+  readonly drag: SidebarDragOrigin;
+  readonly supportsSnooze: boolean;
+  readonly canSnooze: boolean;
+  readonly canOperate: boolean;
+}): boolean {
+  const { drag } = input;
+  if (drag.queuedDraft || drag.activeSection === "working" || !input.canOperate) return false;
+  // Already snoozed: a main-list row has nothing to do there; a Queue row is only unqueued.
+  if (drag.activeSection === "snoozed") return drag.fromQueue;
+  return input.supportsSnooze && input.canSnooze;
+}
+
+/** The release's snooze gate. A thread may have moved while lifted, so `sidebarSnoozeDropAllowed`
+    runs on where it rests now: a main-list row reads the section it is listed in (`listedSection`),
+    a Queue row has no list row and recomputes its resting section (`restingSection`; undefined when
+    the thread is not here). `liveSection` is what `runSidebarSnoozeDrop` reads. */
+export function sidebarReleaseSnoozeState(input: {
+  readonly drag: SidebarDragOrigin;
+  readonly listedSection: SidebarSection | undefined;
+  readonly restingSection: SidebarRestingSection | undefined;
+  readonly supportsSnooze: boolean;
+  readonly canSnooze: boolean;
+  readonly canOperate: boolean;
+}): { readonly liveSection: SidebarSection; readonly snoozeAllowed: boolean } {
+  const { drag } = input;
+  const liveSection =
+    (drag.fromQueue ? input.restingSection : input.listedSection) ?? drag.activeSection;
+  return {
+    liveSection,
+    snoozeAllowed:
+      input.restingSection !== undefined &&
+      sidebarSnoozeDropAllowed({
+        drag: { ...drag, activeSection: liveSection },
+        supportsSnooze: input.supportsSnooze,
+        canSnooze: input.canSnooze,
+        canOperate: input.canOperate,
+      }),
+  };
+}
+
 /** Whether the collision detector may pick `id`. `planKind` plans the drop
     into a resolved target; the main-list rule is "the drop changes something". */
 export function isSidebarDragCandidate(input: {
@@ -371,12 +558,18 @@ export function isSidebarDragCandidate(input: {
   readonly items: readonly SidebarListItem[];
   readonly queuedKeys: ReadonlySet<string>;
   readonly queueDropId: string;
+  /** `sidebarSnoozeDropAllowed` for this drag. The detector's pointer zones skip this gate, so
+      Sidebar.tsx also leaves the zones out of `pointerDropIds` when it is false. */
+  readonly snoozeAllowed?: boolean;
   readonly planKind: (target: SidebarDropTarget) => SidebarThreadDropPlan["kind"];
 }): boolean {
   const { id, drag } = input;
   if (input.queuedKeys.has(id)) return drag.fromQueue;
   if (drag.queuedDraft) return false;
   if (id === input.queueDropId) return !drag.fromQueue;
+  if (sidebarSnoozeZoneIds(input.items, drag.activeKey).includes(id)) {
+    return input.snoozeAllowed === true;
+  }
   const target = resolveSidebarDropTarget(input.items, drag.activeKey, id);
   if (target === null) return false;
   // Dropping a queued thread back on its resting section still unqueues it; a section member
@@ -394,6 +587,8 @@ export type SidebarDragEndRoute =
   | { readonly kind: "reorder-queue"; readonly overKey: string }
   /** A main-list row dropped on the Queue header. */
   | { readonly kind: "enqueue" }
+  /** On the Snoozed shelf: the menu's 1-hour snooze; a Queue row also leaves the Queue. */
+  | { readonly kind: "snooze" }
   /** Into a section; `unqueue` first when the row came from the Queue. */
   | { readonly kind: "place"; readonly target: SidebarDropTarget; readonly unqueue: boolean };
 
@@ -405,6 +600,8 @@ export function routeSidebarDragEnd(input: {
   readonly queueDropId: string;
   /** False while the queue is read-only. */
   readonly queueWritable?: boolean;
+  /** `sidebarReleaseSnoozeState(...).snoozeAllowed`: a refused zone snoozes nothing. */
+  readonly snoozeAllowed: boolean;
 }): SidebarDragEndRoute {
   const { drag, overId } = input;
   if (overId === null) return { kind: "none" };
@@ -419,8 +616,80 @@ export function routeSidebarDragEnd(input: {
   }
   if (overId === input.queueDropId) return drag.fromQueue ? { kind: "none" } : { kind: "enqueue" };
   if (drag.queuedDraft) return { kind: "none" };
+  // Every zone is caught here, allowed or not, so none reaches the resolver.
+  if (sidebarSnoozeZoneIds(input.items, drag.activeKey).includes(overId)) {
+    if (!input.snoozeAllowed) return { kind: "none" };
+    // A row a peer queued mid-drag has left the list: snoozing it would leave it snoozed and queued.
+    const listed = input.items.some(
+      (item) => item.kind === "thread" && item.key === drag.activeKey,
+    );
+    return listed ? { kind: "snooze" } : { kind: "none" };
+  }
   const target = resolveSidebarDropTarget(input.items, drag.activeKey, overId);
   return target === null ? { kind: "none" } : { kind: "place", target, unqueue: drag.fromQueue };
+}
+
+/** `performSnooze`'s result. */
+export type SidebarSnoozeOutcome =
+  | { readonly status: "success" | "skipped" | "interrupted" }
+  | { readonly status: "failure"; readonly error: unknown };
+
+/**
+ * A drop on the Snoozed shelf: the menu's 1-hour snooze, resolved at release. `liveSection`
+ * is where the thread rests now, read from live state, so a thread a peer snoozed mid-drag is
+ * never re-snoozed. A Queue row leaves the Queue only once the snooze succeeded, and the
+ * notice's Undo puts it back.
+ */
+export async function runSidebarSnoozeDrop(input: {
+  readonly drag: Pick<SidebarDragOrigin, "fromQueue">;
+  readonly liveSection: SidebarSection;
+  /** `checkThreadOperations` for the thread: false (already reported) refuses the snooze. */
+  readonly checkOperate: () => boolean;
+  readonly snooze: (
+    snoozedUntil: string,
+    undoAlso: (() => void) | undefined,
+  ) => Promise<SidebarSnoozeOutcome>;
+  readonly unqueue: () => void;
+  readonly requeue: () => void;
+  /** The snooze failed. */
+  readonly reportFailure: (error: unknown) => void;
+  /** Undo woke the thread but could not put it back in the Queue. */
+  readonly reportRequeueFailure: (error: unknown) => void;
+}): Promise<void> {
+  const { fromQueue } = input.drag;
+  if (input.liveSection === "snoozed") {
+    if (fromQueue) input.unqueue();
+    return;
+  }
+  // A thread this connection cannot operate says so, like every other drop, and stays queued.
+  if (!input.checkOperate()) return;
+  const hour = resolveSnoozePresets(new Date()).find((preset) => preset.id === "hour")!;
+  // A throw out of Undo's follow-up would reject the notice's undo after the wake succeeded.
+  const requeue = () => {
+    try {
+      input.requeue();
+    } catch (error) {
+      input.reportRequeueFailure(error);
+    }
+  };
+  const outcome = await input.snooze(hour.snoozedUntil, fromQueue ? requeue : undefined);
+  if (outcome.status === "success") {
+    if (fromQueue) input.unqueue();
+  } else if (outcome.status === "failure") {
+    input.reportFailure(outcome.error);
+  }
+}
+
+/** Snooze -> Queue: queue it, then wake it, or a send would find it snoozed. `enqueue` says
+    "full" itself and returns false; then nothing else happens. */
+export async function runSidebarWakeAndQueue(input: {
+  /** `checkThreadOperations` for the thread: false (already reported) refuses before queueing. */
+  readonly checkOperate: () => boolean;
+  readonly enqueue: () => boolean;
+  readonly wake: () => Promise<unknown>;
+}): Promise<void> {
+  if (!input.checkOperate()) return;
+  if (input.enqueue()) await input.wake();
 }
 
 export function resolveSidebarDropTarget(
@@ -428,15 +697,42 @@ export function resolveSidebarDropTarget(
   activeKey: string,
   overId: string,
 ): SidebarDropTarget | null {
+  // The shelf's zones are caught by id before resolution (routeSidebarDragEnd).
+  if (
+    overId === sidebarMarkerId("snoozed-header") ||
+    overId === sidebarMarkerId("snoozed-placeholder")
+  )
+    return null;
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
-  const moved = items.filter((_, index) => index !== activeIndex);
-  moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
-  // Custom sections do not accept drops yet.
-  if (section === "working" || section === "snoozed" || isCustomSidebarSection(section))
+  const over = items[overIndex]!;
+  // A collapsed or empty custom section's header means that section, from either direction: it is
+  // the only way in. From above, arrayMove already lands below the header; from below the row
+  // goes right under it instead of to the end of the section above. An expanded section with
+  // rows, and any other header, keeps arrayMove.
+  const overHeader = over.kind === "marker" && over.marker === "custom-header" ? over : null;
+  const intoSection =
+    overHeader !== null &&
+    (overHeader.collapsed ||
+      !items.some(
+        (item) =>
+          item.kind === "thread" && item.section === customSidebarSection(overHeader.sectionId),
+      ));
+  // The open row of a collapsed section, dropped on its own header from below, goes nowhere: it
+  // would only move above members the user cannot see. A queued member sits above the sections.
+  const lifted = items[activeIndex];
+  if (
+    overHeader?.collapsed === true &&
+    activeIndex > overIndex &&
+    lifted.section === customSidebarSection(overHeader.sectionId)
+  )
     return null;
+  const slot = intoSection && activeIndex > overIndex ? overIndex + 1 : overIndex;
+  const moved = items.filter((_, index) => index !== activeIndex);
+  moved.splice(slot, 0, items[activeIndex]!);
+  const section = sectionAtSidebarSlot(moved, slot);
+  if (section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -453,7 +749,21 @@ export function resolveSidebarDropTarget(
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }
-  return { section, pinnedOrder, activeOrder };
+  if (!isCustomSidebarSection(section)) return { section, pinnedOrder, activeOrder };
+  // The row lands after the member above it; the zero-height placeholder is not a slot.
+  let before = slot - 1;
+  while (before >= 0) {
+    const item = moved[before]!;
+    if (item.kind !== "marker" || item.marker !== "snoozed-placeholder") break;
+    before -= 1;
+  }
+  const above = before >= 0 ? moved[before] : undefined;
+  return {
+    section,
+    pinnedOrder,
+    activeOrder,
+    customAfter: above?.kind === "thread" && above.section === section ? above.key : null,
+  };
 }
 
 export type SidebarThreadDropPlan =
@@ -483,8 +793,12 @@ export type SidebarThreadDropPlan =
       readonly unsnooze: boolean;
       /** The custom section the drag started in; the drop clears that membership. */
       readonly clearsSection?: string;
+      /** A drop into a custom section: the section move (`moveThreadToSidebarSection`) sets the
+          membership and clears pin, settle and snooze itself, so the clear flags stay false. */
+      readonly joinsSection?: string;
     }
-  | { readonly kind: "settle" }
+  /** `unsnooze`: the server's settle keeps a snooze, so a drop out of Snoozed also wakes. */
+  | { readonly kind: "settle"; readonly unsnooze: boolean }
   /** A queued section member dropped on Active: clear what outranks membership, nothing else. */
   | {
       readonly kind: "unpark";
@@ -494,16 +808,36 @@ export type SidebarThreadDropPlan =
     };
 
 /** What dropping in `to` does to a thread lifted from `from`, for the badge
-    on the lifted row. Null while reordering inside one section and for the
-    working and snoozed shelves, which cannot be drop targets. */
-export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake" | "unqueue";
+    on the lifted row. Null while reordering inside one section and over the
+    Working shelf, which is never a target. */
+export type SidebarDropVerb =
+  | "pin"
+  | "unpin"
+  | "settle"
+  | "unsettle"
+  | "wake"
+  | "unqueue"
+  | "snooze"
+  | "wake-queue"
+  | "move";
 
 export function resolveSidebarDropVerb(
   fromSection: SidebarSection,
   toSection: SidebarSection | null,
   /** Lifted from the Queue: a drop always unqueues, even into its resting section. */
   fromQueue = false,
+  /** The drag state's zone (`nextSidebarDragOver`): the Snoozed shelf or the Queue header. */
+  zone: "snooze" | "queue" | null = null,
 ): SidebarDropVerb | null {
+  // On the Snoozed shelf an already-snoozed thread is only unqueued, or nothing at all.
+  if (zone === "snooze") return fromSection !== "snoozed" ? "snooze" : fromQueue ? "unqueue" : null;
+  if (zone === "queue") return fromSection === "snoozed" && !fromQueue ? "wake-queue" : null;
+  // Into a custom section, or a member out to Active: the section move.
+  if (toSection !== null && isCustomSidebarSection(toSection)) {
+    if (toSection !== fromSection) return "move";
+    return fromQueue ? "unqueue" : null;
+  }
+  if (toSection === "active" && isCustomSidebarSection(fromSection) && !fromQueue) return "move";
   // A custom section behaves like Active.
   const rank = (section: SidebarSection) => (isCustomSidebarSection(section) ? "active" : section);
   const from = rank(fromSection);
@@ -569,6 +903,11 @@ export function planSidebarThreadDrop(input: {
   /** The thread's raw membership, and the sections this client defines. */
   readonly activeSidebarSectionId?: string | null;
   readonly customSectionIds?: ReadonlySet<string>;
+  /** For a drop into a custom section: each section's members in displayed order (all of them,
+      not just the visible rows, so a collapsed section takes a drop at the right key). */
+  readonly customOrders?: ReadonlyMap<string, readonly string[]>;
+  /** The source thread's server has `threadSidebarSections`. */
+  readonly supportsSections?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -611,6 +950,33 @@ export function planSidebarThreadDrop(input: {
     });
     return assignments.every(({ id }) => writable.has(id)) ? assignments : null;
   };
+  if (isCustomSidebarSection(target.section)) {
+    if (input.supportsSections !== true) return { kind: "none" };
+    const sectionId = customSidebarSectionId(target.section);
+    const join = { unpin: false, unsettle: false, unsnooze: false, joinsSection: sectionId };
+    const within = activeSection === target.section;
+    // Custom sections sort like the inbox: time-ordered with the Working beta on.
+    if (input.activeTimeOrdered) {
+      return within
+        ? { kind: "none" }
+        : { kind: "move-active", order: null, assignments: [], ...join };
+    }
+    const members = input.customOrders?.get(sectionId) ?? [];
+    const others = members.filter((key) => key !== activeKey);
+    const after = target.customAfter ?? null;
+    const at = after === null ? 0 : others.indexOf(after) + 1;
+    const order = [...others.slice(0, at), activeKey, ...others.slice(at)];
+    if (
+      within &&
+      order.length === members.length &&
+      order.every((key, index) => key === members[index])
+    ) {
+      return { kind: "none" };
+    }
+    const assignments = arrange(order, activeKeysById, activeReorderableKeys);
+    if (assignments === null) return { kind: "none" };
+    return { kind: "move-active", order, assignments, ...join };
+  }
   switch (target.section) {
     case "active": {
       // A queued section member dropped on Active only unqueues (the caller already did) and
@@ -662,7 +1028,9 @@ export function planSidebarThreadDrop(input: {
       };
     }
     case "settled":
-      return activeSection === "settled" ? { kind: "none" } : { kind: "settle" };
+      return activeSection === "settled"
+        ? { kind: "none" }
+        : { kind: "settle", unsnooze: activeSection === "snoozed" };
     case "pinned": {
       const order = target.pinnedOrder;
       // Dropped back where it started: nothing to write.
@@ -702,6 +1070,7 @@ export interface SidebarDropBoard {
   readonly activeReorderableKeys: ReadonlySet<string>;
   readonly activeTimeOrdered: boolean;
   readonly customSectionIds: ReadonlySet<string>;
+  readonly customOrders: ReadonlyMap<string, readonly string[]>;
 }
 
 /** One argument builder for the drop-target check and the drop itself, so the two always plan
@@ -711,6 +1080,7 @@ export function sidebarDropPlanInput(
   drag: Pick<SidebarDragOrigin, "activeKey" | "activeSection" | "fromQueue">,
   source: Pick<SidebarThreadSummary, "pinnedAt" | "settledOverride" | "sidebarSectionId"> & {
     readonly supportsSettlement: boolean;
+    readonly supportsSections: boolean;
   },
   target: SidebarDropTarget,
 ): Parameters<typeof planSidebarThreadDrop>[0] {
@@ -731,6 +1101,8 @@ export function sidebarDropPlanInput(
     fromQueue: drag.fromQueue,
     activeSidebarSectionId: source.sidebarSectionId,
     customSectionIds: board.customSectionIds,
+    customOrders: board.customOrders,
+    supportsSections: source.supportsSections,
   };
 }
 
@@ -749,7 +1121,12 @@ export function applySidebarThreadDrop<
     | "unsettledAt"
     | "sidebarSectionId"
   >,
->(thread: T, section: "pinned" | "active" | "settled", now: string, orderKey?: string): T {
+>(
+  thread: T,
+  section: "pinned" | "active" | "settled" | CustomSidebarSection,
+  now: string,
+  orderKey?: string,
+): T {
   const wasSettled = thread.settledOverride === "settled";
   const awake = { ...thread, snoozedAt: null, snoozedUntil: null };
   if (section === "settled") {
@@ -766,13 +1143,17 @@ export function applySidebarThreadDrop<
   const resumed = wasSettled
     ? { ...awake, settledOverride: "active" as const, settledAt: null, unsettledAt: now }
     : awake;
+  const joins = isCustomSidebarSection(section) ? customSidebarSectionId(section) : null;
   return {
     ...resumed,
     pinnedAt: section === "pinned" ? (thread.pinnedAt ?? now) : null,
     pinOrderKey: section === "pinned" ? (orderKey ?? thread.pinOrderKey) : null,
-    ...(section === "active" && orderKey !== undefined ? { activeOrderKey: orderKey } : {}),
-    // A drop into Active is the third membership write (with Move to section / Move to Active).
+    ...((section === "active" || joins !== null) && orderKey !== undefined
+      ? { activeOrderKey: orderKey }
+      : {}),
+    // Membership writes: a drop into Active clears it, a join sets it.
     ...(section === "active" && thread.sidebarSectionId != null ? { sidebarSectionId: null } : {}),
+    ...(joins !== null ? { sidebarSectionId: joins } : {}),
   };
 }
 
@@ -794,7 +1175,7 @@ function canonicalSidebarSection(
 export interface SidebarOptimisticDrop {
   readonly key: string;
   readonly sourceSection: SidebarSection;
-  readonly section: "pinned" | "active" | "settled";
+  readonly section: "pinned" | "active" | "settled" | CustomSidebarSection;
   readonly occurredAt: string;
   readonly clearsSnooze: boolean;
   /** The membership this drop clears (a drop into Active), or null. */
@@ -805,6 +1186,119 @@ export interface SidebarOptimisticDrop {
   readonly keysAtDrop: ReadonlyMap<string, string | null>;
   /** The keys this drop writes; the hold lasts until all appear in canonical state. */
   readonly assignedKeys: ReadonlyMap<string, string>;
+}
+
+/** The hold for a drop: what it projects and what `shouldReleaseOptimisticDrop` waits for. */
+export function sidebarOptimisticDrop(input: {
+  readonly key: string;
+  readonly sourceSection: SidebarSection;
+  readonly section: SidebarOptimisticDrop["section"];
+  readonly plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "unpark" }>;
+  readonly assignments: ReadonlyArray<{ readonly id: string; readonly orderKey: string }>;
+  readonly occurredAt: string;
+  readonly pinnedKeysById: ReadonlyMap<string, string | null>;
+  readonly activeKeysById: ReadonlyMap<string, string | null>;
+}): SidebarOptimisticDrop {
+  const { plan } = input;
+  return {
+    key: input.key,
+    sourceSection: input.sourceSection,
+    section: input.section,
+    occurredAt: input.occurredAt,
+    clearsSnooze:
+      plan.kind === "pin" ||
+      plan.kind === "settle" ||
+      // A join's section move wakes the thread itself.
+      (plan.kind === "move-active" && (plan.unsnooze || plan.joinsSection !== undefined)),
+    clearsSection: plan.kind === "move-active" ? (plan.clearsSection ?? null) : null,
+    order: plan.kind === "settle" ? null : plan.order,
+    // A custom section's rows are ordered by their active keys.
+    keysAtDrop: input.section === "pinned" ? input.pinnedKeysById : input.activeKeysById,
+    assignedKeys: new Map(input.assignments.map(({ id, orderKey }) => [id, orderKey])),
+  };
+}
+
+/** Where the held row renders while its drop is pending, and as what. */
+export function projectSidebarHeldDrop<T extends Parameters<typeof applySidebarThreadDrop>[0]>(
+  thread: T,
+  drop: SidebarOptimisticDrop,
+): { readonly section: SidebarOptimisticDrop["section"]; readonly thread: T } {
+  const projected = applySidebarThreadDrop(
+    thread,
+    drop.section,
+    drop.occurredAt,
+    drop.assignedKeys.get(drop.key),
+  );
+  return {
+    section: drop.section,
+    thread: {
+      ...projected,
+      ...(drop.clearsSnooze
+        ? {}
+        : { snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil }),
+      // A join projects its new membership; into Active, only a drop that clears membership
+      // projects it cleared (a Queue row keeps it).
+      ...(drop.clearsSection === null && drop.section === "active"
+        ? { sidebarSectionId: thread.sidebarSectionId }
+        : {}),
+    },
+  };
+}
+
+/**
+ * The entries shown in the Queue block, and so the threads the main list leaves to it. A Queue
+ * row held on its way into a custom section renders in that section instead, so the hold waits
+ * there for its key; when the hold ends a refused or failed join is back in the Queue.
+ */
+export function sidebarShownQueueEntries<E extends Parameters<typeof threadQueueEntryKey>[0]>(
+  entries: readonly E[],
+  drop: SidebarOptimisticDrop | null,
+): readonly E[] {
+  if (drop === null || !isCustomSidebarSection(drop.section)) return entries;
+  return entries.filter((entry) => threadQueueEntryKey(entry) !== drop.key);
+}
+
+/** Whether a drag start must refuse `activeKey`: its drop is still held. A held Queue join renders
+    in its section while the raw Queue still lists it until `joined`, so lifted again it would
+    classify as a Queue drag and appear twice in the drag list. */
+export function sidebarPickupRefused(
+  activeKey: string,
+  drop: Pick<SidebarOptimisticDrop, "key"> | null,
+): boolean {
+  return drop?.key === activeKey;
+}
+
+/** Whether a Queue row may not be lifted. Like a main-list row, none may while a drop is held:
+    a second drop would replace the held one, and a held join's entry is still in the raw Queue,
+    so a Queue row released over it would reorder the Queue against a row shown elsewhere. */
+export function sidebarQueueRowDragDisabled(input: {
+  readonly readOnly: boolean;
+  readonly drop: SidebarOptimisticDrop | null;
+}): boolean {
+  return input.readOnly || input.drop !== null;
+}
+
+/** `section`'s sorted rows, with a held drop's full order on top so renumbered rows do not jump
+    at release. */
+export function sidebarHeldRows<T>(
+  rows: readonly T[],
+  section: SidebarOptimisticDrop["section"],
+  drop: SidebarOptimisticDrop | null,
+  keyOf: (row: T) => string,
+): readonly T[] {
+  if (drop === null || drop.section !== section || drop.order === null) return rows;
+  return orderItemsByPreferredIds({ items: rows, preferredIds: drop.order, getId: keyOf });
+}
+
+/** The rows a held drop lands among, in displayed order. */
+export function sidebarDropDestinationKeys(
+  section: SidebarOptimisticDrop["section"],
+  board: Pick<SidebarDropBoard, "pinnedOrder" | "activeOrder" | "customOrders">,
+): readonly string[] {
+  if (isCustomSidebarSection(section)) {
+    return board.customOrders.get(customSidebarSectionId(section)) ?? [];
+  }
+  return section === "pinned" ? board.pinnedOrder : board.activeOrder;
 }
 
 /**
@@ -841,6 +1335,10 @@ export interface SidebarDropCommands {
   readonly pin: (orderKey: string | undefined) => Promise<boolean>;
   readonly reorderActive: (threadKey: string, orderKey: string) => Promise<boolean>;
   readonly reorderPinned: (threadKey: string, orderKey: string) => Promise<boolean>;
+  /** The section move into a custom section; resolves whether the thread joined. */
+  readonly joinSection: (sectionId: string) => Promise<boolean>;
+  /** Runs once a join landed, before its key writes (a Queue row leaves the Queue here). */
+  readonly joined: () => void;
 }
 
 /**
@@ -857,6 +1355,20 @@ export function holdSidebarDrop(
   return holdDuring(drop, () => runSidebarDropCommands(plan, commands));
 }
 
+/**
+ * When a drop takes its row out of the Queue: "now", synchronously, so the row is back in its
+ * resting section in the same render that projects the drop (even a drop that plans nothing);
+ * "on-join" for a join into a custom section, so a refused or failed move leaves the Queue
+ * untouched; null for a row that was not queued.
+ */
+export function sidebarDropUnqueue(
+  unqueue: boolean,
+  plan: SidebarThreadDropPlan,
+): "now" | "on-join" | null {
+  if (!unqueue) return null;
+  return plan.kind === "move-active" && plan.joinsSection !== undefined ? "on-join" : "now";
+}
+
 /** A drop's commands in order. An unpark runs without a hold: its row never leaves its section. */
 export async function runSidebarDropCommands(
   plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" }>,
@@ -864,7 +1376,8 @@ export async function runSidebarDropCommands(
 ): Promise<void> {
   switch (plan.kind) {
     case "settle":
-      await commands.settle();
+      if (!(await commands.settle())) return;
+      if (plan.unsnooze) await commands.unsnooze();
       return;
     case "unpark":
       if (plan.unpin && !(await commands.unpin())) return;
@@ -872,6 +1385,13 @@ export async function runSidebarDropCommands(
       if (plan.unsnooze) await commands.unsnooze();
       return;
     case "move-active":
+      if (plan.joinsSection !== undefined) {
+        // The section move sets membership and clears what outranks it; it is the only definition
+        // of those steps. A refusal or failure writes nothing else.
+        if (!(await commands.joinSection(plan.joinsSection))) return;
+        commands.joined();
+        break;
+      }
       if (plan.clearsSection !== undefined && !(await commands.clearSection())) return;
       if (plan.unpin && !(await commands.unpin())) return;
       if (plan.unsettle && !(await commands.unsettle())) return;
@@ -899,9 +1419,15 @@ export function shouldReleaseOptimisticDrop(input: {
   readonly destinationKeys: readonly string[];
   /** Canonical order key per destination row. */
   readonly keyByThread: ReadonlyMap<string, string | null>;
+  /** The raw Queue still lists the dropped thread. */
+  readonly queued: boolean;
 }): boolean {
   const { drop, thread } = input;
   if (thread === undefined || thread.archivedAt !== null) return true;
+  // A Queue join leaves the Queue in `joined`, after the optimistic membership write, so a hold
+  // released on membership alone would show the row back in the Queue for a round trip. It ends
+  // with its command sequence instead, a refused or failed join included.
+  if (isCustomSidebarSection(drop.section) && input.queued) return false;
   // A peer moved the thread into another section: our clear lost, stop pretending.
   if (
     drop.clearsSection !== null &&
@@ -1068,6 +1594,43 @@ export function filterSidebarV2VisibleThreads<
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
+}
+
+/** The threads the sidebar lists in their sections, and the rows a drop may write keys for, by
+    capability. The key sets are built before the queued filter: a Queue row dropped into Pinned
+    or Active writes its key too. */
+export function sidebarListedThreads<
+  T extends Parameters<typeof filterSidebarV2VisibleThreads>[0][number] & {
+    environmentId: EnvironmentId;
+    id: ThreadId;
+  },
+>(input: {
+  readonly threads: readonly T[];
+  readonly scopedProjectKeys: ReadonlySet<string> | null;
+  readonly queuedKeys: ReadonlySet<string>;
+  readonly capabilitiesOf: (environmentId: EnvironmentId) =>
+    | {
+        readonly threadPinning?: boolean;
+        readonly threadPinReorder?: boolean;
+        readonly threadActiveReorder?: boolean;
+      }
+    | undefined;
+}): { readonly visible: T[]; readonly pinned: Set<string>; readonly active: Set<string> } {
+  const visible: T[] = [];
+  const pinned = new Set<string>();
+  const active = new Set<string>();
+  for (const thread of filterSidebarV2VisibleThreads(input.threads, input.scopedProjectKeys)) {
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const capabilities = input.capabilitiesOf(thread.environmentId);
+    if (capabilities?.threadActiveReorder === true) active.add(key);
+    // Older servers retain their existing drag actions. Active placement
+    // additionally requires its own ordering capability at the drop target.
+    if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
+      pinned.add(key);
+    }
+    if (!input.queuedKeys.has(key)) visible.push(thread);
+  }
+  return { visible, pinned, active };
 }
 
 export function getSidebarForkParentThreadId(

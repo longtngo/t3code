@@ -1,5 +1,6 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import type { Atom } from "effect/reactivity";
+import * as Cause from "effect/Cause";
+import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useThreadActions } from "./useThreadActions";
@@ -9,6 +10,7 @@ import { useThreadUndoNotice } from "./showThreadUndoNotice";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryServerConfigAtom } from "../state/server";
 
+const shellPresent = vi.hoisted(() => ({ value: true }));
 const commands = vi.hoisted(() => ({
   pin: vi.fn(),
   unpin: vi.fn(),
@@ -68,7 +70,7 @@ vi.mock("../state/entities", async (original) => ({
   readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsSnooze: () => true,
   readEnvironmentSupportsSidebarSections: () => true,
-  readThreadShell: () => threadShell,
+  readThreadShell: () => (shellPresent.value ? threadShell : null),
 }));
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => {
@@ -116,6 +118,8 @@ beforeEach(() => {
   router.state.matches[0]!.params = {};
   threadShell.pinnedAt = null;
   threadShell.snoozedUntil = null;
+  threadShell.sidebarSectionId = null;
+  shellPresent.value = true;
 });
 afterEach(() => {
   vi.runAllTimers();
@@ -237,6 +241,28 @@ describe("settle and snooze Undo", () => {
       input: { threadId: target.threadId, reason: "user" },
     });
   });
+
+  it("runs a drop's follow-up once the notice woke the thread", async () => {
+    const undoAlso = vi.fn();
+    await useThreadActions().snoozeThread(target, new Date(Date.now() + 60_000).toISOString(), {
+      undoAlso,
+    });
+    expect(undoAlso).not.toHaveBeenCalled();
+    await currentUndo()();
+    expect(commands.unsnooze).toHaveBeenCalledOnce();
+    expect(undoAlso).toHaveBeenCalledOnce();
+  });
+
+  it("skips the follow-up when the wake fails", async () => {
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    commands.unsnooze.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    const undoAlso = vi.fn();
+    await useThreadActions().snoozeThread(target, new Date(Date.now() + 60_000).toISOString(), {
+      undoAlso,
+    });
+    await currentUndo()();
+    expect(undoAlso).not.toHaveBeenCalled();
+  });
 });
 
 describe("Move to section", () => {
@@ -273,5 +299,39 @@ describe("Move to section", () => {
     });
     expect(commands.unpin).toHaveBeenCalledOnce();
     expect(add).not.toHaveBeenCalled();
+  });
+
+  it("resolves whether the thread joined", async () => {
+    appAtomRegistry.set(configAtom, sections(["focus"]));
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    const actions = useThreadActions();
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(true);
+    // The membership landed but the unpin failed: joined, and the failure was toasted.
+    commands.unpin.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(true);
+    // The membership write itself failed: nothing moved.
+    commands.setSection.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("nope"))));
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(false);
+    appAtomRegistry.set(configAtom, sections([]));
+    expect(await actions.moveThreadToSidebarSection(target, "focus", "Focus")).toBe(false);
+  });
+
+  it("an unknown thread is not joined (refused, not unchanged)", async () => {
+    appAtomRegistry.set(configAtom, sections(["focus"]));
+    shellPresent.value = false;
+    expect(await useThreadActions().moveThreadToSidebarSection(target, "focus", "Focus")).toBe(
+      false,
+    );
+    expect(commands.setSection).not.toHaveBeenCalled();
+  });
+
+  it("a member with nothing to clear is already joined, and writes nothing", async () => {
+    appAtomRegistry.set(configAtom, sections(["focus"]));
+    threadShell.pinnedAt = null;
+    threadShell.sidebarSectionId = "focus";
+    expect(await useThreadActions().moveThreadToSidebarSection(target, "focus", "Focus")).toBe(
+      true,
+    );
+    expect(commands.setSection).not.toHaveBeenCalled();
   });
 });

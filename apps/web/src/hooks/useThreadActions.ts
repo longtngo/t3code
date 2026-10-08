@@ -972,10 +972,17 @@ export function useThreadActions() {
   /**
    * Move to section / Move to Active: membership first, then clear what outranks it, and toast
    * the step that failed. `sectionName` is null for Active. The unpin offers no Undo: re-pinning
-   * would take the thread back out of the section it was moved to.
+   * would take the thread back out of the section it was moved to. Resolves true when the
+   * membership landed (a later clear may still have failed and was toasted; the pin, settle or
+   * snooze it left then still outranks the section) or was already there; false when nothing
+   * moved: a deleted section, an unknown thread, or a failed membership write.
    */
   const moveThreadToSidebarSection = useCallback(
-    async (target: ScopedThreadRef, sectionId: string | null, sectionName: string | null) => {
+    async (
+      target: ScopedThreadRef,
+      sectionId: string | null,
+      sectionName: string | null,
+    ): Promise<boolean> => {
       // The menu or palette may have been built before a peer deleted the section: moving into
       // it would strip the pin, settle and snooze and leave the thread in plain Active.
       const live = resolveSidebarSections(appAtomRegistry.get(primaryServerConfigAtom));
@@ -987,12 +994,12 @@ export function useThreadActions() {
             description: "The thread was not moved.",
           }),
         );
-        return;
+        return false;
       }
       const thread = readThreadShell(target);
-      if (thread === null) return;
+      if (thread === null) return false;
       const plan = planSidebarSectionMove(thread, sectionId, new Date().toISOString());
-      if (plan === null) return;
+      if (plan === null) return true;
       const failure = await runSidebarSectionMove(plan, {
         section: () => setThreadSidebarSection(target, plan.sectionId),
         unpin: () => {
@@ -1005,21 +1012,30 @@ export function useThreadActions() {
         unsettle: () => unsettleThread(target),
         unsnooze: () => unsnoozeThread(target),
       });
-      if (failure === null || isAtomCommandInterrupted(failure.result)) return;
-      const error = squashAtomCommandFailure(failure.result);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: sidebarSectionMoveFailureTitle(failure.step, sectionName),
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
+      if (failure === null) return true;
+      if (!isAtomCommandInterrupted(failure.result)) {
+        const error = squashAtomCommandFailure(failure.result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: sidebarSectionMoveFailureTitle(failure.step, sectionName),
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      // Every step after the membership write leaves the membership set; a failed unpin,
+      // unsettle or unsnooze still outranks it, and was toasted above.
+      return failure.step !== "section";
     },
     [setThreadSidebarSection, unpinThreadMutation, unsettleThread, unsnoozeThread],
   );
 
   const snoozeThread = useCallback(
-    async (target: ScopedThreadRef, snoozedUntil: string) => {
+    async (
+      target: ScopedThreadRef,
+      snoozedUntil: string,
+      options?: { readonly undoAlso?: (() => void) | undefined },
+    ) => {
       // Version skew: never send the command to a server that predates it.
       if (!readEnvironmentSupportsSnooze(target.environmentId)) {
         return AsyncResult.failure(
@@ -1058,7 +1074,12 @@ export function useThreadActions() {
       showThreadUndoNotice({
         action: "Snoozed",
         claim: action,
-        undo: () => unsnoozeThread(target),
+        // A drop from the Queue also puts the thread back in the Queue, once it is awake.
+        undo: async () => {
+          const woke = await unsnoozeThread(target);
+          if (woke._tag === "Success") options?.undoAlso?.();
+          return woke;
+        },
         failureTitle: "Failed to wake thread",
       });
       return result;

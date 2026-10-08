@@ -18,6 +18,8 @@ import * as Schema from "effect/Schema";
 import {
   DndContext,
   DragOverlay,
+  getClientRect,
+  useDndContext,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -183,7 +185,7 @@ import {
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
-  filterSidebarV2VisibleThreads,
+  sidebarListedThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -197,7 +199,14 @@ import {
   orderItemsByPreferredIds,
   holdSidebarDrop,
   planSidebarThreadDrop,
+  projectSidebarHeldDrop,
+  sidebarHeldRows,
+  sidebarShownQueueEntries,
   runSidebarDropCommands,
+  sidebarDropDestinationKeys,
+  sidebarOptimisticDrop,
+  sidebarDropUnqueue,
+  sidebarMarkerId,
   sidebarDropPlanInput,
   type SidebarDropBoard,
   type SidebarDropCommands,
@@ -207,13 +216,23 @@ import {
   sidebarRestingSection,
   resolveAdjacentThreadId,
   resolveSidebarSweepKeys,
-  resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   isSidebarDragCandidate,
   routeSidebarDragEnd,
+  runSidebarSnoozeDrop,
+  runSidebarWakeAndQueue,
+  nextSidebarDragOver,
+  sidebarReleaseSnoozeState,
   sidebarDragListItems,
   sidebarDragLostItsRow,
+  sidebarDragQueueEntryCount,
+  sidebarPickupRefused,
+  sidebarQueueBlockEntries,
+  sidebarQueuePlacement,
+  sidebarSnoozeDropAllowed,
+  sidebarSnoozeZoneIds,
   type SidebarDragOrigin,
+  type SidebarDragOverState,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
@@ -222,6 +241,7 @@ import {
   customSectionHeaderId,
   countSidebarThreads,
   customSidebarSection,
+  customSidebarSectionId,
   isCustomSidebarSection,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
@@ -261,6 +281,14 @@ import {
   createSidebarSortingStrategy,
   pointerOverVisibleRect,
   restrictBelowSidebarLabel,
+  sidebarDragLabelsShift,
+  sidebarSnoozeHintState,
+  sidebarQueueBoundary,
+  sidebarSortableIds,
+  sidebarStrategyDragInput,
+  SHOW_MORE_ID,
+  SNOOZED_PLACEHOLDER_ID,
+  type SidebarSnoozeHint,
 } from "./Sidebar.drag";
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
@@ -364,9 +392,25 @@ function checkThreadOperations(
   return false;
 }
 
+/** The snooze gate's thread inputs (`sidebarSnoozeDropAllowed`), built the same way at pickup and
+    at release. `capabilities` are those of the thread's server. */
+function sidebarSnoozeGateOf(
+  thread: SidebarThreadSummary | undefined,
+  capabilities: { readonly threadSnooze?: boolean } | undefined,
+  now: string,
+) {
+  return {
+    supportsSnooze: thread !== undefined && capabilities?.threadSnooze === true,
+    canSnooze: thread !== undefined && canSnooze(thread, { now }),
+    canOperate: thread !== undefined && canOperateThreads([thread]),
+  };
+}
+
 /** "Add to queue" from the sidebar: a full queue says so rather than doing nothing. */
-function addToQueueOrSayFull(entry: Parameters<typeof addToQueue>[0]): void {
-  if (!addToQueue(entry)) toastManager.add({ type: "info", title: QUEUE_FULL_MESSAGE });
+function addToQueueOrSayFull(entry: Parameters<typeof addToQueue>[0]): boolean {
+  if (addToQueue(entry)) return true;
+  toastManager.add({ type: "info", title: QUEUE_FULL_MESSAGE });
+  return false;
 }
 
 function compactSidebarTimeLabel(label: string): string {
@@ -787,6 +831,92 @@ function SidebarSectionPlaceholder(props: {
   );
 }
 
+// The empty Snoozed shelf. The li is zero height at rest, so nothing moves at pickup. Its
+// sortable node is the hint box, absolutely placed just above the li: dnd-kit measures that 36px
+// box, the strategy moves it into the slot it opens, and the collision detector hit-tests it
+// where it is painted. Where it may not open in place (`sidebarSnoozeHintState`), the box
+// goes `atEnd`: out of flow below everything in the list, positioned against the list itself, so
+// the li keeps its place (and its auto margin) and no row moves. The box then carries the
+// transform: on the li it would make the li the box's containing block.
+function SidebarSnoozedPlaceholder(props: {
+  showHint: boolean;
+  isDropTarget: boolean;
+  firstShelf: boolean;
+  atEnd: boolean;
+}) {
+  const { setNodeRef, transform } = useSortable({
+    id: SNOOZED_PLACEHOLDER_ID,
+    disabled: { draggable: true },
+    animateLayoutChanges: animateSidebarLayoutChanges,
+  });
+  // dnd-kit measured the box where it rested at pickup; a moved box needs a fresh rect or the
+  // strategy projects it from the old place.
+  const { measureDroppableContainers } = useDndContext();
+  const { atEnd } = props;
+  useLayoutEffect(() => {
+    if (atEnd) measureDroppableContainers([SNOOZED_PLACEHOLDER_ID]);
+  }, [atEnd, measureDroppableContainers]);
+  const moved = {
+    transform: CSS.Translate.toString(transform),
+    // A newly revealed target must not slide from its hidden position.
+    transition: "none",
+    visibility: transform?.scaleY === 0 ? ("hidden" as const) : undefined,
+  };
+  return (
+    <li
+      data-thread-selection-safe
+      data-testid="sidebar-snoozed-placeholder"
+      className={cn(
+        "mx-0.5 -mb-px h-0 list-none",
+        !atEnd && "relative",
+        props.firstShelf && "mt-auto",
+      )}
+      style={atEnd ? undefined : moved}
+    >
+      <div
+        ref={setNodeRef}
+        className={cn(
+          "pointer-events-none absolute flex h-9 items-center justify-center rounded-md text-xs",
+          atEnd ? "inset-x-0.5 top-full mt-px" : "inset-x-0 bottom-0",
+          props.showHint &&
+            "border border-dashed border-sidebar-foreground/25 text-sidebar-foreground/80",
+          props.showHint && props.isDropTarget && "border-primary/40 bg-primary/5 text-primary",
+        )}
+        style={atEnd ? moved : undefined}
+      >
+        {props.showHint ? "Snoozed" : null}
+      </div>
+    </li>
+  );
+}
+
+// "Show N more" after the Settled rows. It is listed in the sortable context after the rows but can
+// be neither lifted nor dropped on: the strategy only moves it with the rows above it.
+function SidebarSettledShowMore(props: { count: number; onClick: () => void }) {
+  const { setNodeRef, transform, transition } = useSortable({
+    id: SHOW_MORE_ID,
+    disabled: { draggable: true, droppable: true },
+    animateLayoutChanges: animateSidebarLayoutChanges,
+  });
+  return (
+    <li
+      ref={setNodeRef}
+      className="list-none"
+      data-testid="sidebar-settled-show-more"
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+    >
+      <button
+        type="button"
+        onClick={props.onClick}
+        className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+      >
+        <PlusIcon aria-hidden className="size-4 shrink-0" />
+        Show {props.count} more
+      </button>
+    </li>
+  );
+}
+
 // Pointer travel before a press on a row starts a drag, or a press on its
 // action button starts a sweep. Shorter presses stay clicks.
 const SIDEBAR_DRAG_DISTANCE = 6;
@@ -796,6 +926,75 @@ type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 // Zero-height markers reserve no label space at rest. During a drag the
 // sorting strategy opens 24px for a 16px label with 4px clearance on each side.
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
+
+/** Measured once per drag, on the pickup layout (after the render that started the drag). */
+interface SidebarDragPickup {
+  readonly snoozeHint: SidebarSnoozeHint;
+  /** The whole Queue block (header and rows) when it renders right above the first shelf. */
+  readonly dockedQueueHeight: number | undefined;
+  /** From the last row's bottom to the bottom of the content rendered after the rows. */
+  readonly trailingHeight: number;
+}
+
+const SIDEBAR_SHELF_TEST_IDS = new Set([
+  "sidebar-working-header",
+  "sidebar-snoozed-header",
+  "sidebar-snoozed-placeholder",
+  "sidebar-settled-header",
+]);
+
+/** Reads the pickup layout for the strategy and the empty-shelf hint. Rects ignore transforms,
+ * as dnd-kit's droppable rects do: the Pins labels and the preview move rows by transform only. */
+function measureSidebarPickup(
+  list: HTMLUListElement | null,
+  input: {
+    readonly snoozeAllowed: boolean;
+    readonly fromQueue: boolean;
+    readonly queueAfterRows: boolean;
+  },
+): SidebarDragPickup {
+  const rectOf = (node: Element | null | undefined) =>
+    node instanceof HTMLElement ? getClientRect(node, { ignoreTransform: true }) : undefined;
+  const queueHeader = list?.querySelector('[data-testid="sidebar-queue-header"]') ?? null;
+  // The Queue block runs from its header to the first marker after it; its rows are not markers.
+  let afterQueue = queueHeader?.nextElementSibling ?? null;
+  while (afterQueue !== null && !afterQueue.hasAttribute("data-thread-selection-safe")) {
+    afterQueue = afterQueue.nextElementSibling;
+  }
+  const docked =
+    queueHeader !== null &&
+    afterQueue !== null &&
+    SIDEBAR_SHELF_TEST_IDS.has(afterQueue.getAttribute("data-testid") ?? "");
+  const queueTop = rectOf(queueHeader)?.top;
+  const queueBottom = rectOf(afterQueue?.previousElementSibling)?.bottom;
+  const placeholder = list?.querySelector('[data-testid="sidebar-snoozed-placeholder"]');
+  const scale =
+    list !== null && list.offsetWidth > 0
+      ? list.getBoundingClientRect().width / list.offsetWidth
+      : 1;
+  // Content after the last row: the Queue placed after every row, then "Show N more".
+  const trailingStart = input.queueAfterRows
+    ? queueHeader
+    : (list?.querySelector('[data-testid="sidebar-settled-show-more"]') ?? null);
+  const lastRow = rectOf(trailingStart?.previousElementSibling);
+  const contentEnd = rectOf(list?.lastElementChild);
+  return {
+    snoozeHint: sidebarSnoozeHintState({
+      snoozeAllowed: input.snoozeAllowed,
+      hint: rectOf(placeholder?.firstElementChild),
+      above: rectOf(placeholder?.previousElementSibling),
+      labelsShift: input.fromQueue ? 0 : sidebarDragLabelsShift(SIDEBAR_DRAG_LABEL_HEIGHT, scale),
+    }),
+    dockedQueueHeight:
+      docked && queueTop !== undefined && queueBottom !== undefined
+        ? queueBottom - queueTop
+        : undefined,
+    trailingHeight:
+      lastRow !== undefined && contentEnd !== undefined
+        ? Math.max(0, contentEnd.bottom - lastRow.bottom)
+        : 0,
+  };
+}
 
 /**
  * The bag the overlay copy renders with: the row's dragging state, none of its wiring. `isDragging`
@@ -898,13 +1097,19 @@ function SidebarCustomSectionHeader(props: {
   // Shown after the name while collapsed; a long name truncates, the count stays visible.
   collapsedCount: number | undefined;
   dragging: boolean;
+  isDropTarget: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
   onContextMenu?: ((position: { x: number; y: number }) => void) | undefined;
 }) {
   const { onContextMenu } = props;
   return (
     <SortableSidebarMarker
-      item={{ kind: "marker", marker: "custom-header", sectionId: props.sectionId }}
+      item={{
+        kind: "marker",
+        marker: "custom-header",
+        sectionId: props.sectionId,
+        collapsed: !props.toggle.expanded,
+      }}
       data-testid="sidebar-custom-section-header"
       className="group/section-header relative mx-0.5 h-8"
     >
@@ -924,7 +1129,7 @@ function SidebarCustomSectionHeader(props: {
             })}
         count={props.collapsedCount}
         expanded={props.toggle.expanded}
-        tone={props.dragging ? "emphasized" : "muted"}
+        tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
       >
         {props.name}
       </CollapsibleSectionHeader>
@@ -1332,7 +1537,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 // Verb and icon on the lifted row while it hovers over another section. Uses
 // the same icons as the row actions and context menu so the drop reads as the
 // action it performs.
-const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
+const dropVerbBadge: Record<Exclude<SidebarDropVerb, "move">, ReactNode> = {
   pin: (
     <>
       <PinIcon aria-hidden className="size-3" />
@@ -1369,6 +1574,18 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
       Unqueue
     </>
   ),
+  snooze: (
+    <>
+      <AlarmClockIcon aria-hidden className="size-3" />
+      Snooze 1h
+    </>
+  ),
+  "wake-queue": (
+    <>
+      <ListPlusIcon aria-hidden className="size-3" />
+      {"Wake & queue"}
+    </>
+  ),
 };
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
@@ -1401,6 +1618,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
    */
   isOverlayCopy?: boolean | undefined;
   dropVerb: SidebarDropVerb | null;
+  /** The destination's name while `dropVerb` is "move". */
+  dropSectionName: string | null;
   // While dragging, the pin marker stays only for a pinned thread still over
   // the pinned section. Any other position shows the verb badge instead, and
   // the badge carries its own icon.
@@ -1915,9 +2134,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     destinationVerb !== null ? (
       <span
         role="status"
-        className="pointer-events-none ml-auto inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 text-2xs font-medium text-primary"
+        className="pointer-events-none ml-auto inline-flex h-5 max-w-40 shrink-0 items-center gap-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 text-2xs font-medium text-primary"
       >
-        {dropVerbBadge[destinationVerb]}
+        {destinationVerb === "move" ? (
+          <>
+            <FolderIcon aria-hidden className="size-3" />
+            <span className="truncate">Move to {props.dropSectionName}</span>
+          </>
+        ) : (
+          dropVerbBadge[destinationVerb]
+        )}
       </span>
     ) : null;
 
@@ -2674,6 +2900,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   );
 });
 
+const threadKeyOf = (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) =>
+  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+
 export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
@@ -3068,6 +3297,15 @@ export default function Sidebar() {
     holdDuring: holdOptimisticDrop,
     release: releaseOptimisticDrop,
   } = useSidebarDropHold();
+  // The Queue block and the memos below render a held join in its section, not in the Queue.
+  const shownQueueEntries = useMemo(
+    () => sidebarShownQueueEntries(queueEntries, optimisticDrop),
+    [optimisticDrop, queueEntries],
+  );
+  const shownQueuedKeys = useMemo(
+    () => new Set(shownQueueEntries.map(threadQueueEntryKey)),
+    [shownQueueEntries],
+  );
   const sidebarSections = useSidebarSections();
   const customSectionIds = useMemo(
     () => new Set((sidebarSections ?? []).map((section) => section.id)),
@@ -3093,9 +3331,16 @@ export default function Sidebar() {
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage). A queued
     // thread renders in the Queue instead of its section.
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys).filter(
-      (thread) => !queuedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-    );
+    const {
+      visible,
+      pinned: draggable,
+      active: activeReorderable,
+    } = sidebarListedThreads({
+      threads,
+      scopedProjectKeys,
+      queuedKeys: shownQueuedKeys,
+      capabilitiesOf: (environmentId) => serverConfigs.get(environmentId)?.environment.capabilities,
+    });
     inboxReturns.observe(workingShelfEnabled ? threads : null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -3107,56 +3352,29 @@ export default function Sidebar() {
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     const custom = new Map<string, EnvironmentThreadShell[]>();
-    const draggable = new Set<string>();
-    const activeReorderable = new Set<string>();
     for (const thread of visible) {
       const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
-      // Older servers retain their existing drag actions. Active placement
-      // additionally requires its own ordering capability at the drop target.
-      if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
-        draggable.add(threadKey);
-      }
-      if (optimisticDrop?.key === threadKey) {
-        const projected = applySidebarThreadDrop(
-          thread,
-          optimisticDrop.section,
-          optimisticDrop.occurredAt,
-          optimisticDrop.assignedKeys.get(threadKey),
-        );
-        (optimisticDrop.section === "pinned"
-          ? pinned
-          : optimisticDrop.section === "settled"
-            ? settled
-            : inbox(projected)
-        ).push({
-          ...projected,
-          ...(optimisticDrop.clearsSnooze
-            ? {}
-            : { snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil }),
-          // Only a drop that clears membership projects it cleared (a Queue row keeps it).
-          ...(optimisticDrop.clearsSection === null
-            ? { sidebarSectionId: thread.sidebarSectionId }
-            : {}),
-        });
+      // A held drop renders where it is going, as what it will be.
+      const held =
+        optimisticDrop?.key === threadKey ? projectSidebarHeldDrop(thread, optimisticDrop) : null;
+      const row = held?.thread ?? thread;
+      const section =
+        held?.section ?? sidebarRestingSection(thread, capabilities, preciseNow, customSectionIds);
+      if (isCustomSidebarSection(section)) {
+        const id = customSidebarSectionId(section);
+        const list = custom.get(id);
+        if (list) list.push(row);
+        else custom.set(id, [row]);
       } else {
-        const section = sidebarRestingSection(thread, capabilities, preciseNow, customSectionIds);
-        if (isCustomSidebarSection(section)) {
-          const id = section.slice("custom:".length);
-          const list = custom.get(id);
-          if (list) list.push(thread);
-          else custom.set(id, [thread]);
-        } else {
-          (section === "snoozed"
-            ? snoozed
-            : section === "settled"
-              ? settled
-              : section === "pinned"
-                ? pinned
-                : inbox(thread)
-          ).push(thread);
-        }
+        (section === "snoozed"
+          ? snoozed
+          : section === "settled"
+            ? settled
+            : section === "pinned"
+              ? pinned
+              : inbox(row)
+        ).push(row);
       }
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
@@ -3169,24 +3387,10 @@ export default function Sidebar() {
       ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
       : sortThreadsForSidebar(active);
     return {
-      pinnedThreads:
-        optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
-          ? sortedPinned
-          : orderItemsByPreferredIds({
-              items: sortedPinned,
-              preferredIds: optimisticDrop.order,
-              getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            }),
+      pinnedThreads: sidebarHeldRows(sortedPinned, "pinned", optimisticDrop, threadKeyOf),
       draggableThreadKeys: draggable,
       activeReorderableThreadKeys: activeReorderable,
-      activeThreads:
-        optimisticDrop?.section !== "active" || optimisticDrop.order === null
-          ? sortedActive
-          : orderItemsByPreferredIds({
-              items: sortedActive,
-              preferredIds: optimisticDrop.order,
-              getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            }),
+      activeThreads: sidebarHeldRows(sortedActive, "active", optimisticDrop, threadKeyOf),
       // Newest send first; finishing and waking again do not move a row.
       workingThreads: sortWorkingThreadsBySend(working),
       // Soonest wake first: "what comes back next" is the shelf's question.
@@ -3199,9 +3403,14 @@ export default function Sidebar() {
       customThreads: new Map(
         [...custom].map(([id, list]) => [
           id,
-          workingShelfEnabled
-            ? sortInboxThreadsByReturn(list, inboxReturns.returnedAt)
-            : sortThreadsForSidebar(list),
+          sidebarHeldRows(
+            workingShelfEnabled
+              ? sortInboxThreadsByReturn(list, inboxReturns.returnedAt)
+              : sortThreadsForSidebar(list),
+            customSidebarSection(id),
+            optimisticDrop,
+            threadKeyOf,
+          ),
         ]),
       ),
       snoozeNow: preciseNow,
@@ -3210,7 +3419,7 @@ export default function Sidebar() {
     customSectionIds,
     nowMinute,
     optimisticDrop,
-    queuedKeys,
+    shownQueuedKeys,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -3226,11 +3435,11 @@ export default function Sidebar() {
           thread,
         ]),
     );
-    return queueEntries.flatMap((entry) => {
+    return shownQueueEntries.flatMap((entry) => {
       const thread = byKey.get(threadQueueEntryKey(entry));
       return thread === undefined ? [] : [thread];
     });
-  }, [queueEntries, threads]);
+  }, [shownQueueEntries, threads]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -3864,12 +4073,16 @@ export default function Sidebar() {
   // also covers first-time ordering, which assigns keys to keyless neighbors.
   // A failed write, concurrent reorder, or membership change releases the hold.
   const [dragState, setDragState] = useState<
-    | (SidebarDragOrigin & {
-        readonly occurredAt: string;
-        readonly activationY: number | null;
-        readonly targetSection: SidebarSection | null;
-        readonly contextDrag: boolean;
-      })
+    | (SidebarDragOrigin &
+        SidebarDragOverState & {
+          readonly occurredAt: string;
+          readonly activationY: number | null;
+          readonly contextDrag: boolean;
+          /** Unset until the pickup layout is measured. */
+          readonly pickup?: SidebarDragPickup;
+          /** The Queue block's shown entries at pickup; the Queue is placed by it all drag. */
+          readonly queueEntryCount: number;
+        })
     | null
   >(null);
   const isContextDrag = dragState?.contextDrag === true;
@@ -4044,6 +4257,10 @@ export default function Sidebar() {
       ),
     [activeThreads],
   );
+  const customOrderKeys = useMemo(
+    () => new Map([...customThreads].map(([id, list]) => [id, list.map(threadKeyOf)])),
+    [customThreads],
+  );
   useEffect(() => {
     if (optimisticDrop === null) return;
     const canonicalByKey = new Map(
@@ -4053,7 +4270,11 @@ export default function Sidebar() {
       ]),
     );
     const thread = canonicalByKey.get(optimisticDrop.key);
-    const destinationKeys = optimisticDrop.section === "pinned" ? pinnedKeys : activeKeys;
+    const destinationKeys = sidebarDropDestinationKeys(optimisticDrop.section, {
+      pinnedOrder: pinnedKeys,
+      activeOrder: activeKeys,
+      customOrders: customOrderKeys,
+    });
     const keyByThread = new Map(
       destinationKeys.flatMap((key) => {
         const canonical = canonicalByKey.get(key);
@@ -4077,11 +4298,21 @@ export default function Sidebar() {
         customSectionIds,
         destinationKeys,
         keyByThread,
+        queued: queuedKeys.has(optimisticDrop.key),
       })
     ) {
       releaseOptimisticDrop();
     }
-  }, [activeKeys, customSectionIds, optimisticDrop, pinnedKeys, releaseOptimisticDrop, threads]);
+  }, [
+    activeKeys,
+    customOrderKeys,
+    customSectionIds,
+    optimisticDrop,
+    pinnedKeys,
+    queuedKeys,
+    releaseOptimisticDrop,
+    threads,
+  ]);
   const attemptPin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -4155,6 +4386,7 @@ export default function Sidebar() {
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
+      if (sidebarPickupRefused(activeKey, optimisticDrop)) return;
       contextDragKeyRef.current = activeKey;
       const fromQueue = queuedKeys.has(activeKey);
       const queuedThread = fromQueue ? threadByKey.get(activeKey) : undefined;
@@ -4189,14 +4421,27 @@ export default function Sidebar() {
         activeSection,
         fromQueue,
         queuedDraft: fromQueue && queuedThread === undefined,
+        // A Queue row targets nothing until it moves: dropped where it was, it stays queued.
         targetSection: fromQueue ? null : activeSection,
+        overZone: null,
+        // A first over on a snooze zone projects as the row's own slot, not as "no over".
+        stickyOverId: activeKey,
         contextDrag: false,
+        queueEntryCount: shownQueueEntries.length,
         occurredAt: new Date().toISOString(),
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
     },
-    [customSectionIds, queuedKeys, sectionByThreadKey, serverConfigs, threadByKey],
+    [
+      customSectionIds,
+      optimisticDrop,
+      queuedKeys,
+      sectionByThreadKey,
+      serverConfigs,
+      shownQueueEntries.length,
+      threadByKey,
+    ],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -4212,10 +4457,12 @@ export default function Sidebar() {
       custom: visibleCustomThreads.map((block) => ({
         id: block.section.id,
         visible: keysOf(block.visible),
+        collapsed: collapsedCustomSectionIds.includes(block.section.id),
       })),
     });
   }, [
     activeThreads,
+    collapsedCustomSectionIds,
     pinnedThreads,
     renderedSettledThreads,
     settledThreads.length,
@@ -4282,27 +4529,87 @@ export default function Sidebar() {
     () => sidebarDragListItems(sidebarListItems, dragOrigin),
     [dragOrigin, sidebarListItems],
   );
+  // The Snoozed shelf's zones for the lifted row, or null when it may not be snoozed there.
+  const snoozeZoneIds = useMemo(() => {
+    if (dragOrigin === null) return null;
+    const source = threadByKey.get(dragOrigin.activeKey);
+    const allowed = sidebarSnoozeDropAllowed({
+      drag: dragOrigin,
+      ...sidebarSnoozeGateOf(
+        source,
+        source === undefined
+          ? undefined
+          : serverConfigs.get(source.environmentId)?.environment.capabilities,
+        new Date().toISOString(),
+      ),
+    });
+    return allowed ? sidebarSnoozeZoneIds(dragListItems, dragOrigin.activeKey) : null;
+  }, [dragListItems, dragOrigin, serverConfigs, threadByKey]);
+  const snoozeAllowed = snoozeZoneIds !== null;
+  const snoozeZoneSet = useMemo(
+    () => (snoozeZoneIds === null ? null : new Set(snoozeZoneIds)),
+    [snoozeZoneIds],
+  );
+  const dragStickyOverId = dragState?.stickyOverId ?? null;
+  const dragPickup = dragState?.pickup;
+  const snoozeHint = dragPickup?.snoozeHint ?? "closed";
+  // Where the Queue renders this drag, and whether it collapses to its header.
+  const queuePlacement = sidebarQueuePlacement({
+    sectionCount: (sidebarSections ?? []).length,
+    entryCount: sidebarDragQueueEntryCount(dragState?.queueEntryCount, shownQueueEntries),
+    dropShown: !isContextDrag && dragOrigin !== null && !dragOrigin.fromQueue,
+    listScrolls,
+    liftedFromShelf:
+      dragOrigin !== null &&
+      !dragOrigin.fromQueue &&
+      (dragOrigin.activeSection === "snoozed" || dragOrigin.activeSection === "settled"),
+  });
+  const queueBoundary = sidebarQueueBoundary(queuePlacement);
+  // Once per drag, on the layout the pickup render committed: the docked Queue appears or
+  // collapses at pickup, so measuring before it reads the wrong neighbours. Kept in the drag
+  // state so the hint's place cannot flip mid-drag.
+  const pickupPending = dragState !== null && dragState.pickup === undefined;
+  const pickupFromQueue = dragOrigin?.fromQueue === true;
+  const queueAfterRows = queuePlacement.belowShelves;
+  useLayoutEffect(() => {
+    if (!pickupPending) return;
+    const pickup = measureSidebarPickup(threadListRef.current, {
+      snoozeAllowed,
+      fromQueue: pickupFromQueue,
+      queueAfterRows,
+    });
+    setDragState((current) =>
+      current === null || current.pickup !== undefined ? current : { ...current, pickup },
+    );
+  }, [pickupFromQueue, pickupPending, queueAfterRows, snoozeAllowed]);
   const handleThreadDragOver = useCallback(
     (event: DragOverEvent) => {
       const overId = event.over ? String(event.over.id) : null;
       // Resolve against the updater's state: the first move can arrive before
       // the render that learned this drag started in the Queue.
-      setDragState((current) => {
-        if (current === null || current.activeKey !== String(event.active.id)) return current;
-        const target =
-          overId === null || queuedKeys.has(overId)
-            ? null
-            : resolveSidebarDropTarget(
-                sidebarDragListItems(sidebarListItems, current),
-                current.activeKey,
+      setDragState((current) =>
+        current === null || current.activeKey !== String(event.active.id)
+          ? current
+          : {
+              ...current,
+              ...nextSidebarDragOver({
+                current,
                 overId,
-              );
-        return { ...current, targetSection: target?.section ?? null };
-      });
+                activeKey: current.activeKey,
+                items: sidebarDragListItems(sidebarListItems, current),
+                queuedKeys,
+                queueDropId: QUEUE_DROP_ID,
+              }),
+            },
+      );
     },
     [queuedKeys, sidebarListItems],
   );
-  const sortableIds = useMemo(() => sidebarListItems.map(sidebarListItemId), [sidebarListItems]);
+  // The Queue header and "Show N more" join the context after the rows (`sidebarSortableIds`).
+  const sortableIds = useMemo(
+    () => sidebarSortableIds(sidebarListItems, QUEUE_DROP_ID),
+    [sidebarListItems],
+  );
   const draggedSettledOrder = useMemo(() => {
     // A Queue row never previews in the main list, so it needs no settled order.
     const thread =
@@ -4344,11 +4651,26 @@ export default function Sidebar() {
         settledVisibleCount,
         routeThreadKey,
         snoozedThreadCount: snoozedThreads.length,
+        ...(dragPickup?.dockedQueueHeight === undefined
+          ? {}
+          : { dockedQueueHeight: dragPickup.dockedQueueHeight }),
+        trailingHeight: dragPickup?.trailingHeight ?? 0,
+        queueBoundary,
+        ...sidebarStrategyDragInput({
+          stickyOverId: dragStickyOverId,
+          snoozeZoneIds: snoozeZoneSet,
+          hint: snoozeHint,
+        }),
       }),
     [
+      dragPickup,
+      dragStickyOverId,
+      snoozeHint,
+      snoozeZoneSet,
       draggedActiveOrder,
       draggedSettledOrder,
       isContextDrag,
+      queueBoundary,
       routeThreadKey,
       settledShelfExpanded,
       settledVisibleCount,
@@ -4386,11 +4708,13 @@ export default function Sidebar() {
       activeReorderableKeys: activeReorderableThreadKeys,
       activeTimeOrdered: workingShelfEnabled,
       customSectionIds,
+      customOrders: customOrderKeys,
     }),
     [
       activeKeys,
       activeKeysById,
       activeReorderableThreadKeys,
+      customOrderKeys,
       customSectionIds,
       draggableThreadKeys,
       pinnedKeys,
@@ -4404,6 +4728,19 @@ export default function Sidebar() {
     if (source === undefined && !dragOrigin.queuedDraft) {
       return createSidebarCollisionDetection(() => false);
     }
+    // Built once per drag, not per candidate on every pointer move.
+    const capabilities =
+      source === undefined
+        ? undefined
+        : serverConfigs.get(source.environmentId)?.environment.capabilities;
+    const planSource =
+      source === undefined
+        ? undefined
+        : {
+            ...source,
+            supportsSettlement: capabilities?.threadSettlement === true,
+            supportsSections: capabilities?.threadSidebarSections === true,
+          };
     return createSidebarCollisionDetection(
       (id) =>
         isSidebarDragCandidate({
@@ -4412,27 +4749,29 @@ export default function Sidebar() {
           items: dragListItems,
           queuedKeys,
           queueDropId: QUEUE_DROP_ID,
+          snoozeAllowed,
           planKind: (target) =>
-            source === undefined
+            planSource === undefined
               ? "none"
               : planSidebarThreadDrop(
-                  sidebarDropPlanInput(
-                    dropBoard,
-                    dragOrigin,
-                    {
-                      ...source,
-                      supportsSettlement:
-                        serverConfigs.get(source.environmentId)?.environment.capabilities
-                          .threadSettlement === true,
-                    },
-                    target,
-                  ),
+                  sidebarDropPlanInput(dropBoard, dragOrigin, planSource, target),
                 ).kind,
         }),
       {
         items: dragListItems,
         activationY: dragActivationY ?? null,
-        ...(dragOrigin.queuedDraft ? {} : { pointerDropIds: [QUEUE_DROP_ID] }),
+        // Zones are hit where painted, before the gate, so a refused row gets none of them. The
+        // empty shelf's box is one only while its hint shows.
+        ...(dragOrigin.queuedDraft
+          ? {}
+          : {
+              pointerDropIds: [
+                QUEUE_DROP_ID,
+                ...(snoozeZoneIds ?? []).filter(
+                  (id) => id !== SNOOZED_PLACEHOLDER_ID || snoozeHint !== "closed",
+                ),
+              ],
+            }),
         // Queue rows only take part in a drag that started in the Queue.
         ...(dragOrigin.fromQueue ? { freeIds: [...queuedKeys] } : { excludeIds: [...queuedKeys] }),
       },
@@ -4444,8 +4783,57 @@ export default function Sidebar() {
     dragListItems,
     dragOrigin,
     queuedKeys,
+    snoozeAllowed,
+    snoozeHint,
+    snoozeZoneIds,
     threadByKey,
   ]);
+  // One snooze per thread at a time — same double-dispatch guard as settle.
+  const snoozingThreadKeysRef = useRef(new Set<string>());
+  const performSnooze = useCallback(
+    async (
+      threadRef: ScopedThreadRef,
+      preset: Pick<SnoozePreset, "snoozedUntil">,
+      opts: { coSnoozingKeys?: ReadonlySet<string>; undoAlso?: (() => void) | undefined } = {},
+    ) => {
+      const threadKey = scopedThreadKey(threadRef);
+      if (snoozingThreadKeysRef.current.has(threadKey)) {
+        return { status: "skipped" } as const;
+      }
+      snoozingThreadKeysRef.current.add(threadKey);
+      try {
+        // Snoozing the open thread moves you forward, same as settle —
+        // both park the thread you're done with for now.
+        const navigateAfterSnooze = planForwardNavigation(threadKey, opts.coSnoozingKeys);
+        const result = await snoozeThread(threadRef, preset.snoozedUntil, {
+          undoAlso: opts.undoAlso,
+        });
+        if (result._tag === "Failure") {
+          // Never navigate away from a thread that did not snooze.
+          return isAtomCommandInterrupted(result)
+            ? ({ status: "interrupted" } as const)
+            : ({ status: "failure", error: squashAtomCommandFailure(result) } as const);
+        }
+        // Only move forward if the user is still on the snoozed thread —
+        // a navigation made during the await wins over ours.
+        if (
+          shouldNavigateAfterThreadPark({
+            threadKey,
+            currentThreadKey: routeThreadKeyRef.current,
+            action: "snooze",
+            now: new Date().toISOString(),
+            thread: readThreadShell(threadRef),
+          })
+        ) {
+          navigateAfterSnooze?.();
+        }
+        return { status: "success" } as const;
+      } finally {
+        snoozingThreadKeysRef.current.delete(threadKey);
+      }
+    },
+    [planForwardNavigation, snoozeThread],
+  );
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
@@ -4469,6 +4857,22 @@ export default function Sidebar() {
         headerRect !== null &&
         headerNode != null &&
         pointerOverVisibleRect(headerNode, headerRect, pointer);
+      const activeThread = threadByKey.get(activeKey);
+      const capabilities =
+        activeThread === undefined
+          ? undefined
+          : serverConfigs.get(activeThread.environmentId)?.environment.capabilities;
+      const now = new Date().toISOString();
+      // Where the thread rests now: a peer may have moved it while it was lifted.
+      const { liveSection, snoozeAllowed } = sidebarReleaseSnoozeState({
+        drag,
+        listedSection: sectionByThreadKey.get(activeKey),
+        restingSection:
+          activeThread === undefined
+            ? undefined
+            : sidebarRestingSection(activeThread, capabilities, now, customSectionIds),
+        ...sidebarSnoozeGateOf(activeThread, capabilities, now),
+      });
       const route = routeSidebarDragEnd({
         drag,
         overId: releasedOverQueue
@@ -4480,6 +4884,7 @@ export default function Sidebar() {
         queuedKeys,
         queueDropId: QUEUE_DROP_ID,
         queueWritable: !useThreadQueueStore.getState().readOnly,
+        snoozeAllowed,
       });
       const queue = useThreadQueueStore.getState();
       const entryIndex = (key: string) =>
@@ -4491,14 +4896,56 @@ export default function Sidebar() {
         if (entry !== undefined && toIndex >= 0) queue.enqueue(entry, toIndex);
         return;
       }
-      const activeThread = threadByKey.get(activeKey);
       if (activeThread === undefined) return;
+      const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+      const queueEntry = {
+        environmentId: activeThread.environmentId,
+        threadId: activeThread.id,
+        draftId: null,
+        label: activeThread.title,
+      };
+      const errorToast = (title: string) => (error: unknown) =>
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      const run = async (
+        operation: Promise<AtomCommandResult<unknown, unknown>>,
+        title: string,
+      ) => {
+        const result = await operation;
+        if (result._tag === "Success") return true;
+        if (!isAtomCommandInterrupted(result)) errorToast(title)(squashAtomCommandFailure(result));
+        return false;
+      };
       if (route.kind === "enqueue") {
-        addToQueueOrSayFull({
-          environmentId: activeThread.environmentId,
-          threadId: activeThread.id,
-          draftId: null,
-          label: activeThread.title,
+        // Snooze -> Queue: "Wake & queue".
+        if (liveSection === "snoozed") {
+          void runSidebarWakeAndQueue({
+            checkOperate: () => checkThreadOperations([activeThread]),
+            enqueue: () => addToQueueOrSayFull(queueEntry),
+            wake: () => run(unsnoozeThread(threadRef), "Failed to wake thread"),
+          });
+        } else {
+          addToQueueOrSayFull(queueEntry);
+        }
+        return;
+      }
+      if (route.kind === "snooze") {
+        void runSidebarSnoozeDrop({
+          drag,
+          liveSection,
+          checkOperate: () => checkThreadOperations([activeThread]),
+          snooze: (snoozedUntil, undoAlso) =>
+            performSnooze(threadRef, { snoozedUntil }, { undoAlso }),
+          unqueue: () => useThreadQueueStore.getState().remove(activeKey),
+          // Undo of a Queue -> Snooze appends it to the Queue again; a full Queue says so.
+          requeue: () => void addToQueueOrSayFull(queueEntry),
+          reportFailure: errorToast("Failed to snooze thread"),
+          reportRequeueFailure: errorToast("Failed to queue thread"),
         });
         return;
       }
@@ -4507,23 +4954,20 @@ export default function Sidebar() {
       const activeSection = drag.fromQueue
         ? drag.activeSection
         : (sectionByThreadKey.get(activeKey) ?? drag.activeSection);
-      // Unqueue first, synchronously: the thread is back in its resting section
-      // in the same render that projects the drop.
-      if (route.unqueue) queue.remove(activeKey);
-      const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
       const plan = planSidebarThreadDrop(
         sidebarDropPlanInput(
           dropBoard,
           { activeKey, activeSection, fromQueue: drag.fromQueue },
           {
             ...activeThread,
-            supportsSettlement:
-              serverConfigs.get(activeThread.environmentId)?.environment.capabilities
-                .threadSettlement === true,
+            supportsSettlement: capabilities?.threadSettlement === true,
+            supportsSections: capabilities?.threadSidebarSections === true,
           },
           target,
         ),
       );
+      const unqueue = sidebarDropUnqueue(route.unqueue, plan);
+      if (unqueue === "now") queue.remove(activeKey);
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
       const assignments =
@@ -4546,24 +4990,6 @@ export default function Sidebar() {
         )
       )
         return;
-      const run = async (
-        operation: Promise<AtomCommandResult<unknown, unknown>>,
-        title: string,
-      ) => {
-        const result = await operation;
-        if (result._tag === "Success") return true;
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title,
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-        return false;
-      };
       // A renumbered row that vanished meanwhile is skipped, not a failure.
       const reorder =
         (command: typeof reorderActiveThread | typeof reorderPinnedThread, title: string) =>
@@ -4606,34 +5032,42 @@ export default function Sidebar() {
           ),
         reorderActive: reorder(reorderActiveThread, "Failed to reorder active threads"),
         reorderPinned: reorder(reorderPinnedThread, "Failed to reorder pinned threads"),
+        joinSection: (sectionId) =>
+          moveThreadToSidebarSection(
+            threadRef,
+            sectionId,
+            sidebarSections?.find((section) => section.id === sectionId)?.name ?? sectionId,
+          ),
+        joined: () => {
+          if (unqueue === "on-join") useThreadQueueStore.getState().remove(activeKey);
+        },
       };
       // A queued member that only unparks never leaves its section, so nothing is held.
       if (plan.kind === "unpark") {
         void runSidebarDropCommands(plan, commands);
         return;
       }
-      const drop = {
+      const drop = sidebarOptimisticDrop({
         key: activeKey,
         sourceSection: activeSection,
         section: target.section,
+        plan,
+        assignments,
         occurredAt: new Date().toISOString(),
-        clearsSnooze:
-          plan.kind === "pin" ||
-          plan.kind === "settle" ||
-          (plan.kind === "move-active" && plan.unsnooze),
-        clearsSection: plan.kind === "move-active" ? (plan.clearsSection ?? null) : null,
-        order: plan.kind === "settle" ? null : plan.order,
-        keysAtDrop: target.section === "active" ? activeKeysById : pinnedKeysById,
-        assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
-      };
+        pinnedKeysById,
+        activeKeysById,
+      });
       void holdSidebarDrop(holdOptimisticDrop, drop, plan, commands);
     },
     [
       activeKeysById,
+      customSectionIds,
       pinnedKeysById,
+      performSnooze,
       serverConfigs,
       dropBoard,
       holdOptimisticDrop,
+      moveThreadToSidebarSection,
       pinThread,
       planForwardNavigation,
       reorderPinnedThread,
@@ -4641,6 +5075,7 @@ export default function Sidebar() {
       sectionByThreadKey,
       setThreadSidebarSection,
       settleThread,
+      sidebarSections,
       dragState,
       queuedKeys,
       sidebarListItems,
@@ -4649,50 +5084,6 @@ export default function Sidebar() {
       unsettleThread,
       unsnoozeThread,
     ],
-  );
-  // One snooze per thread at a time — same double-dispatch guard as settle.
-  const snoozingThreadKeysRef = useRef(new Set<string>());
-  const performSnooze = useCallback(
-    async (
-      threadRef: ScopedThreadRef,
-      preset: Pick<SnoozePreset, "snoozedUntil">,
-      opts: { coSnoozingKeys?: ReadonlySet<string> } = {},
-    ) => {
-      const threadKey = scopedThreadKey(threadRef);
-      if (snoozingThreadKeysRef.current.has(threadKey)) {
-        return { status: "skipped" } as const;
-      }
-      snoozingThreadKeysRef.current.add(threadKey);
-      try {
-        // Snoozing the open thread moves you forward, same as settle —
-        // both park the thread you're done with for now.
-        const navigateAfterSnooze = planForwardNavigation(threadKey, opts.coSnoozingKeys);
-        const result = await snoozeThread(threadRef, preset.snoozedUntil);
-        if (result._tag === "Failure") {
-          // Never navigate away from a thread that did not snooze.
-          return isAtomCommandInterrupted(result)
-            ? ({ status: "interrupted" } as const)
-            : ({ status: "failure", error: squashAtomCommandFailure(result) } as const);
-        }
-        // Only move forward if the user is still on the snoozed thread —
-        // a navigation made during the await wins over ours.
-        if (
-          shouldNavigateAfterThreadPark({
-            threadKey,
-            currentThreadKey: routeThreadKeyRef.current,
-            action: "snooze",
-            now: new Date().toISOString(),
-            thread: readThreadShell(threadRef),
-          })
-        ) {
-          navigateAfterSnooze?.();
-        }
-        return { status: "success" } as const;
-      } finally {
-        snoozingThreadKeysRef.current.delete(threadKey);
-      }
-    },
-    [planForwardNavigation, snoozeThread],
   );
   const attemptSnooze = useCallback(
     (
@@ -5806,6 +6197,26 @@ export default function Sidebar() {
                     )}
                   >
                     {(() => {
+                      const overlayVerb =
+                        dragState === null
+                          ? null
+                          : resolveSidebarDropVerb(
+                              dragState.activeSection,
+                              dragTargetSection,
+                              dragState.fromQueue,
+                              isContextDrag ? null : dragState.overZone,
+                            );
+                      // The badge names the section the drop lands in (its target), not the one
+                      // under the pointer.
+                      const overlaySectionName =
+                        overlayVerb !== "move"
+                          ? null
+                          : dragTargetSection !== null && isCustomSidebarSection(dragTargetSection)
+                            ? (sidebarSections?.find(
+                                (section) => customSidebarSection(section.id) === dragTargetSection,
+                              )?.name ?? null)
+                            : "Active";
+                      const snoozeOver = !isContextDrag && dragState?.overZone === "snooze";
                       const renderThreadRowInner = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
@@ -5858,14 +6269,9 @@ export default function Sidebar() {
                             }
                             isPinned={thread.pinnedAt != null}
                             sortable={sortable}
-                            dropVerb={
-                              dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(
-                                    dragState.activeSection,
-                                    dragTargetSection,
-                                    dragState.fromQueue,
-                                  )
-                                : null
+                            dropVerb={dragState?.activeKey === threadKey ? overlayVerb : null}
+                            dropSectionName={
+                              dragState?.activeKey === threadKey ? overlaySectionName : null
                             }
                             dragOverPinned={
                               dragState?.activeKey === threadKey && dragTargetSection === "pinned"
@@ -6002,10 +6408,6 @@ export default function Sidebar() {
                           : null;
                       // A main-list drag: the Queue collapses to its docked header.
                       const queueDropShown = from !== null && dragState?.fromQueue !== true;
-                      // With custom sections the Queue stays inline: collapsing it at drag start
-                      // would shift the custom blocks under the pointer.
-                      const collapseQueue =
-                        queueDropShown && !listScrolls && (sidebarSections ?? []).length === 0;
                       // A Queue row leaves no section behind, so emptiness hints ignore it.
                       const leavingSection = dragState?.fromQueue ? null : from;
                       const items: ReactNode[] = [
@@ -6029,13 +6431,14 @@ export default function Sidebar() {
                         items.push(
                           <SidebarQueueBlock
                             key="queue"
-                            entries={queueEntries}
+                            entries={sidebarQueueBlockEntries(queuePlacement, shownQueueEntries)}
                             routeKey={routeThreadKey}
                             routeDraftId={routeDraftIdForRows}
                             expanded={queueExpanded}
                             onToggleExpanded={toggleQueueExpanded}
                             dragging={queueDropShown}
-                            collapse={collapseQueue}
+                            collapse={queuePlacement.collapse}
+                            heldDrop={optimisticDrop}
                             renderEntry={(
                               entry: ThreadQueueEntry,
                               bag: QueueRowSortableBag,
@@ -6072,11 +6475,16 @@ export default function Sidebar() {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
+                        // An empty Queue docks with the shelves: inline above the custom sections its
+                        // drop zone would push them down at pickup. Placed after every row
+                        // (`belowShelves`), no marker renders it: the trailing call does.
                         if (
-                          item.marker === "custom-header" ||
-                          item.marker === "working-header" ||
-                          item.marker === "snoozed-header" ||
-                          item.marker === "settled-header"
+                          !queuePlacement.belowShelves &&
+                          ((item.marker === "custom-header" && !queuePlacement.docksWithShelves) ||
+                            item.marker === "working-header" ||
+                            item.marker === "snoozed-header" ||
+                            item.marker === "snoozed-placeholder" ||
+                            item.marker === "settled-header")
                         ) {
                           pushQueue();
                         }
@@ -6134,6 +6542,9 @@ export default function Sidebar() {
                                 name={block.section.name}
                                 collapsedCount={expanded ? undefined : block.total}
                                 dragging={from !== null}
+                                isDropTarget={
+                                  dragTargetSection === customSidebarSection(item.sectionId)
+                                }
                                 toggle={{
                                   expanded,
                                   onToggle: () => toggleCustomSection(item.sectionId),
@@ -6172,6 +6583,7 @@ export default function Sidebar() {
                                 key="snoozed-shelf-header"
                                 marker="snoozed-header"
                                 className={cn(workingThreads.length === 0 && "mt-auto")}
+                                isDropTarget={snoozeOver}
                                 label={
                                   snoozedShelfExpanded
                                     ? "Snoozed"
@@ -6184,14 +6596,23 @@ export default function Sidebar() {
                               />,
                             );
                             break;
+                          case "snoozed-placeholder":
+                            items.push(
+                              <SidebarSnoozedPlaceholder
+                                key="snoozed-placeholder"
+                                firstShelf={workingThreads.length === 0}
+                                // One decision for the paint, the zone and the preview.
+                                showHint={from !== null && snoozeHint !== "closed"}
+                                atEnd={snoozeHint === "at-end"}
+                                isDropTarget={snoozeOver}
+                              />,
+                            );
+                            break;
                           case "settled-header":
                             items.push(
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                className={cn(
-                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
-                                )}
                                 label={
                                   settledShelfExpanded
                                     ? "Settled"
@@ -6281,16 +6702,10 @@ export default function Sidebar() {
                       return items;
                     })()}
                     {settledShelfExpanded && hiddenSettledCount > 0 ? (
-                      <li className="list-none">
-                        <button
-                          type="button"
-                          onClick={showMoreSettled}
-                          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                        >
-                          <PlusIcon aria-hidden className="size-4 shrink-0" />
-                          Show {Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)} more
-                        </button>
-                      </li>
+                      <SidebarSettledShowMore
+                        count={Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)}
+                        onClick={showMoreSettled}
+                      />
                     ) : null}
                   </ul>
                   {dragOverlayNode}

@@ -34,6 +34,7 @@ function render(dragging: boolean, collapse: boolean) {
             onToggleExpanded={() => {}}
             dragging={dragging}
             collapse={collapse}
+            heldDrop={null}
             renderEntry={(queued) => <li data-row={queued.threadId}>{queued.threadId}</li>}
           />
         </ul>
@@ -110,6 +111,7 @@ describe("queue slots header control", () => {
               onToggleExpanded={() => {}}
               dragging={false}
               collapse={false}
+              heldDrop={null}
               renderEntry={(queued) => <li>{queued.threadId}</li>}
             />
           </ul>
@@ -136,6 +138,7 @@ describe("queue slots header control", () => {
             onToggleExpanded={() => {}}
             dragging={false}
             collapse={false}
+            heldDrop={null}
             renderEntry={(queued, _bag, note) => <li data-row={queued.threadId}>{note}</li>}
           />
         </ul>
@@ -282,6 +285,7 @@ describe("queue rows from another device", () => {
             onToggleExpanded={() => {}}
             dragging={false}
             collapse={false}
+            heldDrop={null}
             renderEntry={(queued) => <li>{queued.threadId}</li>}
           />
         </ul>

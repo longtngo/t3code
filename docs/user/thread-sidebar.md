@@ -67,13 +67,13 @@ Pinning does not prevent automatic settlement. Settling a thread removes its pin
 On web and desktop, drag a thread between sections to change its state. Drag a thread up into
 the pinned section to pin it at the spot you drop it; drag a pinned thread down into the active
 list to unpin it. Dragging a thread onto the **Settled** header settles it, and dragging a settled
-thread into the active list un-settles it. A snoozed thread can be dragged out of the snoozed
-shelf, which wakes it, but threads cannot be dragged into the shelf because snoozing needs a wake
-time. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
+thread into the active list un-settles it. Drop a thread on the **Snoozed** shelf to snooze it for an
+hour. With nothing snoozed, an empty **Snoozed** box opens above **Settled** while you drag, or at
+the end of the list when there is no room. Dragging a snoozed thread out of the shelf wakes it. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
 Pinned and active boundary labels appear only while dragging, without moving the rows. The
 other rows slide aside to show where the thread will land. When you cross into another section,
 the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
-**Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
+**Settle**, **Un-settle**, **Wake**, **Snooze 1h**, or **Move to** a section. Its status and hover actions hide during the drag. A pinned
 thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes
 over. Reordering within the same section shows no badge. When there are no pins, drag to the top
 edge to pin a thread. Section labels stay readable for the whole drag, and the section the
@@ -135,7 +135,8 @@ dragging the thread into the active list, takes it out again. A queued thread yo
 Queue to Active goes back to its section. A thread in a section works like
 an active thread: pinning, settling, or snoozing it shows it there instead, and unpinning,
 un-settling, or waking it returns it to its section. With **Working section (beta)** on, a
-working thread stays in its section. You cannot drag threads into a section yet.
+working thread stays in its section. Drag a thread among a section's threads to move it there,
+or onto its header when the section is collapsed or empty; this also unpins, un-settles, or wakes it.
 
 Right-click a section's header, or use the **…** button on it, to rename or delete it, or run
 **Rename sidebar section** or **Delete sidebar section** from the command palette. Deleting a
@@ -150,9 +151,11 @@ On web and desktop, the **Queue** section holds threads that should start when a
 frees up. Add a thread with **Add to queue** from its menu, drag its row onto
 the **Queue** header, or use the queue button or the right-click (long-press on a phone)
 menu on a new-thread draft. Drag queued rows to change their order, and type in a queued
-thread's composer as usual. Drag a queued thread into **Pinned**, **Active**, or **Settled**
+thread's composer as usual. Drag a queued thread into any section
 to take it out of the queue there; the dragged row shows **Unqueue** when the drop only
-returns it to where it was.
+returns it to where it was. Dropping a queued thread on **Snoozed** snoozes it and takes it out of
+the queue; **Undo** puts it back at the end. Dropping a snoozed thread on the **Queue** header wakes
+it and queues it (**Wake & queue**).
 
 The number on the **Queue** header is its active slots. Queued threads send, top first,
 while fewer threads are working or watching background work than that number. A queued

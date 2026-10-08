@@ -1,6 +1,7 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
+  customSidebarSection,
   isCustomSidebarSection,
   resolveSidebarDropTarget,
   sidebarListItemId,
@@ -12,16 +13,58 @@ import {
 } from "./Sidebar.logic";
 
 const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+/** The empty Snoozed shelf's placeholder, by sortable id. */
+export const SNOOZED_PLACEHOLDER_ID = sidebarMarkerId("snoozed-placeholder");
 const hidden = { ...stationary, scaleY: 0 };
 type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
-/** A custom-section header is not a shelf: its block sits in the list flow under Active and
- * carries no auto margin, so it neither absorbs the shelf space nor sets the header scale. */
+/** Where the shelves start (the auto margin): a shelf header, or the empty Snoozed shelf's
+ * placeholder. A custom-section header is not a shelf: its block sits in the list flow under
+ * Active and carries no auto margin. */
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
   (item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
+    item.marker === "snoozed-placeholder" ||
     item.marker === "settled-header");
+
+/** How far a previewing drag moves every row below the Pins boundaries: each boundary opens its
+ * label (scaled by the measured root scale) plus one gap, and rests at zero height with `-mb-px`.
+ * The strategy applies exactly this to every row the shelves' free space does not absorb; the
+ * empty Snoozed shelf's hint needs the same room (`sidebarSnoozeHintState`). */
+export function sidebarDragLabelsShift(boundaryLabelHeight: number, scale = 1): number {
+  return 2 * (boundaryLabelHeight * scale + 1);
+}
+
+/** Where the empty Snoozed shelf shows its hint for this drag. One call decides it for the
+ * strategy, the hint's paint and its place among the drop zones, so they never disagree.
+ * - `closed`: the lifted row may not be snoozed; no hint, no target.
+ * - `in-place`: the 36px box resting above the placeholder's li opens in the free space without
+ *   pushing the shelves: it clears whatever renders above the li (the whole docked Queue block
+ *   when there is one, else the row above) by two gaps plus the label space the same free space
+ *   must also give the Pins labels (`labelsShift`).
+ * - `at-end`: no such room (a crowded or scrolling list, Working rows right above it, or a free
+ *   space the labels need). The box renders out of flow below everything in the list, reached by
+ *   autoscroll: opening it moves no row at pickup, and every source keeps a snooze target. */
+export type SidebarSnoozeHint = "closed" | "in-place" | "at-end";
+
+export function sidebarSnoozeHintState(input: {
+  readonly snoozeAllowed: boolean;
+  /** The placeholder's measured box at rest, in its slot. */
+  readonly hint: { readonly top: number } | undefined;
+  /** The element rendered right before the placeholder's li: the whole docked Queue block (header
+   * and rows) when it docks there, else the row above. */
+  readonly above: { readonly bottom: number } | undefined;
+  /** `sidebarDragLabelsShift` for a main-list drag; 0 for a Queue drag, which never previews. */
+  readonly labelsShift: number;
+}): SidebarSnoozeHint {
+  if (!input.snoozeAllowed || input.hint === undefined) return "closed";
+  // Opened, the box sits one gap above its li: it needs its height plus two gaps of free space,
+  // on top of what the labels take from the same margin.
+  return input.above === undefined || input.hint.top >= input.above.bottom + 2 + input.labelsShift
+    ? "in-place"
+    : "at-end";
+}
 
 /** Keep the lifted card below the Pins label, including when Pins is empty.
  * The container rect follows scrolling; the offset is measured once at pickup. */
@@ -127,8 +170,11 @@ export function createSidebarCollisionDetection(
         }
       }
     }
+    // The empty shelf's placeholder is a zone or nothing, never a list target: its resting box
+    // lies over the row above it when there is no free space.
     let collisions = closestCenter(args).filter(
       (collision) =>
+        collision.id !== SNOOZED_PLACEHOLDER_ID &&
         !options.pointerDropIds?.includes(String(collision.id)) &&
         !options.excludeIds?.includes(String(collision.id)),
     );
@@ -154,6 +200,8 @@ export function createSidebarCollisionDetection(
         // Active ends at the first block below it: a custom section or a shelf. With that header's
         // node missing (transient), skip the re-rank: a lower header would bound Active below a
         // custom section and let a pointer over it resolve to Active.
+        // Not the empty shelf's placeholder: its node is a hint box that can rest over the last
+        // row, and its li ends where the Settled header starts anyway.
         const activeEnd = items.find(
           (item) =>
             item.kind === "marker" &&
@@ -217,19 +265,49 @@ export function createSidebarSortingStrategy(input: {
   /** Space each pinned boundary opens for its label while dragging. The
    * markers stay zero height at rest, so nothing is reserved until pickup. */
   boundaryLabelHeight?: number;
+  /** The measured height of the whole Queue block (header and rows) when it docks right above the
+   * first shelf. */
+  dockedQueueHeight?: number;
+  /** At-end hint only: the measured distance from the last row's bottom to the bottom of the
+   * content rendered after the rows (the "Show N more" li, the Queue block placed after every row);
+   * 0 when there is none. The end target sits below it. */
+  trailingHeight?: number;
+  /** Where the Queue block renders (`sidebarQueueBoundary`): the Queue header moves with it. */
+  queueBoundary?: SidebarBoundary | null;
+  /** While the lifted row may be snoozed: the shelf's drop zones (`sidebarSnoozeZoneIds`).
+   * Over a zone the preview projects as `stickyOverId`, so the bottom-anchored zone does not move
+   * under the pointer. `hint` is
+   * `sidebarSnoozeHintState`'s answer for this drag. Unset: the empty-shelf placeholder stays
+   * closed. */
+  snooze?: {
+    readonly zoneIds: ReadonlySet<string>;
+    readonly hint: SidebarSnoozeHint;
+  };
+  /** The drag state's last list over, the projection over a snooze zone. Sidebar.tsx lists the Queue header in the SortableContext
+   * after the rows, so dnd-kit keeps the preview running while it is the over (it rests every row
+   * for an over outside the context); such an over, not a list item, projects as this one. Rows
+   * that snapped back to rest over the Queue would move a zone next to it when the pointer left. */
+  stickyOverId?: string | null;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
+  const placeholder = indices.get(SNOOZED_PLACEHOLDER_ID) ?? -1;
+  const hint = input.snooze?.hint ?? "closed";
   let previous: Pick<Layout, "rects" | "activeIndex" | "overIndex"> | undefined;
   let transforms: ReturnType<SortingStrategy>[] | null = [];
+  const still: ReturnType<SortingStrategy>[] = [];
 
-  function project({ rects, activeIndex, overIndex }: Layout) {
+  function project({
+    rects,
+    activeIndex,
+    overIndex,
+  }: Pick<Layout, "rects" | "activeIndex" | "overIndex">): ReturnType<SortingStrategy>[] {
     const active = items[activeIndex];
     const over = items[overIndex] ?? active;
-    if (active?.kind !== "thread" || !over || !rects[0]) return [];
+    if (active?.kind !== "thread" || !over || !rects[0]) return still;
     const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
-    if (!target) return [];
+    if (!target) return still;
     const groups: Record<Exclude<SidebarSection, CustomSidebarSection>, ThreadItem[]> = {
       pinned: [],
       active: [],
@@ -237,23 +315,35 @@ export function createSidebarSortingStrategy(input: {
       snoozed: [],
       settled: [],
     };
-    const customBlock: SidebarListItem[] = [];
+    // Each custom section in list order with its rows; a drop into one lands after `customAfter`.
+    const customBlocks: Array<{
+      readonly header: SidebarListItem;
+      readonly section: CustomSidebarSection;
+      readonly rows: ThreadItem[];
+    }> = [];
     let cardHeight = input.cardHeight;
     let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
-        if (isShelfHeader(item)) {
+        if (isShelfHeader(item) && item.marker !== "snoozed-placeholder") {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
-        if (item.marker === "custom-header") customBlock.push(item);
+        if (item.marker === "custom-header")
+          customBlocks.push({
+            header: item,
+            section: customSidebarSection(item.sectionId),
+            rows: [],
+          });
         continue;
       }
-      // A custom row can be lifted out, but a custom section is never a destination until sections accept drops.
+      // A custom row moves with its section's block; a drop into a section opens its slot there.
       if (isCustomSidebarSection(item.section)) {
         cardHeight ??= rects[index]?.height;
-        if (item.key !== active.key) customBlock.push(item);
+        const section = item.section;
+        if (item.key !== active.key)
+          customBlocks.find((block) => block.section === section)?.rows.push(item);
         continue;
       }
       if (item.section === "pinned" || item.section === "active" || item.section === "working")
@@ -267,19 +357,30 @@ export function createSidebarSortingStrategy(input: {
     cardHeight ??= 82 * scale;
     slimHeight ??= 36 * scale;
     const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
-    const group = groups[target.section];
-    const order =
-      target.section === "pinned"
-        ? target.pinnedOrder
-        : target.section === "settled"
-          ? input.settledOrder
-          : (input.activeOrder ?? target.activeOrder);
-    const ranks = new Map(order.map((key, index) => [key, index]));
-    const rank = ranks.get(active.key) ?? Number.POSITIVE_INFINITY;
-    const index = group.findIndex(
-      (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
-    );
-    group.splice(index < 0 ? group.length : index, 0, { ...active, section: target.section });
+    const moved: ThreadItem = { ...active, section: target.section };
+    if (isCustomSidebarSection(target.section)) {
+      const block = customBlocks.find((candidate) => candidate.section === target.section);
+      const after = target.customAfter ?? null;
+      block?.rows.splice(
+        after === null ? 0 : block.rows.findIndex((row) => row.key === after) + 1,
+        0,
+        moved,
+      );
+    } else {
+      const group = groups[target.section];
+      const order =
+        target.section === "pinned"
+          ? target.pinnedOrder
+          : target.section === "settled"
+            ? input.settledOrder
+            : (input.activeOrder ?? target.activeOrder);
+      const ranks = new Map(order.map((key, index) => [key, index]));
+      const rank = ranks.get(active.key) ?? Number.POSITIVE_INFINITY;
+      const index = group.findIndex(
+        (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
+      );
+      group.splice(index < 0 ? group.length : index, 0, moved);
+    }
     const settledOrder = (
       input.settledOrder.length > 0 ? input.settledOrder : groups.settled.map((item) => item.key)
     ).filter((key) => key !== active.key || target.section === "settled");
@@ -301,7 +402,7 @@ export function createSidebarSortingStrategy(input: {
     projected.push(...groups.pinned);
     marker("pinned-divider");
     section("active");
-    projected.push(...customBlock);
+    for (const block of customBlocks) projected.push(block.header, ...block.rows);
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
@@ -314,8 +415,14 @@ export function createSidebarSortingStrategy(input: {
       marker("snoozed-header");
       projected.push(...groups.snoozed);
     }
+    // The empty shelf opens its 36px hint in place only while the lifted row may be snoozed
+    // and the hint fits there; at the end it keeps its own measured place.
+    if (hint === "in-place" && placeholder !== -1) marker("snoozed-placeholder");
     marker("settled-header");
     section("settled");
+    // At the end it is out of the flow, right below the last row, and moves with it.
+    const atEnd = hint === "at-end" && placeholder !== -1;
+    if (atEnd) marker("snoozed-placeholder");
     const heights = projected.map((item) => {
       const index = indices.get(sidebarListItemId(item));
       const rect = index === undefined ? undefined : rects[index];
@@ -337,17 +444,33 @@ export function createSidebarSortingStrategy(input: {
             ? fallback
             : (rect?.height ?? fallback);
     });
-    const firstShelf = items.findIndex(isShelfHeader);
+    // A placeholder rendered at the end is out of the flow: it neither starts the shelves nor
+    // sits above them.
+    const inFlow = (index: number) => hint !== "at-end" || index !== placeholder;
+    const firstShelf = items.findIndex((item, index) => isShelfHeader(item) && inFlow(index));
+    const shelfItem = items[firstShelf];
     const shelfRect = rects[firstShelf];
-    const beforeShelf = rects[firstShelf - 1];
+    const beforeShelf = rects[inFlow(firstShelf - 1) ? firstShelf - 1 : firstShelf - 2];
     const lastRect = rects.at(-1);
     // Consume the shelf's auto margin as drag labels and resized rows need
     // room, keeping the combined shelves at their measured bottom.
     let shelfSpace =
-      shelfRect && beforeShelf && lastRect && shelfRect.top > beforeShelf.bottom + 1
+      shelfRect &&
+      beforeShelf &&
+      lastRect &&
+      // The placeholder's measured node is its hint box above the li; the margin ends at the li.
+      (shelfItem?.kind === "marker" && shelfItem.marker === "snoozed-placeholder"
+        ? shelfRect.top + shelfRect.height
+        : shelfRect.top) >
+        beforeShelf.bottom + 1
         ? Math.max(
             0,
-            lastRect.bottom - rects[0].top - heights.reduce((sum, height) => sum + height + 1, -1),
+            lastRect.bottom -
+              rects[0].top -
+              (atEnd ? heights.slice(0, -1) : heights).reduce(
+                (sum, height) => sum + height + 1,
+                -1,
+              ),
           )
         : 0;
     // The Queue drop zone renders above the first custom header, outside the
@@ -359,17 +482,48 @@ export function createSidebarSortingStrategy(input: {
     const beforeCustom = rects[firstCustom - 1];
     let customGap =
       customRect && beforeCustom ? Math.max(0, customRect.top - beforeCustom.bottom - 1) : 0;
-    shelfSpace = Math.max(0, shelfSpace - customGap);
+    // A Queue header docked right above the shelves is outside the sortable list too: its measured
+    // height is not free space, so rows that grow push the shelves down instead of painting
+    // under it.
+    let queueGap = input.dockedQueueHeight === undefined ? 0 : input.dockedQueueHeight + 1;
+    shelfSpace = Math.max(0, shelfSpace - customGap - queueGap);
     const result = items.map(() => hidden);
+    // Where the in-flow content above an item ends at rest: one gap below the item before it, or at
+    // its bottom when that is a zero-height marker (its -mb-px cancels the gap).
+    const restEndAbove = (index: number) => {
+      const above = rects[index - 1];
+      return above === undefined ? undefined : above.bottom + (above.height === 0 ? 0 : 1);
+    };
+    const firstShelfRestEnd = restEndAbove(inFlow(firstShelf - 1) ? firstShelf : firstShelf - 1);
+    const firstCustomRestEnd = restEndAbove(firstCustom);
+    const shifts = { custom: 0, shelf: 0, trailing: 0 };
+    let shelfReached = false;
+    let customReached = false;
     let top = rects[0].top;
+    // Where the in-flow content ends: the top of whatever renders after the last row.
+    let end: number | undefined;
     for (const [projectedIndex, item] of projected.entries()) {
       if (item.kind === "marker" && item.marker === "custom-header") {
+        // The Queue block rendered above the custom sections moves with the content above it.
+        if (!customReached && firstCustomRestEnd !== undefined)
+          shifts.custom = top - firstCustomRestEnd;
+        customReached = true;
         top += customGap;
         customGap = 0;
       }
       if (isShelfHeader(item)) {
-        top += shelfSpace;
+        // The Queue block docked above the shelves moves with the content above it, so
+        // the gap carried below it holds whether the preview grows or shrinks that content.
+        if (!shelfReached && firstShelfRestEnd !== undefined)
+          shifts.shelf = top - firstShelfRestEnd;
+        shelfReached = true;
+        top += shelfSpace + queueGap;
         shelfSpace = 0;
+        queueGap = 0;
+      }
+      if (atEnd && sidebarListItemId(item) === SNOOZED_PLACEHOLDER_ID) {
+        end = top;
+        top += input.trailingHeight ?? 0;
       }
       const index = indices.get(sidebarListItemId(item));
       const rect = index === undefined ? undefined : rects[index];
@@ -377,20 +531,93 @@ export function createSidebarSortingStrategy(input: {
       top += heights[projectedIndex]! + 1;
     }
     result[activeIndex] = stationary;
+    shifts.trailing = (end ?? top) - (restEndAbove(rects.length) ?? end ?? top);
+    // The content after the list in `sidebarSortableIds`: the Queue header, then "Show N more".
+    const boundary = input.queueBoundary ?? null;
+    result.push(
+      { ...stationary, y: boundary === null ? 0 : shifts[boundary] },
+      { ...stationary, y: shifts.trailing },
+    );
     return result;
   }
 
+  const ids = items.map(sidebarListItemId);
+  // Over a snooze zone, project as the drag state's last other over. A rebuilt strategy
+  // reads it from its input, so a stale render between dnd-kit's over and the drag state
+  // update still lands on the previous over.
+  const projectedOver = ({ activeIndex, overIndex }: Pick<Layout, "activeIndex" | "overIndex">) => {
+    const overId = ids[overIndex];
+    const sticky =
+      overId === undefined ? overIndex >= 0 : input.snooze?.zoneIds.has(overId) === true;
+    return sticky ? (indices.get(input.stickyOverId ?? "") ?? activeIndex) : overIndex;
+  };
+  // The context's rects run past the list (the content after the rows): project the rows'.
+  const listRects = (rects: Layout["rects"]) =>
+    rects.length > items.length ? rects.slice(0, items.length) : rects;
   return (args) => {
+    const overIndex = projectedOver(args);
     if (
       previous?.rects !== args.rects ||
       previous.activeIndex !== args.activeIndex ||
-      previous.overIndex !== args.overIndex
+      previous.overIndex !== overIndex
     ) {
-      previous = args;
-      transforms = project(args);
+      previous = { rects: args.rects, activeIndex: args.activeIndex, overIndex };
+      transforms = project({ ...args, rects: listRects(args.rects), overIndex });
     }
     return transforms === null
       ? verticalListSortingStrategy(args)
       : (transforms[args.index] ?? stationary);
   };
+}
+
+/** "Show N more" below the expanded Settled rows, by sortable id. */
+export const SHOW_MORE_ID = "sidebar-settled-show-more";
+
+/** The main SortableContext's items: the list, then the content rendered after it, which can never
+ * be lifted. Listed last, they keep every row's index, and the strategy hands them the
+ * shift of the content above them, so they move with the rows and with the rows' transition:
+ * - the Queue header, a drop zone: it keeps dnd-kit displacing the rows while it is the over, which
+ *   otherwise snap to rest and move the zones beside it. The strategy projects it as the sticky over;
+ * - "Show N more", which is no drop target at all. */
+export function sidebarSortableIds(
+  items: readonly SidebarListItem[],
+  queueDropId: string,
+): string[] {
+  return [...items.map(sidebarListItemId), queueDropId, SHOW_MORE_ID];
+}
+
+/** The drag-state part of the strategy input: the sticky over, for an over outside the list (the
+ * Queue header) and, while the lifted row may be snoozed, for the shelf's zones. */
+export function sidebarStrategyDragInput(input: {
+  readonly stickyOverId: string | null;
+  /** `sidebarSnoozeZoneIds` as a set, or null when the lifted row may not be snoozed. */
+  readonly snoozeZoneIds: ReadonlySet<string> | null;
+  readonly hint: SidebarSnoozeHint;
+}): Pick<Parameters<typeof createSidebarSortingStrategy>[0], "stickyOverId" | "snooze"> {
+  return {
+    stickyOverId: input.stickyOverId,
+    ...(input.snoozeZoneIds === null
+      ? {}
+      : { snooze: { zoneIds: input.snoozeZoneIds, hint: input.hint } }),
+  };
+}
+
+/** Content after the sortable list's items that renders in the flow below rows:
+ * - `custom`: the Queue block rendered above the first custom header;
+ * - `shelf`: the Queue block docked right above the first shelf;
+ * - `trailing`: what renders after the last row (the Queue placed after every row, "Show N more"). */
+export type SidebarBoundary = "custom" | "shelf" | "trailing";
+
+/** Which boundary the Queue block renders at for this placement, or null when it does not move with
+ * the preview: collapsed to its header with its own auto margin, it sits in the free space the
+ * shelves' margin shares, and rows the labels push past that margin paint under the opaque header
+ * (accepted: paint and hit-test still agree there). */
+export function sidebarQueueBoundary(placement: {
+  readonly docksWithShelves: boolean;
+  readonly belowShelves: boolean;
+  readonly collapse: boolean;
+}): SidebarBoundary | null {
+  if (placement.belowShelves) return "trailing";
+  if (placement.collapse) return null;
+  return placement.docksWithShelves ? "shelf" : "custom";
 }

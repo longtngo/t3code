@@ -32,6 +32,7 @@ function Harness({ thread }: { thread: SidebarThreadSummary }) {
         now: NOW,
         customSectionIds: defined,
         destinationKeys: ["q:1"],
+        queued: false,
         keyByThread: new Map([["q:1", thread.activeOrderKey]]),
       })
     ) {
@@ -131,6 +132,8 @@ describe("the drop runs its commands inside the hold", () => {
     pin: vi.fn(async (_orderKey: string | undefined) => true),
     reorderActive: vi.fn(async (_threadKey: string, _orderKey: string) => true),
     reorderPinned: vi.fn(async (_threadKey: string, _orderKey: string) => true),
+    joinSection: vi.fn(async (_sectionId: string) => true),
+    joined: vi.fn(() => {}),
     ...overrides,
   });
   const moveActive = {
@@ -220,7 +223,7 @@ describe("the drop runs its commands inside the hold", () => {
 
   it("a settle runs the settle alone", async () => {
     const fakes = commands();
-    await runSidebarDropCommands({ kind: "settle" }, fakes);
+    await runSidebarDropCommands({ kind: "settle", unsnooze: false }, fakes);
     expect(fakes.settle).toHaveBeenCalledOnce();
     for (const other of [fakes.unpin, fakes.reorderActive, fakes.reorderPinned]) {
       expect(other).not.toHaveBeenCalled();
@@ -293,5 +296,67 @@ describe("the drop runs its commands inside the hold", () => {
     expect(await dragsEnabled(mounted)).toBe(false);
     await act(async () => second.resolve());
     expect(await dragsEnabled(mounted)).toBe(true);
+  });
+
+  const join = {
+    kind: "move-active",
+    order: ["f1", "q:1"],
+    assignments: [{ id: "q:1", orderKey: "e" }],
+    unpin: false,
+    unsettle: false,
+    unsnooze: false,
+    joinsSection: "later",
+  } as const;
+
+  it("a join runs the section move, then `joined`, then the keys, and never clears", async () => {
+    const calls: string[] = [];
+    const fakes = commands({
+      joinSection: vi.fn(async (sectionId: string) => {
+        calls.push(`join ${sectionId}`);
+        return true;
+      }),
+      joined: vi.fn(() => {
+        calls.push("joined");
+      }),
+      clearSection: vi.fn(async () => {
+        calls.push("clear");
+        return true;
+      }),
+      reorderActive: vi.fn(async (threadKey: string, orderKey: string) => {
+        calls.push(`key ${threadKey}=${orderKey}`);
+        return true;
+      }),
+    });
+    await runSidebarDropCommands(join, fakes);
+    expect(calls).toEqual(["join later", "joined", "key q:1=e"]);
+  });
+
+  it("a refused or failed join writes nothing else", async () => {
+    const fakes = commands({ joinSection: vi.fn(async () => false) });
+    await runSidebarDropCommands(join, fakes);
+    expect(fakes.joined).not.toHaveBeenCalled();
+    expect(fakes.reorderActive).not.toHaveBeenCalled();
+    for (const other of [fakes.clearSection, fakes.unpin, fakes.unsettle, fakes.unsnooze]) {
+      expect(other).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a settle from Snoozed wakes after the settle, and only if it landed", async () => {
+    const calls: string[] = [];
+    const fakes = commands({
+      settle: vi.fn(async () => {
+        calls.push("settle");
+        return true;
+      }),
+      unsnooze: vi.fn(async () => {
+        calls.push("unsnooze");
+        return true;
+      }),
+    });
+    await runSidebarDropCommands({ kind: "settle", unsnooze: true }, fakes);
+    expect(calls).toEqual(["settle", "unsnooze"]);
+    const refused = commands({ settle: vi.fn(async () => false) });
+    await runSidebarDropCommands({ kind: "settle", unsnooze: true }, refused);
+    expect(refused.unsnooze).not.toHaveBeenCalled();
   });
 });
