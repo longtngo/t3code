@@ -10,6 +10,8 @@ import { useThreadUndoNotice } from "./showThreadUndoNotice";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryServerConfigAtom } from "../state/server";
 import { useThreadQueueStore } from "../threadQueueStore";
+import { useThreadQueueLeavingStore } from "../threadQueueLeaving";
+import { nextThreadQueueAction } from "../components/threadQueue.logic";
 import type { DraftId } from "../composerDraftStore";
 import { QUEUE_SENDING_MESSAGE, SNOOZE_QUEUE_READ_ONLY_MESSAGE } from "../threadQueueAdd";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -358,6 +360,63 @@ describe("Snooze on a queued thread", () => {
     await useThreadActions().snoozeThread(target, inHour());
     expect(queuedAtSnooze).toEqual(["thread", "other"]);
     expect(queuedThreadIds()).toEqual(["other"]);
+  });
+
+  /** What the queue coordinator would claim now, with one free slot. */
+  const coordinatorClaims = () => {
+    const action = nextThreadQueueAction({
+      entries: useThreadQueueStore.getState().entries,
+      paused: false,
+      inFlight: null,
+      threads: [],
+      nowMs: Date.now(),
+      slots: 1,
+      perProvider: false,
+      providerSlots: {},
+      visibleInstanceIds: [],
+      targetInstanceOf: () => null,
+      ownerId: null,
+      leaving: useThreadQueueLeavingStore.getState().keys,
+    });
+    return action.kind === "claim" ? action.key : null;
+  };
+
+  it("is not sent while the snooze is in flight; the next entry is", async () => {
+    let claimedAtSnooze: string | null = null;
+    commands.snooze.mockImplementation(async () => {
+      claimedAtSnooze = coordinatorClaims();
+      return AsyncResult.success(undefined);
+    });
+    // The mark ends only once the thread already left the Queue: no gap between the two.
+    const queuedAtRelease: string[][] = [];
+    const unsubscribe = useThreadQueueLeavingStore.subscribe(({ keys }) => {
+      if (keys.size === 0) queuedAtRelease.push(queuedThreadIds());
+    });
+    try {
+      await useThreadActions().snoozeThread(target, inHour());
+    } finally {
+      unsubscribe();
+    }
+    expect(claimedAtSnooze).toBe("undo-env:other");
+    expect(queuedAtRelease).toEqual([["other"]]);
+  });
+
+  it.each([
+    ["refused", async () => AsyncResult.failure(Cause.fail(new Error("nope")))],
+    ["interrupted", async () => AsyncResult.failure(Cause.interrupt())],
+    [
+      "thrown",
+      async () => {
+        throw new Error("socket closed");
+      },
+    ],
+  ])("after a %s snooze it stays queued and sendable at once", async (_name, snooze) => {
+    commands.snooze.mockImplementationOnce(snooze);
+    await useThreadActions()
+      .snoozeThread(target, inHour())
+      .catch(() => {});
+    expect(queuedThreadIds()).toEqual(["thread", "other"]);
+    expect(coordinatorClaims()).toBe("undo-env:thread");
   });
 
   it("stays queued when the snooze failed or was interrupted", async () => {

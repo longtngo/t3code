@@ -83,7 +83,10 @@ const fixture = vi.hoisted(() => {
   };
 });
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => {
+  const navigate = vi.fn();
+  return { useNavigate: () => navigate };
+});
 vi.mock("../state/environments", () => ({
   useEnvironments: () => ({ presentationById: fixture.presentationById }),
   // No primary unless a test sets one: slot settings then come from the local store.
@@ -110,31 +113,42 @@ vi.mock("../state/server", async (importOriginal) => {
     ),
   };
 });
-// The network boundary: every command the coordinator dispatches lands here.
-vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: (command: { label: string }) => async (value: unknown) => {
-    fixture.commandCalls.push({ label: command.label, value });
-    fixture.onCommand?.(command.label, value);
+// The network boundary: every command the coordinator dispatches lands here. One function per
+// command, stable across renders like the real hook's, so a render alone never re-decides.
+vi.mock("../state/use-atom-command", () => {
+  const byLabel = new Map<string, (value: unknown) => Promise<unknown>>();
+  const run = (label: string) => async (value: unknown) => {
+    fixture.commandCalls.push({ label, value });
+    fixture.onCommand?.(label, value);
     const { AsyncResult } = await import("effect/reactivity");
     // A settings write is the queue-slot import; the server accepts it.
     const patch = (value as { input?: { patch?: { queueSlotsImport?: unknown } } }).input?.patch;
     return AsyncResult.success(
-      command.label === UPDATE_SETTINGS ? { queueSlots: patch?.queueSlotsImport } : undefined,
+      label === UPDATE_SETTINGS ? { queueSlots: patch?.queueSlotsImport } : undefined,
     );
-  },
-}));
+  };
+  return {
+    useAtomCommand: ({ label }: { label: string }) => {
+      const command = byLabel.get(label) ?? run(label);
+      byLabel.set(label, command);
+      return command;
+    },
+  };
+});
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { primaryServerConfigAtom } from "../state/server";
 import { renderDom } from "../testing/renderDom";
-import { type ThreadQueueEntry } from "../threadQueueRules";
+import { useThreadQueueLeavingStore, whileLeavingThreadQueue } from "../threadQueueLeaving";
+import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
 import {
   queueDeviceId,
   removeSentThreadFromQueue,
   useThreadQueueStore,
   type ThreadQueueConnection,
 } from "../threadQueueStore";
+import { customSidebarSection, holdSidebarDrop, type SidebarOptimisticDrop } from "./Sidebar.logic";
 import { ThreadQueueCoordinator } from "./ThreadQueueCoordinator";
 
 const env = fixture.env as ThreadQueueEntry["environmentId"];
@@ -768,3 +782,208 @@ describe("ThreadQueueCoordinator with a primary environment", () => {
     ]);
   });
 });
+
+// A Queue row dropped into a custom section stays queued until its section move lands; the
+// drop then unqueues it. Meanwhile the coordinator must not send it, and a failed move must
+// leave it queued and sendable.
+describe("ThreadQueueCoordinator while a Queue row's section drop is pending", () => {
+  const droppedKey = threadQueueEntryKey({ environmentId: env, threadId: threadId("queued-b") });
+  const joinPlan = {
+    kind: "move-active",
+    order: [droppedKey],
+    assignments: [],
+    unpin: false,
+    unsettle: false,
+    unsnooze: false,
+    joinsSection: "later",
+  } as const;
+  const drop: SidebarOptimisticDrop = {
+    key: droppedKey,
+    sourceSection: "active",
+    section: customSidebarSection("later"),
+    occurredAt: "2026-09-13T10:00:00.000Z",
+    clearsSnooze: false,
+    clearsSection: null,
+    order: [droppedKey],
+    keysAtDrop: new Map(),
+    assignedKeys: new Map(),
+  };
+  /** The drop as the sidebar runs it, with the section move answered by `move`. */
+  const startDrop = (move: () => Promise<boolean>) => {
+    const unexpected = async () => {
+      throw new Error("a join runs no other command");
+    };
+    return holdSidebarDrop(
+      async (_drop, sequence) => void (await sequence()),
+      drop,
+      joinPlan,
+      {
+        settle: unexpected,
+        clearSection: unexpected,
+        unpin: unexpected,
+        unsettle: unexpected,
+        unsnooze: unexpected,
+        pin: unexpected,
+        reorderActive: unexpected,
+        reorderPinned: unexpected,
+        joinSection: move,
+        joined: () => useThreadQueueStore.getState().remove(droppedKey),
+      },
+      "on-join",
+    );
+  };
+  const sentOnce = () => {
+    let started!: () => void;
+    const sent = new Promise<void>((resolve) => (started = resolve));
+    const unsubscribe = useThreadQueueStore.subscribe((state) => {
+      if (state.inFlight?.sentAt != null) started();
+    });
+    return sent.finally(unsubscribe);
+  };
+  const queuedIds = () => useThreadQueueStore.getState().entries.map((entry) => entry.threadId);
+
+  beforeEach(() => {
+    // A free slot on each instance: either entry could go out.
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    const drafts = useComposerDraftStore.getState();
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue a");
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue b");
+  });
+
+  it("skips the dropped row and sends the next; the landed move unqueues it unsent", async () => {
+    const queue = useThreadQueueStore.getState();
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-b"), draftId: null });
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-a"), draftId: null });
+    const move = deferredJoin();
+    const done = startDrop(() => move.promise);
+    const sent = sentOnce();
+
+    await renderDom(<ThreadQueueCoordinator />);
+    // queued-b sits first with a free slot, but it is leaving the Queue.
+    expect(useThreadQueueStore.getState().inFlight?.entry.threadId).toBe("queued-a");
+    await sent;
+
+    await act(async () => {
+      move.resolve(true);
+      await done;
+    });
+    expect(startedThreadIds()).toEqual(["queued-a"]);
+    expect(queuedIds()).toEqual([]);
+  });
+
+  it.each([
+    ["refused", (move: ReturnType<typeof deferredJoin>) => move.resolve(false)],
+    ["thrown", (move: ReturnType<typeof deferredJoin>) => move.reject(new Error("socket closed"))],
+  ])("a %s move leaves the row queued, and it sends", async (_name, settle) => {
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: threadId("queued-b"), draftId: null });
+    const move = deferredJoin();
+    const done = startDrop(() => move.promise);
+    const sent = sentOnce();
+
+    // The queue's tick never fires: only the release can bring the row back.
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      expect(useThreadQueueStore.getState().inFlight).toBeNull();
+      expect(queuedIds()).toEqual(["queued-b"]);
+
+      await act(async () => {
+        settle(move);
+        await done.catch(() => {});
+      });
+      expect(useThreadQueueStore.getState().inFlight?.entry.threadId).toBe("queued-b");
+      await sent;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(startedThreadIds()).toEqual(["queued-b"]);
+  });
+});
+
+// Several commands can mark rows at once, a row even twice (a section drop, then a snooze from
+// its menu while the move is in flight). Each release frees only its own mark.
+describe("ThreadQueueCoordinator with several leaving marks", () => {
+  const keyOf = (id: string) => threadQueueEntryKey({ environmentId: env, threadId: threadId(id) });
+  const queuedIds = () => useThreadQueueStore.getState().entries.map((entry) => entry.threadId);
+  beforeEach(() => {
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    const drafts = useComposerDraftStore.getState();
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue a");
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue b");
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("two marks on one row: the first to end does not release the other", async () => {
+    const first = deferredJoin();
+    const second = deferredJoin();
+    const p1 = whileLeavingThreadQueue(keyOf("queued-b"), () => first.promise);
+    const p2 = whileLeavingThreadQueue(keyOf("queued-b"), () => second.promise);
+    first.resolve(false);
+    await p1;
+    expect(useThreadQueueLeavingStore.getState().keys.has(keyOf("queued-b"))).toBe(true);
+    second.resolve(false);
+    await p2;
+    expect(useThreadQueueLeavingStore.getState().keys.size).toBe(0);
+  });
+
+  it("a refused drop that ends while a snooze of the same row runs does not send it", async () => {
+    useThreadQueueStore
+      .getState()
+      .enqueue({ environmentId: env, threadId: threadId("queued-b"), draftId: null });
+    const drop = deferredJoin();
+    const snooze = deferredJoin();
+    const dropped = whileLeavingThreadQueue(keyOf("queued-b"), () => drop.promise);
+    const snoozed = whileLeavingThreadQueue(keyOf("queued-b"), () => snooze.promise);
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    await renderDom(<ThreadQueueCoordinator />);
+    await act(async () => {
+      drop.resolve(false);
+      await dropped;
+    });
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
+    expect(queuedIds()).toEqual(["queued-b"]);
+    await act(async () => {
+      snooze.resolve(true);
+      await snoozed;
+    });
+  });
+
+  it("two rows: a refusal and a throw each release only their own row", async () => {
+    const queue = useThreadQueueStore.getState();
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-a"), draftId: null });
+    queue.enqueue({ environmentId: env, threadId: threadId("queued-b"), draftId: null });
+    const a = deferredJoin();
+    const b = deferredJoin();
+    const leavingA = whileLeavingThreadQueue(keyOf("queued-a"), () => a.promise);
+    const leavingB = whileLeavingThreadQueue(keyOf("queued-b"), () => b.promise);
+    vi.useFakeTimers({ toFake: ["setInterval"] });
+    await renderDom(<ThreadQueueCoordinator />);
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
+    await act(async () => {
+      b.resolve(false);
+      await leavingB;
+    });
+    // b's release alone brings b back; a is still leaving and is skipped.
+    expect(useThreadQueueStore.getState().inFlight?.entry.threadId).toBe("queued-b");
+    expect([...useThreadQueueLeavingStore.getState().keys.keys()]).toEqual([keyOf("queued-a")]);
+    await vi.waitFor(() => expect(startedThreadIds()).toEqual(["queued-b"]));
+    await act(async () => {
+      a.reject(new Error("socket closed"));
+      await leavingA.catch(() => {});
+    });
+    expect(useThreadQueueLeavingStore.getState().keys.size).toBe(0);
+    expect(queuedIds()).toEqual(["queued-a"]);
+  });
+});
+
+function deferredJoin() {
+  let resolve!: (joined: boolean) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<boolean>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}

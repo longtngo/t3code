@@ -83,6 +83,8 @@ export function nextThreadQueueAction(input: {
   readonly targetInstanceOf: (entry: ThreadQueueEntry) => string | null;
   /** This device's id in server mode, so only its own entries are claimed; null in local mode. */
   readonly ownerId: string | null;
+  /** Entries this tab is taking out of the Queue (`useThreadQueueLeavingStore`): skipped. */
+  readonly leaving: { has(key: string): boolean };
 }): ThreadQueueAction {
   const { inFlight, nowMs } = input;
   const now = new Date(nowMs).toISOString();
@@ -144,6 +146,7 @@ export function nextThreadQueueAction(input: {
     (entry) =>
       (input.ownerId === null || entry.ownerId === input.ownerId) &&
       !busyKeys.has(threadQueueEntryKey(entry)) &&
+      !input.leaving.has(threadQueueEntryKey(entry)) &&
       fits(entry),
   );
   return pick ? { kind: "claim", key: threadQueueEntryKey(pick) } : { kind: "wait" };

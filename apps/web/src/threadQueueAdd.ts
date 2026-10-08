@@ -67,6 +67,17 @@ export function queueRefusesSnooze(threadKey: string): boolean {
 }
 
 /**
+ * An archived or deleted thread leaves the Queue once the command landed, rather than when the
+ * coordinator's prune sees the change (prune still covers a removal the queue drops).
+ */
+export function leaveQueueForRemoval(threadKey: string): void {
+  const queue = useThreadQueueStore.getState();
+  if (queue.entries.some((candidate) => threadQueueEntryKey(candidate) === threadKey)) {
+    queue.remove(threadKey);
+  }
+}
+
+/**
  * A snoozed thread leaves the Queue, or the Queue's send would wake it. Call once the snooze
  * landed. Returns the snooze Undo's follow-up, which appends it to the Queue again once it is
  * awake, or undefined when it was not queued here.

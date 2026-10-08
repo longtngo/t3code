@@ -27,6 +27,7 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { queueAndWake, threadQueueEntryKey } from "../threadQueueRules";
+import { whileLeavingThreadQueue } from "../threadQueueLeaving";
 import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
@@ -1409,8 +1410,14 @@ export function holdSidebarDrop(
   drop: SidebarOptimisticDrop,
   plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "refuse" | "unpark" }>,
   commands: SidebarDropCommands,
+  /** `sidebarDropUnqueue(...)`: an "on-join" row is not sent while the drop runs. */
+  unqueue: "now" | "on-join" | null,
 ): Promise<void> {
-  return holdDuring(drop, () => runSidebarDropCommands(plan, commands));
+  const run = () => runSidebarDropCommands(plan, commands);
+  return holdDuring(
+    drop,
+    unqueue === "on-join" ? () => whileLeavingThreadQueue(drop.key, run) : run,
+  );
 }
 
 /**

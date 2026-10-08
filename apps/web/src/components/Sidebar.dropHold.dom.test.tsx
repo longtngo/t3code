@@ -162,7 +162,9 @@ describe("the drop runs its commands inside the hold", () => {
         return true;
       }),
     });
-    await act(async () => void holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes));
+    await act(
+      async () => void holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes, null),
+    );
     expect(fakes.clearSection).toHaveBeenCalledOnce();
     expect(await dragsEnabled(mounted)).toBe(false);
     await act(async () => clear.resolve());
@@ -176,7 +178,7 @@ describe("the drop runs its commands inside the hold", () => {
   it("stops at the first failed command and releases", async () => {
     const mounted = await renderDom(<Harness thread={member} />);
     const fakes = commands({ unpin: vi.fn(async () => false) });
-    await act(async () => holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes));
+    await act(async () => holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes, null));
     expect(fakes.clearSection).toHaveBeenCalledOnce();
     expect(fakes.reorderActive).not.toHaveBeenCalled();
     expect(await dragsEnabled(mounted)).toBe(true);
@@ -185,7 +187,7 @@ describe("the drop runs its commands inside the hold", () => {
   it("a refused section clear changes nothing else and releases", async () => {
     const mounted = await renderDom(<Harness thread={member} />);
     const fakes = commands({ clearSection: vi.fn(async () => false) });
-    await act(async () => holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes));
+    await act(async () => holdSidebarDrop(hold!.holdDuring, baseDrop, moveActive, fakes, null));
     expect(fakes.clearSection).toHaveBeenCalledOnce();
     expect(fakes.unpin).not.toHaveBeenCalled();
     expect(fakes.reorderActive).not.toHaveBeenCalled();

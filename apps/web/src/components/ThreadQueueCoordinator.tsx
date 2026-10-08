@@ -34,6 +34,7 @@ import {
   subscribeToCrossTabThreadQueueUpdates,
   useThreadQueueStore,
 } from "../threadQueueStore";
+import { useThreadQueueLeavingStore } from "../threadQueueLeaving";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import { visibleQueueInstanceIds } from "./queueSlotSources";
 import {
@@ -125,6 +126,7 @@ export function ThreadQueueCoordinator() {
       };
     }),
   );
+  const leaving = useThreadQueueLeavingStore((state) => state.keys);
   const { slots, perProvider, providerSlots } = useQueueSlotSettings();
   useImportLocalQueueSlots();
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -305,6 +307,7 @@ export function ThreadQueueCoordinator() {
       // Claim and landing ages are server-stamped: measure them on the server's clock.
       nowMs: useThreadQueueStore.getState().serverNow(),
       ownerId,
+      leaving,
       slots,
       perProvider,
       providerSlots,
@@ -347,6 +350,7 @@ export function ThreadQueueCoordinator() {
     active,
     entries,
     inFlight,
+    leaving,
     ownerId,
     paused,
     perProvider,

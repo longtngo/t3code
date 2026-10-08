@@ -94,6 +94,7 @@ const base = (): DecideInput => ({
   visibleInstanceIds: [],
   targetInstanceOf: () => null,
   ownerId: null,
+  leaving: new Set(),
 });
 
 function decide(threads: EnvironmentThreadShell[], overrides: Partial<DecideInput> = {}) {
@@ -157,6 +158,14 @@ describe("nextThreadQueueAction", () => {
       kind: "claim",
       key: "env-1:queued-1",
     });
+  });
+
+  it("skips an entry leaving the Queue, and waits when every entry is", () => {
+    expect(nextThreadQueueAction({ ...base(), leaving: new Set(["env-1:queued-1"]) })).toEqual({
+      kind: "claim",
+      key: "env-1:queued-2",
+    });
+    expect(decide([], { leaving: new Set(["env-1:queued-1", "env-1:queued-2"]) })).toBe("wait");
   });
 
   it("slots 0 holds the queue in both modes, even for an entry that would refuse", () => {

@@ -5060,7 +5060,7 @@ export default function Sidebar() {
         pinnedKeysById,
         activeKeysById,
       });
-      void holdSidebarDrop(holdOptimisticDrop, drop, plan, commands);
+      void holdSidebarDrop(holdOptimisticDrop, drop, plan, commands, unqueue);
     },
     [
       activeKeysById,

@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -35,6 +35,8 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn<(message: string) => Promise<boolean>>(),
   toasts: [] as string[],
   afterRequest: undefined as ((action: string) => void) | undefined,
+  /** Actions the server answers with a failure, or that throw. */
+  failing: new Map<string, "refused" | "thrown">(),
   sessionLookupFails: false,
 }));
 
@@ -62,6 +64,9 @@ vi.mock("../state/use-atom-command", () => ({
         return AsyncResult.failure(Cause.fail(new Error("Server denied the request")));
       }
       state.afterRequest?.(action);
+      const failing = state.failing.get(action);
+      if (failing === "thrown") throw new Error("socket closed");
+      if (failing === "refused") return AsyncResult.failure(Cause.fail(new Error("refused")));
       return AsyncResult.success(undefined);
     },
 }));
@@ -166,6 +171,9 @@ vi.mock("./useSettings", () => ({
 }));
 
 import { useThreadActions } from "./useThreadActions";
+import { nextThreadQueueAction } from "../components/threadQueue.logic";
+import { useThreadQueueLeavingStore } from "../threadQueueLeaving";
+import { useThreadQueueStore } from "../threadQueueStore";
 
 const primary = EnvironmentId.make("primary");
 const secondary = EnvironmentId.make("secondary");
@@ -229,6 +237,7 @@ beforeEach(() => {
   state.confirm.mockReset().mockResolvedValue(true);
   state.toasts = [];
   state.afterRequest = undefined;
+  state.failing = new Map();
   state.sessionLookupFails = false;
 });
 
@@ -351,5 +360,96 @@ describe("thread action permissions", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+// A queued thread being archived or deleted leaves the Queue once the command landed. Until then
+// the Queue's coordinator must not send it; a refused or failed command leaves it sendable.
+describe("archive or delete of a queued thread", () => {
+  const entry = (threadId: string) => ({
+    environmentId: secondary,
+    threadId: ThreadId.make(threadId),
+    draftId: null,
+    addedAt: 1,
+    ownerId: "device",
+    label: threadId,
+  });
+  const key = (threadId: string) => `${secondary}:${threadId}`;
+  const queuedThreadIds = () =>
+    useThreadQueueStore.getState().entries.map((candidate) => candidate.threadId);
+  /** What the queue coordinator would claim now, with one free slot. */
+  const coordinatorClaims = () => {
+    const action = nextThreadQueueAction({
+      entries: useThreadQueueStore.getState().entries,
+      paused: false,
+      inFlight: null,
+      threads: [],
+      nowMs: Date.now(),
+      slots: 1,
+      perProvider: false,
+      providerSlots: {},
+      visibleInstanceIds: [],
+      targetInstanceOf: () => null,
+      ownerId: null,
+      leaving: useThreadQueueLeavingStore.getState().keys,
+    });
+    return action.kind === "claim" ? action.key : null;
+  };
+  const remove = {
+    archive: (actions: ThreadActions) => actions.archiveThread(target),
+    delete: (actions: ThreadActions) => actions.deleteThread(target),
+  };
+
+  beforeEach(() => {
+    state.scopes.get(secondary)!.add(AuthOrchestrationOperateScope);
+    useThreadQueueStore.setState({
+      mode: "local",
+      readOnly: false,
+      entries: [entry("thread"), entry("other")],
+      inFlight: null,
+    });
+  });
+  afterEach(() => {
+    useThreadQueueStore.setState({ entries: [], inFlight: null });
+  });
+
+  it.each(["archive", "delete"] as const)(
+    "%s: not sent while in flight, and out of the Queue once it landed",
+    async (action) => {
+      const claimed: Array<[string, string | null]> = [];
+      state.afterRequest = (request) => claimed.push([request, coordinatorClaims()]);
+      // The mark ends only once the thread already left the Queue: no gap between the two.
+      const queuedAtRelease: string[][] = [];
+      const unsubscribe = useThreadQueueLeavingStore.subscribe(({ keys }) => {
+        if (keys.size === 0) queuedAtRelease.push(queuedThreadIds());
+      });
+      try {
+        expect((await remove[action](useThreadActions()))._tag).toBe("Success");
+      } finally {
+        unsubscribe();
+      }
+      expect(queuedAtRelease).toEqual([["other"]]);
+      // A delete stops the thread's session first: it is not sent during that step either.
+      expect(claimed).toEqual(
+        (action === "delete" ? ["stopSession", "delete"] : ["archive"]).map((request) => [
+          request,
+          key("other"),
+        ]),
+      );
+      expect(queuedThreadIds()).toEqual(["other"]);
+      expect(useThreadQueueLeavingStore.getState().keys.size).toBe(0);
+    },
+  );
+
+  it.each([
+    ["archive", "refused"],
+    ["archive", "thrown"],
+    ["delete", "refused"],
+    ["delete", "thrown"],
+  ] as const)("a %s %s leaves it queued and sendable at once", async (action, failure) => {
+    state.failing.set(action, failure);
+    await remove[action](useThreadActions()).catch(() => {});
+    expect(queuedThreadIds()).toEqual(["thread", "other"]);
+    expect(coordinatorClaims()).toBe(key("thread"));
   });
 });

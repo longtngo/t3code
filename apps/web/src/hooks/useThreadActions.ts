@@ -72,10 +72,12 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import {
   SNOOZE_QUEUE_READ_ONLY_MESSAGE,
+  leaveQueueForRemoval,
   leaveQueueForSnooze,
   queueRefusesSnooze,
 } from "../threadQueueAdd";
 import { useClientSettings } from "./useSettings";
+import { whileLeavingThreadQueue } from "../threadQueueLeaving";
 import * as ThreadUndo from "./threadUndo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -437,10 +439,16 @@ export function useThreadActions() {
       const shouldNavigateToDraft =
         currentRouteThreadRef?.threadId === threadRef.threadId &&
         currentRouteThreadRef.environmentId === threadRef.environmentId;
-      const action = ThreadUndo.begin("archive", scopedThreadKey(threadRef));
-      const archiveResult = await archiveThreadMutation({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId },
+      const threadKey = scopedThreadKey(threadRef);
+      const action = ThreadUndo.begin("archive", threadKey);
+      // A queued thread is not sent while it is being archived, and leaves the Queue once it is.
+      const archiveResult = await whileLeavingThreadQueue(threadKey, async () => {
+        const archived = await archiveThreadMutation({
+          environmentId: threadRef.environmentId,
+          input: { threadId: threadRef.threadId },
+        });
+        if (archived._tag === "Success") leaveQueueForRemoval(threadKey);
+        return archived;
       });
       if (archiveResult._tag === "Failure") {
         action.finish();
@@ -567,28 +575,36 @@ export function useThreadActions() {
         shouldDeleteWorktree = confirmationResult.value;
       }
 
-      if (thread.runtime !== null) {
-        await stopThreadSession({
-          environmentId: threadRef.environmentId,
-          input: { threadId: threadRef.threadId },
-        });
-      }
+      // A queued thread is not sent while it is stopped and deleted, and leaves the Queue once
+      // it is gone.
+      const threadKey = scopedThreadKey(threadRef);
+      const { deleteResult, shouldNavigateToFallback, fallbackThreadId } =
+        await whileLeavingThreadQueue(threadKey, async () => {
+          if (thread.runtime !== null) {
+            await stopThreadSession({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId },
+            });
+          }
 
-      const deletedThreadIds = deletedIds ?? new Set<ThreadId>();
-      const currentRouteThreadRef = getCurrentRouteThreadRef();
-      const shouldNavigateToFallback =
-        currentRouteThreadRef?.threadId === threadRef.threadId &&
-        currentRouteThreadRef.environmentId === threadRef.environmentId;
-      const fallbackThreadId = getFallbackThreadIdAfterDelete({
-        threads,
-        deletedThreadId: threadRef.threadId,
-        deletedThreadIds,
-        sortOrder: sidebarThreadSortOrder,
-      });
-      const deleteResult = await deleteThreadMutation({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId },
-      });
+          const deletedThreadIds = deletedIds ?? new Set<ThreadId>();
+          const currentRouteThreadRef = getCurrentRouteThreadRef();
+          const shouldNavigateToFallback =
+            currentRouteThreadRef?.threadId === threadRef.threadId &&
+            currentRouteThreadRef.environmentId === threadRef.environmentId;
+          const fallbackThreadId = getFallbackThreadIdAfterDelete({
+            threads,
+            deletedThreadId: threadRef.threadId,
+            deletedThreadIds,
+            sortOrder: sidebarThreadSortOrder,
+          });
+          const deleteResult = await deleteThreadMutation({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          if (deleteResult._tag === "Success") leaveQueueForRemoval(threadKey);
+          return { deleteResult, shouldNavigateToFallback, fallbackThreadId };
+        });
       if (deleteResult._tag === "Failure") {
         return deleteResult;
       }
@@ -1107,17 +1123,23 @@ export function useThreadActions() {
           ),
         );
       }
-      const action = ThreadUndo.begin("snooze", scopedThreadKey(target));
-      const result = await snoozeThreadMutation({
-        environmentId: target.environmentId,
-        input: { threadId: target.threadId, snoozedUntil },
+      const threadKey = scopedThreadKey(target);
+      const action = ThreadUndo.begin("snooze", threadKey);
+      // Every snooze, menu or drop, takes the thread out of the Queue once it landed; Undo puts
+      // it back. Until then the Queue does not send it; a failed snooze leaves it sendable.
+      let requeue: (() => void) | undefined;
+      const result = await whileLeavingThreadQueue(threadKey, async () => {
+        const snoozed = await snoozeThreadMutation({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId, snoozedUntil },
+        });
+        if (snoozed._tag === "Success") requeue = leaveQueueForSnooze(threadKey);
+        return snoozed;
       });
       if (result._tag !== "Success") {
         action.finish();
         return result;
       }
-      // Every snooze, menu or drop, takes the thread out of the Queue; Undo puts it back.
-      const requeue = leaveQueueForSnooze(scopedThreadKey(target));
       // Snooze hides the row, so keep its confirmation in the sidebar.
       showThreadUndoNotice({
         action: "Snoozed",
