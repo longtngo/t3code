@@ -1,14 +1,43 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  EnvironmentId,
+  THREAD_QUEUE_FAILURE_MESSAGE_MAX_LENGTH,
+  THREAD_QUEUE_FAILURE_TITLE_MAX_LENGTH,
+  THREAD_QUEUE_PRIOR_ID_MAX_LENGTH,
+  ThreadId,
+  type ThreadQueueDocument,
+  ThreadQueueSetInput,
+  type ThreadQueueSetResult,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId } from "./composerDraftStore";
 import {
-  removeSentThreadFromQueue,
   threadQueueEntryKey,
-  useThreadQueueStore,
   type ThreadQueueEntry,
   type ThreadQueuePrior,
+} from "./threadQueueRules";
+import {
+  queueDeviceId,
+  removeSentThreadFromQueue,
+  THREAD_QUEUE_STORAGE_KEY,
+  useThreadQueueStore,
+  type ThreadQueueConnection,
+  type ThreadQueueWriter,
 } from "./threadQueueStore";
+
+// The unit project runs under node: give the store a browser storage before it loads.
+const localStorage = vi.hoisted(() => {
+  const data = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => void data.set(key, value),
+    removeItem: (key: string) => void data.delete(key),
+    clear: () => data.clear(),
+  };
+  Object.assign(globalThis, { window: { localStorage: storage } });
+  return storage;
+});
 
 const env = EnvironmentId.make("env-1");
 const a = { environmentId: env, threadId: ThreadId.make("thread-A"), draftId: null };
@@ -26,11 +55,82 @@ const resolveWith =
   });
 const keys = () => useThreadQueueStore.getState().entries.map(threadQueueEntryKey);
 
-describe("threadQueueStore", () => {
-  beforeEach(() => {
-    useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null, lastFailure: null });
-  });
+const primary = EnvironmentId.make("env-primary");
+const LOCAL: ThreadQueueConnection = {
+  primaryId: null,
+  noPrimary: true,
+  configSource: null,
+  capability: false,
+  connected: false,
+  canWrite: true,
+};
+const SERVER: ThreadQueueConnection = {
+  primaryId: primary,
+  noPrimary: false,
+  configSource: "live",
+  capability: true,
+  connected: true,
+  canWrite: true,
+};
+const store = () => useThreadQueueStore.getState();
+const emptyDocument = (bootId: string, revision = 0): ThreadQueueDocument => ({
+  bootId,
+  revision,
+  entries: [],
+  paused: false,
+  inFlight: null,
+  lastFailure: null,
+});
+const queued = (entry: typeof a | typeof b | typeof c) => ({
+  ...entry,
+  addedAt: 1,
+  ownerId: "d",
+  label: null,
+});
+/** Echoes every write back as accepted. */
+const acceptAll = () =>
+  vi.fn(async (input: ThreadQueueSetInput): Promise<ThreadQueueSetResult> => ({
+    ok: true,
+    document: { ...emptyDocument("boot-1", input.expectedRevision + 1), ...input.state },
+    serverTime: Date.now(),
+  }));
+/** A server that holds one document and accepts a write only at its current revision. */
+function fakeServer(initial: ThreadQueueDocument) {
+  const server = {
+    document: initial,
+    write: vi.fn(async (input: ThreadQueueSetInput): Promise<ThreadQueueSetResult> => {
+      const ok =
+        input.bootId === server.document.bootId &&
+        input.expectedRevision === server.document.revision;
+      if (ok) {
+        server.document = {
+          ...server.document,
+          ...input.state,
+          revision: server.document.revision + 1,
+        };
+      }
+      return { ok, document: server.document, serverTime: Date.now() };
+    }),
+  };
+  return server;
+}
 
+async function enterLocal() {
+  store().setConnection(LOCAL);
+  await useThreadQueueStore.persist.rehydrate();
+}
+
+beforeEach(async () => {
+  localStorage.clear();
+  store().setWriter(null);
+  await enterLocal();
+  useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null, lastFailure: null });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("threadQueueStore", () => {
   it("appends in add order, ignores a second add, and moves on drop", () => {
     const store = useThreadQueueStore.getState();
     store.enqueue(a);
@@ -227,5 +327,988 @@ describe("threadQueueStore", () => {
         resolve: resolveWith(),
       }),
     ).toBeNull();
+  });
+});
+
+describe("queue modes", () => {
+  // Pending accepts no user change and never writes.
+  it("pending shows the mirror read-only and accepts no user change", () => {
+    const write = vi.fn();
+    store().setWriter({ write, reportFailure: vi.fn() });
+    store().setConnection({ ...SERVER, connected: false });
+    expect(store().mode).toBe("pending");
+    expect(store().readOnly).toBe(true);
+    store().enqueue(a);
+    store().setPaused(true);
+    store().remove("env-1:thread-A");
+    expect(store().entries).toEqual([]);
+    expect(store().paused).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+
+    // A session without operate scope sees the live queue but cannot change it either.
+    store().setConnection({ ...SERVER, canWrite: false });
+    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, Date.now());
+    expect(store()).toMatchObject({ mode: "server", readOnly: true });
+    store().enqueue(b);
+    store().remove("env-1:thread-A");
+    expect(store().entries).toHaveLength(1);
+    expect(
+      store().claimEntry({ key: "env-1:thread-A", claimId: "x", now: 1, resolve: resolveWith() }),
+    ).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("never calls the queue RPCs on a cached config or a server without the capability", () => {
+    const write = vi.fn();
+    store().setWriter({ write, reportFailure: vi.fn() });
+    store().setConnection({ ...SERVER, configSource: "cache" });
+    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    expect(store().mode).toBe("pending");
+    store().setConnection({ ...SERVER, capability: false });
+    expect(store().mode).toBe("local");
+    store().setConnection({ ...SERVER, primaryId: null, configSource: null });
+    expect(store().mode).toBe("pending");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  // The v1 key still holds threads sent by hand while the server's queue ran.
+  it("loads a v1 queue paused once after this device ran in server mode, and as it was otherwise", async () => {
+    store().enqueue(a);
+    await enterLocal();
+    expect(store()).toMatchObject({ paused: false, entries: [expect.objectContaining(a)] });
+
+    store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    expect(store().mode).toBe("server");
+    await enterLocal();
+    expect(store()).toMatchObject({ paused: true, entries: [expect.objectContaining(a)] });
+    expect(JSON.parse(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)!).state.paused).toBe(true);
+
+    // Once: a resume sticks across the next load.
+    store().setPaused(false);
+    await useThreadQueueStore.persist.rehydrate();
+    expect(store().paused).toBe(false);
+  });
+
+  it("counts the v1 entries left behind on the first server run only, without writing v1", () => {
+    store().enqueue(a);
+    store().enqueue(c);
+    const v1 = localStorage.getItem(THREAD_QUEUE_STORAGE_KEY);
+    store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    expect(store().localEntriesLeftBehind).toBe(2);
+    useThreadQueueStore.setState({ localEntriesLeftBehind: 0 });
+    store().setConnection({ ...SERVER, connected: false });
+    store().setConnection(SERVER);
+    store().receiveDocument(emptyDocument("boot-1", 1), Date.now());
+    expect(store().mode).toBe("server");
+    expect(store().localEntriesLeftBehind).toBe(0);
+    expect(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)).toBe(v1);
+  });
+
+  it("counts the v1 entries left behind once per page load when storage refuses the seen-server key", async () => {
+    store().enqueue(a);
+    store().enqueue(c);
+    const setItem = localStorage.setItem;
+    const refusing = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key === "t3code:thread-queue-seen-server:v1") throw new Error("QuotaExceededError");
+      setItem(key, value);
+    });
+    try {
+      vi.resetModules();
+      const fresh = (await import("./threadQueueStore")).useThreadQueueStore;
+      fresh.getState().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
+      const counts: number[] = [];
+      for (let revision = 0; revision < 3; revision++) {
+        fresh.getState().setConnection({ ...SERVER, connected: false });
+        fresh.getState().setConnection(SERVER);
+        fresh.getState().receiveDocument(emptyDocument("boot-1", revision), Date.now());
+        expect(fresh.getState().mode).toBe("server");
+        counts.push(fresh.getState().localEntriesLeftBehind);
+        fresh.setState({ localEntriesLeftBehind: 0 });
+      }
+      expect(counts).toEqual([2, 0, 0]);
+    } finally {
+      refusing.mockRestore();
+    }
+  });
+
+  it("server mode never writes the v1 key", async () => {
+    store().enqueue(a);
+    const v1 = localStorage.getItem(THREAD_QUEUE_STORAGE_KEY);
+    expect(v1).toContain("thread-A");
+    store().setWriter({ write: acceptAll(), reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(emptyDocument("boot-1"), Date.now());
+    expect(store().mode).toBe("server");
+    store().enqueue(b);
+    store().setPaused(true);
+    await vi.waitFor(() => expect(store().pending).toEqual([]));
+    store().setConnection({ ...SERVER, connected: false });
+    expect(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)).toBe(v1);
+  });
+
+  // What a hand send or a send's outcome changes while pending is held, then applied
+  // when the queue opens.
+  it("holds a hand-sent removal while pending and applies it when server mode starts", async () => {
+    const write = acceptAll();
+    store().setWriter({ write, reportFailure: vi.fn() });
+    const sending = {
+      entry: queued(b),
+      claimId: "claim-B",
+      claimedAt: 1,
+      priorUserMessageAt: null,
+      priorTurnId: null,
+      priorSessionUpdatedAt: null,
+      sentAt: null,
+      sendingAt: 2,
+    };
+    const document = { ...emptyDocument("boot-1", 3), entries: [queued(a)], inFlight: sending };
+    store().setConnection(SERVER);
+    store().receiveDocument(document, Date.now());
+    store().setConnection({ ...SERVER, connected: false });
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    // The queue's own send of B settles while the primary is away.
+    store().markSent("claim-B", 7);
+    expect(write).not.toHaveBeenCalled();
+    expect(store().held).toHaveLength(2);
+    expect(store().entries).toEqual([]); // shown applied, even while held
+    expect(store().inFlight?.sentAt).toBe(7);
+
+    store().setConnection(SERVER);
+    store().receiveDocument(document, Date.now());
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect(write.mock.calls[0]![0]).toMatchObject({ expectedRevision: 3, state: { entries: [] } });
+    expect(write.mock.calls[1]![0]).toMatchObject({
+      expectedRevision: 4,
+      state: { inFlight: { claimId: "claim-B", sentAt: 7 } },
+    });
+    expect(store().held).toEqual([]);
+
+    // A failure is held too: dropped, the server's queue would stay unpaused behind a stale claim.
+    const failure = { threadKey: "env-1:thread-B", title: "B", message: "boom" };
+    store().setConnection({ ...SERVER, connected: false });
+    store().fail("claim-B", failure);
+    expect(store()).toMatchObject({ paused: true, inFlight: null, lastFailure: failure });
+    store().setConnection(SERVER);
+    store().receiveDocument(store().server!, Date.now());
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(3));
+    expect(write.mock.calls[2]![0]).toMatchObject({
+      expectedRevision: 5,
+      state: { inFlight: null, paused: true, lastFailure: failure },
+    });
+  });
+
+  it("local mode keeps today's cross-tab claim check", async () => {
+    vi.useFakeTimers();
+    store().enqueue(a);
+    store().claimEntry({ key: "env-1:thread-A", claimId: "mine", now: 1, resolve: resolveWith() });
+    // Another tab's claim lands in storage during the settle.
+    const raw = JSON.parse(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)!);
+    raw.state.inFlight.claimId = "other-tab";
+    localStorage.setItem(THREAD_QUEUE_STORAGE_KEY, JSON.stringify(raw));
+    const confirmed = store().confirmClaim("mine");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await confirmed).toBe(false);
+  });
+
+  it("stamps the owner and a clamped label on enqueue; v1 entries from before ownership are this device's", async () => {
+    store().enqueue({ ...a, label: `${"x".repeat(100)}\nmore` });
+    const device = queueDeviceId();
+    expect(store().entries[0]).toMatchObject({ label: "x".repeat(80), ownerId: device });
+    localStorage.setItem(
+      THREAD_QUEUE_STORAGE_KEY,
+      JSON.stringify({
+        state: {
+          entries: [{ ...c, addedAt: 1 }],
+          paused: false,
+          inFlight: null,
+          lastFailure: null,
+        },
+        version: 1,
+      }),
+    );
+    await useThreadQueueStore.persist.rehydrate();
+    expect(store().entries).toEqual([{ ...c, addedAt: 1, ownerId: device, label: null }]);
+  });
+
+  // Ruling 8: a take-over from another tab can land between the claim and the send.
+  it("a send starts only once the server holds its sending mark, never over a take-over", async () => {
+    const server = fakeServer({ ...emptyDocument("boot-1"), entries: [queued(a), queued(c)] });
+    store().setWriter({ write: server.write, reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+
+    store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    expect(await store().confirmClaim("one")).toBe(true);
+    expect(await store().markSending("one", 2)).toBe(true);
+    expect(server.document.inFlight).toMatchObject({ claimId: "one", sendingAt: 2 });
+    store().clearInFlight("one");
+    await vi.waitFor(() => expect(store().pending).toEqual([]));
+
+    store().claimEntry({ key: "env-1:thread-C", claimId: "two", now: 3, resolve: resolveWith() });
+    expect(await store().confirmClaim("two")).toBe(true);
+    // Another tab of this device sent C by hand; its take-over reached the server first.
+    server.document = {
+      ...server.document,
+      revision: server.document.revision + 1,
+      inFlight: { ...server.document.inFlight!, sentAt: 4, handSent: true },
+    };
+    expect(await store().markSending("two", 5)).toBe(false);
+    expect(server.document.inFlight).not.toHaveProperty("sendingAt");
+    expect(store().inFlight).toMatchObject({ claimId: "two", handSent: true });
+  });
+
+  // Ruling 3: the release frees only a claim its own removal took over; a held removal's is a no-op.
+  it("a failed hand send releases its taken-over claim on the server, but not one held while pending", async () => {
+    const server = fakeServer({ ...emptyDocument("boot-1"), entries: [queued(a), queued(c)] });
+    store().setWriter({ write: server.write, reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+
+    store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    await store().confirmClaim("one");
+    const release = removeSentThreadFromQueue("env-1:thread-A", null);
+    await vi.waitFor(() =>
+      expect(server.document.inFlight).toMatchObject({ claimId: "one", handSent: true }),
+    );
+    release();
+    await vi.waitFor(() => expect(server.document.inFlight).toBeNull());
+
+    store().claimEntry({ key: "env-1:thread-C", claimId: "two", now: 2, resolve: resolveWith() });
+    await store().confirmClaim("two");
+    store().setConnection({ ...SERVER, connected: false });
+    const held = removeSentThreadFromQueue("env-1:thread-C", null);
+    held();
+    expect(store().held).toHaveLength(1);
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+    await vi.waitFor(() =>
+      expect(server.document.inFlight).toMatchObject({ claimId: "two", handSent: true }),
+    );
+    expect(store().pending).toEqual([]);
+  });
+
+  // A claim's waiter gives up when server mode ends, so its write must not follow.
+  it("a claim still queued when the primary disconnects is never written after the reconnect", async () => {
+    const server = fakeServer({ ...emptyDocument("boot-1"), entries: [queued(a)] });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const write = vi.fn(async (input: ThreadQueueSetInput) => {
+      await gate;
+      return server.write(input);
+    });
+    store().setWriter({ write, reportFailure: vi.fn() });
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+
+    // In flight, holding the claim behind it. Not a pause: a paused queue refuses the claim anyway.
+    store().enqueue(c);
+    store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    const confirmed = store().confirmClaim("one");
+    store().setConnection({ ...SERVER, connected: false });
+    expect(await confirmed).toBe(false);
+    open();
+    await vi.waitFor(() => expect(server.document.entries).toHaveLength(2));
+
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+    await vi.waitFor(() => expect(store().pending).toEqual([]));
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(server.document.inFlight).toBeNull();
+    expect(server.document.entries.map(threadQueueEntryKey)).toEqual([
+      threadQueueEntryKey(a),
+      threadQueueEntryKey(c),
+    ]);
+  });
+
+  // Held changes belong to the queue they were made against.
+  it("held changes never reach another primary's queue, and a held failure never pauses the local one", async () => {
+    const failure = { threadKey: "env-1:thread-C", title: "C", message: "boom" };
+    store().setConnection(SERVER);
+    store().receiveDocument({ ...emptyDocument("boot-1"), entries: [queued(a)] }, Date.now());
+    store().setConnection({ ...SERVER, connected: false });
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    expect(store().held).toHaveLength(1);
+    store().setConnection({ ...SERVER, primaryId: EnvironmentId.make("env-other") });
+    expect(store().held).toEqual([]);
+
+    // The same primary turns out to lack the capability: the queue is this device's after all.
+    await enterLocal();
+    store().enqueue(a);
+    store().enqueue(c);
+    store().setConnection({ ...SERVER, connected: false });
+    removeSentThreadFromQueue("env-1:thread-A", null);
+    store().fail("claim-C", failure);
+    expect(store().held).toHaveLength(2);
+    store().setConnection({ ...SERVER, capability: false });
+    expect(store().mode).toBe("local");
+    await useThreadQueueStore.persist.rehydrate();
+    expect(keys()).toEqual(["env-1:thread-C"]);
+    expect(store()).toMatchObject({ held: [], paused: false, lastFailure: null });
+  });
+
+  // While pending, the last document seen from this primary is shown, and only its.
+  it("pending shows the last document mirrored for this primary, read-only", () => {
+    store().setConnection(SERVER);
+    store().receiveDocument({ ...emptyDocument("boot-1", 4), entries: [queued(a)] }, Date.now());
+    const other = EnvironmentId.make("env-other");
+    store().setConnection({ ...SERVER, primaryId: other, connected: false });
+    expect(store()).toMatchObject({ mode: "pending", entries: [] });
+    store().setConnection({ ...SERVER, connected: false });
+    expect(store()).toMatchObject({ mode: "pending", readOnly: true, entries: [queued(a)] });
+  });
+});
+
+it("a full storage does not stop this device from getting an id", async () => {
+  const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+    throw new Error("QuotaExceededError");
+  });
+  try {
+    vi.resetModules();
+    const fresh = await import("./threadQueueStore");
+    expect(fresh.queueDeviceId()).toEqual(expect.any(String));
+  } finally {
+    setItem.mockRestore();
+  }
+});
+
+/**
+ * The server's compare-and-set, as `ThreadQueueService.set` does it; claim times are stamped as
+ * `stampClaimTimes` stamps them (keep the two alike).
+ */
+function casServer(bootId: string, revision = 0) {
+  let document: ThreadQueueDocument = emptyDocument(bootId, revision);
+  let now = 1_000_000;
+  const writes: ThreadQueueSetInput[] = [];
+  return {
+    get document() {
+      return document;
+    },
+    set now(value: number) {
+      now = value;
+    },
+    get now() {
+      return now;
+    },
+    writes,
+    restart(nextBoot: string) {
+      document = { ...document, bootId: nextBoot };
+    },
+    /** Another writer's change, landing first. */
+    replace(state: Partial<ThreadQueueDocument>) {
+      document = { ...document, ...state, revision: document.revision + 1 };
+    },
+    apply(input: ThreadQueueSetInput): ThreadQueueSetResult {
+      writes.push(input);
+      if (input.bootId !== document.bootId || input.expectedRevision !== document.revision) {
+        return { ok: false, document, serverTime: now };
+      }
+      const next = input.state.inFlight;
+      let inFlight: ThreadQueueDocument["inFlight"] = null;
+      if (next !== null) {
+        const { sendingAt, ...claim } = next;
+        const first = document.inFlight?.claimId === next.claimId ? document.inFlight : null;
+        const sending = first?.sendingAt ?? (sendingAt === undefined ? undefined : now);
+        inFlight = {
+          ...claim,
+          claimedAt: first?.claimedAt ?? now,
+          sentAt: first?.sentAt ?? (next.sentAt === null ? null : now),
+          ...(sending !== undefined && { sendingAt: sending }),
+        };
+      }
+      document = {
+        bootId: document.bootId,
+        revision: document.revision + 1,
+        ...input.state,
+        inFlight,
+      };
+      return { ok: true, document, serverTime: now };
+    },
+  };
+}
+type CasServer = ReturnType<typeof casServer>;
+function enterServer(server: CasServer, overrides: Partial<ThreadQueueWriter> = {}) {
+  const reportFailure = vi.fn();
+  store().setWriter({ write: async (input) => server.apply(input), reportFailure, ...overrides });
+  store().setConnection(SERVER);
+  store().receiveDocument(server.document, server.now);
+  return { reportFailure };
+}
+/** A writer whose next reply is lost after the server applied the write. */
+function losingWriter(server: CasServer) {
+  const writer = {
+    loseNext: false,
+    write: async (input: ThreadQueueSetInput) => {
+      const reply = server.apply(input);
+      if (writer.loseNext) {
+        writer.loseNext = false;
+        throw new Error("socket closed");
+      }
+      return reply;
+    },
+  };
+  return writer;
+}
+const idle = () => vi.waitFor(() => expect(store().pending).toEqual([]));
+const claimA = (claimId = "mine") =>
+  store().claimEntry({
+    key: "env-1:thread-A",
+    claimId,
+    now: store().serverNow(),
+    resolve: resolveWith(),
+  });
+
+describe("server mode", () => {
+  it("on one boot never adopts a lower or equal revision; another boot is always adopted", () => {
+    const server = casServer("boot-1", 2);
+    enterServer(server);
+    store().receiveDocument(emptyDocument("boot-1", 1), server.now);
+    expect(store().server?.revision).toBe(2);
+    store().receiveDocument({ ...emptyDocument("boot-1", 2), paused: true }, server.now);
+    expect(store().server?.paused).toBe(false);
+    store().receiveDocument(emptyDocument("boot-2", 0), server.now);
+    expect(store().server).toMatchObject({ bootId: "boot-2", revision: 0 });
+  });
+
+  // A write in flight across a restart is refused once and re-run.
+  it("converges after a server restart in one retry", async () => {
+    const server = casServer("boot-1", 3);
+    enterServer(server);
+    server.restart("boot-2");
+    store().enqueue(a);
+    await idle();
+    expect(server.writes.map((w) => w.bootId)).toEqual(["boot-1", "boot-2"]);
+    expect(server.document.entries.map((e) => e.threadId)).toEqual(["thread-A"]);
+    expect(store().entries.map((e) => e.threadId)).toEqual(["thread-A"]);
+  });
+
+  // Another writer's claim lands first; ours becomes a no-op.
+  it("a claim another writer beat is not won", async () => {
+    const server = casServer("boot-1");
+    enterServer(server);
+    store().enqueue(a);
+    await idle();
+    const theirs = { ...server.document.entries[0]! };
+    server.replace({
+      entries: [],
+      inFlight: {
+        entry: theirs,
+        claimId: "other-tab",
+        claimedAt: 1,
+        priorUserMessageAt: null,
+        priorTurnId: null,
+        priorSessionUpdatedAt: null,
+        sentAt: null,
+      },
+    });
+    expect(claimA()).not.toBeNull();
+    expect(await store().confirmClaim("mine")).toBe(false);
+    expect(store().server?.inFlight?.claimId).toBe("other-tab");
+  });
+
+  // The server applied the claim but its reply was lost; re-sending the document the
+  // claim was written on gets a reply that settles it.
+  it("a claim whose reply was lost is won, and sent once", async () => {
+    const server = casServer("boot-1");
+    const writer = losingWriter(server);
+    enterServer(server, { write: writer.write });
+    store().enqueue(a);
+    await idle();
+    writer.loseNext = true;
+    claimA();
+    expect(await store().confirmClaim("mine")).toBe(true);
+    // The re-send carries the document the claim was written on, so the server refuses it.
+    expect(
+      server.writes.slice(1).map((w) => [w.expectedRevision, w.state.inFlight?.claimId]),
+    ).toEqual([
+      [1, "mine"],
+      [1, undefined],
+    ]);
+    expect(await store().markSending("mine", 2)).toBe(true);
+    expect(server.writes.filter((w) => w.state.inFlight?.claimId === "mine")).toHaveLength(2);
+    expect(server.document).toMatchObject({ entries: [], inFlight: { claimId: "mine" } });
+    expect(claimA("again")).toBeNull();
+  });
+
+  it("a claim that never reached the server is lost, and the entry stays queued", async () => {
+    const server = casServer("boot-1");
+    let failNext = false;
+    enterServer(server, {
+      write: async (input) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("socket closed");
+        }
+        return server.apply(input);
+      },
+    });
+    store().enqueue(a);
+    await idle();
+    failNext = true;
+    claimA();
+    expect(await store().confirmClaim("mine")).toBe(false);
+    expect(store()).toMatchObject({ inFlight: null, entries: [expect.objectContaining(a)] });
+  });
+
+  // Ruling 8: a lost sending-mark reply does not strand the claim.
+  it("a sending mark whose reply was lost still lets the send go", async () => {
+    const server = casServer("boot-1");
+    const writer = losingWriter(server);
+    enterServer(server, { write: writer.write });
+    store().enqueue(a);
+    await idle();
+    claimA();
+    expect(await store().confirmClaim("mine")).toBe(true);
+    writer.loseNext = true;
+    expect(await store().markSending("mine", 2)).toBe(true);
+    expect(server.document.inFlight).toMatchObject({ claimId: "mine", sendingAt: server.now });
+  });
+
+  it("re-sends with backoff while the request fails, and stops when a document or a disconnect settles it", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1", 0);
+    server.replace({ entries: [{ ...queued(a), ownerId: "device-a" }] });
+    let down = false;
+    let lose = false;
+    let attempts = 0;
+    enterServer(server, {
+      write: async (input) => {
+        attempts += 1;
+        if (down) throw new Error("socket closed");
+        const reply = server.apply(input);
+        if (lose) {
+          lose = false;
+          down = true;
+          throw new Error("socket closed");
+        }
+        return reply;
+      },
+    });
+    const writes = () => server.writes.length;
+
+    // The claim lands, its reply is lost, and the next two re-sends fail: 1 s, then 2 s apart.
+    lose = true;
+    claimA("one");
+    let settled: boolean | undefined;
+    void store()
+      .confirmClaim("one")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(attempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempts).toBe(3);
+    down = false;
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(attempts).toBe(3);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempts).toBe(4);
+    expect(settled).toBe(true);
+    expect(writes()).toBe(2);
+
+    // A document showing the claim settles it between re-sends.
+    store().clearInFlight("one");
+    await vi.advanceTimersByTimeAsync(0);
+    store().enqueue(c);
+    await vi.advanceTimersByTimeAsync(0);
+    lose = true;
+    store().claimEntry({ key: "env-1:thread-C", claimId: "two", now: 1, resolve: resolveWith() });
+    settled = undefined;
+    void store()
+      .confirmClaim("two")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(0);
+    const before = writes();
+    store().receiveDocument(server.document, server.now);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(writes()).toBe(before);
+
+    // Leaving server mode ends the wait as unconfirmed.
+    down = false;
+    store().clearInFlight("two");
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    lose = true;
+    claimA("three");
+    settled = undefined;
+    void store()
+      .confirmClaim("three")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(0);
+    const stopped = writes();
+    store().setConnection({ ...SERVER, connected: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(writes()).toBe(stopped);
+  });
+
+  it("a lost-reply re-send stops once the session may no longer write the queue", async () => {
+    vi.useFakeTimers();
+    const server = casServer("boot-1");
+    let attempts = 0;
+    let lose = false;
+    enterServer(server, {
+      write: async (input) => {
+        attempts += 1;
+        if (lose) throw new Error("socket closed");
+        return server.apply(input);
+      },
+    });
+    store().enqueue(a);
+    await vi.advanceTimersByTimeAsync(0);
+    lose = true;
+    claimA();
+    let settled: boolean | undefined;
+    void store()
+      .confirmClaim("mine")
+      .then((won) => (settled = won));
+    await vi.advanceTimersByTimeAsync(0);
+    const before = attempts;
+    store().setConnection({ ...SERVER, canWrite: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store()).toMatchObject({ mode: "server", readOnly: true });
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(attempts).toBe(before);
+  });
+
+  // A lost markSent reply leaves the server's stamp, and re-running it writes nothing.
+  it("server owns sentAt; a markSent re-run after a lost reply is a no-op", async () => {
+    const server = casServer("boot-1");
+    const writer = losingWriter(server);
+    enterServer(server, { write: writer.write });
+    store().enqueue(a);
+    await idle();
+    store().claimEntry({ key: "env-1:thread-A", claimId: "mine", now: 1, resolve: resolveWith() });
+    expect(await store().confirmClaim("mine")).toBe(true);
+    server.now = 1_005_000;
+    writer.loseNext = true;
+    store().markSent("mine", 42);
+    await idle();
+    store().receiveDocument(server.document, server.now);
+    expect(store().server?.inFlight?.sentAt).toBe(1_005_000);
+    const writes = server.writes.length;
+    store().markSent("mine", 43);
+    await idle();
+    expect(server.writes.length).toBe(writes);
+  });
+
+  // Every time the queue uses is the server's clock.
+  it("measures time on the server's clock, from the latest message", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000_000);
+    const server = casServer("boot-1");
+    server.now = 10_000_000 - 600_000; // this device runs 10 minutes ahead
+    enterServer(server);
+    expect(store().serverNow()).toBe(10_000_000 - 600_000);
+  });
+
+  it("a failed write drops the change, toasting for a user change only", async () => {
+    const server = casServer("boot-1");
+    server.replace({ entries: [{ ...a, addedAt: 1, ownerId: "device-b", label: "A" }] });
+    const write = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const { reportFailure } = enterServer(server, { write });
+    // A coordinator write that fails: dropped silently.
+    store().prune(["env-1:thread-A"]);
+    await idle();
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(reportFailure).not.toHaveBeenCalled();
+    expect(store().entries.map((e) => e.threadId)).toEqual(["thread-A"]);
+    // A user's write that fails: dropped, one toast.
+    store().enqueue(b);
+    await idle();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(store().entries.map((e) => e.threadId)).toEqual(["thread-A"]);
+  });
+
+  it("a read-only session (no operate scope) changes nothing and the coordinator gets no claim", () => {
+    const server = casServer("boot-1");
+    enterServer(server);
+    store().setConnection({ ...SERVER, canWrite: false });
+    expect(store().readOnly).toBe(true);
+    store().enqueue(a);
+    expect(store().pending).toEqual([]);
+    expect(
+      store().claimEntry({ key: "env-1:thread-A", claimId: "x", now: 1, resolve: resolveWith() }),
+    ).toBeNull();
+  });
+
+  it("a primary change drops the old server's document and unconfirmed changes", () => {
+    const server = casServer("boot-1");
+    enterServer(server);
+    // No writer: the change stays unconfirmed (a writer that never settles would wedge the
+    // module's single write chain for every later test).
+    store().setWriter(null);
+    store().enqueue(a);
+    expect(store().pending).toHaveLength(1);
+    store().setConnection({ ...SERVER, primaryId: EnvironmentId.make("env-other") });
+    expect(store().server).toBeNull();
+    expect(store().pending).toEqual([]);
+    expect(store().mode).toBe("pending");
+  });
+
+  /** A writer that lets another device's write land, and reach this tab, before its first write. */
+  function beatenOnce(server: CasServer, other: Partial<ThreadQueueDocument>) {
+    let beaten = false;
+    return async (input: ThreadQueueSetInput) => {
+      if (!beaten) {
+        beaten = true;
+        server.replace(other);
+        store().receiveDocument(server.document, server.now);
+      }
+      return server.apply(input);
+    };
+  }
+
+  // The refusal's document is already the adopted one, yet it is newer than the write's base.
+  it("a change refused because another device's write arrived first is re-run, not dropped", async () => {
+    const server = casServer("boot-1");
+    enterServer(server, {
+      write: beatenOnce(server, { entries: [{ ...queued(b), ownerId: "device-b" }] }),
+    });
+    store().enqueue(c);
+    await idle();
+    expect(server.document.entries.map((e) => e.threadId)).toEqual(["thread-B", "thread-C"]);
+  });
+
+  // A drag decided before another device's claim landed must not re-add the claimed row as ours.
+  it("a reorder refused behind another device's claim of the row does not bring it back", async () => {
+    const server = casServer("boot-1");
+    const ownedA = { ...queued(a), ownerId: "device-b" };
+    const ownedC = { ...queued(c), ownerId: "device-b" };
+    server.replace({ entries: [ownedA, ownedC] });
+    const claimOfA = {
+      entry: ownedA,
+      claimId: "device-b-claim",
+      claimedAt: 1,
+      priorUserMessageAt: null,
+      priorTurnId: null,
+      priorSessionUpdatedAt: null,
+      sentAt: null,
+    };
+    enterServer(server, { write: beatenOnce(server, { entries: [ownedC], inFlight: claimOfA }) });
+    store().enqueue(a, 1);
+    await idle();
+    expect(server.document.inFlight).toMatchObject({ claimId: "device-b-claim" });
+    expect(server.document.entries).toEqual([ownedC]);
+  });
+
+  // The abandon was decided on an unsent claim; the owner's mark-sent landed first.
+  it("an abandon refused behind the owner's mark-sent keeps the sent claim", async () => {
+    const server = casServer("boot-1");
+    const unsent = {
+      entry: { ...queued(a), ownerId: "device-b" },
+      claimId: "device-b-claim",
+      claimedAt: 1,
+      priorUserMessageAt: null,
+      priorTurnId: null,
+      priorSessionUpdatedAt: null,
+      sentAt: null,
+    };
+    server.replace({ inFlight: unsent });
+    enterServer(server, {
+      write: beatenOnce(server, { inFlight: { ...unsent, sentAt: 5 } }),
+    });
+    store().clearInFlight("device-b-claim", true);
+    await idle();
+    expect(server.document.inFlight).toMatchObject({ claimId: "device-b-claim", sentAt: 5 });
+  });
+
+  // A refusal carrying no newer document cannot converge: re-sending would loop forever.
+  it("a change refused at the same revision is dropped, not re-sent", async () => {
+    const server = casServer("boot-1");
+    let calls = 0;
+    enterServer(server, {
+      write: async () => {
+        calls += 1;
+        // Ends a resend loop fast: a throw drops the change.
+        if (calls > 3) throw new Error("re-sent in a loop");
+        return { ok: false, document: server.document, serverTime: server.now };
+      },
+    });
+    store().enqueue(a);
+    await idle();
+    expect(calls).toBe(1);
+    expect(server.document.entries).toEqual([]);
+  });
+
+  it("a sending mark refused behind an unrelated write still lands and lets the send go", async () => {
+    const server = casServer("boot-1");
+    let beat: ((input: ThreadQueueSetInput) => Promise<ThreadQueueSetResult>) | null = null;
+    enterServer(server, {
+      write: async (input) => (beat === null ? server.apply(input) : beat(input)),
+    });
+    store().enqueue(a);
+    await idle();
+    claimA();
+    expect(await store().confirmClaim("mine")).toBe(true);
+    beat = beatenOnce(server, { paused: true });
+    expect(await store().markSending("mine", 2)).toBe(true);
+    expect(server.document.inFlight).toMatchObject({ claimId: "mine", sendingAt: server.now });
+  });
+
+  it("keeps one held hand-sent removal per thread while pending", () => {
+    store().setConnection({ ...SERVER, connected: false });
+    expect(store().mode).toBe("pending");
+    for (let i = 0; i < 300; i++) {
+      store().removeSent(`env-1:thread-${i % 3}`, null);
+    }
+    store().removeSent("env-1:thread-0", DraftId.make("draft-0"));
+    expect(store().held).toHaveLength(4);
+  });
+
+  it("a reorder hands the sidebar a new entries list once", async () => {
+    const server = casServer("boot-1");
+    enterServer(server);
+    store().enqueue(a);
+    store().enqueue(b);
+    await idle();
+    const identities = new Set([store().entries]);
+    const unsubscribe = useThreadQueueStore.subscribe((state) => identities.add(state.entries));
+    store().enqueue(b, 0);
+    await idle();
+    unsubscribe();
+    expect(keys()).toEqual(["env-1:thread-B", "env-1:thread-A"]);
+    expect(identities.size).toBe(2);
+  });
+
+  // The server refuses an over-long failure, so the client never composes one.
+  it("bounds a failure's title and message before writing it", async () => {
+    const server = casServer("boot-1");
+    enterServer(server);
+    store().enqueue(a);
+    await idle();
+    claimA();
+    expect(await store().confirmClaim("mine")).toBe(true);
+    store().fail("mine", {
+      threadKey: "env-1:thread-A",
+      title: "t".repeat(10_000),
+      message: "m".repeat(10_000),
+    });
+    await idle();
+    expect(server.document.lastFailure?.title).toHaveLength(THREAD_QUEUE_FAILURE_TITLE_MAX_LENGTH);
+    expect(server.document.lastFailure?.message).toHaveLength(
+      THREAD_QUEUE_FAILURE_MESSAGE_MAX_LENGTH,
+    );
+  });
+});
+
+// Ids the server derives from other ids grow past a few hundred characters: an MCP thread id
+// carries an encoded client request id, and a run id encodes the thread id again.
+describe("server-derived ids", () => {
+  const mcpThreadId = (request: string) =>
+    [
+      "thread",
+      "mcp",
+      "0b5c8a3e-6a7a-4c3e-9f2f-0a1b2c3d4e5f",
+      encodeURIComponent(request),
+      "0",
+    ].join(":");
+  const runIdOf = (threadId: string) =>
+    ["run", "thread", encodeURIComponent(threadId), "ordinal", "1"].join(":");
+
+  /** Encodes each write as the RPC client does before sending it, which dies on a bad payload. */
+  function encodingServer() {
+    const server = fakeServer(emptyDocument("boot-1"));
+    const failures: unknown[] = [];
+    const encode = Schema.encodeUnknownSync(ThreadQueueSetInput);
+    store().setWriter({
+      write: async (input) => {
+        encode(input);
+        return server.write(input);
+      },
+      reportFailure: (error) => failures.push(error),
+    });
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+    return { server, failures };
+  }
+
+  it("queues an MCP thread whose id passes 210 characters", async () => {
+    const { server, failures } = encodingServer();
+    const threadId = ThreadId.make(mcpThreadId("x".repeat(200)));
+    expect(threadId.length).toBeGreaterThan(210);
+    store().enqueue({ environmentId: env, threadId, draftId: null });
+    await vi.waitFor(() => expect(store().pending).toEqual([]));
+    expect(server.document.entries.map((entry) => entry.threadId)).toEqual([threadId]);
+    expect(failures).toEqual([]);
+  });
+
+  it("claims and sends a thread whose run id passes 200 characters", async () => {
+    const { server, failures } = encodingServer();
+    const threadId = ThreadId.make(mcpThreadId("r".repeat(130)));
+    const runId = runIdOf(threadId);
+    expect(runId.length).toBeGreaterThan(200);
+    const entry = { environmentId: env, threadId, draftId: null };
+    store().enqueue(entry);
+    await vi.waitFor(() => expect(server.document.entries).toHaveLength(1));
+
+    store().claimEntry({
+      key: threadQueueEntryKey(entry),
+      claimId: "long",
+      now: 1,
+      resolve: resolveWith({ turnId: runId }),
+    });
+    expect(await store().confirmClaim("long")).toBe(true);
+    expect(await store().markSending("long", 2)).toBe(true);
+    expect(server.document.inFlight).toMatchObject({ claimId: "long", priorTurnId: runId });
+    expect(failures).toEqual([]);
+  });
+});
+
+// A claim whose prior ids outgrow the wire bound fails to encode before it is sent. Nothing
+// distinguishes the next attempt, so the entry would sit at the head and block the queue.
+describe("a claim that cannot be saved", () => {
+  it("leaves the queue, is reported once with its entry, and the next entry is claimed", async () => {
+    const server = fakeServer(emptyDocument("boot-1"));
+    const encode = Schema.encodeUnknownSync(ThreadQueueSetInput);
+    const reportFailure = vi.fn();
+    store().setWriter({
+      write: async (input) => {
+        encode(input);
+        return server.write(input);
+      },
+      reportFailure,
+    });
+    store().setConnection(SERVER);
+    store().receiveDocument(server.document, Date.now());
+    store().enqueue(a);
+    store().enqueue(c);
+    await vi.waitFor(() => expect(server.document.entries).toHaveLength(2));
+
+    const tooLong = "x".repeat(THREAD_QUEUE_PRIOR_ID_MAX_LENGTH + 1);
+    store().claimEntry({
+      key: threadQueueEntryKey(a),
+      claimId: "big",
+      now: 1,
+      resolve: resolveWith({ turnId: tooLong }),
+    });
+    expect(await store().confirmClaim("big")).toBe(false);
+    await vi.waitFor(() => expect(store().pending).toEqual([]));
+    expect(server.document.entries.map(threadQueueEntryKey)).toEqual([threadQueueEntryKey(c)]);
+    expect(server.document.inFlight).toBeNull();
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(Schema.isSchemaError(reportFailure.mock.calls[0]![0])).toBe(true);
+    expect(reportFailure.mock.calls[0]![1]).toMatchObject({ threadId: a.threadId });
+
+    store().claimEntry({
+      key: threadQueueEntryKey(c),
+      claimId: "next",
+      now: 2,
+      resolve: resolveWith(),
+    });
+    expect(await store().confirmClaim("next")).toBe(true);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
   });
 });

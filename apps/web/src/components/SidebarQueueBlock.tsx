@@ -1,19 +1,25 @@
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { ChevronDownIcon, PauseIcon, PlayIcon } from "lucide-react";
+import { CSS } from "@dnd-kit/utilities";
+import { ChevronDownIcon, PauseIcon, PlayIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
-import {
-  threadQueueEntryKey,
-  useThreadQueueStore,
-  type ThreadQueueEntry,
-} from "../threadQueueStore";
+import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
+import { queueDeviceId, useThreadQueueStore } from "../threadQueueStore";
 import { QueueSlotsControl, useQueueSlots } from "./QueueSlotsControl";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export const QUEUE_DROP_ID = "sidebar-queue-drop";
 export const QUEUE_EXPANDED_KEY = "t3code:sidebar:queue-expanded";
+/** Only the device that queued an entry holds its draft, so only it sends. */
+const QUEUED_ON_ANOTHER_DEVICE = "Queued on another device";
+/** The same note where it shares a thread row with the branch; the full one is its tooltip. */
+export const QUEUED_ON_ANOTHER_DEVICE_SHORT = "Other device";
+
+export const queuedOnAnotherDevice = (entry: ThreadQueueEntry) =>
+  entry.ownerId === queueDeviceId() ? null : QUEUED_ON_ANOTHER_DEVICE;
 
 export type QueueRowSortableBag = Pick<
   ReturnType<typeof useSortable>,
@@ -24,8 +30,10 @@ function SortableQueueRow(props: {
   id: string;
   children: (bag: QueueRowSortableBag) => ReactNode;
 }) {
+  const disabled = useThreadQueueStore((state) => state.readOnly);
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
+    disabled,
   });
   return props.children({ listeners, setNodeRef, transform, transition, isDragging });
 }
@@ -45,14 +53,23 @@ export function SidebarQueueBlock(props: {
   dragging: boolean;
   /** Show the header alone: the drag preview needs the room the rows occupy. */
   collapse: boolean;
-  renderEntry: (entry: ThreadQueueEntry, sortable: QueueRowSortableBag) => ReactNode;
+  /** `note` is a line the row shows under its title, or null. */
+  renderEntry: (
+    entry: ThreadQueueEntry,
+    sortable: QueueRowSortableBag,
+    note: string | null,
+  ) => ReactNode;
 }) {
   const paused = useThreadQueueStore((state) => state.paused);
   const lastFailure = useThreadQueueStore((state) => state.lastFailure);
   const setPaused = useThreadQueueStore((state) => state.setPaused);
+  const readOnly = useThreadQueueStore((state) => state.readOnly);
   const queueSlots = useQueueSlots();
   const { expanded, onToggleExpanded: toggleExpanded } = props;
-  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: QUEUE_DROP_ID });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: QUEUE_DROP_ID,
+    disabled: readOnly,
+  });
   const keys = props.entries.map(threadQueueEntryKey);
 
   if (props.entries.length === 0 && !props.dragging) return null;
@@ -136,8 +153,9 @@ export function SidebarQueueBlock(props: {
                   type="button"
                   aria-label={paused ? "Resume queue" : "Pause queue"}
                   data-testid="sidebar-queue-pause"
+                  disabled={readOnly}
                   onClick={() => setPaused(!paused)}
-                  className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md hover:bg-sidebar-row-hover hover:text-sidebar-foreground disabled:pointer-events-none disabled:opacity-50"
                 >
                   {paused ? <PlayIcon className="size-3" /> : <PauseIcon className="size-3" />}
                 </button>
@@ -159,12 +177,64 @@ export function SidebarQueueBlock(props: {
             const key = threadQueueEntryKey(entry);
             return (
               <SortableQueueRow key={key} id={key}>
-                {(bag) => props.renderEntry(entry, bag)}
+                {(bag) => props.renderEntry(entry, bag, queuedOnAnotherDevice(entry))}
               </SortableQueueRow>
             );
           })}
         </SortableContext>
       ) : null}
     </>
+  );
+}
+
+/**
+ * A queued row this device cannot open: a draft on another device, or a thread it cannot see (its
+ * own entry while shells load, or one in a disconnected environment).
+ */
+export function ForeignQueueRow(props: {
+  entry: ThreadQueueEntry;
+  sortable: QueueRowSortableBag;
+  isOverlayCopy?: boolean | undefined;
+}) {
+  const readOnly = useThreadQueueStore((state) => state.readOnly);
+  const remove = useThreadQueueStore((state) => state.remove);
+  const { sortable } = props;
+  return (
+    <li
+      className={cn(
+        "list-none py-0.5",
+        props.isOverlayCopy === true && "relative z-20 rounded-md bg-sidebar shadow-lg",
+      )}
+      ref={sortable.setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(sortable.transform),
+        transition: sortable.transition,
+      }}
+      {...sortable.listeners}
+      data-testid="sidebar-queue-foreign-row"
+    >
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-md px-2 py-1 text-sidebar-foreground",
+          sortable.isDragging && props.isOverlayCopy !== true && "opacity-40",
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm">{props.entry.label ?? "Untitled"}</div>
+          <div className="truncate text-xs text-sidebar-muted-foreground/60">
+            {queuedOnAnotherDevice(props.entry) ?? "Not available on this device"}
+          </div>
+        </div>
+        <Button
+          size="icon-xs"
+          variant="ghost-muted"
+          aria-label="Remove from queue"
+          disabled={readOnly}
+          onClick={() => remove(threadQueueEntryKey(props.entry))}
+        >
+          <XIcon />
+        </Button>
+      </div>
+    </li>
   );
 }

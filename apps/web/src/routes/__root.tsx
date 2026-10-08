@@ -35,6 +35,7 @@ import { ThreadNotificationCoordinator } from "../components/ThreadNotificationC
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
+import { ThreadQueueServerSync } from "../components/ThreadQueueServerSync";
 import { ThreadQueueCoordinator } from "../components/ThreadQueueCoordinator";
 import { OutboxFlushCoordinator } from "../components/OutboxFlushCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
@@ -225,6 +226,7 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
+        <ThreadQueueServerSync />
         <ThreadQueueCoordinator />
         <OutboxFlushCoordinator />
         <ProviderAuthCallbackCoordinator />

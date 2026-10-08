@@ -28,11 +28,11 @@ import { vcsEnvironment } from "../state/vcs";
 import { environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
+import type { ThreadQueueEntry } from "../threadQueueRules";
 import {
+  queueDeviceId,
   subscribeToCrossTabThreadQueueUpdates,
-  threadQueueEntryKey,
   useThreadQueueStore,
-  type ThreadQueueEntry,
 } from "../threadQueueStore";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import { visibleQueueInstanceIds } from "./queueSlotSources";
@@ -40,11 +40,10 @@ import {
   claimAndSendQueueEntry,
   nextThreadQueueAction,
   QUEUE_EMPTY_DRAFT_MESSAGE,
+  queueEntriesToPrune,
 } from "./threadQueue.logic";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
-/** How long a claiming tab waits for another tab's competing claim to land in storage. */
-const CLAIM_SETTLE_MS = 300;
 /** Re-evaluates the queue's time-based caps while it has work. */
 const QUEUE_TICK_MS = 15_000;
 
@@ -106,18 +105,25 @@ function queuedCheckoutRoot(
 
 /**
  * Sends queued entries while busy threads are below the slot count. Mounted once at the
- * app root; every tab runs one, and a claim in shared storage picks the sender.
+ * app root; every tab runs one, and the claim the queue confirms picks the sender.
  */
 export function ThreadQueueCoordinator() {
   const navigate = useNavigate();
   const { presentationById } = useEnvironments();
   const threads = useThreadShells();
-  const { entries, paused, inFlight } = useThreadQueueStore(
-    useShallow((state) => ({
-      entries: state.entries,
-      paused: state.paused,
-      inFlight: state.inFlight,
-    })),
+  const { active, ownerId, entries, paused, inFlight } = useThreadQueueStore(
+    useShallow((state) => {
+      // Server mode judges from the adopted document, never this tab's unconfirmed changes.
+      const view = state.mode === "server" && state.server !== null ? state.server : state;
+      return {
+        // Pending, or a session without operate scope: the coordinator issues nothing.
+        active: !state.readOnly,
+        ownerId: state.mode === "server" ? queueDeviceId() : null,
+        entries: view.entries,
+        paused: view.paused,
+        inFlight: view.inFlight,
+      };
+    }),
   );
   const { slots, perProvider, providerSlots } = useQueueSlotSettings();
   useImportLocalQueueSlots();
@@ -164,25 +170,11 @@ export function ThreadQueueCoordinator() {
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const draftSessions = useComposerDraftStore((state) => state.draftThreadsByThreadKey);
   useEffect(() => {
-    if (!shellsBootstrapped || entries.length === 0) return;
-    const live = new Map(
-      threads.map((thread) => [
-        threadQueueEntryKey({ environmentId: thread.environmentId, threadId: thread.id }),
-        thread,
-      ]),
-    );
-    const store = useThreadQueueStore.getState();
-    for (const entry of entries) {
-      const key = threadQueueEntryKey(entry);
-      const thread = live.get(key);
-      if (thread !== undefined) {
-        if (thread.archivedAt !== null) store.remove(key);
-        continue;
-      }
-      const session = entry.draftId !== null ? draftSessions[entry.draftId] : undefined;
-      if (session === undefined) store.remove(key);
-    }
-  }, [draftSessions, entries, shellsBootstrapped, threads]);
+    if (!active || !shellsBootstrapped || entries.length === 0) return;
+    useThreadQueueStore
+      .getState()
+      .prune(queueEntriesToPrune({ entries, threads, draftSessions, ownerId }));
+  }, [active, draftSessions, entries, ownerId, shellsBootstrapped, threads]);
 
   const hasWork = entries.length > 0 || inFlight !== null;
   useEffect(() => {
@@ -255,10 +247,10 @@ export function ThreadQueueCoordinator() {
   );
 
   const runQueuedSend = useCallback(
-    (key: string) =>
+    (key: string, claimId: string) =>
       claimAndSendQueueEntry({
         key,
-        claimId: randomUUID(),
+        claimId,
         readGitBranch,
         resolveEntry: resolveCurrentEntry,
         prior: (entry) => {
@@ -269,10 +261,8 @@ export function ThreadQueueCoordinator() {
             sessionUpdatedAt: shell?.runtime?.updatedAt ?? null,
           };
         },
-        settle: async () => {
-          await new Promise((resolve) => window.setTimeout(resolve, CLAIM_SETTLE_MS));
-          await useThreadQueueStore.persist.rehydrate();
-        },
+        now: () => useThreadQueueStore.getState().serverNow(),
+        confirm: (claimId) => useThreadQueueStore.getState().confirmClaim(claimId),
         readSnapshot: (entry, currentGitBranch) =>
           readQueuedSendSnapshot(entry, isEnvironmentConnected, currentGitBranch),
         send: (snapshot) =>
@@ -304,12 +294,15 @@ export function ThreadQueueCoordinator() {
 
   useEffect(() => {
     void tick;
+    if (!active) return;
     const action = nextThreadQueueAction({
       entries,
       paused,
       inFlight,
       threads,
-      nowMs: Date.now(),
+      // Claim and landing ages are server-stamped: measure them on the server's clock.
+      nowMs: useThreadQueueStore.getState().serverNow(),
+      ownerId,
       slots,
       perProvider,
       providerSlots,
@@ -317,17 +310,20 @@ export function ThreadQueueCoordinator() {
       targetInstanceOf,
     });
     if (action.kind === "clear-in-flight") {
-      useThreadQueueStore.getState().clearInFlight(action.claimId);
+      useThreadQueueStore.getState().clearInFlight(action.claimId, action.ifUnsent);
       return;
     }
     if (action.kind !== "claim" || sendingRef.current) return;
     sendingRef.current = true;
-    void runQueuedSend(action.key).then(
-      () => {
+    const claimId = randomUUID();
+    void runQueuedSend(action.key, claimId).then(
+      (started) => {
         sendingRef.current = false;
-        // Decide again at once: changes that arrived mid-send were skipped, and a claim that
-        // is still held (sent, or taken over by a hand send) simply keeps waiting.
-        setTick((value) => value + 1);
+        // After a send, decide again at once: changes that arrived mid-send were skipped. A claim
+        // that never started (refused, unconfirmed, a server that cannot save it, or taken over)
+        // waits for the next change or tick: deciding again on the same document would pick the
+        // same entry and spin.
+        if (started) setTick((value) => value + 1);
       },
       (error: unknown) => {
         // The claim step, or a refused storage write, threw (a held claim fails visibly):
@@ -337,8 +333,10 @@ export function ThreadQueueCoordinator() {
       },
     );
   }, [
+    active,
     entries,
     inFlight,
+    ownerId,
     paused,
     perProvider,
     providerSlots,

@@ -47,9 +47,11 @@ export function buildDraftActionMenuItems(options: {
   readonly hasPath: boolean;
   readonly hasBranch: boolean;
   readonly hasProject: boolean;
+  /** False while the queue is read-only (its server is not reachable yet, or this session cannot operate). */
+  readonly queueWritable?: boolean;
 }): ReadonlyArray<ContextMenuItem<DraftActionMenuId>> {
   return [
-    queueMenuItem(options.isQueued),
+    queueMenuItem(options.isQueued, options.queueWritable),
     {
       id: "copy",
       label: "Copy",
@@ -94,6 +96,8 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   /** In this device's sidebar Queue. Optional so surfaces without a queue omit nothing. */
   readonly isQueued?: boolean;
+  /** False while the queue is read-only (its server is not reachable yet, or this session cannot operate). */
+  readonly queueWritable?: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
@@ -109,10 +113,11 @@ export interface ThreadActionMenuState {
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
 
-function queueMenuItem(isQueued: boolean) {
-  return isQueued
+function queueMenuItem(isQueued: boolean, writable = true) {
+  const item = isQueued
     ? { id: "unqueue" as const, label: "Remove from queue", icon: "list-x" }
     : { id: "queue" as const, label: "Add to queue", icon: "list-plus" };
+  return writable ? item : { ...item, disabled: true };
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -182,7 +187,7 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    queueMenuItem(state.isQueued === true),
+    queueMenuItem(state.isQueued === true, state.queueWritable),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [

@@ -1102,6 +1102,15 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeResourceTelemetry,
       idleTtlMs: 0,
     }),
+    /**
+     * The sidebar Queue document: the current one first, then each later revision. Dropped on
+     * unmount, so a remount never replays an old message's server time as the clock offset.
+     */
+    threadQueue: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:thread-queue",
+      tag: WS_METHODS.serverSubscribeThreadQueue,
+      idleTtlMs: 0,
+    }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
@@ -1325,6 +1334,11 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,
       },
+    }),
+    // Off the config lane: the queue's write chain already sends one change at a time.
+    setThreadQueue: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:set-thread-queue",
+      tag: WS_METHODS.serverSetThreadQueue,
     }),
     pushSubscriptionsRegister: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:push-subscriptions-register",

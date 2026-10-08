@@ -31,8 +31,18 @@ const storedSettings = () =>
   JSON.parse(localStorage.getItem(QUEUE_SLOT_SETTINGS_STORAGE_KEY)!).state;
 
 describe("queueSlotSettingsStore storage", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
+    // The queue's v1 key is read and written only in local mode.
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
     useQueueSlotSettingsStore.setState({ slots: 1, perProvider: false, providerSlots: {} });
   });
 

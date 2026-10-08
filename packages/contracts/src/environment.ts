@@ -241,6 +241,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       "server"`) and streams them over `/api/preview-stream`. Clients
       without a local browser runtime open server tabs here. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
+  /** Server holds the sidebar Queue (`server.setThreadQueue` / `server.subscribeThreadQueue`).
+      Absent on older servers; clients keep the queue on the device instead, and decide only
+      from a live config, never a cached one. */
+  threadQueue: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

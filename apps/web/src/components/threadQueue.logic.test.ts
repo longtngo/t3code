@@ -2,6 +2,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import {
   EnvironmentId,
   PROVIDER_DISPLAY_NAMES,
+  THREAD_QUEUE_MAX_ENTRIES,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -11,19 +12,17 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
+import { type ThreadQueueEntry, type ThreadQueueInFlight } from "../threadQueueRules";
+import { removeSentThreadFromQueue, useThreadQueueStore } from "../threadQueueStore";
 import {
-  removeSentThreadFromQueue,
-  useThreadQueueStore,
-  type ThreadQueueEntry,
-  type ThreadQueueInFlight,
-} from "../threadQueueStore";
-import {
+  addToQueue,
   claimAndSendQueueEntry,
   nextThreadQueueAction,
   QUEUE_BRANCH_READ_TIMEOUT_MS,
   QUEUE_CLAIM_ABANDON_MS,
   isQueueBusy,
   listQueueSlotInstances,
+  queueEntriesToPrune,
   queueSlotTotal,
   QUEUE_SENT_LANDING_CAP_MS,
 } from "./threadQueue.logic";
@@ -65,11 +64,13 @@ const running = {
 /** Post-settlement background work: v2 parks the runtime at "idle" (the V1 "monitoring"). */
 const monitoring = { ...running, status: "idle" as const, activeRunId: null };
 
-const entry = (id: string): ThreadQueueEntry => ({
+const entry = (id: string, ownerId = "device-a"): ThreadQueueEntry => ({
   environmentId: env,
   threadId: ThreadId.make(id),
   draftId: null,
   addedAt: 0,
+  ownerId,
+  label: id,
 });
 
 type DecideInput = Parameters<typeof nextThreadQueueAction>[0];
@@ -85,6 +86,7 @@ const base = (): DecideInput => ({
   providerSlots: {},
   visibleInstanceIds: [],
   targetInstanceOf: () => null,
+  ownerId: null,
 });
 
 function decide(threads: EnvironmentThreadShell[], overrides: Partial<DecideInput> = {}) {
@@ -320,6 +322,21 @@ describe("nextThreadQueueAction", () => {
           inFlight: claim({ sentAt: null, claimedAt: NOW - QUEUE_CLAIM_ABANDON_MS - 1 }),
         }),
       ).toBe("clear-in-flight");
+      // The abandon clears only an unsent claim; a landing clear is unconditional.
+      expect(
+        nextThreadQueueAction({
+          ...base(),
+          threads: [stuck],
+          inFlight: claim({ sentAt: null, claimedAt: NOW - QUEUE_CLAIM_ABANDON_MS - 1 }),
+        }),
+      ).toEqual({ kind: "clear-in-flight", claimId: "claim-1", ifUnsent: true });
+      expect(
+        nextThreadQueueAction({
+          ...base(),
+          threads: [stuck],
+          inFlight: claim({ sentAt: NOW - QUEUE_SENT_LANDING_CAP_MS - 1 }),
+        }),
+      ).toEqual({ kind: "clear-in-flight", claimId: "claim-1" });
     });
   });
 
@@ -395,8 +412,87 @@ describe("nextThreadQueueAction", () => {
   });
 });
 
+describe("ownership", () => {
+  it("never claims another device's entry; its own entry behind it is claimed", () => {
+    const entries = [entry("foreign", "device-b"), entry("mine", "device-a")];
+    expect(nextThreadQueueAction({ ...base(), entries, ownerId: "device-a" })).toEqual({
+      kind: "claim",
+      key: "env-1:mine",
+    });
+    expect(
+      nextThreadQueueAction({
+        ...base(),
+        entries: [entry("foreign", "device-b")],
+        ownerId: "device-a",
+      }).kind,
+    ).toBe("wait");
+    // Local mode: every entry is this device's.
+    expect(nextThreadQueueAction({ ...base(), entries, ownerId: null })).toEqual({
+      kind: "claim",
+      key: "env-1:foreign",
+    });
+  });
+});
+
+describe("queueEntriesToPrune", () => {
+  const draft = (id: string, draftId: string, ownerId: string): ThreadQueueEntry => ({
+    ...entry(id, ownerId),
+    draftId: draftId as ThreadQueueEntry["draftId"],
+  });
+  it("prunes an archived thread whoever queued it", () => {
+    const archived = shell("gone", { archivedAt: iso(-1) });
+    expect(
+      queueEntriesToPrune({
+        entries: [entry("gone", "device-b")],
+        threads: [archived],
+        draftSessions: {},
+        ownerId: "device-a",
+      }),
+    ).toEqual(["env-1:gone"]);
+  });
+  it("never prunes a foreign draft or a thread this device cannot see", () => {
+    expect(
+      queueEntriesToPrune({
+        entries: [draft("d", "draft-1", "device-b"), entry("unseen", "device-b")],
+        threads: [],
+        draftSessions: {},
+        ownerId: "device-a",
+      }),
+    ).toEqual([]);
+  });
+  it("prunes its own entry whose thread and draft are both gone", () => {
+    expect(
+      queueEntriesToPrune({
+        entries: [draft("d", "draft-1", "device-a"), draft("kept", "draft-2", "device-a")],
+        threads: [],
+        draftSessions: { "draft-2": {} },
+        ownerId: "device-a",
+      }),
+    ).toEqual(["env-1:d"]);
+  });
+  it("in local mode every entry is this device's", () => {
+    expect(
+      queueEntriesToPrune({
+        entries: [entry("unseen", "device-b")],
+        threads: [],
+        draftSessions: {},
+        ownerId: null,
+      }),
+    ).toEqual(["env-1:unseen"]);
+  });
+});
+
 describe("claimAndSendQueueEntry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
     useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null, lastFailure: null });
     const store = useThreadQueueStore.getState();
     store.enqueue(entry("A"));
@@ -419,7 +515,8 @@ describe("claimAndSendQueueEntry", () => {
         readGitBranch: async (value: ThreadQueueEntry) => `branch-of-${value.threadId}`,
         resolveEntry: (value: ThreadQueueEntry) => value,
         prior: () => ({ userMessageAt: null, turnId: null, sessionUpdatedAt: null }),
-        settle: async () => {},
+        now: () => 1_000,
+        confirm: async () => true,
         readSnapshot: (value: ThreadQueueEntry, branch: string | null) => {
           snapshots.push({ entry: value, branch });
           return { shell: null, draft: null } as unknown as QueuedSendSnapshot;
@@ -504,16 +601,98 @@ describe("claimAndSendQueueEntry", () => {
     expect(useThreadQueueStore.getState().inFlight).toBeNull();
   });
 
-  it("a claim taken over by another tab during the settle sends nothing", async () => {
-    const run = deps({
-      settle: async () => {
+  it("a claim the queue does not confirm sends nothing", async () => {
+    const run = deps({ confirm: async () => false });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.snapshots).toEqual([]);
+  });
+
+  it("a confirmed claim the store shows as another tab's sends nothing", async () => {
+    const stolen = deps({
+      confirm: async () => {
         useThreadQueueStore.setState((state) => ({
           inFlight: state.inFlight && { ...state.inFlight, claimId: "other-tab" },
         }));
+        return true;
+      },
+    });
+    await claimAndSendQueueEntry(stolen.deps);
+    expect(stolen.snapshots).toEqual([]);
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("other-tab");
+  });
+
+  it("a hand send while the claim is confirmed: no branch read, nothing sent, nothing said", async () => {
+    let reads = 0;
+    const run = deps({
+      confirm: async () => {
+        removeSentThreadFromQueue("env-1:A", null);
+        return true;
+      },
+      readGitBranch: async () => {
+        reads += 1;
+        return null;
       },
     });
     await claimAndSendQueueEntry(run.deps);
-    expect(run.snapshots).toEqual([]);
+    expect({ reads, snapshots: run.snapshots, failures: run.failures }).toEqual({
+      reads: 0,
+      snapshots: [],
+      failures: [],
+    });
+  });
+
+  it("stamps the claim, the sending mark and the sent mark with the injected clock", async () => {
+    const run = deps({ now: () => 42_000 });
+    await claimAndSendQueueEntry(run.deps);
+    expect(useThreadQueueStore.getState().inFlight).toMatchObject({
+      claimedAt: 42_000,
+      sendingAt: 42_000,
+      sentAt: 42_000,
+    });
+  });
+
+  it("sends the entry as the confirmed claim holds it", async () => {
+    const run = deps({
+      confirm: async () => {
+        // The adopted claim names where the entry lives now.
+        useThreadQueueStore.setState((state) => ({
+          inFlight: state.inFlight && {
+            ...state.inFlight,
+            entry: { ...state.inFlight.entry, environmentId: EnvironmentId.make("env-2") },
+          },
+        }));
+        return true;
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.snapshots).toMatchObject([{ entry: { environmentId: "env-2", threadId: "A" } }]);
+  });
+
+  it("a sending mark the queue refuses sends nothing and leaves the claim to its owner", async () => {
+    const { markSending } = useThreadQueueStore.getState();
+    useThreadQueueStore.setState({ markSending: async () => false });
+    let sends = 0;
+    try {
+      const run = deps({
+        send: async () => {
+          sends += 1;
+          return { kind: "sent" };
+        },
+      });
+      await claimAndSendQueueEntry(run.deps);
+      expect({ sends, failures: run.failures, empties: run.empties }).toEqual({
+        sends: 0,
+        failures: [],
+        empties: [],
+      });
+      // Not cleared: the take-over (or the abandon cap) owns the slot.
+      expect(useThreadQueueStore.getState()).toMatchObject({
+        paused: false,
+        inFlight: { claimId: "claim-1", sentAt: null },
+      });
+    } finally {
+      useThreadQueueStore.setState({ markSending });
+    }
   });
 
   it("a hand send while the queued send is going out keeps the claim, even if it fails", async () => {
@@ -704,7 +883,7 @@ describe("claimAndSendQueueEntry", () => {
         lastFailure: null,
       });
       const run = deps({
-        settle: async () => {
+        confirm: async () => {
           lose();
           throw new Error("rehydrate broke");
         },
@@ -724,7 +903,7 @@ describe("claimAndSendQueueEntry", () => {
 
   it("a throw after another tab took the claim leaves that tab's claim alone", async () => {
     const run = deps({
-      settle: async () => {
+      confirm: async () => {
         useThreadQueueStore.setState((state) => ({
           inFlight: state.inFlight && { ...state.inFlight, claimId: "other-tab" },
         }));
@@ -793,6 +972,36 @@ describe("claimAndSendQueueEntry", () => {
     await claimAndSendQueueEntry(throwing.deps);
     expect(useThreadQueueStore.getState().lastFailure?.message).toBe("boom");
     expect(useThreadQueueStore.getState().inFlight).toBeNull();
+  });
+});
+
+describe("addToQueue", () => {
+  it("says the queue is full instead of adding past the cap, and still takes a queued thread", async () => {
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
+    const full = Array.from({ length: THREAD_QUEUE_MAX_ENTRIES }, (_, i) => ({
+      environmentId: env,
+      threadId: ThreadId.make(`T${i}`),
+      draftId: null,
+      addedAt: 1,
+      ownerId: "d",
+      label: null,
+    }));
+    useThreadQueueStore.setState({ entries: full });
+    const fresh = { environmentId: env, threadId: ThreadId.make("new"), draftId: null };
+    expect(addToQueue(fresh)).toBe(false);
+    expect(addToQueue(full[0]!)).toBe(true);
+    expect(useThreadQueueStore.getState().entries).toHaveLength(THREAD_QUEUE_MAX_ENTRIES);
+    useThreadQueueStore.setState({ entries: full.slice(1) });
+    expect(addToQueue(fresh)).toBe(true);
+    expect(useThreadQueueStore.getState().entries.at(-1)?.threadId).toBe("new");
   });
 });
 

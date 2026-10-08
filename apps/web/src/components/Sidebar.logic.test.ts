@@ -2868,6 +2868,26 @@ describe("dragging a Queue row", () => {
     );
   });
 
+  // A read-only queue ignores every drag into, within, or out of it.
+  it("routes nothing that touches the Queue while it is read-only", () => {
+    const readOnly = (drag: SidebarDragOrigin, overId: string | null) =>
+      routeSidebarDragEnd({
+        drag,
+        overId,
+        items: sidebarDragListItems(items, drag),
+        queuedKeys,
+        queueDropId: QUEUE,
+        queueWritable: false,
+      });
+    expect(readOnly(origin({}), "q2")).toEqual({ kind: "none" }); // reorder
+    expect(readOnly(origin({}), "s1")).toEqual({ kind: "none" }); // drag out: no unqueue, no settle
+    expect(readOnly(origin({ activeKey: "a1", fromQueue: false }), QUEUE)).toEqual({
+      kind: "none",
+    }); // enqueue
+    // Unrelated drags still work.
+    expect(readOnly(origin({ activeKey: "a1", fromQueue: false }), "p1").kind).toBe("place");
+  });
+
   it("keeps main-list drags on their existing rules", () => {
     const main = origin({ activeKey: "a1", fromQueue: false });
     expect(route(main, QUEUE)).toEqual({ kind: "enqueue" });

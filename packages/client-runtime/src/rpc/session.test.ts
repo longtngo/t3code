@@ -1085,6 +1085,37 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
+  // The sidebar Queue's write chain awaits each write; a socket loss must fail it, not strand it.
+  it.effect.each([
+    ["the server closes the socket", 1012],
+    ["the socket closes normally", 1000],
+  ] as const)("fails an in-flight queue write when %s", ([, code]) =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const writeFiber = yield* Effect.forkChild(
+        session.client[WS_METHODS.serverSetThreadQueue]({
+          bootId: "boot-1",
+          expectedRevision: 0,
+          state: { entries: [], paused: false, inFlight: null, lastFailure: null },
+        }),
+      );
+      expect(yield* awaitRequest(socket, 1)).toMatchObject({
+        tag: WS_METHODS.serverSetThreadQueue,
+      });
+      socket.close(code, "gone");
+
+      const exit = yield* Fiber.await(writeFiber);
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("tolerates two missed pong windows before closing the session", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();

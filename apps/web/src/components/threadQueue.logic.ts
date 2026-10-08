@@ -3,6 +3,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import { effectiveSnoozed, hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
 import {
   PROVIDER_DISPLAY_NAMES,
+  THREAD_QUEUE_MAX_ENTRIES,
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
@@ -14,11 +15,11 @@ import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
   threadQueueEntryKey,
-  useThreadQueueStore,
   type ThreadQueueEntry,
   type ThreadQueueInFlight,
   type ThreadQueuePrior,
-} from "../threadQueueStore";
+} from "../threadQueueRules";
+import { useThreadQueueStore } from "../threadQueueStore";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -63,10 +64,24 @@ export const QUEUE_BRANCH_READ_TIMEOUT_MS = 5_000;
 export const QUEUE_EMPTY_DRAFT_MESSAGE =
   "There is nothing to send, so it left the queue. Open the thread to write the message.";
 
+export const QUEUE_FULL_MESSAGE = `The queue is full (${THREAD_QUEUE_MAX_ENTRIES}).`;
+
+/** Adds a thread or draft for a user action. False when the queue is full and takes nothing new. */
+export function addToQueue(
+  entry: Parameters<ReturnType<typeof useThreadQueueStore.getState>["enqueue"]>[0],
+): boolean {
+  const queue = useThreadQueueStore.getState();
+  const key = threadQueueEntryKey(entry);
+  const queued = queue.entries.some((candidate) => threadQueueEntryKey(candidate) === key);
+  if (!queued && queue.entries.length >= THREAD_QUEUE_MAX_ENTRIES) return false;
+  queue.enqueue(entry);
+  return true;
+}
+
 export type ThreadQueueAction =
   | { readonly kind: "wait" }
   | { readonly kind: "claim"; readonly key: string }
-  | { readonly kind: "clear-in-flight"; readonly claimId: string };
+  | { readonly kind: "clear-in-flight"; readonly claimId: string; readonly ifUnsent?: true };
 
 /** The provider instance a thread occupies: the running run's, else the one it is set to. */
 function threadInstanceId(thread: EnvironmentThreadShell): string {
@@ -106,13 +121,15 @@ export function nextThreadQueueAction(input: {
   readonly providerSlots: Readonly<Record<string, number>>;
   readonly visibleInstanceIds: ReadonlyArray<string>;
   readonly targetInstanceOf: (entry: ThreadQueueEntry) => string | null;
+  /** This device's id in server mode, so only its own entries are claimed; null in local mode. */
+  readonly ownerId: string | null;
 }): ThreadQueueAction {
   const { inFlight, nowMs } = input;
   const now = new Date(nowMs).toISOString();
   if (inFlight !== null) {
     if (inFlight.sentAt === null) {
       return nowMs - inFlight.claimedAt > QUEUE_CLAIM_ABANDON_MS
-        ? { kind: "clear-in-flight", claimId: inFlight.claimId }
+        ? { kind: "clear-in-flight", claimId: inFlight.claimId, ifUnsent: true }
         : { kind: "wait" };
     }
     const sentKey = threadQueueEntryKey(inFlight.entry);
@@ -162,16 +179,48 @@ export function nextThreadQueueAction(input: {
       return target === null || (busyBy.get(target) ?? 0) < cap(target);
     };
   }
+  // Another device's entry is skipped, never waited on: only its owner holds the draft.
   const pick = input.entries.find(
-    (entry) => !busyKeys.has(threadQueueEntryKey(entry)) && fits(entry),
+    (entry) =>
+      (input.ownerId === null || entry.ownerId === input.ownerId) &&
+      !busyKeys.has(threadQueueEntryKey(entry)) &&
+      fits(entry),
   );
   return pick ? { kind: "claim", key: threadQueueEntryKey(pick) } : { kind: "wait" };
 }
 
 /**
- * One queued send: claim the named entry, let a competing tab's claim land, then
+ * Entries to drop: an archived thread whoever queued it, and this device's own entries whose
+ * thread and draft are both gone. Another device's draft, or a thread in an environment this
+ * device cannot see, is never pruned here: only the owner can tell it is gone.
+ */
+export function queueEntriesToPrune(input: {
+  readonly entries: ReadonlyArray<ThreadQueueEntry>;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly draftSessions: Readonly<Record<string, unknown>>;
+  /** As in `nextThreadQueueAction`: null in local mode, where every entry is this device's. */
+  readonly ownerId: string | null;
+}): string[] {
+  const live = new Map(input.threads.map((thread) => [shellKey(thread), thread]));
+  const keys: string[] = [];
+  for (const entry of input.entries) {
+    const key = threadQueueEntryKey(entry);
+    const thread = live.get(key);
+    if (thread !== undefined) {
+      if (thread.archivedAt !== null) keys.push(key);
+      continue;
+    }
+    if (input.ownerId !== null && entry.ownerId !== input.ownerId) continue;
+    if (entry.draftId === null || input.draftSessions[entry.draftId] === undefined) keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * One queued send: claim the named entry, wait for the queue to confirm the claim, then
  * send and record the outcome. Every store read and effect is injected except the
- * queue store itself, so the ordering can be tested.
+ * queue store itself, so the ordering can be tested. Resolves true once the send started,
+ * whatever its outcome; false when it never did (nothing claimed, or the claim not confirmed).
  */
 export async function claimAndSendQueueEntry(deps: {
   readonly key: string;
@@ -180,7 +229,10 @@ export async function claimAndSendQueueEntry(deps: {
   readonly readGitBranch: (entry: ThreadQueueEntry) => Promise<string | null>;
   readonly resolveEntry: (entry: ThreadQueueEntry) => ThreadQueueEntry;
   readonly prior: (entry: ThreadQueueEntry) => ThreadQueuePrior;
-  readonly settle: () => Promise<void>;
+  /** The server's clock (server mode) or this device's (local mode). */
+  readonly now: () => number;
+  /** Whether the queue now holds this claim as this tab's (another tab or device may have won). */
+  readonly confirm: (claimId: string) => Promise<boolean>;
   readonly readSnapshot: (
     entry: ThreadQueueEntry,
     currentGitBranch: string | null,
@@ -189,19 +241,19 @@ export async function claimAndSendQueueEntry(deps: {
   readonly reportFailure: (entry: ThreadQueueEntry, title: string, message: string) => void;
   /** An empty draft leaves the queue for Active without pausing it (the queue's original rule). */
   readonly reportEmpty: (entry: ThreadQueueEntry, title: string) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   const claim = useThreadQueueStore.getState().claimEntry({
     key: deps.key,
     claimId: deps.claimId,
-    now: Date.now(),
+    now: deps.now(),
     resolve: (queued) => {
       const entry = deps.resolveEntry(queued);
       return { entry, prior: deps.prior(entry) };
     },
   });
   // Nothing was claimed: the entry left meanwhile.
-  if (claim === null) return;
-  const { entry } = claim;
+  if (claim === null) return false;
+  let { entry } = claim;
   let title = "New thread";
   // Once this tab starts the send, its outcome is this tab's to report, claim or no claim.
   let started = false;
@@ -209,9 +261,11 @@ export async function claimAndSendQueueEntry(deps: {
   // Anything that throws once the claim is held fails it visibly: a held claim nobody runs
   // would otherwise leave the queue silently at the abandon cap.
   try {
-    // Last writer wins across tabs: keep going only if the stored claim is still this one.
-    await deps.settle();
-    if (useThreadQueueStore.getState().inFlight?.claimId !== deps.claimId) return;
+    if (!(await deps.confirm(deps.claimId))) return false;
+    // A hand send may have taken the confirmed claim over; send the entry as the queue holds it.
+    const confirmed = useThreadQueueStore.getState().inFlight;
+    if (confirmed?.claimId !== deps.claimId || confirmed.sentAt !== null) return false;
+    entry = confirmed.entry;
 
     // A failed or slow read sends without a branch, so the thread keeps the one it has.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -224,8 +278,10 @@ export async function claimAndSendQueueEntry(deps: {
     clearTimeout(timer);
     // A hand send during the branch read took the claim over; nothing is left to send.
     const current = useThreadQueueStore.getState().inFlight;
-    if (current?.claimId !== deps.claimId || current.sentAt !== null) return;
-    useThreadQueueStore.getState().markSending(deps.claimId, Date.now());
+    if (current?.claimId !== deps.claimId || current.sentAt !== null) return false;
+    // False when the claim is no longer this send's (a hand send took it over) or the mark never
+    // landed. Never cleared here: the take-over owns the slot, else the abandon cap frees it.
+    if (!(await useThreadQueueStore.getState().markSending(deps.claimId, deps.now()))) return false;
     started = true;
     const snapshot = deps.readSnapshot(entry, branch);
     // The composer's own title rule for a new thread.
@@ -247,8 +303,8 @@ export async function claimAndSendQueueEntry(deps: {
   const queue = useThreadQueueStore.getState();
   switch (outcome.kind) {
     case "sent":
-      queue.markSent(deps.claimId, Date.now());
-      return;
+      queue.markSent(deps.claimId, deps.now());
+      return true;
     // Tell the user before writing the store, and write it even if telling throws: a refused
     // storage write must not swallow the notice, and a notice must not skip the write.
     case "empty":
@@ -257,7 +313,7 @@ export async function claimAndSendQueueEntry(deps: {
       } finally {
         queue.clearInFlight(deps.claimId);
       }
-      return;
+      return true;
     case "refused":
     case "failed": {
       // Before this send started, only a claim still ours and unsent is ours to fail: another
@@ -266,7 +322,7 @@ export async function claimAndSendQueueEntry(deps: {
         !started &&
         (queue.inFlight?.claimId !== deps.claimId || queue.inFlight.sentAt !== null)
       ) {
-        return;
+        return false;
       }
       const message = outcome.kind === "refused" ? outcome.reason : outcome.message;
       try {
@@ -274,7 +330,7 @@ export async function claimAndSendQueueEntry(deps: {
       } finally {
         queue.fail(deps.claimId, { threadKey: threadQueueEntryKey(entry), title, message });
       }
-      return;
+      return started;
     }
   }
 }

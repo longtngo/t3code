@@ -31,6 +31,19 @@ import {
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("lets read-only sessions follow the queue", () => {
+    // An auth failure on a subscription is never retried, so the read must stay at read scope.
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverSubscribeThreadQueue)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
+  it("keeps queue writes, which claim and send threads, behind operate scope", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverSetThreadQueue)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

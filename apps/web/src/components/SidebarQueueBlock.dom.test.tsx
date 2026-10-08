@@ -5,20 +5,19 @@ import { SortableContext } from "@dnd-kit/sortable";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { SidebarQueueBlock } from "./SidebarQueueBlock";
+import { ForeignQueueRow, SidebarQueueBlock } from "./SidebarQueueBlock";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { renderDom } from "../testing/renderDom";
-import {
-  threadQueueEntryKey,
-  useThreadQueueStore,
-  type ThreadQueueEntry,
-} from "../threadQueueStore";
+import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
+import { queueDeviceId, useThreadQueueStore } from "../threadQueueStore";
 
 const entry = (id: string): ThreadQueueEntry => ({
   environmentId: "env" as EnvironmentId,
   threadId: id as ThreadId,
   draftId: null,
   addedAt: 0,
+  ownerId: "device-a",
+  label: id,
 });
 const entries = [entry("one"), entry("two")];
 
@@ -124,6 +123,28 @@ describe("queue slots header control", () => {
   const slotText = (view: Awaited<ReturnType<typeof mount>>) =>
     view.find('[data-testid="sidebar-queue-slots"]')?.textContent;
 
+  // A row this device can open still says when another device holds its draft.
+  it("hands a row queued on another device its note, and this device's own rows none", async () => {
+    const view = await renderDom(
+      <DndContext>
+        <ul>
+          <SidebarQueueBlock
+            entries={[entry("theirs"), { ...entry("mine"), ownerId: queueDeviceId() }]}
+            routeKey={null}
+            routeDraftId={null}
+            expanded
+            onToggleExpanded={() => {}}
+            dragging={false}
+            collapse={false}
+            renderEntry={(queued, _bag, note) => <li data-row={queued.threadId}>{note}</li>}
+          />
+        </ul>
+      </DndContext>,
+    );
+    expect(view.find('[data-row="theirs"]')?.textContent).toBe("Queued on another device");
+    expect(view.find('[data-row="mine"]')?.textContent).toBe("");
+  });
+
   it("shows the slot count and edits it from the gear popover", async () => {
     const view = await mount();
     expect(slotText(view)).toBe("1");
@@ -192,5 +213,82 @@ describe("queue slots header control", () => {
     const view = await mount();
     expect(slotText(view)).toBe("0");
     expect(view.text()).toContain("Paused");
+  });
+});
+
+describe("queue rows from another device", () => {
+  const foreign = {
+    ...entry("elsewhere"),
+    draftId: "draft-b",
+    ownerId: "device-b",
+    label: "Fix it",
+  };
+  const bag = {
+    listeners: undefined,
+    setNodeRef: () => {},
+    transform: null,
+    transition: undefined,
+    isDragging: false,
+  };
+  const mount = () =>
+    renderDom(
+      <ul>
+        <ForeignQueueRow entry={foreign as ThreadQueueEntry} sortable={bag} />
+      </ul>,
+    );
+  const removeButton = (view: Awaited<ReturnType<typeof mount>>) =>
+    view.find<HTMLButtonElement>('button[aria-label="Remove from queue"]');
+
+  beforeEach(() => {
+    useThreadQueueStore.setState({
+      mode: "local",
+      readOnly: false,
+      entries: [foreign as ThreadQueueEntry, entry("mine")],
+    });
+  });
+
+  it("shows the entry's label and removes it from the Queue", async () => {
+    const view = await mount();
+    expect(view.text()).toContain("Fix it");
+    expect(view.text()).toContain("Queued on another device");
+    await view.click(removeButton(view));
+    expect(useThreadQueueStore.getState().entries.map((queued) => queued.threadId)).toEqual([
+      "mine",
+    ]);
+  });
+
+  it("this device's own entry for a thread it cannot see does not claim another device", async () => {
+    const view = await renderDom(
+      <ul>
+        <ForeignQueueRow entry={{ ...entry("unseen"), ownerId: queueDeviceId() }} sortable={bag} />
+      </ul>,
+    );
+    expect(view.text()).toContain("Not available on this device");
+    expect(view.text()).not.toContain("Queued on another device");
+  });
+
+  it("cannot be removed, and the queue cannot be paused, while the queue is read-only", async () => {
+    useThreadQueueStore.setState({ readOnly: true });
+    const view = await mount();
+    expect(removeButton(view)?.disabled).toBe(true);
+    const block = await renderDom(
+      <DndContext>
+        <ul>
+          <SidebarQueueBlock
+            entries={entries}
+            routeKey={null}
+            routeDraftId={null}
+            expanded
+            onToggleExpanded={() => {}}
+            dragging={false}
+            collapse={false}
+            renderEntry={(queued) => <li>{queued.threadId}</li>}
+          />
+        </ul>
+      </DndContext>,
+    );
+    expect(block.find<HTMLButtonElement>('[data-testid="sidebar-queue-pause"]')?.disabled).toBe(
+      true,
+    );
   });
 });

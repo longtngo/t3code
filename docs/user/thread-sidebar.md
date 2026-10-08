@@ -145,12 +145,16 @@ A queued thread sends its composer message as if you had pressed Send, then retu
 active work. A queued thread with an empty composer returns without sending. Sending it
 yourself also takes it out of the queue.
 
-Queued threads stay on this device and send while T3 Code is open here. The slot numbers
-are saved on the server serving your web app, or the desktop app's local environment, and
-shared by its clients; app.t3.codes and a desktop app with its local environment turned off keep
-their own. Use the
-pause button on the **Queue** header to hold the queue. If a queued send fails, or needs
-something only the open thread can do (attachments, a slash command, an answer to a
+The queue and its slot numbers are kept by the server serving your web app, or the desktop
+app's local environment, and shared by its clients; app.t3.codes and a desktop app with its
+local environment turned off keep their own. Each queued thread sends from the device that
+queued it, while T3 Code is open there. Other devices mark it as queued on another device
+and can reorder or remove it; typing in that thread on another device does not change what it
+sends. Threads queued on a device before the queue was shared are not moved into it; add them
+again.
+
+Use the pause button on the **Queue** header to hold the queue. If a queued send fails, or
+needs something only the open thread can do (attachments, a slash command, an answer to a
 question), the thread returns to active work with the reason and the queue pauses until you
 resume it.
 

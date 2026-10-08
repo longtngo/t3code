@@ -232,18 +232,18 @@ import {
   type SidebarListMarker,
   type SidebarSection,
 } from "./Sidebar.logic";
-import { sidebarRestingSection } from "./threadQueue.logic";
+import { addToQueue, QUEUE_FULL_MESSAGE, sidebarRestingSection } from "./threadQueue.logic";
 import {
   QUEUE_DROP_ID,
+  ForeignQueueRow,
   QUEUE_EXPANDED_KEY,
   SidebarQueueBlock,
+  QUEUED_ON_ANOTHER_DEVICE_SHORT,
+  queuedOnAnotherDevice,
   type QueueRowSortableBag,
 } from "./SidebarQueueBlock";
-import {
-  threadQueueEntryKey,
-  useThreadQueueStore,
-  type ThreadQueueEntry,
-} from "../threadQueueStore";
+import { threadQueueEntryKey, type ThreadQueueEntry } from "../threadQueueRules";
+import { queueDeviceId, useThreadQueueStore } from "../threadQueueStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
@@ -344,6 +344,11 @@ function checkThreadOperations(
     description: "This connection cannot change one or more selected threads.",
   });
   return false;
+}
+
+/** "Add to queue" from the sidebar: a full queue says so rather than doing nothing. */
+function addToQueueOrSayFull(entry: Parameters<typeof addToQueue>[0]): void {
+  if (!addToQueue(entry)) toastManager.add({ type: "info", title: QUEUE_FULL_MESSAGE });
 }
 
 function compactSidebarTimeLabel(label: string): string {
@@ -963,6 +968,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     },
     [draftId, onToggleQueue, session],
   );
+  const queueReadOnly = useThreadQueueStore((state) => state.readOnly);
   return (
     <li
       className={cn(
@@ -1015,8 +1021,9 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                     <button
                       type="button"
                       aria-label={props.queued ? "Remove from queue" : "Add to queue"}
+                      disabled={queueReadOnly}
                       onClick={handleToggleQueue}
-                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100 disabled:cursor-default disabled:hover:text-muted-foreground"
                     >
                       {props.queued ? (
                         <ListXIcon className="size-3" />
@@ -1323,6 +1330,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   sweepAction: SidebarSweepAction | null;
   // Compact wake countdown ("2h") for rows in the snoozed shelf.
   snoozeWakeLabelText: string | null;
+  // A Queue row's note ("Queued on another device"): shown short after the branch, which it
+  // would otherwise never fit beside, and in full as its tooltip.
+  queueNote?: string | null | undefined;
   // When a snooze ended (timer or early wake); drives the Woke pill until
   // the user visits the thread.
   wokeAt: string | null;
@@ -2360,7 +2370,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
               {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
-                  branch, so the row lost its most stable identifier. */}
+                  branch, so the row lost its most stable identifier. A Queue
+                  note sits after it rather than in its place; both grow from
+                  zero so neither squeezes the other out of a narrow row. */}
               {thread.branch ? (
                 <>
                   <ThreadWorktreeIndicator thread={thread} />
@@ -2368,9 +2380,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     <MiddleTruncate value={thread.branch} showTitle={false} />
                   </span>
                 </>
-              ) : (
+              ) : props.queueNote ? null : (
                 <span className="flex-1" />
               )}
+              {props.queueNote ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="min-w-0 flex-1 basis-0 truncate text-sidebar-muted-foreground/60">
+                        {QUEUED_ON_ANOTHER_DEVICE_SHORT}
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">{props.queueNote}</TooltipPopup>
+                </Tooltip>
+              ) : null}
               {terminalStatusIcon}
               {prBadge}
               {diff ? (
@@ -2921,6 +2945,7 @@ export default function Sidebar() {
 
   // Queued threads and drafts render under Queue and nowhere else.
   const queueEntries = useThreadQueueStore((state) => state.entries);
+  const queueMode = useThreadQueueStore((state) => state.mode);
   const queuedKeys = useMemo(() => new Set(queueEntries.map(threadQueueEntryKey)), [queueEntries]);
   const queuedDraftIds = useMemo(
     () => new Set(queueEntries.flatMap((entry) => (entry.draftId === null ? [] : [entry.draftId]))),
@@ -2942,8 +2967,16 @@ export default function Sidebar() {
       threadId: session.threadId,
     });
     if (store.entries.some((entry) => threadQueueEntryKey(entry) === key)) store.remove(key);
-    else
-      store.enqueue({ environmentId: session.environmentId, threadId: session.threadId, draftId });
+    else {
+      const prompt = useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt ?? "";
+      addToQueueOrSayFull({
+        environmentId: session.environmentId,
+        threadId: session.threadId,
+        draftId,
+        // What other devices show for a draft they cannot open: the row's own preview text.
+        label: replaceComposerContextReferences(prompt, (occurrence) => occurrence.label),
+      });
+    }
   }, []);
 
   // Keep a dropped row at its destination while its server applies the
@@ -4338,6 +4371,7 @@ export default function Sidebar() {
         items: sidebarDragListItems(sidebarListItems, drag),
         queuedKeys,
         queueDropId: QUEUE_DROP_ID,
+        queueWritable: !useThreadQueueStore.getState().readOnly,
       });
       const queue = useThreadQueueStore.getState();
       const entryIndex = (key: string) =>
@@ -4352,10 +4386,11 @@ export default function Sidebar() {
       const activeThread = threadByKey.get(activeKey);
       if (activeThread === undefined) return;
       if (route.kind === "enqueue") {
-        queue.enqueue({
+        addToQueueOrSayFull({
           environmentId: activeThread.environmentId,
           threadId: activeThread.id,
           draftId: null,
+          label: activeThread.title,
         });
         return;
       }
@@ -4896,6 +4931,7 @@ export default function Sidebar() {
           api.contextMenu.show(
             buildDraftActionMenuItems({
               isQueued: queuedDraftIds.has(draftId),
+              queueWritable: !useThreadQueueStore.getState().readOnly,
               hasPath: Boolean(workspacePath),
               hasBranch: Boolean(session.branch),
               hasProject: projectGroup != null,
@@ -5007,6 +5043,7 @@ export default function Sidebar() {
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
               isSnoozed,
               isQueued,
+              queueWritable: !useThreadQueueStore.getState().readOnly,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
@@ -5083,9 +5120,12 @@ export default function Sidebar() {
             attemptPin(threadRef);
             return;
           case "queue":
-            useThreadQueueStore
-              .getState()
-              .enqueue({ environmentId: thread.environmentId, threadId: thread.id, draftId: null });
+            addToQueueOrSayFull({
+              environmentId: thread.environmentId,
+              threadId: thread.id,
+              draftId: null,
+              label: thread.title,
+            });
             return;
           case "unqueue":
             useThreadQueueStore.getState().remove(threadKey);
@@ -5648,6 +5688,7 @@ export default function Sidebar() {
                         section: SidebarSection,
                         sortable?: SortableThreadRowBag,
                         isOverlayCopy?: boolean,
+                        queueNote?: string | null,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -5668,6 +5709,7 @@ export default function Sidebar() {
                             isOverlayCopy={isOverlayCopy}
                             thread={thread}
                             variant={rowVariant}
+                            queueNote={queueNote}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={
                               section === "snoozed"
@@ -5806,14 +5848,32 @@ export default function Sidebar() {
                                   ? ("active" as SidebarSection)
                                   : (dragState?.activeSection ?? ("active" as SidebarSection)),
                             };
-                      // A queued draft has no thread behind it, so it needs its own overlay copy
-                      // or the user would drag nothing at all.
-                      const overlayDraftId =
-                        overlayRow !== null || dragState?.queuedDraft !== true
-                          ? null
-                          : (queueEntries.find(
+                      const overlayQueuedEntry =
+                        dragState?.fromQueue === true
+                          ? queueEntries.find(
                               (entry) => threadQueueEntryKey(entry) === dragState.activeKey,
-                            )?.draftId ?? null);
+                            )
+                          : undefined;
+                      const overlayQueueNote =
+                        overlayQueuedEntry === undefined
+                          ? null
+                          : queuedOnAnotherDevice(overlayQueuedEntry);
+                      // A queued row with no thread behind it (a draft, or another device's entry)
+                      // needs its own overlay copy or the user would drag nothing at all.
+                      const overlayEntry =
+                        overlayRow !== null || dragState?.queuedDraft !== true
+                          ? undefined
+                          : overlayQueuedEntry;
+                      const overlayDraftId =
+                        overlayEntry?.draftId != null && overlayEntry.ownerId === queueDeviceId()
+                          ? overlayEntry.draftId
+                          : null;
+                      const overlayForeign =
+                        overlayEntry !== undefined &&
+                        overlayDraftId === null &&
+                        queueMode !== "local"
+                          ? overlayEntry
+                          : null;
                       // A main-list drag: the Queue collapses to its docked header.
                       const queueDropShown = from !== null && dragState?.fromQueue !== true;
                       const collapseQueue = queueDropShown && !listScrolls;
@@ -5847,23 +5907,32 @@ export default function Sidebar() {
                             onToggleExpanded={toggleQueueExpanded}
                             dragging={queueDropShown}
                             collapse={collapseQueue}
-                            renderEntry={(entry: ThreadQueueEntry, bag: QueueRowSortableBag) => {
+                            renderEntry={(
+                              entry: ThreadQueueEntry,
+                              bag: QueueRowSortableBag,
+                              note: string | null,
+                            ) => {
                               const thread = threadByKey.get(threadQueueEntryKey(entry));
                               if (thread !== undefined) {
-                                return renderThreadRowInner(thread, "active", bag);
+                                return renderThreadRowInner(thread, "active", bag, undefined, note);
                               }
-                              if (entry.draftId === null) return null;
-                              return (
-                                <QueuedDraftRow
-                                  draftId={entry.draftId}
-                                  projectByKey={projectByKey}
-                                  projectDisplayNameByKey={projectDisplayNameByKey}
-                                  isActive={entry.draftId === routeDraftIdForRows}
-                                  onNavigate={navigateToDraft}
-                                  onToggleQueue={toggleDraftQueue}
-                                  onContextMenu={handleDraftContextMenu}
-                                  sortable={bag}
-                                />
+                              if (entry.draftId !== null && entry.ownerId === queueDeviceId()) {
+                                return (
+                                  <QueuedDraftRow
+                                    draftId={entry.draftId}
+                                    projectByKey={projectByKey}
+                                    projectDisplayNameByKey={projectDisplayNameByKey}
+                                    isActive={entry.draftId === routeDraftIdForRows}
+                                    onNavigate={navigateToDraft}
+                                    onToggleQueue={toggleDraftQueue}
+                                    onContextMenu={handleDraftContextMenu}
+                                    sortable={bag}
+                                  />
+                                );
+                              }
+                              // Local mode has no other device; a missing thread there is pruned.
+                              return queueMode === "local" ? null : (
+                                <ForeignQueueRow entry={entry} sortable={bag} />
                               );
                             }}
                           />,
@@ -6012,7 +6081,9 @@ export default function Sidebar() {
                       // which is fine now that the overlay sits outside the sidebar's list.
                       dragOverlayNode = (
                         <DragOverlay dropAnimation={null}>
-                          {overlayRow === null && overlayDraftId === null ? null : (
+                          {overlayRow === null &&
+                          overlayDraftId === null &&
+                          overlayForeign === null ? null : (
                             <ul
                               className="list-none"
                               data-testid="sidebar-drag-overlay"
@@ -6025,7 +6096,14 @@ export default function Sidebar() {
                                   overlayRow.section,
                                   overlaySortableBag,
                                   true,
+                                  overlayQueueNote,
                                 )
+                              ) : overlayForeign !== null ? (
+                                <ForeignQueueRow
+                                  entry={overlayForeign}
+                                  sortable={overlaySortableBag}
+                                  isOverlayCopy
+                                />
                               ) : (
                                 <QueuedDraftRow
                                   draftId={overlayDraftId!}

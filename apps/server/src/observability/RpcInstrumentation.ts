@@ -208,6 +208,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subagentBackendSet]: "server",
   [WS_METHODS.subagentBackendUsage]: "server",
   [WS_METHODS.pushSubscriptionsRegister]: "server",
+  [WS_METHODS.serverSetThreadQueue]: "server",
+  [WS_METHODS.serverSubscribeThreadQueue]: "server",
   [WS_METHODS.subscribeHostMetrics]: "diagnostics",
   [WS_METHODS.subscribeLlmModels]: "diagnostics",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;

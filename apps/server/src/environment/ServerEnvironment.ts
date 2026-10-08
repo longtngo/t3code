@@ -253,6 +253,8 @@ export const make = Effect.gen(function* () {
       subagentBackend: true,
       subagentBackendThreadModes: true,
       jiraTicketLinks: true,
+      // FORK: the sidebar Queue lives on the primary's server (ThreadQueueService).
+      threadQueue: true,
       // FORK: refuses turns on an instance at 100% while the switch is off (CreditSpendGuard).
       allowSpendingCredits: true,
       // FORK: the Claude adapter answers resume questions from the setting.

@@ -150,6 +150,20 @@ describe("buildThreadActionMenuItems", () => {
     expect(allIds(baseState)).not.toContain("copy-branch");
   });
 
+  // A read-only queue disables both queue menu items.
+  it("disables Add to queue / Remove from queue while the queue is read-only", () => {
+    const item = (state: Partial<typeof baseState>) =>
+      buildThreadActionMenuItems({ ...baseState, ...state }).find(
+        (i) => i.id === "queue" || i.id === "unqueue",
+      );
+    expect(item({ queueWritable: false })?.disabled).toBe(true);
+    expect(item({ isQueued: true, queueWritable: false })?.disabled).toBe(true);
+    expect(item({})?.disabled).toBeFalsy();
+    const draft = { isQueued: false, hasPath: true, hasBranch: true, hasProject: true };
+    expect(buildDraftActionMenuItems({ ...draft, queueWritable: false })[0]?.disabled).toBe(true);
+    expect(buildDraftActionMenuItems(draft)[0]?.disabled).toBeFalsy();
+  });
+
   it("offers adding to the queue, or removing a queued thread", () => {
     expect(ids(baseState)).toContain("queue");
     expect(ids({ ...baseState, isQueued: true })).toEqual(expect.arrayContaining(["unqueue"]));

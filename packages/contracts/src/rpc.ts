@@ -317,6 +317,12 @@ import {
   SubagentBackendSetInput,
   SubagentBackendState,
 } from "./subagentBackend.ts";
+import {
+  ThreadQueueSetInput,
+  ThreadQueueSetResult,
+  ThreadQueueSnapshot,
+  ThreadQueueWriteError,
+} from "./threadQueue.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   ScheduledTaskDeleteInput,
@@ -504,6 +510,8 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+  serverSetThreadQueue: "server.setThreadQueue",
+  serverSubscribeThreadQueue: "server.subscribeThreadQueue",
 
   // Local-model manager actions (mlx-serve load & unload)
   llmServeLoad: "llmServe.load",
@@ -889,6 +897,21 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
   error: EnvironmentAuthorizationError,
+});
+
+/** Compare-and-set of the sidebar Queue document; `ok: false` returns the newer document. */
+const WsServerSetThreadQueueRpc = Rpc.make(WS_METHODS.serverSetThreadQueue, {
+  payload: ThreadQueueSetInput,
+  success: ThreadQueueSetResult,
+  error: Schema.Union([EnvironmentAuthorizationError, ThreadQueueWriteError]),
+});
+
+/** The current queue document first, then each later revision. */
+const WsServerSubscribeThreadQueueRpc = Rpc.make(WS_METHODS.serverSubscribeThreadQueue, {
+  payload: Schema.Struct({}),
+  success: ThreadQueueSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
@@ -2110,6 +2133,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
+  WsServerSetThreadQueueRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
@@ -2247,6 +2271,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeHostMetricsRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsServerSubscribeThreadQueueRpc,
   WsPushSubscriptionsRegisterRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,

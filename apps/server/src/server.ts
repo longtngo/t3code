@@ -71,6 +71,7 @@ import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as ThreadQueue from "./threadQueue.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -610,10 +611,15 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // the relay's fan-out.
   Layer.provideMerge(PushSubscriptionRepositoryLive),
   Layer.provideMerge(layerPersistence),
-  // Both read a user-owned file out of the state directory and stream changes
-  // to clients; neither depends on the other.
+  // Independent services that stream live state to clients; none depends on
+  // another.
   Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
+    Layer.mergeAll(
+      Keybindings.layer,
+      EnvironmentTheme.layer,
+      UsageLimitSources.layer,
+      ThreadQueue.layer,
+    ),
   ),
   Layer.provideMerge(ProviderRegistry.layer),
   // The instance registry is the new routing keystone — text generation,

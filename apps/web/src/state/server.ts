@@ -126,3 +126,21 @@ export const primaryServerEnvironmentThemesAtom = Atom.make(
   (get): ReadonlyArray<EnvironmentTheme> =>
     get(primaryServerConfigAtom)?.environmentThemes ?? EMPTY_ENVIRONMENT_THEMES,
 ).pipe(Atom.withLabel("web-primary-server-environment-themes"));
+
+/**
+ * What the sidebar Queue's mode needs from the primary: where its config came from (only a
+ * live config may decide) and whether that server holds the queue.
+ */
+export const primaryThreadQueueSupportAtom = Atom.make(
+  (get): { readonly configSource: "live" | "cache" | null; readonly capability: boolean } => {
+    const environmentId = get(primaryEnvironmentIdAtom);
+    if (environmentId === null) return { configSource: null, capability: false };
+    const projection = Option.getOrNull(
+      AsyncResult.value(get(serverEnvironment.configProjection({ environmentId, input: {} }))),
+    );
+    return {
+      configSource: projection?.source ?? null,
+      capability: projection?.config.environment.capabilities.threadQueue === true,
+    };
+  },
+).pipe(Atom.withLabel("web-primary-thread-queue-support"));

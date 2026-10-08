@@ -222,7 +222,7 @@ export interface SidebarDragOrigin {
   /** For a Queue row, the section it rests in once unqueued. */
   readonly activeSection: SidebarSection;
   readonly fromQueue: boolean;
-  /** A queued draft: no thread yet, so it can only reorder inside the Queue. */
+  /** A queued row with no thread here (a draft, or another device's entry): it can only reorder inside the Queue. */
   readonly queuedDraft: boolean;
 }
 
@@ -283,9 +283,15 @@ export function routeSidebarDragEnd(input: {
   readonly items: readonly SidebarListItem[];
   readonly queuedKeys: ReadonlySet<string>;
   readonly queueDropId: string;
+  /** False while the queue is read-only. */
+  readonly queueWritable?: boolean;
 }): SidebarDragEndRoute {
   const { drag, overId } = input;
   if (overId === null) return { kind: "none" };
+  // A read-only queue takes no drop and gives none up; a drag out would also pin or settle.
+  if (input.queueWritable === false && (drag.fromQueue || overId === input.queueDropId)) {
+    return { kind: "none" };
+  }
   if (drag.fromQueue && input.queuedKeys.has(overId)) {
     return overId === drag.activeKey
       ? { kind: "none" }

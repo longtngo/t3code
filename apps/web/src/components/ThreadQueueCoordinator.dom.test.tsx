@@ -1,7 +1,11 @@
 import { RegistryContext } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { QueueSlotSettings } from "@t3tools/contracts";
+import type {
+  QueueSlotSettings,
+  ThreadQueueDocument,
+  ThreadQueueSetInput,
+} from "@t3tools/contracts";
 import { type Atom, AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -124,10 +128,12 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useQueueSlotSettingsStore } from "../queueSlotSettingsStore";
 import { primaryServerConfigAtom } from "../state/server";
 import { renderDom } from "../testing/renderDom";
+import { type ThreadQueueEntry } from "../threadQueueRules";
 import {
+  queueDeviceId,
   removeSentThreadFromQueue,
   useThreadQueueStore,
-  type ThreadQueueEntry,
+  type ThreadQueueConnection,
 } from "../threadQueueStore";
 import { ThreadQueueCoordinator } from "./ThreadQueueCoordinator";
 
@@ -139,7 +145,7 @@ const startedThreadIds = () =>
     return input?.message !== undefined ? [input.threadId] : [];
   });
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
   fixture.commandCalls.length = 0;
   fixture.primary = null;
@@ -151,6 +157,15 @@ beforeEach(() => {
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
   });
+  useThreadQueueStore.getState().setConnection({
+    primaryId: null,
+    noPrimary: true,
+    configSource: null,
+    capability: false,
+    connected: false,
+    canWrite: true,
+  });
+  await useThreadQueueStore.persist.rehydrate();
   useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null });
   useQueueSlotSettingsStore.setState({
     slots: 1,
@@ -161,6 +176,254 @@ beforeEach(() => {
 
 afterEach(() => {
   localStorage.clear();
+  useThreadQueueStore.getState().setWriter(null);
+});
+
+const SERVER_CONNECTION: ThreadQueueConnection = {
+  primaryId: "env-primary" as ThreadQueueEntry["environmentId"],
+  noPrimary: false,
+  configSource: "live",
+  capability: true,
+  connected: true,
+  canWrite: true,
+};
+const queuedOnServer = (id: string) => ({
+  environmentId: env,
+  threadId: threadId(id),
+  draftId: null,
+  addedAt: 1,
+  ownerId: queueDeviceId(),
+  label: id,
+});
+
+// A queue shown from the last document, but disconnected, sends nothing.
+describe("ThreadQueueCoordinator while the queue is pending", () => {
+  it("claims nothing", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
+    const store = useThreadQueueStore.getState();
+    store.setConnection(SERVER_CONNECTION);
+    store.receiveDocument(
+      {
+        bootId: "boot-1",
+        revision: 1,
+        paused: false,
+        inFlight: null,
+        lastFailure: null,
+        entries: [queuedOnServer("queued-b")],
+      },
+      Date.now(),
+    );
+    store.setConnection({ ...SERVER_CONNECTION, connected: false });
+    expect(useThreadQueueStore.getState()).toMatchObject({
+      mode: "pending",
+      entries: [{ threadId: "queued-b" }],
+    });
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims();
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      await act(async () => {});
+      expect(claims.attempts).toBe(0);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+    expect(useThreadQueueStore.getState().inFlight).toBeNull();
+    expect(startedThreadIds()).toEqual([]);
+  });
+});
+
+/** Counts claim attempts; past `limit` it throws, which ends a spinning re-decide loop fast. */
+function countClaims(limit = 20) {
+  const { claimEntry } = useThreadQueueStore.getState();
+  const counter = {
+    attempts: 0,
+    restore: () => useThreadQueueStore.setState({ claimEntry }),
+  };
+  useThreadQueueStore.setState({
+    claimEntry: (input) => {
+      counter.attempts += 1;
+      if (counter.attempts > limit) throw new Error("claim attempts spun");
+      return claimEntry(input);
+    },
+  });
+  return counter;
+}
+
+describe("ThreadQueueCoordinator on the server's queue", () => {
+  const writes: ThreadQueueSetInput[] = [];
+  /** Each write's reply waits for this; a test holds it to keep a change unconfirmed. */
+  let reply: Promise<void> = Promise.resolve();
+  // This device's clock runs 10 minutes ahead of the server's.
+  const enter = (document: Partial<ThreadQueueDocument>, connection = SERVER_CONNECTION) => {
+    writes.length = 0;
+    const serverTime = Date.now() - 10 * 60_000;
+    const store = useThreadQueueStore.getState();
+    store.setWriter({
+      write: async (input) => {
+        writes.push(input);
+        await reply;
+        return {
+          ok: true,
+          document: { bootId: "boot-1", revision: input.expectedRevision + 1, ...input.state },
+          serverTime: Date.now() - 10 * 60_000,
+        };
+      },
+      reportFailure: vi.fn(),
+    });
+    store.setConnection(connection);
+    store.receiveDocument(
+      {
+        bootId: "boot-1",
+        revision: 1,
+        paused: false,
+        inFlight: null,
+        lastFailure: null,
+        entries: [],
+        ...document,
+      },
+      serverTime,
+    );
+    return serverTime;
+  };
+  const claimedAgo = (serverTime: number, ms: number) => ({
+    entry: queuedOnServer("queued-b"),
+    claimId: "other-tab",
+    claimedAt: serverTime - ms,
+    priorUserMessageAt: null,
+    priorTurnId: null,
+    priorSessionUpdatedAt: null,
+    sentAt: null,
+  });
+
+  // 4 minutes old by the server's clock is 14 by this device's.
+  it("ages a claim on the server's clock, not this device's", async () => {
+    const serverTime = Date.now() - 10 * 60_000;
+    enter({ inFlight: claimedAgo(serverTime, 4 * 60_000) });
+    await renderDom(<ThreadQueueCoordinator />);
+    expect(writes).toEqual([]);
+    expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("other-tab");
+  });
+
+  it("abandons a claim past the cap on the server's clock", async () => {
+    const serverTime = Date.now() - 10 * 60_000;
+    enter({ inFlight: claimedAgo(serverTime, 6 * 60_000) });
+    const { clearInFlight } = useThreadQueueStore.getState();
+    const clears: Array<Parameters<typeof clearInFlight>> = [];
+    useThreadQueueStore.setState({
+      clearInFlight: (...args) => {
+        clears.push(args);
+        clearInFlight(...args);
+      },
+    });
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      await vi.waitFor(() => expect(writes.map((write) => write.state.inFlight)).toEqual([null]));
+      // Only while still unsent: an owner's mark-sent landing first keeps the claim.
+      expect(clears).toEqual([["other-tab", true]]);
+    } finally {
+      useThreadQueueStore.setState({ clearInFlight });
+    }
+  });
+
+  it("sends only this device's entries", async () => {
+    const drafts = useComposerDraftStore.getState();
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue queued-a");
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    enter({
+      entries: [
+        { ...queuedOnServer("queued-b"), ownerId: "another-device" },
+        queuedOnServer("queued-a"),
+      ],
+    });
+    await renderDom(<ThreadQueueCoordinator />);
+    expect(useThreadQueueStore.getState().inFlight?.entry.threadId).toBe("queued-a");
+    await vi.waitFor(() => expect(startedThreadIds()).toEqual(["queued-a"]));
+  });
+
+  it("a claim the displayed queue refuses waits for a change instead of re-deciding at once", async () => {
+    // queued-b's instance is free, but the user's removal of it is not yet confirmed.
+    enter({ entries: [queuedOnServer("queued-b")] });
+    let release!: () => void;
+    reply = new Promise((resolve) => (release = resolve));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims();
+    try {
+      useThreadQueueStore.getState().remove(`${env}:queued-b`);
+      await renderDom(<ThreadQueueCoordinator />);
+      for (let flush = 0; flush < 5; flush += 1) await act(async () => {});
+      expect(claims.attempts).toBe(1);
+    } finally {
+      release();
+      reply = Promise.resolve();
+      claims.restore();
+      error.mockRestore();
+    }
+    await vi.waitFor(() => expect(useThreadQueueStore.getState().server?.entries).toEqual([]));
+    expect(startedThreadIds()).toEqual([]);
+  });
+
+  it("a claim the server answers but cannot save waits for a change instead of re-claiming at once", async () => {
+    enter({ entries: [queuedOnServer("queued-b")] });
+    // The state dir is unwritable: an unchanged document is accepted (nothing to write), any
+    // real change fails.
+    let attempts = 0;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        attempts += 1;
+        const document = useThreadQueueStore.getState().server!;
+        if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
+        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims(50);
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      for (let flush = 0; flush < 200; flush += 1) await act(async () => {});
+      expect(claims.attempts).toBe(1);
+      // The claim, then one unchanged re-send that settles its lost reply.
+      expect(attempts).toBe(2);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+    expect(useThreadQueueStore.getState().server?.entries).toEqual([queuedOnServer("queued-b")]);
+    expect(startedThreadIds()).toEqual([]);
+  });
+
+  it("a session that may not write the queue issues nothing: no prune, no claim, no abandon", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
+    const serverTime = Date.now() - 10 * 60_000;
+    enter(
+      {
+        entries: [queuedOnServer("queued-b"), queuedOnServer("deleted-thread")],
+        inFlight: claimedAgo(serverTime, 60 * 60_000),
+      },
+      { ...SERVER_CONNECTION, canWrite: false },
+    );
+    expect(useThreadQueueStore.getState()).toMatchObject({ mode: "server", readOnly: true });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims();
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      await act(async () => {});
+      expect(claims.attempts).toBe(0);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+    expect(writes).toEqual([]);
+    expect(useThreadQueueStore.getState().pending).toEqual([]);
+    expect(startedThreadIds()).toEqual([]);
+  });
 });
 
 describe("ThreadQueueCoordinator per-provider slots", () => {
