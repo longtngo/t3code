@@ -11,10 +11,17 @@ import {
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  claimAndSendQueueEntry,
+  nextThreadQueueAction,
+  QUEUE_CLAIM_ABANDON_MS,
+} from "./components/threadQueue.logic";
 import { DraftId } from "./composerDraftStore";
 import { SLOW_RPC_ACK_THRESHOLD_MS } from "./rpc/requestLatencyState";
 import {
+  applyQueueAction,
   threadQueueEntryKey,
+  type ThreadQueueData,
   type ThreadQueueEntry,
   type ThreadQueuePrior,
 } from "./threadQueueRules";
@@ -1634,5 +1641,120 @@ describe("a claim that cannot be saved", () => {
     });
     expect(await store().confirmClaim("next")).toBe(true);
     expect(reportFailure).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** A queued send whose branch read runs `duringBranch`; records what it sent. */
+function queuedSend(
+  key: string,
+  claimId: string,
+  duringBranch: () => void,
+  overrides: Partial<Parameters<typeof claimAndSendQueueEntry>[0]> = {},
+) {
+  const sent: string[] = [];
+  const deps: Parameters<typeof claimAndSendQueueEntry>[0] = {
+    key,
+    claimId,
+    readGitBranch: async () => {
+      duringBranch();
+      return null;
+    },
+    resolveEntry: (entry) => entry,
+    prior: () => ({ userMessageAt: null, turnId: null, sessionUpdatedAt: null }),
+    now: () => store().serverNow(),
+    confirm: async () => true,
+    readSnapshot: (entry) => {
+      sent.push(threadQueueEntryKey(entry));
+      return { shell: null, draft: null } as never;
+    },
+    send: async () => ({ kind: "sent" }),
+    reportFailure: vi.fn(),
+    reportEmpty: vi.fn(),
+    ...overrides,
+  };
+  return { sent, deps };
+}
+
+describe("a queued send racing other tabs and devices", () => {
+  // Tab A sleeps in the branch read past the abandon cap; tab B releases the claim in storage,
+  // which puts the entry back at the front. A resumes before its storage event arrives.
+  it("local: a claim another tab released while this tab slept is not sent by this tab", async () => {
+    for (const entry of [a, b, c]) store().enqueue(entry);
+    let tabB: ThreadQueueData | null = null;
+    const run = queuedSend("env-1:thread-A", "tab-a", () => {
+      const raw = JSON.parse(localStorage.getItem(THREAD_QUEUE_STORAGE_KEY)!);
+      const decision = nextThreadQueueAction({
+        entries: raw.state.entries,
+        paused: raw.state.paused,
+        inFlight: raw.state.inFlight,
+        threads: [],
+        nowMs: raw.state.inFlight.claimedAt + QUEUE_CLAIM_ABANDON_MS + 1,
+        slots: 3,
+        perProvider: false,
+        providerSlots: {},
+        visibleInstanceIds: [],
+        targetInstanceOf: () => null,
+        ownerId: null,
+        leaving: new Set(),
+      });
+      expect(decision).toEqual({ kind: "release-claim", claimId: "tab-a" });
+      tabB = applyQueueAction(raw.state, decision as { kind: "release-claim"; claimId: string });
+      localStorage.setItem(THREAD_QUEUE_STORAGE_KEY, JSON.stringify({ ...raw, state: tabB }));
+    });
+    expect(await claimAndSendQueueEntry(run.deps)).toBe(false);
+    expect(run.sent).toEqual([]);
+    // Tab B, seeing the entry back and the slot free, is now its only sender.
+    expect(tabB!.entries.map(threadQueueEntryKey)).toEqual([
+      "env-1:thread-A",
+      "env-1:thread-B",
+      "env-1:thread-C",
+    ]);
+    expect(store().inFlight).toBeNull();
+    expect(keys()).toEqual(["env-1:thread-A", "env-1:thread-B", "env-1:thread-C"]);
+  });
+
+  // The pause check reads the queue as this tab shows it: its own click counts before the
+  // server confirms it.
+  it("server: this tab's own pause, not yet confirmed, stops the send and requeues the entry", async () => {
+    const server = casServer("boot-1");
+    for (const entry of [a, b, c])
+      server.replace({ entries: [...server.document.entries, queued(entry)] });
+    let hold: Promise<void> | null = null;
+    let open!: () => void;
+    enterServer(server, {
+      write: async (input) => {
+        if (input.state.paused && hold === null) {
+          hold = new Promise((resolve) => (open = resolve));
+        }
+        if (input.state.paused) await hold;
+        return server.apply(input);
+      },
+    });
+    const run = queuedSend(
+      "env-1:thread-A",
+      "mine",
+      () => {
+        store().setPaused(true);
+        expect(store().server?.paused).toBe(false);
+        // The pause lands right after this send decides: under a wrong decision the mark waits
+        // behind it and the send starts at once, rather than after the write timeout.
+        setTimeout(() => open(), 0);
+      },
+      // The claim and its confirmation go through `settle` for real.
+      { confirm: (claimId) => store().confirmClaim(claimId) },
+    );
+    expect(await claimAndSendQueueEntry(run.deps)).toBe(false);
+    expect(run.sent).toEqual([]);
+    open();
+    await idle();
+    expect({
+      paused: server.document.paused,
+      inFlight: server.document.inFlight,
+      keys: server.document.entries.map(threadQueueEntryKey),
+    }).toEqual({
+      paused: true,
+      inFlight: null,
+      keys: ["env-1:thread-A", "env-1:thread-B", "env-1:thread-C"],
+    });
   });
 });

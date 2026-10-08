@@ -87,6 +87,7 @@ describe("applyQueueAction is idempotent", () => {
     ["mark-sent", claimed, { kind: "mark-sent", claimId: "c1", now: 20 }],
     ["mark-sent on a hand-sent claim", handSent, { kind: "mark-sent", claimId: "c1", now: 20 }],
     ["release-hand-sent", handSent, { kind: "release-hand-sent", claimId: "c1" }],
+    ["release-claim", claimedB, { kind: "release-claim", claimId: "c1" }],
     ["clear-in-flight", claimed, { kind: "clear-in-flight", claimId: "c1" }],
     [
       "clear-in-flight if unsent",
@@ -150,6 +151,37 @@ describe("applyQueueAction is idempotent", () => {
   it("a claim takes the entry out of the queue in the same step", () => {
     expect(claimed.entries.map((e) => e.threadId)).toEqual(["B", "C"]);
     expect(claimed.inFlight).toMatchObject({ claimId: "c1", claimedAt: 10, sentAt: null });
+  });
+});
+
+// An unstarted claim nobody will send goes back to the Queue instead of leaving it unseen.
+describe("release-claim", () => {
+  const release: QueueAction = { kind: "release-claim", claimId: "c1" };
+
+  it("puts an unstarted claim's entry back at the front and keeps the others in order", () => {
+    const released = applyQueueAction(claimedB, release);
+    expect(released.inFlight).toBeNull();
+    expect(released.entries.map((e) => e.threadId)).toEqual(["B", "A", "C"]);
+    expect(released.entries[0]).toBe(claimedB.inFlight?.entry);
+  });
+
+  it("leaves a started, sent, hand-sent or other claim alone", () => {
+    const started = applyQueueAction(claimed, { kind: "mark-sending", claimId: "c1", now: 12 });
+    const sent = applyQueueAction(claimed, { kind: "mark-sent", claimId: "c1", now: 20 });
+    for (const state of [started, sent, handSent]) {
+      expect(applyQueueAction(state, release)).toBe(state);
+    }
+    expect(applyQueueAction(claimed, { kind: "release-claim", claimId: "c2" })).toBe(claimed);
+  });
+
+  it("does not add the entry twice, nor past the entry cap", () => {
+    const requeued = { ...claimed, entries: [entry("C"), entry("A")] };
+    expect(applyQueueAction(requeued, release)).toEqual({ ...requeued, inFlight: null });
+    const full = {
+      ...claimed,
+      entries: Array.from({ length: THREAD_QUEUE_MAX_ENTRIES }, (_, i) => entry(`T${i}`)),
+    };
+    expect(applyQueueAction(full, release)).toEqual({ ...full, inFlight: null });
   });
 });
 

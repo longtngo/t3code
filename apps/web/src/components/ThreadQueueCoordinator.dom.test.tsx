@@ -322,9 +322,41 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
     expect(useThreadQueueStore.getState().inFlight?.claimId).toBe("other-tab");
   });
 
-  it("abandons a claim past the cap on the server's clock", async () => {
+  it("puts an unstarted claim past the cap back at the front of the queue, on the server's clock", async () => {
+    const serverTime = Date.now() - 10 * 60_000;
+    // Paused, so the released entry is not claimed again at once.
+    enter({
+      paused: true,
+      inFlight: claimedAgo(serverTime, 6 * 60_000),
+      entries: [queuedOnServer("queued-a")],
+    });
+    await renderDom(<ThreadQueueCoordinator />);
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.state.inFlight).toBeNull();
+    expect(writes[0]!.state.entries.map((entry) => entry.threadId)).toEqual([
+      "queued-b",
+      "queued-a",
+    ]);
+    expect(startedThreadIds()).toEqual([]);
+  });
+
+  it("an unstarted claim past the cap is sent again once released", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
     const serverTime = Date.now() - 10 * 60_000;
     enter({ inFlight: claimedAgo(serverTime, 6 * 60_000) });
+    await renderDom(<ThreadQueueCoordinator />);
+    await vi.waitFor(() => expect(startedThreadIds()).toEqual(["queued-b"]));
+  });
+
+  it("a started send past the cap only frees the slot, and only while still unsent", async () => {
+    const serverTime = Date.now() - 10 * 60_000;
+    enter({
+      paused: true,
+      inFlight: { ...claimedAgo(serverTime, 7 * 60_000), sendingAt: serverTime - 6 * 60_000 },
+      entries: [queuedOnServer("queued-a")],
+    });
     const { clearInFlight } = useThreadQueueStore.getState();
     const clears: Array<Parameters<typeof clearInFlight>> = [];
     useThreadQueueStore.setState({
@@ -338,6 +370,7 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
       await vi.waitFor(() => expect(writes.map((write) => write.state.inFlight)).toEqual([null]));
       // Only while still unsent: an owner's mark-sent landing first keeps the claim.
       expect(clears).toEqual([["other-tab", true]]);
+      expect(writes[0]!.state.entries.map((entry) => entry.threadId)).toEqual(["queued-a"]);
     } finally {
       useThreadQueueStore.setState({ clearInFlight });
     }
@@ -408,6 +441,38 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
       error.mockRestore();
     }
     expect(useThreadQueueStore.getState().server?.entries).toEqual([queuedOnServer("queued-b")]);
+    expect(startedThreadIds()).toEqual([]);
+  });
+
+  it("a pause made while the claim is on its way to the server sends nothing and keeps the order", async () => {
+    const drafts = useComposerDraftStore.getState();
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue queued-a");
+    drafts.setPrompt(scopeThreadRef(env, threadId("queued-b")), "continue queued-b");
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    enter({ entries: [queuedOnServer("queued-b"), queuedOnServer("queued-a")] });
+    let document: ThreadQueueDocument = useThreadQueueStore.getState().server!;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        writes.push(input);
+        // The user pauses while the claim's request is out.
+        if (input.state.inFlight !== null && !input.state.paused) {
+          useThreadQueueStore.getState().setPaused(true);
+        }
+        const ok = input.expectedRevision === document.revision;
+        if (ok) document = { ...document, ...input.state, revision: document.revision + 1 };
+        return { ok, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    await renderDom(<ThreadQueueCoordinator />);
+    await vi.waitFor(() =>
+      expect({
+        paused: document.paused,
+        inFlight: document.inFlight,
+        entries: document.entries.map((entry) => entry.threadId),
+      }).toEqual({ paused: true, inFlight: null, entries: ["queued-b", "queued-a"] }),
+    );
+    expect(writes[0]?.state.inFlight?.entry.threadId).toBe("queued-b");
     expect(startedThreadIds()).toEqual([]);
   });
 

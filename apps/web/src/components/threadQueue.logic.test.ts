@@ -333,19 +333,14 @@ describe("nextThreadQueueAction", () => {
           inFlight: claim({ sentAt: null, claimedAt: NOW - QUEUE_CLAIM_ABANDON_MS + 1 }),
         }),
       ).toBe("wait");
-      expect(
-        decide([stuck], {
-          inFlight: claim({ sentAt: null, claimedAt: NOW - QUEUE_CLAIM_ABANDON_MS - 1 }),
-        }),
-      ).toBe("clear-in-flight");
-      // The abandon clears only an unsent claim; a landing clear is unconditional.
+      // An unstarted claim goes back to the queue; a landing clear is unconditional.
       expect(
         nextThreadQueueAction({
           ...base(),
           threads: [stuck],
           inFlight: claim({ sentAt: null, claimedAt: NOW - QUEUE_CLAIM_ABANDON_MS - 1 }),
         }),
-      ).toEqual({ kind: "clear-in-flight", claimId: "claim-1", ifUnsent: true });
+      ).toEqual({ kind: "release-claim", claimId: "claim-1" });
       expect(
         nextThreadQueueAction({
           ...base(),
@@ -353,6 +348,22 @@ describe("nextThreadQueueAction", () => {
           inFlight: claim({ sentAt: NOW - QUEUE_SENT_LANDING_CAP_MS - 1 }),
         }),
       ).toEqual({ kind: "clear-in-flight", claimId: "claim-1" });
+    });
+
+    it("ages a started send from its sending mark, not from its claim", () => {
+      const stuck = shell("sent", { latestUserMessageAt: iso(-3_600_000) });
+      // The claim retried a lost reply for most of the cap; its send started a minute ago.
+      const startedAt = (ago: number) =>
+        claim({ sentAt: null, claimedAt: NOW - 2 * QUEUE_CLAIM_ABANDON_MS, sendingAt: NOW - ago });
+      expect(decide([stuck], { inFlight: startedAt(60_000) })).toBe("wait");
+      expect(decide([stuck], { inFlight: startedAt(QUEUE_CLAIM_ABANDON_MS - 1) })).toBe("wait");
+      expect(
+        nextThreadQueueAction({
+          ...base(),
+          threads: [stuck],
+          inFlight: startedAt(QUEUE_CLAIM_ABANDON_MS + 1),
+        }),
+      ).toEqual({ kind: "clear-in-flight", claimId: "claim-1", ifUnsent: true });
     });
   });
 
@@ -655,6 +666,52 @@ describe("claimAndSendQueueEntry", () => {
       snapshots: [],
       failures: [],
     });
+  });
+
+  // The claim refuses a paused queue, but a pause can land while the claim settles or the
+  // branch is read: the send must not start, and the entry goes back where it was.
+  it.each([
+    ["while the claim settles", "confirm"],
+    ["during the branch read", "readGitBranch"],
+  ] as const)("a pause %s sends nothing and puts the entry back", async (_name, step) => {
+    const pause = () => useThreadQueueStore.getState().setPaused(true);
+    const run = deps(
+      step === "confirm"
+        ? {
+            confirm: async () => {
+              pause();
+              return true;
+            },
+          }
+        : {
+            readGitBranch: async () => {
+              pause();
+              return null;
+            },
+          },
+    );
+    expect(await claimAndSendQueueEntry(run.deps)).toBe(false);
+    expect({ snapshots: run.snapshots, failures: run.failures }).toEqual({
+      snapshots: [],
+      failures: [],
+    });
+    const state = useThreadQueueStore.getState();
+    expect(state).toMatchObject({ paused: true, inFlight: null, lastFailure: null });
+    expect(state.entries.map((value) => value.threadId)).toEqual(["A", "B"]);
+  });
+
+  it("a pause after a hand send took the claim over leaves the hand send's slot held", async () => {
+    const run = deps({
+      readGitBranch: async () => {
+        removeSentThreadFromQueue("env-1:A", null);
+        useThreadQueueStore.getState().setPaused(true);
+        return null;
+      },
+    });
+    expect(await claimAndSendQueueEntry(run.deps)).toBe(false);
+    const state = useThreadQueueStore.getState();
+    expect(state.inFlight).toMatchObject({ claimId: "claim-1", handSent: true });
+    expect(state.entries.map((value) => value.threadId)).toEqual(["B"]);
   });
 
   it("stamps the claim, the sending mark and the sent mark with the injected clock", async () => {

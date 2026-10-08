@@ -177,6 +177,8 @@ interface ThreadQueueState extends ThreadQueueData {
   readonly removeSent: (threadKey: string, draftId: DraftId | null) => void;
   /** A failed hand send frees the claim its removal took over. */
   readonly releaseHandSent: (claimId: string) => void;
+  /** Puts a claim whose send never started back at the front of the queue. */
+  readonly releaseClaim: (claimId: string) => void;
   /** The server's clock as this tab estimates it; claim and landing ages are measured on it. */
   readonly serverNow: () => number;
   readonly setConnection: (connection: ThreadQueueConnection) => void;
@@ -675,6 +677,7 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
         removeSent: (threadKey, draftId) =>
           dispatch({ kind: "remove-sent", threadKey, draftId, now: get().serverNow() }, "system"),
         releaseHandSent: (claimId) => dispatch({ kind: "release-hand-sent", claimId }, "system"),
+        releaseClaim: (claimId) => dispatch({ kind: "release-claim", claimId }, "system"),
         serverNow: () => Date.now() + (get().mode === "local" ? 0 : get().offsetMs),
         setConnection: (next) => {
           const state = get();

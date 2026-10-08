@@ -98,6 +98,8 @@ export type QueueAction =
   | { readonly kind: "clear-in-flight"; readonly claimId: string; readonly ifUnsent?: true }
   /** A failed hand send frees the slot its taken-over claim still holds. */
   | { readonly kind: "release-hand-sent"; readonly claimId: string }
+  /** A claim whose send never started goes back to the front of the queue (it is not sent). */
+  | { readonly kind: "release-claim"; readonly claimId: string }
   /** Pauses the queue and records why; clears the claim if it is still this one. */
   | { readonly kind: "fail"; readonly claimId: string; readonly failure: ThreadQueueFailure };
 
@@ -240,6 +242,25 @@ export function applyQueueAction(state: ThreadQueueData, action: QueueAction): T
       return state.inFlight?.claimId === action.claimId && state.inFlight.handSent === true
         ? { ...state, inFlight: null }
         : state;
+    case "release-claim": {
+      const claim = state.inFlight;
+      if (
+        claim?.claimId !== action.claimId ||
+        claim.sendingAt !== undefined ||
+        claim.sentAt !== null
+      ) {
+        return state;
+      }
+      const key = threadQueueEntryKey(claim.entry);
+      const keep =
+        state.entries.some((entry) => threadQueueEntryKey(entry) === key) ||
+        state.entries.length >= THREAD_QUEUE_MAX_ENTRIES;
+      return {
+        ...state,
+        inFlight: null,
+        entries: keep ? state.entries : [claim.entry, ...state.entries],
+      };
+    }
     case "fail":
       return {
         ...state,

@@ -41,7 +41,9 @@ export const QUEUE_EMPTY_DRAFT_MESSAGE =
 export type ThreadQueueAction =
   | { readonly kind: "wait" }
   | { readonly kind: "claim"; readonly key: string }
-  | { readonly kind: "clear-in-flight"; readonly claimId: string; readonly ifUnsent?: true };
+  | { readonly kind: "clear-in-flight"; readonly claimId: string; readonly ifUnsent?: true }
+  /** A claim whose send never started, abandoned: its entry goes back to the queue. */
+  | { readonly kind: "release-claim"; readonly claimId: string };
 
 /** The provider instance a thread occupies: the running run's, else the one it is set to. */
 function threadInstanceId(thread: EnvironmentThreadShell): string {
@@ -90,9 +92,16 @@ export function nextThreadQueueAction(input: {
   const now = new Date(nowMs).toISOString();
   if (inFlight !== null) {
     if (inFlight.sentAt === null) {
-      return nowMs - inFlight.claimedAt > QUEUE_CLAIM_ABANDON_MS
-        ? { kind: "clear-in-flight", claimId: inFlight.claimId, ifUnsent: true }
-        : { kind: "wait" };
+      // A started send is aged from its start: the claim before it can retry a lost reply for
+      // most of the cap, and the send itself takes seconds.
+      if (nowMs - (inFlight.sendingAt ?? inFlight.claimedAt) <= QUEUE_CLAIM_ABANDON_MS) {
+        return { kind: "wait" };
+      }
+      // An unstarted send left its draft untouched, so the entry is queued again rather than
+      // dropped unseen. A started one may have gone out; it only frees the slot.
+      return inFlight.sendingAt === undefined
+        ? { kind: "release-claim", claimId: inFlight.claimId }
+        : { kind: "clear-in-flight", claimId: inFlight.claimId, ifUnsent: true };
     }
     const sentKey = threadQueueEntryKey(inFlight.entry);
     const sentThread = input.threads.find((thread) => shellKey(thread) === sentKey);
@@ -239,9 +248,20 @@ export async function claimAndSendQueueEntry(deps: {
       }),
     ]);
     clearTimeout(timer);
+    // Locally, another tab may have released or taken the claim while this one waited (a
+    // frozen tab resumes before its storage events): read storage, as `confirmClaim` does.
+    if (useThreadQueueStore.getState().mode === "local") {
+      await useThreadQueueStore.persist.rehydrate();
+    }
     // A hand send during the branch read took the claim over; nothing is left to send.
     const current = useThreadQueueStore.getState().inFlight;
     if (current?.claimId !== deps.claimId || current.sentAt !== null) return false;
+    // A pause that landed after the claim (while it settled or the branch was read) stops the
+    // send before it starts; the entry goes back to the front of the queue.
+    if (useThreadQueueStore.getState().paused) {
+      useThreadQueueStore.getState().releaseClaim(deps.claimId);
+      return false;
+    }
     // False when the claim is no longer this send's (a hand send took it over) or the mark never
     // landed. Never cleared here: the take-over owns the slot, else the abandon cap frees it.
     if (!(await useThreadQueueStore.getState().markSending(deps.claimId, deps.now()))) return false;

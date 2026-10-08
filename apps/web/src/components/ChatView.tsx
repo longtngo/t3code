@@ -9892,7 +9892,11 @@ export default function ChatView(props: ChatViewProps) {
       let releasedComposer = false;
       let canRestoreDraft = () => false;
       let startedCount = 0;
+      let releaseQueueSlot: (() => void) | null = null;
       try {
+        // The prompt goes to new threads: the draft leaves the Queue before any await, as on a
+        // single send, so the Queue neither sends it meanwhile nor sends a prompt restored later.
+        releaseQueueSlot = removeSentThreadFromQueue(routeThreadKey, draftId);
         const attachments = await turnAttachmentsPromise;
         const fileBlockReason = readLiveAttachmentCapabilities().fileBlockReason;
         if (fileBlockReason !== null) throw new Error(fileBlockReason);
@@ -10140,6 +10144,8 @@ export default function ChatView(props: ChatViewProps) {
             );
           }
         }
+        // The new threads read busy on their own; the draft's thread never lands a message.
+        releaseQueueSlot?.();
         if (!releasedComposer) {
           sendInFlightRef.current = false;
           resetLocalDispatch();

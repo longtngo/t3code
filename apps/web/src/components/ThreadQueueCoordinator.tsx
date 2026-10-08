@@ -318,6 +318,10 @@ export function ThreadQueueCoordinator() {
       useThreadQueueStore.getState().clearInFlight(action.claimId, action.ifUnsent);
       return;
     }
+    if (action.kind === "release-claim") {
+      useThreadQueueStore.getState().releaseClaim(action.claimId);
+      return;
+    }
     if (action.kind !== "claim") return;
     if (sendingRef.current) {
       skippedClaimRef.current = action.key;
