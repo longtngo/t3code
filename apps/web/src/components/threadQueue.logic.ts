@@ -7,10 +7,8 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 
-import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
-import { truncate } from "@t3tools/shared/String";
-import { stripInlineContextReferences } from "../lib/composerContextReferences";
 import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
+// Type-only: the send planner pulls in UI modules this pure logic must not load.
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
   threadQueueEntryKey,
@@ -210,6 +208,11 @@ export async function claimAndSendQueueEntry(deps: {
     currentGitBranch: string | null,
   ) => QueuedSendSnapshot;
   readonly send: (snapshot: QueuedSendSnapshot) => Promise<QueuedSendOutcome>;
+  /**
+   * The name the notices give the send (`queuedSendTitle`): from its snapshot, or, for a failure
+   * before the snapshot was read (the settle or a read threw), with `snapshot` null.
+   */
+  readonly title: (entry: ThreadQueueEntry, snapshot: QueuedSendSnapshot | null) => string;
   readonly reportFailure: (entry: ThreadQueueEntry, title: string, message: string) => void;
   /** An empty draft leaves the queue for Active without pausing it (the queue's original rule). */
   readonly reportEmpty: (entry: ThreadQueueEntry, title: string) => void;
@@ -226,7 +229,16 @@ export async function claimAndSendQueueEntry(deps: {
   // Nothing was claimed: the entry left meanwhile.
   if (claim === null) return false;
   let { entry } = claim;
-  let title = "New thread";
+  // Set from the snapshot once read; a failure before that asks without one. That ask may fail
+  // the way the read did, and runs outside the try below, so it never throws.
+  let title: string | null = null;
+  const titleWithoutSnapshot = () => {
+    try {
+      return deps.title(entry, null);
+    } catch {
+      return "New thread";
+    }
+  };
   // Once this tab starts the send, its outcome is this tab's to report, claim or no claim.
   let started = false;
   let outcome: QueuedSendOutcome;
@@ -267,15 +279,7 @@ export async function claimAndSendQueueEntry(deps: {
     if (!(await useThreadQueueStore.getState().markSending(deps.claimId, deps.now()))) return false;
     started = true;
     const snapshot = deps.readSnapshot(entry, branch);
-    // The composer's own title rule for a new thread.
-    title =
-      snapshot.shell?.title ??
-      (truncate(
-        assistantCitationsToPlainText(
-          stripInlineContextReferences(snapshot.draft?.prompt ?? ""),
-        ).trim(),
-      ) ||
-        "New thread");
+    title = deps.title(entry, snapshot);
     outcome = await deps.send(snapshot);
   } catch (error) {
     outcome = {
@@ -291,6 +295,7 @@ export async function claimAndSendQueueEntry(deps: {
     // Tell the user before writing the store, and write it even if telling throws: a refused
     // storage write must not swallow the notice, and a notice must not skip the write.
     case "empty":
+      title ??= titleWithoutSnapshot();
       try {
         deps.reportEmpty(entry, title);
       } finally {
@@ -308,6 +313,7 @@ export async function claimAndSendQueueEntry(deps: {
         return false;
       }
       const message = outcome.kind === "refused" ? outcome.reason : outcome.message;
+      title ??= titleWithoutSnapshot();
       try {
         deps.reportFailure(entry, title, message);
       } finally {

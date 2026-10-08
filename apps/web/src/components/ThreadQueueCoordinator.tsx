@@ -11,6 +11,7 @@ import { executeQueuedSend } from "../lib/threadSend/executeQueuedSend";
 import {
   planQueuedSend,
   queuedSendInstanceId,
+  queuedSendTitle,
   type QueuedSendSnapshot,
 } from "../lib/threadSend/queuedSend";
 import { newMessageId, newThreadId, randomHex, randomUUID } from "../lib/utils";
@@ -281,6 +282,8 @@ export function ThreadQueueCoordinator() {
             },
             { messageId: newMessageId(), now: () => new Date().toISOString(), newThreadId },
           ),
+        title: (entry, snapshot) =>
+          queuedSendTitle(snapshot ?? readQueuedSendSnapshot(entry, isEnvironmentConnected, null)),
         reportFailure,
         reportEmpty,
       }),

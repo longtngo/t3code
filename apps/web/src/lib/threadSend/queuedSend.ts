@@ -55,7 +55,7 @@ import { isLatestRunSettled } from "../../session-logic";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
 import { buildMessageContext, terminalContextReference } from "../composerContextRecords";
 import { removeInlineContextReference } from "../composerContextReferences";
-import { composeTurnStart, type TurnStartBootstrap } from "./composeTurnStart";
+import { composeTurnStart, composeTurnTitle, type TurnStartBootstrap } from "./composeTurnStart";
 
 /** Everything a queued send reads, gathered from stores by the caller. */
 export interface QueuedSendSnapshot {
@@ -114,6 +114,25 @@ export function queuedSendInstanceId(snapshot: QueuedSendSnapshot): string | nul
 }
 
 const OPEN_TO_SEND = "Open the thread to send it.";
+
+/** The name the queue's notices give a send: the thread's title, else what Send would title it. */
+export function queuedSendTitle(snapshot: Pick<QueuedSendSnapshot, "shell" | "draft">): string {
+  if (snapshot.shell !== null) return snapshot.shell.title;
+  const draft = snapshot.draft;
+  const sendState = deriveComposerSendState({
+    prompt: draft?.prompt ?? "",
+    imageCount: 0,
+    terminalContexts: draft?.terminalContexts ?? [],
+  });
+  return composeTurnTitle({
+    trimmedPrompt: sendState.trimmedPrompt,
+    images: draft?.images ?? [],
+    files: draft?.files ?? [],
+    terminalContexts: sendState.sendableTerminalContexts,
+    reviewComments: draft?.reviewComments ?? [],
+    previewAnnotations: draft?.previewAnnotations ?? [],
+  });
+}
 
 export function planQueuedSend(snapshot: QueuedSendSnapshot): QueuedSendPlan {
   const { draft, draftSession, shell, project, settings } = snapshot;

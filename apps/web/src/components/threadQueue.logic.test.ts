@@ -11,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
+import { queuedSendTitle, type QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import { type ThreadQueueEntry, type ThreadQueueInFlight } from "../threadQueueRules";
 import { removeSentThreadFromQueue, useThreadQueueStore } from "../threadQueueStore";
 import {
@@ -529,11 +529,13 @@ describe("claimAndSendQueueEntry", () => {
   function deps(overrides: Partial<Parameters<typeof claimAndSendQueueEntry>[0]> = {}) {
     const snapshots: Array<{ entry: ThreadQueueEntry; branch: string | null }> = [];
     const failures: string[] = [];
+    const failureTitles: string[] = [];
     const empties: string[] = [];
     const titles: string[] = [];
     return {
       snapshots,
       failures,
+      failureTitles,
       empties,
       titles,
       deps: {
@@ -549,8 +551,12 @@ describe("claimAndSendQueueEntry", () => {
           return { shell: null, draft: null } as unknown as QueuedSendSnapshot;
         },
         send: async () => ({ kind: "sent" }) as const,
-        reportFailure: (_entry: ThreadQueueEntry, _title: string, message: string) => {
+        // The coordinator's rule once the snapshot is read; a stand-in name before that.
+        title: (value: ThreadQueueEntry, snapshot: QueuedSendSnapshot | null) =>
+          snapshot === null ? `Title of ${value.threadId}` : queuedSendTitle(snapshot),
+        reportFailure: (_entry: ThreadQueueEntry, title: string, message: string) => {
           failures.push(message);
+          failureTitles.push(title);
         },
         reportEmpty: (value: ThreadQueueEntry, title: string) => {
           empties.push(`${value.environmentId}:${value.threadId}`);
@@ -838,6 +844,77 @@ describe("claimAndSendQueueEntry", () => {
       lastFailure: { threadKey: "env-1:A", message: "snapshot broke" },
     });
     expect(run.failures).toEqual(["snapshot broke"]);
+  });
+
+  it("a refused draft with only an image is named by it, as the composer does", async () => {
+    const run = deps({
+      readSnapshot: () =>
+        ({
+          shell: null,
+          draft: { prompt: "", images: [{ name: "shot.png" }] },
+        }) as unknown as QueuedSendSnapshot,
+      send: async () => ({ kind: "refused", reason: "The message has attachments." }),
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.failureTitles).toEqual(["Image: shot.png"]);
+  });
+
+  it("a title that throws as well still pauses the queue, says why, and frees the claim", async () => {
+    const titleBroke = (_entry: ThreadQueueEntry, snapshot: QueuedSendSnapshot | null) => {
+      if (snapshot === null) throw new Error("title broke");
+      return "unused";
+    };
+    const cases = {
+      settle: { confirm: async () => Promise.reject(new Error("settle broke")) },
+      snapshot: {
+        readSnapshot: () => {
+          throw new Error("settle broke");
+        },
+      },
+    };
+    for (const [name, overrides] of Object.entries(cases)) {
+      useThreadQueueStore.setState({
+        entries: [entry("A")],
+        paused: false,
+        inFlight: null,
+        lastFailure: null,
+      });
+      const run = deps({ ...overrides, title: titleBroke });
+      const outcome = await claimAndSendQueueEntry(run.deps).then(
+        () => "settled",
+        (error: Error) => `threw: ${error.message}`,
+      );
+      const state = useThreadQueueStore.getState();
+      expect({
+        name,
+        outcome,
+        failureTitles: run.failureTitles,
+        paused: state.paused,
+        inFlight: state.inFlight,
+        lastFailure: state.lastFailure,
+      }).toEqual({
+        name,
+        outcome: "settled",
+        failureTitles: ["New thread"],
+        paused: true,
+        inFlight: null,
+        lastFailure: { threadKey: "env-1:A", title: "New thread", message: "settle broke" },
+      });
+    }
+  });
+
+  it("a failure before the snapshot names the thread by its own title", async () => {
+    const run = deps({
+      confirm: async () => {
+        throw new Error("settle broke");
+      },
+    });
+    await claimAndSendQueueEntry(run.deps);
+    expect(run.failureTitles).toEqual(["Title of A"]);
+    expect(useThreadQueueStore.getState().lastFailure).toMatchObject({
+      title: "Title of A",
+      message: "settle broke",
+    });
   });
 
   it("a send that fails after its claim was cleared still pauses and says so", async () => {

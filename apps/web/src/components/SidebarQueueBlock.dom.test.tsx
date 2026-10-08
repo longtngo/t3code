@@ -296,3 +296,53 @@ describe("queue rows from another device", () => {
     );
   });
 });
+
+describe("an empty Queue", () => {
+  beforeEach(async () => {
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
+    useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null, lastFailure: null });
+  });
+
+  const mount = () =>
+    renderDom(
+      <DndContext>
+        <ul>
+          <SidebarQueueBlock
+            entries={[]}
+            routeKey={null}
+            routeDraftId={null}
+            expanded
+            onToggleExpanded={() => {}}
+            dragging={false}
+            collapse={false}
+            heldDrop={null}
+            renderEntry={() => null}
+          />
+        </ul>
+      </DndContext>,
+    );
+
+  it("shows nothing while it runs", async () => {
+    const view = await mount();
+    expect(view.find('[data-testid="sidebar-queue-header"]')).toBeNull();
+  });
+
+  // A thread queued later waits under this pause, and only its toast ever said why.
+  it("keeps a paused Queue's header, with its failure and a way to resume", async () => {
+    const failure = { threadKey: "env:one", title: "Fix the build", message: "server gone" };
+    useThreadQueueStore.setState({ paused: true, lastFailure: failure });
+    const view = await mount();
+    const header = view.find('[data-testid="sidebar-queue-header"]');
+    expect(header?.textContent ?? "no Queue header").toContain("Paused: Fix the build failed");
+    await view.click(view.find('button[aria-label="Resume queue"]'));
+    expect(useThreadQueueStore.getState()).toMatchObject({ paused: false, lastFailure: null });
+  });
+});

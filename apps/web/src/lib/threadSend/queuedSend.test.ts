@@ -21,7 +21,12 @@ import { executeQueuedSend, type QueuedSendCommands } from "./executeQueuedSend"
 import { terminalContextReference } from "../composerContextRecords";
 import { formatInlineContextReference } from "../composerContextReferences";
 import type { TerminalContextDraft } from "../terminalContext";
-import { planQueuedSend, queuedSendInstanceId, type QueuedSendSnapshot } from "./queuedSend";
+import {
+  planQueuedSend,
+  queuedSendInstanceId,
+  queuedSendTitle,
+  type QueuedSendSnapshot,
+} from "./queuedSend";
 
 const env = EnvironmentId.make("env-1");
 const threadId = ThreadId.make("thread-1");
@@ -448,5 +453,59 @@ describe("executeQueuedSend", () => {
       kind: "empty",
     });
     expect(calls).toEqual([]);
+  });
+});
+
+describe("queuedSendTitle", () => {
+  const titled = (draft: object) =>
+    queuedSendTitle(
+      serverSnapshot({
+        shell: null,
+        draft: {
+          prompt: "",
+          images: [],
+          files: [],
+          terminalContexts: [],
+          reviewComments: [],
+          previewAnnotations: [],
+          ...draft,
+        } as never,
+      }),
+    );
+  const chip: TerminalContextDraft = {
+    id: "t-1",
+    threadId,
+    createdAt: "2026-09-13T10:00:00.000Z",
+    terminalId: "term-1",
+    terminalLabel: "Terminal 1",
+    lineStart: 1,
+    lineEnd: 2,
+    text: "npm test",
+  };
+
+  it("names a draft with no text by its first attachment or chip, as the composer does", () => {
+    expect([
+      titled({ images: [{ name: "shot.png" }], files: [{ name: "notes.txt" }] }),
+      titled({ files: [{ name: "notes.txt" }] }),
+      titled({ terminalContexts: [chip] }),
+      titled({
+        reviewComments: [
+          { sectionId: "files", diff: "", filePath: "src/app.ts", rangeLabel: "+3 to +5" },
+        ],
+      }),
+      titled({ prompt: "fix it", images: [{ name: "shot.png" }] }),
+      titled({}),
+    ]).toEqual([
+      "Image: shot.png",
+      "File: notes.txt",
+      "Terminal 1 lines 1-2",
+      "Review: app.ts L3 to L5",
+      "fix it",
+      "New thread",
+    ]);
+  });
+
+  it("names a thread the server has by its title", () => {
+    expect(queuedSendTitle(serverSnapshot())).toBe("Thread");
   });
 });

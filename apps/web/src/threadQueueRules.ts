@@ -100,7 +100,10 @@ export type QueueAction =
   | { readonly kind: "release-hand-sent"; readonly claimId: string }
   /** A claim whose send never started goes back to the front of the queue (it is not sent). */
   | { readonly kind: "release-claim"; readonly claimId: string }
-  /** Pauses the queue and records why; clears the claim if it is still this one. */
+  /**
+   * Pauses the queue and records why, unless a failure already paused it: that one stays shown
+   * until the queue is resumed. Clears the claim if it is still this one.
+   */
   | { readonly kind: "fail"; readonly claimId: string; readonly failure: ThreadQueueFailure };
 
 function withEntries(
@@ -266,7 +269,7 @@ export function applyQueueAction(state: ThreadQueueData, action: QueueAction): T
         ...state,
         inFlight: state.inFlight?.claimId === action.claimId ? null : state.inFlight,
         paused: true,
-        lastFailure: action.failure,
+        lastFailure: state.lastFailure ?? action.failure,
       };
   }
 }

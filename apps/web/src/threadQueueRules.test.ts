@@ -208,6 +208,22 @@ describe("fail", () => {
     expect(other).toMatchObject({ paused: true, lastFailure: failure });
     expect(other.inFlight).toBe(claimed.inFlight);
   });
+
+  // The Queue shows the failure that paused it until it is resumed; a later one only adds a toast.
+  it("keeps the failure that paused the queue when a second send fails", () => {
+    const first = applyQueueAction(claimed, { kind: "fail", claimId: "c1", failure });
+    const second = { threadKey: "env-1:B", title: "B", message: "also broke" };
+    const after = applyQueueAction(first, { kind: "fail", claimId: "c2", failure: second });
+    expect(after.lastFailure).toEqual(failure);
+    const resumed = applyQueueAction(after, {
+      kind: "set-paused",
+      paused: false,
+      seenFailure: failure,
+    });
+    expect(
+      applyQueueAction(resumed, { kind: "fail", claimId: "c3", failure: second }),
+    ).toMatchObject({ paused: true, lastFailure: second });
+  });
 });
 
 describe("resume", () => {

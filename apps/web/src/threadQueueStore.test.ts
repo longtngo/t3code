@@ -1668,6 +1668,7 @@ function queuedSend(
       return { shell: null, draft: null } as never;
     },
     send: async () => ({ kind: "sent" }),
+    title: () => "New thread",
     reportFailure: vi.fn(),
     reportEmpty: vi.fn(),
     ...overrides,

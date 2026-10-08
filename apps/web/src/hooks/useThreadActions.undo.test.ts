@@ -15,8 +15,13 @@ import { nextThreadQueueAction } from "../components/threadQueue.logic";
 import type { DraftId } from "../composerDraftStore";
 import { QUEUE_SENDING_MESSAGE, SNOOZE_QUEUE_READ_ONLY_MESSAGE } from "../threadQueueAdd";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { SLOW_RPC_ACK_THRESHOLD_MS } from "../rpc/requestLatencyState";
 
 const shellPresent = vi.hoisted(() => ({ value: true }));
+/** The thread keys this client's shells read as archived; set by each test, like the shell stream. */
+const archivedShells = vi.hoisted(() => ({
+  atom: null as unknown as Atom.Writable<{ readonly keys: ReadonlySet<string> }>,
+}));
 const supportsSnooze = vi.hoisted(() => ({ value: true }));
 const commands = vi.hoisted(() => ({
   pin: vi.fn(),
@@ -70,15 +75,40 @@ const threadShell = vi.hoisted(() => ({
   environmentId: "undo-env",
   session: null,
 }));
-vi.mock("../state/entities", async (original) => ({
-  ...(await original<typeof import("../state/entities")>()),
-  readEnvironmentSupportsPinning: () => true,
-  readEnvironmentSupportsPinReorder: () => true,
-  readEnvironmentSupportsSettlement: () => true,
-  readEnvironmentSupportsSnooze: () => supportsSnooze.value,
-  readEnvironmentSupportsSidebarSections: () => true,
-  readThreadShell: () => (shellPresent.value ? threadShell : null),
-}));
+vi.mock("../state/entities", async (original) => {
+  const actual = await original<typeof import("../state/entities")>();
+  const { Atom } = await import("effect/reactivity");
+  const { appAtomRegistry } = await import("../rpc/atomRegistry");
+  const { waitForAtomValue } = await import("../state/waitForAtomValue");
+  archivedShells.atom = Atom.keepAlive(
+    Atom.make({ keys: new Set<string>() } as { readonly keys: ReadonlySet<string> }),
+  );
+  return {
+    ...actual,
+    // The real rule over a stand-in shell; the shells' state changes when each test says.
+    waitForThreadUnarchived: (
+      ref: { environmentId: string; threadId: string },
+      timeoutMs: number,
+    ) =>
+      waitForAtomValue({
+        registry: appAtomRegistry,
+        atom: archivedShells.atom,
+        predicate: (archived) =>
+          actual.threadReadsUnarchived({
+            archivedAt: archived.keys.has(`${ref.environmentId}:${ref.threadId}`)
+              ? "2026-10-08T00:00:00.000Z"
+              : null,
+          }),
+        timeoutMs,
+      }),
+    readEnvironmentSupportsPinning: () => true,
+    readEnvironmentSupportsPinReorder: () => true,
+    readEnvironmentSupportsSettlement: () => true,
+    readEnvironmentSupportsSnooze: () => supportsSnooze.value,
+    readEnvironmentSupportsSidebarSections: () => true,
+    readThreadShell: () => (shellPresent.value ? threadShell : null),
+  };
+});
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => {
     switch (command) {
@@ -511,12 +541,17 @@ describe("Snooze on a queued thread", () => {
   it("an Undo whose re-queue throws still wakes it, and says the queue failed", async () => {
     const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
     await useThreadActions().snoozeThread(target, inHour());
+    const { enqueue } = useThreadQueueStore.getState();
     useThreadQueueStore.setState({
       enqueue: () => {
         throw new Error("queue store gone");
       },
     });
-    await currentUndo()();
+    try {
+      await currentUndo()();
+    } finally {
+      useThreadQueueStore.setState({ enqueue });
+    }
     expect(commands.unsnooze).toHaveBeenCalledOnce();
     // The wake succeeded, so this is not "Failed to wake thread".
     expect(add.mock.calls.map(([toast]) => toast.title)).toEqual(["Failed to queue thread"]);
@@ -608,5 +643,108 @@ describe("Move to section", () => {
       true,
     );
     expect(commands.setSection).not.toHaveBeenCalled();
+  });
+});
+
+describe("archive Undo on a queued thread", () => {
+  const queued = (id: string) => ({
+    environmentId: target.environmentId,
+    threadId: ThreadId.make(id),
+    draftId: null,
+    addedAt: 1,
+    ownerId: "device",
+    label: id,
+  });
+  const ref = (id: string) => ({
+    environmentId: target.environmentId,
+    threadId: ThreadId.make(id),
+  });
+  const key = (id: string) => `undo-env:${id}`;
+  const queuedThreadIds = () =>
+    useThreadQueueStore.getState().entries.map((candidate) => candidate.threadId);
+  const setArchived = (update: (archived: Set<string>) => void) => {
+    const next = new Set<string>(appAtomRegistry.get(archivedShells.atom).keys);
+    update(next);
+    appAtomRegistry.set(archivedShells.atom, { keys: next });
+  };
+
+  beforeEach(() => {
+    appAtomRegistry.set(archivedShells.atom, { keys: new Set<string>() });
+    useThreadQueueStore.setState({
+      mode: "local",
+      readOnly: false,
+      entries: [queued("a"), queued("b"), queued("c")],
+      inFlight: null,
+    });
+    // The archive's own state reaches the shells; the unarchive's arrives when each test says.
+    commands.archive.mockImplementation(async ({ input }: { input: { threadId: string } }) => {
+      setArchived((archived) => archived.add(key(input.threadId)));
+      return AsyncResult.success(undefined);
+    });
+  });
+  afterEach(() => {
+    useThreadQueueStore.setState({ entries: [], inFlight: null });
+  });
+
+  /** Archives a and b (one notice, one Undo for both), then runs that Undo. */
+  async function archiveTwoThenUndo() {
+    await useThreadActions().archiveThread(ref("a"));
+    await useThreadActions().archiveThread(ref("b"));
+    expect(queuedThreadIds()).toEqual(["c"]);
+    await currentUndo()();
+    await flushMicrotasks();
+  }
+
+  it("re-queues only once its thread reads unarchived, when the reply comes first", async () => {
+    await archiveTwoThenUndo();
+    expect(commands.unarchive).toHaveBeenCalledTimes(2);
+    // The reply landed but the shells still read archived: the Queue would prune it at once.
+    expect(queuedThreadIds()).toEqual(["c"]);
+    setArchived((archived) => archived.delete(key("a")));
+    await flushMicrotasks();
+    // Only the thread whose state arrived; b is still read as archived.
+    expect(queuedThreadIds()).toEqual(["c", "a"]);
+  });
+
+  it("re-queues at once when its unarchived state arrived before the reply", async () => {
+    commands.unarchive.mockImplementation(async ({ input }: { input: { threadId: string } }) => {
+      if (input.threadId === "b") setArchived((archived) => archived.delete(key("b")));
+      return AsyncResult.success(undefined);
+    });
+    await archiveTwoThenUndo();
+    expect(queuedThreadIds()).toEqual(["c", "b"]);
+  });
+
+  it("gives up silently when its thread never reads unarchived within the bound", async () => {
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await archiveTwoThenUndo();
+    await vi.advanceTimersByTimeAsync(SLOW_RPC_ACK_THRESHOLD_MS - 1);
+    setArchived((archived) => archived.delete(key("a")));
+    await flushMicrotasks();
+    expect(queuedThreadIds()).toEqual(["c", "a"]);
+    await vi.advanceTimersByTimeAsync(1);
+    setArchived((archived) => archived.delete(key("b")));
+    await flushMicrotasks();
+    expect(queuedThreadIds()).toEqual(["c", "a"]);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("re-queues nothing when the unarchive failed", async () => {
+    vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    commands.unarchive.mockImplementation(async ({ input }: { input: { threadId: string } }) => {
+      setArchived((archived) => archived.delete(key(input.threadId)));
+      return AsyncResult.failure(Cause.fail(new Error("nope")));
+    });
+    await archiveTwoThenUndo();
+    expect(queuedThreadIds()).toEqual(["c"]);
+  });
+
+  it("an archive of a thread that was not queued re-queues nothing", async () => {
+    useThreadQueueStore.setState({ entries: [queued("c")] });
+    await useThreadActions().archiveThread(ref("a"));
+    await currentUndo()();
+    setArchived((archived) => archived.delete(key("a")));
+    await flushMicrotasks();
+    expect(queuedThreadIds()).toEqual(["c"]);
   });
 });

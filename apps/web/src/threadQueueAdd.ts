@@ -78,11 +78,11 @@ export function leaveQueueForRemoval(threadKey: string): void {
 }
 
 /**
- * A snoozed thread leaves the Queue, or the Queue's send would wake it. Call once the snooze
- * landed. Returns the snooze Undo's follow-up, which appends it to the Queue again once it is
- * awake, or undefined when it was not queued here.
+ * A snoozed or archived thread leaves the Queue (a send would wake a snoozed one; the Queue prunes
+ * an archived one). Call once the command landed. Returns the Undo's follow-up, which appends it
+ * to the Queue again once it is awake or unarchived, or undefined when it was not queued here.
  */
-export function leaveQueueForSnooze(threadKey: string): (() => void) | undefined {
+export function leaveQueueForUndo(threadKey: string): (() => void) | undefined {
   const queue = useThreadQueueStore.getState();
   const entry = queue.entries.find((candidate) => threadQueueEntryKey(candidate) === threadKey);
   // A read-only queue drops the removal, so there is nothing to put back.

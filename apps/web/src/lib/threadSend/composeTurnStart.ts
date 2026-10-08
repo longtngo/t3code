@@ -102,27 +102,20 @@ export interface TurnStartBootstrap {
 }
 
 /**
- * Decides what a send dispatches: the message text, the title seed, and the
- * bootstrap for a draft or a first worktree message. Shared by the composer's
- * Send and the thread queue's background send so the two cannot drift.
+ * A new thread's title: its prose, else its first image, file, terminal chip, or other context.
+ * The queue's notices name a draft by it too.
  */
-export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStart {
-  const shouldCreateWorktree =
-    input.isFirstMessage && input.sendEnvMode === "worktree" && !input.thread.worktreePath;
-  const baseBranchForWorktree = shouldCreateWorktree ? input.branch : null;
-
-  // Contexts no longer ride in the prompt text: upstream #11265 carries them as
-  // structured context records on the message, and each caller builds those. They
-  // still seed the title below.
-  const messageTextForSend = input.prompt;
-  const outgoingMessageText = formatOutgoingPrompt({
-    provider: input.provider,
-    model: input.model,
-    models: input.models,
-    effort: input.effort,
-    text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
-  });
-
+export function composeTurnTitle(
+  input: Pick<
+    ComposeTurnStartInput,
+    | "trimmedPrompt"
+    | "images"
+    | "files"
+    | "terminalContexts"
+    | "reviewComments"
+    | "previewAnnotations"
+  >,
+): string {
   let titleSeed = assistantCitationsToPlainText(input.trimmedPrompt);
   if (!titleSeed) {
     const firstImage = input.images[0];
@@ -144,7 +137,32 @@ export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStar
       titleSeed = "New thread";
     }
   }
-  const title = truncate(titleSeed);
+  return truncate(titleSeed);
+}
+
+/**
+ * Decides what a send dispatches: the message text, the title seed, and the
+ * bootstrap for a draft or a first worktree message. Shared by the composer's
+ * Send and the thread queue's background send so the two cannot drift.
+ */
+export function composeTurnStart(input: ComposeTurnStartInput): ComposedTurnStart {
+  const shouldCreateWorktree =
+    input.isFirstMessage && input.sendEnvMode === "worktree" && !input.thread.worktreePath;
+  const baseBranchForWorktree = shouldCreateWorktree ? input.branch : null;
+
+  // Contexts no longer ride in the prompt text: upstream #11265 carries them as
+  // structured context records on the message, and each caller builds those. They
+  // still seed the title below.
+  const messageTextForSend = input.prompt;
+  const outgoingMessageText = formatOutgoingPrompt({
+    provider: input.provider,
+    model: input.model,
+    models: input.models,
+    effort: input.effort,
+    text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  });
+
+  const title = composeTurnTitle(input);
 
   const bootstrap: TurnStartBootstrap | undefined =
     input.isLocalDraftThread || baseBranchForWorktree

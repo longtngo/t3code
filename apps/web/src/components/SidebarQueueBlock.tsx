@@ -96,7 +96,8 @@ export function SidebarQueueBlock(props: {
   const shiftY = transform?.y ?? 0;
   const keys = props.entries.map(threadQueueEntryKey);
 
-  if (props.entries.length === 0 && !props.dragging) return null;
+  // A paused Queue keeps its header even when empty: a thread queued later waits under the pause.
+  if (props.entries.length === 0 && !props.dragging && !paused) return null;
   const routeEntry = (entry: ThreadQueueEntry) =>
     threadQueueEntryKey(entry) === props.routeKey ||
     (entry.draftId !== null && entry.draftId === props.routeDraftId);

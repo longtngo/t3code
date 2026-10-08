@@ -663,6 +663,19 @@ export async function runSidebarSnoozeDrop(input: {
   if (outcome.status === "failure") input.reportFailure(outcome.error);
 }
 
+/** A draft row's Add to / Remove from queue. */
+export function toggleSidebarDraftQueue(input: {
+  readonly queued: boolean;
+  readonly remove: () => void;
+  /** `checkThreadOperations` for the draft: false (already reported) refuses before queueing. */
+  readonly checkOperate: () => boolean;
+  readonly enqueue: () => void;
+}): void {
+  if (input.queued) input.remove();
+  // A queued draft this connection cannot operate would only fail at send.
+  else if (input.checkOperate()) input.enqueue();
+}
+
 /** A drop on the Queue. From Snoozed it is "Wake & queue": queue it, then wake it, or a send
     would find it snoozed. `enqueue` says why it refused and returns false; then nothing else
     happens. */

@@ -71,6 +71,7 @@ import {
   sidebarListItemId,
   sidebarMarkerId,
   sortThreadsForSidebar,
+  toggleSidebarDraftQueue,
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
@@ -3560,5 +3561,31 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+  });
+});
+
+describe("toggleSidebarDraftQueue", () => {
+  const toggle = (queued: boolean, canOperate: boolean) => {
+    const calls: string[] = [];
+    toggleSidebarDraftQueue({
+      queued,
+      remove: () => calls.push("remove"),
+      checkOperate: () => {
+        calls.push("check");
+        return canOperate;
+      },
+      enqueue: () => calls.push("enqueue"),
+    });
+    return calls;
+  };
+
+  // As a drag onto the Queue: a draft this connection cannot operate would only fail at send.
+  it("queues a draft only once the connection can operate it", () => {
+    expect(toggle(false, false)).toEqual(["check"]);
+    expect(toggle(false, true)).toEqual(["check", "enqueue"]);
+  });
+
+  it("removes a queued draft", () => {
+    expect(toggle(true, false)).toEqual(["remove"]);
   });
 });

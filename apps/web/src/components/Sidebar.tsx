@@ -221,6 +221,7 @@ import {
   routeSidebarDragEnd,
   runSidebarSnoozeDrop,
   runSidebarEnqueueDrop,
+  toggleSidebarDraftQueue,
   startSidebarPlaceDrop,
   nextSidebarDragOver,
   sidebarReleaseSnoozeState,
@@ -3274,17 +3275,21 @@ export default function Sidebar() {
       environmentId: session.environmentId,
       threadId: session.threadId,
     });
-    if (store.entries.some((entry) => threadQueueEntryKey(entry) === key)) store.remove(key);
-    else {
-      const prompt = useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt ?? "";
-      addToQueueOrSayWhy({
-        environmentId: session.environmentId,
-        threadId: session.threadId,
-        draftId,
-        // What other devices show for a draft they cannot open: the row's own preview text.
-        label: replaceComposerContextReferences(prompt, (occurrence) => occurrence.label),
-      });
-    }
+    toggleSidebarDraftQueue({
+      queued: store.entries.some((entry) => threadQueueEntryKey(entry) === key),
+      remove: () => store.remove(key),
+      checkOperate: () => checkThreadOperations([session]),
+      enqueue: () => {
+        const prompt = useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt ?? "";
+        addToQueueOrSayWhy({
+          environmentId: session.environmentId,
+          threadId: session.threadId,
+          draftId,
+          // What other devices show for a draft they cannot open: the row's own preview text.
+          label: replaceComposerContextReferences(prompt, (occurrence) => occurrence.label),
+        });
+      },
+    });
   }, []);
 
   // Keep a dropped row at its destination while its server applies the

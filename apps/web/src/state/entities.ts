@@ -201,6 +201,23 @@ export function waitForThreadShell(ref: ScopedThreadRef, timeoutMs = 5_000): Pro
   });
 }
 
+/** This client has the thread and reads it as not archived. */
+export function threadReadsUnarchived(
+  thread: Pick<EnvironmentThreadShell, "archivedAt"> | null,
+): boolean {
+  return thread !== null && thread.archivedAt === null;
+}
+
+/** True once this client reads the thread as unarchived; false at the timeout. */
+export function waitForThreadUnarchived(ref: ScopedThreadRef, timeoutMs: number): Promise<boolean> {
+  return waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentThreadShells.threadShellAtom(ref),
+    predicate: threadReadsUnarchived,
+    timeoutMs,
+  });
+}
+
 /** Whether the environment hosts preview tabs in its own browser (`runtime: "server"`),
     so clients without Electron can still use the Browser panel. */
 export function useEnvironmentSupportsServerBrowser(environmentId: EnvironmentId | null): boolean {

@@ -57,7 +57,9 @@ import {
   readProject,
   readThreadShell,
   readThreadShells,
+  waitForThreadUnarchived,
 } from "../state/entities";
+import { SLOW_RPC_ACK_THRESHOLD_MS } from "../rpc/requestLatencyState";
 import {
   planSidebarSectionMove,
   resolveSidebarSections,
@@ -73,7 +75,7 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import {
   SNOOZE_QUEUE_READ_ONLY_MESSAGE,
   leaveQueueForRemoval,
-  leaveQueueForSnooze,
+  leaveQueueForUndo,
   queueRefusesSnooze,
 } from "../threadQueueAdd";
 import { useClientSettings } from "./useSettings";
@@ -441,13 +443,15 @@ export function useThreadActions() {
         currentRouteThreadRef.environmentId === threadRef.environmentId;
       const threadKey = scopedThreadKey(threadRef);
       const action = ThreadUndo.begin("archive", threadKey);
-      // A queued thread is not sent while it is being archived, and leaves the Queue once it is.
+      // A queued thread is not sent while it is being archived, and leaves the Queue once it is;
+      // Undo puts it back.
+      let requeue: (() => void) | undefined;
       const archiveResult = await whileLeavingThreadQueue(threadKey, async () => {
         const archived = await archiveThreadMutation({
           environmentId: threadRef.environmentId,
           input: { threadId: threadRef.threadId },
         });
-        if (archived._tag === "Success") leaveQueueForRemoval(threadKey);
+        if (archived._tag === "Success") requeue = leaveQueueForUndo(threadKey);
         return archived;
       });
       if (archiveResult._tag === "Failure") {
@@ -464,7 +468,18 @@ export function useThreadActions() {
         action: "Archived",
         claim: action,
         // Undo also brings the reader back when archiving moved them to a draft.
-        undo: () => unarchiveThread(threadRef, { navigate: shouldNavigateToDraft }),
+        undo: async () => {
+          const restored = await unarchiveThread(threadRef, { navigate: shouldNavigateToDraft });
+          // The Queue prunes a thread this client still reads as archived, and the reply can come
+          // before that state does: re-queue once it reads unarchived, or never (said nothing).
+          const back = requeue;
+          if (restored._tag === "Success" && back !== undefined) {
+            void waitForThreadUnarchived(threadRef, SLOW_RPC_ACK_THRESHOLD_MS).then(
+              (unarchived) => unarchived && back(),
+            );
+          }
+          return restored;
+        },
         failureTitle: "Failed to undo archive",
       });
 
@@ -1133,7 +1148,7 @@ export function useThreadActions() {
           environmentId: target.environmentId,
           input: { threadId: target.threadId, snoozedUntil },
         });
-        if (snoozed._tag === "Success") requeue = leaveQueueForSnooze(threadKey);
+        if (snoozed._tag === "Success") requeue = leaveQueueForUndo(threadKey);
         return snoozed;
       });
       if (result._tag !== "Success") {
