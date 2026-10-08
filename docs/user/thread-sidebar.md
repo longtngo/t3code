@@ -70,8 +70,8 @@ list to unpin it. Dragging a thread onto the **Settled** header settles it, and 
 thread into the active list un-settles it. Drop a thread on the **Snoozed** shelf to snooze it for an
 hour. With nothing snoozed, an empty **Snoozed** box opens above **Settled** while you drag, or at
 the end of the list when there is no room. Dragging a snoozed thread out of the shelf wakes it. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
-Pinned and active boundary labels appear only while dragging, without moving the rows. The
-other rows slide aside to show where the thread will land. When you cross into another section,
+Pinned and active boundary labels appear only while dragging, and the rows below them move down
+to make room. The other rows slide aside to show where the thread will land. When you cross into another section,
 the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
 **Settle**, **Un-settle**, **Wake**, **Snooze 1h**, or **Move to** a section. Its status and hover actions hide during the drag. A pinned
 thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes
