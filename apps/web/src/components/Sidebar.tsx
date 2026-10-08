@@ -261,7 +261,11 @@ import {
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
-import { addToQueue, explainQueueAdd } from "./threadQueue.logic";
+import {
+  addToQueueOrSayWhy,
+  readThreadQueueMenuState,
+  runThreadQueueMenuAction,
+} from "../threadQueueAdd";
 import { useSidebarSectionCommands, useSidebarSections } from "../sidebarCustomSections";
 import { sidebarSectionMoveState, type SidebarSectionView } from "../sidebarCustomSections.logic";
 import {
@@ -404,11 +408,6 @@ function sidebarSnoozeGateOf(
     canSnooze: thread !== undefined && canSnooze(thread, { now }),
     canOperate: thread !== undefined && canOperateThreads([thread]),
   };
-}
-
-/** "Add to queue" from the sidebar: a refused add says why rather than doing nothing. */
-function addToQueueOrSayWhy(entry: Parameters<typeof addToQueue>[0]): boolean {
-  return explainQueueAdd(addToQueue(entry), (title) => toastManager.add({ type: "info", title }));
 }
 
 function compactSidebarTimeLabel(label: string): string {
@@ -5505,9 +5504,6 @@ export default function Sidebar() {
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
-        const isQueued = useThreadQueueStore
-          .getState()
-          .entries.some((entry) => threadQueueEntryKey(entry) === threadKey);
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
         const sidebarSectionsState = sidebarSectionMoveState({
@@ -5543,8 +5539,7 @@ export default function Sidebar() {
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
               isSnoozed,
-              isQueued,
-              queueWritable: !useThreadQueueStore.getState().readOnly,
+              ...readThreadQueueMenuState(thread),
               sidebarSections: sidebarSectionsState,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
@@ -5627,15 +5622,8 @@ export default function Sidebar() {
             attemptPin(threadRef);
             return;
           case "queue":
-            addToQueueOrSayWhy({
-              environmentId: thread.environmentId,
-              threadId: thread.id,
-              draftId: null,
-              label: thread.title,
-            });
-            return;
           case "unqueue":
-            useThreadQueueStore.getState().remove(threadKey);
+            runThreadQueueMenuAction(clicked.value, thread);
             return;
           case "unpin":
             attemptUnpin(threadRef);

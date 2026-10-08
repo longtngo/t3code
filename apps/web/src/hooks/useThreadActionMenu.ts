@@ -18,6 +18,8 @@ import { useCallback, useMemo } from "react";
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
+  isSidebarSectionMoveAction,
+  isSnoozePresetAction,
   resolveSidebarSectionMoveAction,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
@@ -38,6 +40,7 @@ import {
 } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { readLocalApi } from "../localApi";
+import { readThreadQueueMenuState, runThreadQueueMenuAction } from "../threadQueueAdd";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
@@ -49,7 +52,7 @@ import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
-import { useClientSettings } from "./useSettings";
+import { useClientSettings, useLegacySidebarEnabled } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -113,6 +116,7 @@ export function useThreadActionMenu(input: {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const legacySidebarEnabled = useLegacySidebarEnabled();
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -161,6 +165,8 @@ export function useThreadActionMenu(input: {
           isSettled: supports.settlement && thread.settledOverride === "settled",
           autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+          hasQueue: !legacySidebarEnabled,
+          ...readThreadQueueMenuState(thread),
           sidebarSections: sidebarSectionMoveState({
             sections: sidebarSections,
             thread,
@@ -185,7 +191,7 @@ export function useThreadActionMenu(input: {
           );
           return;
         }
-        if (action.startsWith("snooze:")) {
+        if (isSnoozePresetAction(action)) {
           const preset =
             action === "snooze:custom"
               ? await requestCustomSnooze()
@@ -206,9 +212,15 @@ export function useThreadActionMenu(input: {
             failureToast(title, squashAtomCommandFailure(result));
           }
         };
-        const moveTarget = resolveSidebarSectionMoveAction(action, sidebarSections);
-        if (moveTarget !== null) {
-          await moveThreadToSidebarSection(threadRef, moveTarget.sectionId, moveTarget.sectionName);
+        if (isSidebarSectionMoveAction(action)) {
+          const moveTarget = resolveSidebarSectionMoveAction(action, sidebarSections);
+          if (moveTarget !== null) {
+            await moveThreadToSidebarSection(
+              threadRef,
+              moveTarget.sectionId,
+              moveTarget.sectionName,
+            );
+          }
           return;
         }
         switch (action) {
@@ -255,6 +267,10 @@ export function useThreadActionMenu(input: {
             return;
           case "pin":
             await reportFailure("Failed to pin thread", () => pinThread(threadRef));
+            return;
+          case "queue":
+          case "unqueue":
+            runThreadQueueMenuAction(action, thread);
             return;
           case "unpin": {
             await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));
@@ -351,8 +367,18 @@ export function useThreadActionMenu(input: {
             }
             return;
           }
-          default:
+          // Submenu rows open their submenu, and this menu has no project filter.
+          case "snooze":
+          case "move-to-section":
+          case "auto-settle":
+          case "copy":
+          case "filter-by-project":
             return;
+          default: {
+            // A menu item with no case here is a typecheck error, not a click that does nothing.
+            const unhandled: never = action;
+            return unhandled;
+          }
         }
       })();
     },
@@ -366,6 +392,7 @@ export function useThreadActionMenu(input: {
       copyThreadIdToClipboard,
       deleteThread,
       handleNewThread,
+      legacySidebarEnabled,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,
       moveThreadToSidebarSection,

@@ -14,16 +14,19 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import { type ThreadQueueEntry, type ThreadQueueInFlight } from "../threadQueueRules";
 import { removeSentThreadFromQueue, useThreadQueueStore } from "../threadQueueStore";
-import { runSidebarWakeAndQueue } from "./Sidebar.logic";
 import {
   addToQueue,
-  claimAndSendQueueEntry,
   explainQueueAdd,
+  QUEUE_FULL_MESSAGE,
+  QUEUE_READ_ONLY_MESSAGE,
+  QUEUE_SENDING_MESSAGE,
+} from "../threadQueueAdd";
+import { runSidebarWakeAndQueue } from "./Sidebar.logic";
+import {
+  claimAndSendQueueEntry,
   nextThreadQueueAction,
   QUEUE_BRANCH_READ_TIMEOUT_MS,
   QUEUE_CLAIM_ABANDON_MS,
-  QUEUE_FULL_MESSAGE,
-  QUEUE_SENDING_MESSAGE,
   isQueueBusy,
   listQueueSlotInstances,
   queueEntriesToPrune,
@@ -1041,6 +1044,45 @@ describe("addToQueue", () => {
     expect(addToQueue(thread)).toBe("added");
     expect(useThreadQueueStore.getState().entries.map((entry) => entry.threadId)).toEqual(["A"]);
   });
+
+  it("refuses a thread that is both queued and being sent", async () => {
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
+    const thread = { environmentId: env, threadId: ThreadId.make("A"), draftId: null };
+    const queued = { ...thread, addedAt: 1, ownerId: "d", label: null };
+    useThreadQueueStore.setState({
+      entries: [queued],
+      paused: false,
+      inFlight: {
+        entry: queued,
+        claimId: "c1",
+        claimedAt: 1,
+        priorUserMessageAt: null,
+        priorTurnId: null,
+        priorSessionUpdatedAt: null,
+        sentAt: null,
+      },
+    });
+    expect(addToQueue(thread)).toBe("sending");
+  });
+
+  it("refuses an add while the queue is read-only", () => {
+    useThreadQueueStore.setState({ entries: [], inFlight: null, readOnly: true });
+    try {
+      const thread = { environmentId: env, threadId: ThreadId.make("A"), draftId: null };
+      expect(addToQueue(thread)).toBe("read-only");
+      expect(useThreadQueueStore.getState().entries).toEqual([]);
+    } finally {
+      useThreadQueueStore.setState({ readOnly: false });
+    }
+  });
 });
 
 describe("explainQueueAdd", () => {
@@ -1048,6 +1090,7 @@ describe("explainQueueAdd", () => {
     ["added", true, []],
     ["full", false, [QUEUE_FULL_MESSAGE]],
     ["sending", false, [QUEUE_SENDING_MESSAGE]],
+    ["read-only", false, [QUEUE_READ_ONLY_MESSAGE]],
   ] as const)("%s: added %s, says %j", (result, added, said) => {
     const titles: string[] = [];
     expect(explainQueueAdd(result, (title) => titles.push(title))).toBe(added);
@@ -1055,7 +1098,7 @@ describe("explainQueueAdd", () => {
   });
 
   // Snooze -> Queue wakes only a thread the Queue took.
-  it.each(["full", "sending"] as const)(
+  it.each(["full", "sending", "read-only"] as const)(
     "Wake & queue wakes nothing when the add is %s",
     async (result) => {
       const wake = vi.fn(async () => {});

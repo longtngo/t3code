@@ -99,7 +99,12 @@ export interface ThreadActionMenuState {
   /** False while the user has turned automatic settlement off for this thread. */
   readonly autoSettleEnabled: boolean;
   readonly isSnoozed: boolean;
-  /** In this device's sidebar Queue. Optional so surfaces without a queue omit nothing. */
+  /**
+   * False when the user cannot see a queue here (the legacy sidebar has none): hides Add to queue,
+   * but a thread queued earlier keeps Remove from queue so it can still leave.
+   */
+  readonly hasQueue?: boolean;
+  /** In this device's sidebar Queue. */
   readonly isQueued?: boolean;
   /** False while the queue is read-only (its server is not reachable yet, or this session cannot operate). */
   readonly queueWritable?: boolean;
@@ -131,6 +136,18 @@ function queueMenuItem(isQueued: boolean, writable = true) {
 }
 
 const MOVE_TO_SECTION_PREFIX = "move-to-section:";
+
+/** A snooze preset or Custom, as opposed to the Snooze submenu row. */
+export function isSnoozePresetAction(action: ThreadActionMenuId): action is `snooze:${string}` {
+  return action.startsWith("snooze:");
+}
+
+/** A Move to section target or Move to Active, as opposed to the Move to section submenu row. */
+export function isSidebarSectionMoveAction(
+  action: ThreadActionMenuId,
+): action is "move-to-active" | `move-to-section:${string}` {
+  return action === "move-to-active" || action.startsWith(MOVE_TO_SECTION_PREFIX);
+}
 
 /** A clicked Move to section / Move to Active id, or null for any other action. `sectionName` is
     null for Active, and "section" for one deleted since the menu opened. */
@@ -240,7 +257,9 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    queueMenuItem(state.isQueued === true, state.queueWritable),
+    ...(state.hasQueue === false && state.isQueued !== true
+      ? []
+      : [queueMenuItem(state.isQueued === true, state.queueWritable)]),
     ...sidebarSectionMenuItems(state.sidebarSections),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
