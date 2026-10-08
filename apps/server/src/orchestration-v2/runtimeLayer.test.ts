@@ -2675,6 +2675,285 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("background pull request syncs are not thread activity; link, watch, unlink are", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make("runtime-pull-request-activity");
+      const command = (suffix: string) => CommandId.make(`pr-activity-${suffix}`);
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: command("create"),
+        threadId,
+        projectId: ProjectId.make("pr-activity-project"),
+        title: "PR activity",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+      // The persisted row, which is what the sidebar and auto-settle read.
+      const updatedAt = Effect.map(orchestrator.getThreadShell(threadId), (shell) =>
+        shell === null ? null : DateTime.toEpochMillis(shell.updatedAt),
+      );
+      // Each step moves the clock first, so a bump is always visible.
+      const step = <A, E, R>(dispatch: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 minute");
+          const before = yield* updatedAt;
+          yield* dispatch;
+          return {
+            before,
+            after: yield* updatedAt,
+            now: DateTime.toEpochMillis(yield* DateTime.now),
+          };
+        });
+
+      const link = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request.link",
+          commandId: command("link"),
+          threadId,
+          ...key,
+          url: "https://github.com/pingdotgg/t3code/pull/7",
+          source: "manual",
+        }),
+      );
+      assert.equal(link.after, link.now);
+
+      const watch = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: command("watch"),
+          threadId,
+          ...key,
+          watching: true,
+        }),
+      );
+      assert.equal(watch.after, watch.now);
+      // Watching an already-watched pull request changes nothing, so it is not activity.
+      const rewatch = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: command("watch-again"),
+          threadId,
+          ...key,
+          watching: true,
+        }),
+      );
+      assert.equal(rewatch.after, rewatch.before);
+      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isDefined(started);
+      if (started === undefined) return;
+
+      const watchSync = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: command("watch-sync"),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch: { ...started, headSha: "abc123", failedChecks: ["lint"], wakes: 1 },
+        }),
+      );
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.headSha,
+        "abc123",
+      );
+      assert.equal(watchSync.after, watchSync.before);
+
+      const syncedAt = DateTime.formatIso(yield* DateTime.now);
+      const linkSync = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request-link.sync",
+          commandId: command("link-sync"),
+          threadId,
+          ...key,
+          snapshot: {
+            state: "open",
+            title: "Fix",
+            headBranch: "fix",
+            baseBranch: "main",
+            isDraft: false,
+            updatedAt: syncedAt,
+            syncedAt,
+          },
+          stack: null,
+        }),
+      );
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.snapshot?.title,
+        "Fix",
+      );
+      assert.equal(linkSync.after, linkSync.before);
+
+      // Rebuilding from the event log reaches the same updatedAt.
+      const beforeRebuild = yield* updatedAt;
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal(yield* updatedAt, beforeRebuild);
+
+      const unlink = yield* step(
+        orchestrator.dispatch({
+          type: "thread.pull-request.unlink",
+          commandId: command("unlink"),
+          threadId,
+          ...key,
+        }),
+      );
+      assert.equal(unlink.after, unlink.now);
+
+      // Stop on an idle thread ends its watches through the same event: stopping a watch is activity.
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: command("rewatch"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/7", source: "manual" },
+      });
+      const stop = yield* step(
+        orchestrator.dispatch({ type: "thread.stop", commandId: command("stop"), threadId }),
+      );
+      assert.isUndefined((yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch);
+      assert.equal(stop.after, stop.now);
+    }),
+  );
+
+  it.effect("branch pull request discovery is not thread activity", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-discovery");
+      const projectId = ProjectId.make("pr-discovery-project");
+      yield* seedProject({
+        projectId,
+        title: "Discovery",
+        workspaceRoot: "/workspace/pr-discovery",
+        defaultModelSelection: null,
+        createdAt: "2026-09-07T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-discovery-create"),
+        threadId,
+        projectId,
+        title: "Discovery",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/discovery",
+        worktreePath: null,
+      });
+      const before = yield* orchestrator.getThreadShell(threadId);
+      const snapshot = yield* orchestrator.getShellSnapshot();
+      yield* TestClock.adjust("1 minute");
+      const branchPullRequest = {
+        projectId,
+        repository: "owner/repository",
+        number: 31,
+        url: "https://github.com/owner/repository/pull/31",
+      };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.sync",
+        commandId: CommandId.make("pr-discovery-sync"),
+        threadId,
+        projectId,
+        snapshotSequence: snapshot.snapshotSequence,
+        expected: {
+          workspaceRoot: "/workspace/pr-discovery",
+          branch: "feature/discovery",
+          worktreePath: null,
+          linkedPullRequest: null,
+          branchPullRequest: null,
+        },
+        branchPullRequest,
+      });
+      const after = yield* orchestrator.getThreadShell(threadId);
+      assert.deepEqual(after?.branchPullRequest, branchPullRequest);
+      assert.isNotNull(before);
+      assert.isNotNull(after);
+      assert.equal(
+        DateTime.toEpochMillis(after.updatedAt),
+        DateTime.toEpochMillis(before.updatedAt),
+      );
+    }),
+  );
+
+  it.effect("a rebuild after compaction keeps a background sync's updatedAt", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 11 };
+      const threadId = ThreadId.make("runtime-pull-request-compacted");
+      const command = (suffix: string) => CommandId.make(`pr-compacted-${suffix}`);
+      const updatedAt = Effect.map(orchestrator.getThreadShell(threadId), (shell) =>
+        shell === null ? null : DateTime.toEpochMillis(shell.updatedAt),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: command("create"),
+        threadId,
+        projectId: ProjectId.make("pr-compacted-project"),
+        title: "Compacted",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: command("link"),
+        threadId,
+        ...key,
+        url: "https://github.com/pingdotgg/t3code/pull/11",
+        source: "manual",
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: command("rename"),
+        threadId,
+        title: "Renamed",
+      });
+      const renamedAt = DateTime.toEpochMillis(yield* DateTime.now);
+      yield* TestClock.adjust("1 minute");
+      const syncedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-link.sync",
+        commandId: command("sync"),
+        threadId,
+        ...key,
+        snapshot: {
+          state: "open",
+          title: "Fix",
+          headBranch: "fix",
+          baseBranch: "main",
+          isDraft: false,
+          updatedAt: syncedAt,
+          syncedAt,
+        },
+        stack: null,
+      });
+      assert.equal(yield* updatedAt, renamedAt);
+
+      // Compaction keeps only the newest thread-state event (the sync), so replay applies it
+      // over the created row, which is older than the sync's kept updatedAt.
+      const compacted = yield* maintenance.compactEventStore;
+      assert.isAtLeast(compacted.deletedEventCount, 1);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal(yield* updatedAt, renamedAt);
+    }),
+  );
+
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

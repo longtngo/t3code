@@ -1761,6 +1761,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
+        // Link, unlink and watch stamp updatedAt; background syncs keep the thread's
+        // value, which the upsert writes. Keep it only when the row is not newer: live
+        // that is equality, and a replay after compaction (older row) lands on the live
+        // value. A payload older than the row (a stale read) still bumps.
+        const storedUpdatedAt =
+          event.type === "thread.pull-request-synced"
+            ? (yield* sql<{ readonly updated_at: string }>`
+                SELECT updated_at
+                FROM orchestration_v2_projection_threads
+                WHERE thread_id = ${event.threadId}
+                LIMIT 1
+              `)[0]?.updated_at
+            : undefined;
+        const keepsUpdatedAt =
+          event.type === "thread.pull-request-synced" &&
+          storedUpdatedAt !== undefined &&
+          storedUpdatedAt <= DateTime.formatIso(event.payload.updatedAt);
         switch (event.type) {
           case "thread.created":
           case "thread.archived":
@@ -2615,7 +2632,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
-          event.type !== "thread.provider-switched"
+          event.type !== "thread.provider-switched" &&
+          !keepsUpdatedAt
         ) {
           const rows = yield* sql<PayloadRow>`
             SELECT payload_json

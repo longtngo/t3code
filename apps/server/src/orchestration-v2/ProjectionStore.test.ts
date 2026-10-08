@@ -1808,6 +1808,142 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("bumps updatedAt on a pull request sync only when the decider did", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const createdAt = yield* DateTime.now;
+      const at = (seconds: number) => DateTime.add(createdAt, { seconds });
+      const threadId = ThreadId.make("thread:projection-pr-sync");
+      const thread = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: ProjectId.make("project:projection-pr-sync"),
+        title: "Projection pull request sync",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: {
+          parentThreadId: null,
+          relationshipToParent: null,
+          rootThreadId: threadId,
+        },
+        forkedFrom: null,
+        createdAt,
+        updatedAt: createdAt,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+      const pullRequest: ThreadPullRequestLink = {
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 7,
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source: "manual",
+        linkedAt: DateTime.formatIso(createdAt),
+        snapshot: null,
+        stack: null,
+      };
+      const synced = (
+        name: string,
+        occurredAt: DateTime.Utc,
+        payload: {
+          readonly updatedAt: DateTime.Utc;
+          readonly pullRequests: ReadonlyArray<ThreadPullRequestLink>;
+        },
+      ) =>
+        projectionStore.apply({
+          id: EventId.make(`event:projection-pr-sync:${name}`),
+          type: "thread.pull-request-synced",
+          threadId,
+          occurredAt,
+          payload: { ...thread, ...payload },
+        });
+      const updatedAt = Effect.gen(function* () {
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const shell = yield* projectionStore.getThreadShell(threadId);
+        // The column and the payload must agree; the shell reads the payload.
+        assert.deepEqual(shell?.updatedAt, projection.thread.updatedAt);
+        return projection.thread.updatedAt;
+      });
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-pr-sync:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: thread,
+      });
+
+      // A link, unlink, or watch: the decider stamps updatedAt with the event time.
+      yield* synced("link", at(1), { updatedAt: at(1), pullRequests: [pullRequest] });
+      assert.deepEqual(yield* updatedAt, at(1));
+
+      // A background sync keeps the thread's updatedAt: the projection must too.
+      yield* synced("watch-sync", at(2), {
+        updatedAt: at(1),
+        pullRequests: [
+          {
+            ...pullRequest,
+            watch: {
+              startedAt: DateTime.formatIso(at(1)),
+              headSha: "abc123",
+              failedChecks: ["lint"],
+              passed: false,
+              passedChecks: [],
+              remarksThrough: DateTime.formatIso(at(1)),
+              remarkIds: [],
+              conflicting: false,
+              wakes: 1,
+            },
+          },
+        ],
+      });
+      assert.deepEqual(yield* updatedAt, at(1));
+
+      // Unlink is activity again.
+      yield* synced("unlink", at(3), { updatedAt: at(3), pullRequests: [] });
+      assert.deepEqual(yield* updatedAt, at(3));
+
+      // A payload whose updatedAt is neither the event time nor the stored value (an
+      // older event replayed after compaction, or a stale read in a multi-event command)
+      // falls to the safe side and bumps as before.
+      yield* synced("unrecognised", at(4), { updatedAt: at(2), pullRequests: [] });
+      assert.deepEqual(yield* updatedAt, at(4));
+
+      // The keep is for this event type only: a message whose own updatedAt matches the
+      // thread's is still activity.
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-pr-sync:message"),
+        type: "message.updated",
+        threadId,
+        occurredAt: at(5),
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: MessageId.make("message:projection-pr-sync"),
+          threadId,
+          runId: null,
+          nodeId: null,
+          role: "user",
+          text: "hello",
+          attachments: [],
+          streaming: false,
+          createdAt: at(4),
+          updatedAt: at(4),
+        },
+      });
+      assert.deepEqual(yield* updatedAt, at(5));
+    }),
+  );
+
   it.effect("preserves delegated completion ownership across stale run and task updates", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;

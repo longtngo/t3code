@@ -8511,6 +8511,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           payload: {
             ...thread,
             pullRequests: pullRequests.map((link) => withPullRequestWatch(link, undefined)),
+            // Stopping a watch is activity, as it is for thread.pull-request.watch.
+            updatedAt: input.now,
           },
         });
       }
