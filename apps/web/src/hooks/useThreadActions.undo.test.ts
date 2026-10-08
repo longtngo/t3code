@@ -1,10 +1,13 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useThreadActions } from "./useThreadActions";
 import { threadEnvironment } from "../state/threads";
 import { toastManager } from "../components/ui/toast";
 import { useThreadUndoNotice } from "./showThreadUndoNotice";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryServerConfigAtom } from "../state/server";
 
 const commands = vi.hoisted(() => ({
   pin: vi.fn(),
@@ -15,6 +18,7 @@ const commands = vi.hoisted(() => ({
   unsettle: vi.fn(),
   snooze: vi.fn(),
   unsnooze: vi.fn(),
+  setSection: vi.fn(),
 }));
 const router = vi.hoisted(() => ({
   navigate: vi.fn(async () => {}),
@@ -31,6 +35,14 @@ vi.mock("react", async (original) => ({
   useMemo: (create: () => unknown) => create(),
   useRef: (value: unknown) => ({ current: value }),
 }));
+// Writable so a test can delete a section the way a peer would.
+vi.mock("../state/server", async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    ...(await original<typeof import("../state/server")>()),
+    primaryServerConfigAtom: Atom.keepAlive(Atom.make<unknown>(null)),
+  };
+});
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => false }));
 vi.mock("./useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
@@ -43,6 +55,8 @@ const threadShell = vi.hoisted(() => ({
   pinOrderKey: "a0",
   pinnedAt: null as string | null,
   snoozedUntil: null as string | null,
+  sidebarSectionId: null as string | null,
+  settledOverride: null,
   projectId: "project",
   environmentId: "undo-env",
   session: null,
@@ -53,6 +67,7 @@ vi.mock("../state/entities", async (original) => ({
   readEnvironmentSupportsPinReorder: () => true,
   readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsSnooze: () => true,
+  readEnvironmentSupportsSidebarSections: () => true,
   readThreadShell: () => threadShell,
 }));
 vi.mock("../state/use-atom-command", () => ({
@@ -74,6 +89,8 @@ vi.mock("../state/use-atom-command", () => ({
         return commands.snooze;
       case threadEnvironment.unsnooze:
         return commands.unsnooze;
+      case threadEnvironment.setSection:
+        return commands.setSection;
       default:
         return vi.fn();
     }
@@ -219,5 +236,42 @@ describe("settle and snooze Undo", () => {
       environmentId: target.environmentId,
       input: { threadId: target.threadId, reason: "user" },
     });
+  });
+});
+
+describe("Move to section", () => {
+  const sections = (ids: string[]) => ({
+    environment: { capabilities: { sidebarSections: true } },
+    settings: {
+      sidebarSections: Object.fromEntries(
+        ids.map((id) => [id, { name: id, createdAt: "2026-10-07T00:00:00.000Z" }]),
+      ),
+    },
+  });
+  const configAtom = primaryServerConfigAtom as unknown as Atom.Writable<unknown>;
+
+  beforeEach(() => {
+    threadShell.pinnedAt = "2026-01-01T00:00:00.000Z";
+  });
+
+  it("writes nothing and says so when a peer deleted the section after the menu opened", async () => {
+    appAtomRegistry.set(configAtom, sections([]));
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().moveThreadToSidebarSection(target, "focus", "Focus");
+    expect(commands.setSection).not.toHaveBeenCalled();
+    expect(commands.unpin).not.toHaveBeenCalled();
+    expect(add.mock.calls.map(([toast]) => toast.title)).toEqual(["Section was deleted"]);
+  });
+
+  it("moves into a live section and clears the pin", async () => {
+    appAtomRegistry.set(configAtom, sections(["focus"]));
+    const add = vi.spyOn(toastManager, "add").mockReturnValue("toast");
+    await useThreadActions().moveThreadToSidebarSection(target, "focus", "Focus");
+    expect(commands.setSection).toHaveBeenCalledExactlyOnceWith({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, sectionId: "focus" },
+    });
+    expect(commands.unpin).toHaveBeenCalledOnce();
+    expect(add).not.toHaveBeenCalled();
   });
 });

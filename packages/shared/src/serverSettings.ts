@@ -4,6 +4,7 @@ import {
   isProviderAvailable,
   resolveProviderInstanceEnabled,
   isProviderTextGenerationCapable,
+  normalizeSidebarSections,
   type ModelSelection,
   type ProjectId,
   type ProjectScopedServerSettingKey,
@@ -301,6 +302,8 @@ export function applyServerSettingsPatch(
     usageLimitSources: usageLimitSourcesPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
+    // Per entry like usageLimitSources; its `null` removals must not reach deepMerge.
+    sidebarSections: sidebarSectionsPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
     // Already translated into `projectSettingsOverrides` above; the legacy
@@ -449,6 +452,13 @@ export function applyServerSettingsPatch(
           usageModelAliases: mergeSettingsEntries(
             current.usageModelAliases,
             usageModelAliasesPatch,
+          ),
+        }
+      : {}),
+    ...(sidebarSectionsPatch !== undefined
+      ? {
+          sidebarSections: normalizeSidebarSections(
+            mergeSettingsEntries(current.sidebarSections, sidebarSectionsPatch),
           ),
         }
       : {}),

@@ -20,6 +20,9 @@ function deferred<T>() {
 const state = vi.hoisted(() => ({
   granted: new Set<string>(),
   effects: [] as string[],
+  sections: null as ReadonlyArray<{ id: string; name: string; createdAt: string }> | null,
+  archivedAt: null as string | null,
+  sectionId: null as string | null,
   completed: deferred<void>(),
   show: vi.fn<
     (
@@ -50,6 +53,7 @@ vi.mock("../state/entities", () => ({
   readEnvironmentSupportsAutoSettleOptOut: () => true,
   readEnvironmentSupportsPinning: () => true,
   readEnvironmentSupportsSettlement: () => true,
+  readEnvironmentSupportsSidebarSections: () => state.sections !== null,
   readEnvironmentSupportsSnooze: () => true,
   readEnvironmentSupportsTitleRegeneration: () => true,
   readThreadShell: () => ({
@@ -61,6 +65,8 @@ vi.mock("../state/entities", () => ({
     worktreePath: null,
     runtime: null,
     latestRun: null,
+    archivedAt: state.archivedAt,
+    sidebarSectionId: state.sectionId,
   }),
   useProjects: () => [{ id: "project", environmentId: "secondary" }],
 }));
@@ -87,6 +93,9 @@ vi.mock("../logicalProject", () => ({
   deriveLogicalProjectKeyFromSettings: () => "project",
   derivePhysicalProjectKey: () => "project",
   selectProjectGroupingSettings: () => ({}),
+}));
+vi.mock("../sidebarCustomSections", () => ({
+  useSidebarSections: () => state.sections,
 }));
 vi.mock("../sidebarProjectGrouping", () => ({
   buildPhysicalToLogicalProjectKeyMap: () => new Map(),
@@ -161,6 +170,9 @@ const createMenu = () =>
 beforeEach(() => {
   state.granted = new Set(["primary"]);
   state.effects = [];
+  state.sections = null;
+  state.archivedAt = null;
+  state.sectionId = null;
   state.completed = deferred<void>();
   state.show.mockReset().mockResolvedValue(null);
 });
@@ -217,5 +229,30 @@ describe("thread menu permissions", () => {
     createMenu().openMenu(position);
     await state.completed.promise;
     expect(state.effects).toEqual([effect]);
+  });
+});
+
+describe("thread menu section moves", () => {
+  const ids = () => state.show.mock.calls[0]![0].map((item) => item.id);
+  const createdAt = "2026-10-07T00:00:00.000Z";
+  const sections = [
+    { id: "focus", name: "Focus", createdAt },
+    { id: "work", name: "Work", createdAt },
+  ];
+
+  it("offers Move to section and Move to Active on a live thread", () => {
+    state.sections = sections;
+    state.sectionId = "focus";
+    createMenu().openMenu(position);
+    expect(ids()).toEqual(expect.arrayContaining(["move-to-section", "move-to-active"]));
+  });
+
+  it("hides both on an archived thread, like the command palette", () => {
+    state.sections = sections;
+    state.sectionId = "focus";
+    state.archivedAt = createdAt;
+    createMenu().openMenu(position);
+    expect(ids()).not.toContain("move-to-section");
+    expect(ids()).not.toContain("move-to-active");
   });
 });

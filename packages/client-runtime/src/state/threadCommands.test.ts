@@ -135,6 +135,7 @@ describe("remote thread lifecycle commands", () => {
     ["setAutoSettle", { enabled: false }, { autoSettleDisabledAt: expect.any(Object) }],
     ["reorderPin", { orderKey: "b" }, { pinOrderKey: "b" }],
     ["reorderActive", { orderKey: "b" }, { activeOrderKey: "b" }],
+    ["setSection", { sectionId: "s1" }, { sidebarSectionId: "s1" }],
   ] as const;
 
   it.effect.each(actions)(
@@ -169,6 +170,7 @@ describe("remote thread lifecycle commands", () => {
             reason: "user",
             enabled: false,
             orderKey: "a",
+            sectionId: "s1",
             snoozedUntil: "2099-01-01T00:00:00.000Z",
             ...input,
           },
@@ -179,6 +181,45 @@ describe("remote thread lifecycle commands", () => {
         yield* Deferred.fail(request.reply, new Error("Remote rejected the action"));
         expect((yield* Effect.promise(() => result))._tag).toBe("Failure");
         expect(h.registry.get(h.visibleAtom)).toBe(initial);
+      }),
+  );
+
+  it.effect.each(["settle", "unsettle", "unsnooze", "pin", "unpin"] as const)(
+    "%s never rewrites sidebar section membership",
+    (action) =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const source = h.snapshotAtom(ENVIRONMENT_ID);
+        h.registry.set(source, {
+          ...SNAPSHOT,
+          threads: [
+            {
+              ...SNAPSHOT.threads[0]!,
+              sidebarSectionId: "s1",
+              settledOverride: "settled",
+              settledAt: NOW,
+              snoozedUntil: FUTURE,
+              snoozedAt: NOW,
+              pinnedAt: NOW,
+              pinOrderKey: "a",
+            },
+          ],
+        });
+        // A variable, not a literal: one input shape for every action skips the excess-property check.
+        const input = {
+          threadId: THREAD_ID,
+          commandId: CommandId.make(action),
+          reason: "user",
+          enabled: false,
+          orderKey: "a",
+          snoozedUntil: "2099-01-01T00:00:00.000Z",
+          sectionId: "s1",
+        } as const;
+        const result = h.commands[action].run(h.registry, { environmentId: ENVIRONMENT_ID, input });
+        const request = yield* Queue.take(h.requests);
+        expect(h.registry.get(h.visibleAtom)?.threads[0]?.sidebarSectionId).toBe("s1");
+        yield* Deferred.fail(request.reply, new Error("done"));
+        yield* Effect.promise(() => result);
       }),
   );
 

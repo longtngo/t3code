@@ -93,6 +93,45 @@ const decodeOrchestrationV2SubscribeThreadInput = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  const historicalShell = {
+    createdBy: "user",
+    creationSource: "web",
+    id: "thread-1",
+    projectId: "project-1",
+    title: "Thread",
+    providerInstanceId: "claudeAgent",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: "thread-1",
+    },
+    forkedFrom: null,
+    activeProviderThreadId: "provider-thread-1",
+    latestRunId: "run-1",
+    activeRunId: null,
+    status: "completed",
+    pendingRuntimeRequest: null,
+    latestVisibleMessage: null,
+    latestUserMessageAt: null,
+    hasActionableProposedPlan: false,
+    itemCount: 0,
+    visibleItemCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
+  };
+
   it("carries command failure metadata through runtime and JSON schemas without output text", () => {
     const base = {
       id: "command-item",
@@ -1126,46 +1165,36 @@ describe("orchestration V2 contracts", () => {
   });
 
   it("decodes historical thread shell JSON without pendingBackgroundTasks as empty roster", () => {
-    const shell = decodeOrchestrationV2ThreadShell({
-      createdBy: "user",
-      creationSource: "web",
-      id: "thread-1",
-      projectId: "project-1",
-      title: "Thread",
-      providerInstanceId: "claudeAgent",
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        model: "claude-sonnet",
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: "thread-1",
-      },
-      forkedFrom: null,
-      activeProviderThreadId: "provider-thread-1",
-      latestRunId: "run-1",
-      activeRunId: null,
-      status: "completed",
-      pendingRuntimeRequest: null,
-      latestVisibleMessage: null,
-      latestUserMessageAt: null,
-      hasActionableProposedPlan: false,
-      itemCount: 0,
-      visibleItemCount: 0,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      deletedAt: null,
-    });
+    const shell = decodeOrchestrationV2ThreadShell(historicalShell);
 
     expect(shell.pendingBackgroundTasks).toEqual([]);
+  });
+
+  it("carries sidebar section membership and rejects colon ids", () => {
+    expect(decodeOrchestrationV2ThreadShell(historicalShell).sidebarSectionId).toBeUndefined();
+    expect(
+      decodeOrchestrationV2ThreadShell({ ...historicalShell, sidebarSectionId: "focus-1" })
+        .sidebarSectionId,
+    ).toBe("focus-1");
+    expect(() =>
+      decodeOrchestrationV2ThreadShell({ ...historicalShell, sidebarSectionId: "a:b" }),
+    ).toThrow();
+    expect(
+      decodeOrchestrationV2Command({
+        type: "thread.section.set",
+        commandId: "command-1",
+        threadId: "thread-1",
+        sectionId: null,
+      }),
+    ).toMatchObject({ type: "thread.section.set", sectionId: null });
+    expect(() =>
+      decodeOrchestrationV2Command({
+        type: "thread.section.set",
+        commandId: "command-1",
+        threadId: "thread-1",
+        sectionId: "a:b",
+      }),
+    ).toThrow();
   });
 });
 

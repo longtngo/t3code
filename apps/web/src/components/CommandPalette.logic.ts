@@ -14,7 +14,61 @@ import { type ReactNode } from "react";
 import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
 import { normalizeSearchText } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import { sidebarSectionMoveTargets, type SidebarSectionView } from "../sidebarCustomSections.logic";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
+
+/** One root entry that lists the sidebar sections, so the root list does not grow per section.
+    Every entry's name is on the root entry too: root search does not look inside submenus. */
+export function buildSidebarSectionPickerItem(input: {
+  value: string;
+  title: string;
+  searchTerms: readonly string[];
+  icon: ReactNode;
+  addonIcon: ReactNode;
+  entries: ReadonlyArray<{ key: string; name: string; run: () => Promise<void> }>;
+}): CommandPaletteSubmenuItem | null {
+  if (input.entries.length === 0) return null;
+  return {
+    kind: "submenu",
+    value: input.value,
+    searchTerms: [...input.searchTerms, ...input.entries.map(({ name }) => name)],
+    title: input.title,
+    icon: input.icon,
+    addonIcon: input.addonIcon,
+    groups: [
+      {
+        value: "sidebar-sections",
+        label: input.title,
+        items: input.entries.map((entry) => ({
+          kind: "action",
+          value: `${input.value}:${entry.key}`,
+          searchTerms: [entry.name],
+          title: entry.name,
+          icon: input.icon,
+          run: entry.run,
+        })),
+      },
+    ],
+  };
+}
+
+/** The palette's move entries: every other section, then Active when the thread is in one. */
+export function sidebarSectionMoveEntries(
+  sections: readonly SidebarSectionView[],
+  currentSectionId: string | null,
+  move: (section: SidebarSectionView | null) => Promise<void>,
+): Array<{ key: string; name: string; run: () => Promise<void> }> {
+  const targets = sidebarSectionMoveTargets(sections, currentSectionId);
+  return [
+    ...targets.sections.map((section) => ({
+      key: section.id,
+      name: section.name,
+      run: () => move(section),
+    })),
+    // A section id can never start with ":", so Active's row value cannot equal a section's.
+    ...(targets.canMoveToActive ? [{ key: ":active", name: "Active", run: () => move(null) }] : []),
+  ];
+}
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";

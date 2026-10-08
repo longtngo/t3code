@@ -1685,3 +1685,67 @@ describe("ServerSettings.removeAgentCreditsOnMerge", () => {
     ).toBe(true);
   });
 });
+
+describe("sidebarSections", () => {
+  const at = "2026-10-07T00:00:00.000Z";
+  const decodeSections = (sidebarSections: unknown) =>
+    decodeServerSettings({ cursorKeychainUsageEnabled: true, sidebarSections });
+
+  it("is empty when never set", () => {
+    expect(decodeServerSettings({}).sidebarSections).toEqual({});
+  });
+
+  it.each([null, "garbage", [], 3])("reads %j as empty and keeps sibling settings", (input) => {
+    const settings = decodeSections(input);
+    expect(settings.sidebarSections).toEqual({});
+    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+  });
+
+  it("drops bad entries, trims names and caps them at 60 characters", () => {
+    const settings = decodeSections({
+      ok: { name: "  Focus  ", createdAt: at },
+      long: { name: "y".repeat(200), createdAt: at },
+      "bad:id": { name: "Colon", createdAt: at },
+      blank: { name: "   ", createdAt: at },
+      undated: { name: "No date" },
+      badDate: { name: "Bad date", createdAt: "not a date" },
+      notObject: "Focus",
+    });
+    expect(settings.sidebarSections).toEqual({
+      ok: { name: "Focus", createdAt: at },
+      long: { name: "y".repeat(60), createdAt: at },
+    });
+    expect(settings.cursorKeychainUsageEnabled).toBe(true);
+  });
+
+  it("drops a `__proto__` id and keeps `constructor` and `prototype` as plain entries", () => {
+    const settings = decodeSections(
+      JSON.parse(
+        `{"__proto__":{"name":"P","createdAt":"${at}"},"constructor":{"name":"C","createdAt":"${at}"},"prototype":{"name":"Q","createdAt":"${at}"}}`,
+      ),
+    );
+    expect(Object.getPrototypeOf(settings.sidebarSections)).toBe(Object.prototype);
+    expect(Object.keys(settings.sidebarSections).toSorted()).toEqual(["constructor", "prototype"]);
+    expect(Object.getOwnPropertyDescriptor(settings.sidebarSections, "constructor")?.value).toEqual(
+      {
+        name: "C",
+        createdAt: at,
+      },
+    );
+  });
+
+  it("round-trips through encode", () => {
+    const value = { focus: { name: "Focus", createdAt: at } };
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeSections(value))).sidebarSections,
+    ).toEqual(value);
+  });
+
+  it("decodes a per-entry patch with null removals", () => {
+    expect(
+      decodeServerSettingsPatch({
+        sidebarSections: { focus: { name: "Focus", createdAt: at }, old: null },
+      }),
+    ).toEqual({ sidebarSections: { focus: { name: "Focus", createdAt: at }, old: null } });
+  });
+});

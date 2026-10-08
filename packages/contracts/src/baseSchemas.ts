@@ -426,3 +426,8 @@ export const RawEventId = makeEntityId("RawEventId");
 export type RawEventId = typeof RawEventId.Type;
 export const PlanId = makeEntityId("PlanId");
 export type PlanId = typeof PlanId.Type;
+
+/** Sidebar section ids are colon-free: sortable marker ids must never look like a scoped thread key. */
+export const SIDEBAR_SECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+export const SidebarSectionId = Schema.String.check(Schema.isPattern(SIDEBAR_SECTION_ID_PATTERN));
+export type SidebarSectionId = typeof SidebarSectionId.Type;

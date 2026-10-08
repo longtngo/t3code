@@ -1,9 +1,11 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
+  isCustomSidebarSection,
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
+  type CustomSidebarSection,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -13,6 +15,8 @@ const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
 const hidden = { ...stationary, scaleY: 0 };
 type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
+/** A custom-section header is not a shelf: its block sits in the list flow under Active and
+ * carries no auto margin, so it neither absorbs the shelf space nor sets the header scale. */
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
   (item.marker === "working-header" ||
@@ -147,11 +151,23 @@ export function createSidebarCollisionDetection(
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
         if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
         else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
-        const nextHeader = (["working-header", "snoozed-header", "settled-header"] as const)
-          .map((marker) =>
-            args.droppableContainers.find((container) => container.id === sidebarMarkerId(marker)),
-          )
-          .find((container) => container !== undefined);
+        // Active ends at the first block below it: a custom section or a shelf. With that header's
+        // node missing (transient), skip the re-rank: a lower header would bound Active below a
+        // custom section and let a pointer over it resolve to Active.
+        const activeEnd = items.find(
+          (item) =>
+            item.kind === "marker" &&
+            (item.marker === "custom-header" ||
+              item.marker === "working-header" ||
+              item.marker === "snoozed-header" ||
+              item.marker === "settled-header"),
+        );
+        const nextHeader =
+          activeEnd === undefined
+            ? undefined
+            : args.droppableContainers.find(
+                (container) => container.id === sidebarListItemId(activeEnd),
+              );
         const activeBottom = nextHeader?.node.current?.getBoundingClientRect().top;
         if (
           !overFreeRow &&
@@ -214,13 +230,14 @@ export function createSidebarSortingStrategy(input: {
     if (active?.kind !== "thread" || !over || !rects[0]) return [];
     const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
     if (!target) return [];
-    const groups: Record<SidebarSection, ThreadItem[]> = {
+    const groups: Record<Exclude<SidebarSection, CustomSidebarSection>, ThreadItem[]> = {
       pinned: [],
       active: [],
       working: [],
       snoozed: [],
       settled: [],
     };
+    const customBlock: SidebarListItem[] = [];
     let cardHeight = input.cardHeight;
     let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
@@ -230,6 +247,13 @@ export function createSidebarSortingStrategy(input: {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
+        if (item.marker === "custom-header") customBlock.push(item);
+        continue;
+      }
+      // A custom row can be lifted out, but a custom section is never a destination until sections accept drops.
+      if (isCustomSidebarSection(item.section)) {
+        cardHeight ??= rects[index]?.height;
+        if (item.key !== active.key) customBlock.push(item);
         continue;
       }
       if (item.section === "pinned" || item.section === "active" || item.section === "working")
@@ -277,6 +301,7 @@ export function createSidebarSortingStrategy(input: {
     projected.push(...groups.pinned);
     marker("pinned-divider");
     section("active");
+    projected.push(...customBlock);
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
@@ -296,7 +321,10 @@ export function createSidebarSortingStrategy(input: {
       const rect = index === undefined ? undefined : rects[index];
       const fallback =
         item.kind === "thread" &&
-        (item.section === "pinned" || item.section === "active" || item.section === "working")
+        (item.section === "pinned" ||
+          item.section === "active" ||
+          item.section === "working" ||
+          isCustomSidebarSection(item.section))
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
@@ -322,9 +350,23 @@ export function createSidebarSortingStrategy(input: {
             lastRect.bottom - rects[0].top - heights.reduce((sum, height) => sum + height + 1, -1),
           )
         : 0;
+    // The Queue drop zone renders above the first custom header, outside the
+    // sortable list; carry its measured gap so the custom block stays below it.
+    const firstCustom = items.findIndex(
+      (item) => item.kind === "marker" && item.marker === "custom-header",
+    );
+    const customRect = rects[firstCustom];
+    const beforeCustom = rects[firstCustom - 1];
+    let customGap =
+      customRect && beforeCustom ? Math.max(0, customRect.top - beforeCustom.bottom - 1) : 0;
+    shelfSpace = Math.max(0, shelfSpace - customGap);
     const result = items.map(() => hidden);
     let top = rects[0].top;
     for (const [projectedIndex, item] of projected.entries()) {
+      if (item.kind === "marker" && item.marker === "custom-header") {
+        top += customGap;
+        customGap = 0;
+      }
       if (isShelfHeader(item)) {
         top += shelfSpace;
         shelfSpace = 0;

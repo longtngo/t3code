@@ -96,6 +96,17 @@ describe("V2 client presentation", () => {
     expect(shell.branchPullRequest).toEqual(branchPullRequest);
   });
 
+  it("carries sidebar section membership from the wire shell", () => {
+    expect(
+      presentThreadShell(environmentId, { ...v2ThreadShell, sidebarSectionId: "focus" })
+        .sidebarSectionId,
+    ).toBe("focus");
+    expect(
+      presentThreadShell(environmentId, { ...v2ThreadShell, sidebarSectionId: undefined })
+        .sidebarSectionId,
+    ).toBeNull();
+  });
+
   it("presents provider errors carried by failed thread shells", () => {
     const runId = RunId.make("run-failed");
     const shell = presentThreadShell(environmentId, {

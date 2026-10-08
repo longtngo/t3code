@@ -1,6 +1,6 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { effectiveSnoozed, hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
+import { hasQueuedTurnStart } from "@t3tools/client-runtime/state/thread-settled";
 import {
   PROVIDER_DISPLAY_NAMES,
   THREAD_QUEUE_MAX_ENTRIES,
@@ -28,31 +28,6 @@ import {
 } from "../providerInstances";
 import { formatProviderDriverKindLabel } from "../providerModels";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
-
-export type SidebarRestingSection = "snoozed" | "settled" | "pinned" | "active";
-
-export interface SidebarSectionCapabilities {
-  readonly threadSettlement?: boolean;
-  readonly threadSnooze?: boolean;
-}
-
-/**
- * The section a thread sits in when nothing is being dragged. Servers without
- * the settlement or snooze capability never classify a thread there: the user
- * could not bring it back.
- */
-export function sidebarRestingSection(
-  thread: EnvironmentThreadShell,
-  capabilities: SidebarSectionCapabilities | undefined,
-  now: string,
-): SidebarRestingSection {
-  // Snooze outranks settlement and pinning until the thread wakes.
-  if (capabilities?.threadSnooze === true && effectiveSnoozed(thread, { now })) return "snoozed";
-  if (capabilities?.threadSettlement === true && thread.settledOverride === "settled") {
-    return "settled";
-  }
-  return thread.pinnedAt != null ? "pinned" : "active";
-}
 
 /** A claim whose tab never reported the send settling is abandoned after this long. */
 export const QUEUE_CLAIM_ABANDON_MS = 5 * 60_000;

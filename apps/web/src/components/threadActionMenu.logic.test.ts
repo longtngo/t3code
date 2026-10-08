@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
+  resolveSidebarSectionMoveAction,
   type ThreadActionMenuState,
 } from "./threadActionMenu.logic";
+import { sidebarSectionMoveFailureTitle } from "../sidebarCustomSections.logic";
 
 const baseState: ThreadActionMenuState = {
   canOperate: true,
@@ -245,6 +247,71 @@ describe("buildThreadActionMenuItems", () => {
       (item) => item.id === "archive",
     );
     expect(archiveItem?.disabled).toBe(true);
+  });
+});
+
+describe("sidebar section items", () => {
+  const sections = [
+    { id: "a", name: "Alpha", createdAt: "2026-10-07T00:00:00.000Z" },
+    { id: "b", name: "Beta", createdAt: "2026-10-07T00:01:00.000Z" },
+  ];
+
+  it("offers the other sections and Move to Active from a section", () => {
+    const menu = allIds({ ...baseState, sidebarSections: { sections, currentSectionId: "a" } });
+    expect(menu).toContain("move-to-section:b");
+    expect(menu).not.toContain("move-to-section:a");
+    expect(menu).toContain("move-to-active");
+  });
+
+  it("offers every section but not Move to Active from Active", () => {
+    const menu = allIds({ ...baseState, sidebarSections: { sections, currentSectionId: null } });
+    expect(menu).toEqual(expect.arrayContaining(["move-to-section:a", "move-to-section:b"]));
+    expect(menu).not.toContain("move-to-active");
+  });
+
+  it("offers no Move to Active for a thread naming a deleted or unknown section", () => {
+    const menu = allIds({ ...baseState, sidebarSections: { sections, currentSectionId: "gone" } });
+    expect(menu).not.toContain("move-to-active");
+    expect(menu).toEqual(expect.arrayContaining(["move-to-section:a", "move-to-section:b"]));
+  });
+
+  it("shows nothing when the thread's server or the primary lacks sections", () => {
+    expect(
+      allIds({ ...baseState, sidebarSections: null }).some((id) => id.startsWith("move-to-")),
+    ).toBe(false);
+    expect(allIds(baseState).some((id) => id.startsWith("move-to-"))).toBe(false);
+  });
+
+  it("disables the moves for a read-only connection", () => {
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      canOperate: false,
+      sidebarSections: { sections, currentSectionId: "a" },
+    });
+    const move = items.find((item) => item.id === "move-to-section");
+    expect(move?.disabled).toBe(true);
+    expect(move?.children?.every((child) => child.disabled)).toBe(true);
+    expect(items.find((item) => item.id === "move-to-active")?.disabled).toBe(true);
+  });
+
+  it("resolves a clicked move id to its section, round-tripping the built ids", () => {
+    const menu = allIds({ ...baseState, sidebarSections: { sections, currentSectionId: "a" } });
+    const resolved = menu.map((id) => resolveSidebarSectionMoveAction(id, sections));
+    expect(resolved.filter((target) => target !== null)).toEqual([
+      { sectionId: "b", sectionName: "Beta" },
+      { sectionId: null, sectionName: null },
+    ]);
+    // The submenu parent and every other action are not moves.
+    expect(resolveSidebarSectionMoveAction("move-to-section", sections)).toBeNull();
+    expect(resolveSidebarSectionMoveAction("rename", sections)).toBeNull();
+  });
+
+  it("a move to a section deleted since the menu opened never reports Active", () => {
+    const target = resolveSidebarSectionMoveAction("move-to-section:gone", sections);
+    expect(target).toEqual({ sectionId: "gone", sectionName: "section" });
+    for (const step of ["section", "unpin", "unsettle", "unsnooze"] as const) {
+      expect(sidebarSectionMoveFailureTitle(step, target!.sectionName)).not.toContain("Active");
+    }
   });
 });
 

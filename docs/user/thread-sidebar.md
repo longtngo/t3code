@@ -124,6 +124,26 @@ device keeps its own choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+## Organize threads into sections
+
+On web and desktop, click **New section** at the top of the sidebar, or run **New sidebar
+section** from the command palette, and give it a name. Sections appear below your active
+threads in the order you created them, and each one collapses on its own.
+
+To move a thread in, open its menu and choose **Move to section**. **Move to Active**, or
+dragging the thread into the active list, takes it out again. A queued thread you drag from the
+Queue to Active goes back to its section. A thread in a section works like
+an active thread: pinning, settling, or snoozing it shows it there instead, and unpinning,
+un-settling, or waking it returns it to its section. With **Working section (beta)** on, a
+working thread stays in its section. You cannot drag threads into a section yet.
+
+Right-click a section's header, or use the **…** button on it, to rename or delete it, or run
+**Rename sidebar section** or **Delete sidebar section** from the command palette. Deleting a
+section moves its threads back to Active. Sections are saved on the machine running your main
+T3 Code server and appear on web and desktop clients that use it as their main server. On
+app.t3.codes, or on a desktop app that added that server as a remote, its threads show in Active.
+Sections are not on mobile yet.
+
 ## Queue work for later
 
 On web and desktop, the **Queue** section holds threads that should start when a slot

@@ -18,6 +18,7 @@ import { useCallback, useMemo } from "react";
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
+  resolveSidebarSectionMoveAction,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -29,6 +30,7 @@ import {
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsSidebarSections,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
@@ -41,6 +43,8 @@ import {
   derivePhysicalProjectKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { useSidebarSections } from "../sidebarCustomSections";
+import { sidebarSectionMoveState } from "../sidebarCustomSections.logic";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
@@ -99,7 +103,9 @@ export function useThreadActionMenu(input: {
     archiveThread,
     deleteThread,
     markThreadUnread,
+    moveThreadToSidebarSection,
   } = useThreadActions();
+  const sidebarSections = useSidebarSections();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -155,6 +161,11 @@ export function useThreadActionMenu(input: {
           isSettled: supports.settlement && thread.settledOverride === "settled",
           autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
+          sidebarSections: sidebarSectionMoveState({
+            sections: sidebarSections,
+            thread,
+            supportsSections: readEnvironmentSupportsSidebarSections(threadRef.environmentId),
+          }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
@@ -195,6 +206,11 @@ export function useThreadActionMenu(input: {
             failureToast(title, squashAtomCommandFailure(result));
           }
         };
+        const moveTarget = resolveSidebarSectionMoveAction(action, sidebarSections);
+        if (moveTarget !== null) {
+          await moveThreadToSidebarSection(threadRef, moveTarget.sectionId, moveTarget.sectionName);
+          return;
+        }
         switch (action) {
           case "project-settings": {
             const project = projects.find(
@@ -352,6 +368,7 @@ export function useThreadActionMenu(input: {
       handleNewThread,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,
+      moveThreadToSidebarSection,
       onStartRename,
       pinThread,
       projectCwd,
@@ -360,6 +377,7 @@ export function useThreadActionMenu(input: {
       router,
       setThreadAutoSettle,
       settleThread,
+      sidebarSections,
       snoozeThread,
       threadRef,
       timestampFormat,

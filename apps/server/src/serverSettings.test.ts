@@ -443,6 +443,23 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("lands concurrent sidebar section patches from two clients", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const at = "2026-10-07T00:00:00.000Z";
+      yield* Effect.all(
+        ["first", "second"].map((id) =>
+          serverSettings.updateSettings({ sidebarSections: { [id]: { name: id, createdAt: at } } }),
+        ),
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(
+        Object.keys((yield* serverSettings.getSettings).sidebarSections).toSorted(),
+        ["first", "second"],
+      );
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("creates provider instances atomically without overwriting a concurrent add", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

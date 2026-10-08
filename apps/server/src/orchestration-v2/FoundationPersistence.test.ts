@@ -896,7 +896,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       const messageId = MessageId.make("message:foundation-compact");
       const threadStateEvent = (
         suffix: string,
-        type: "thread.visited" | "thread.metadata-updated",
+        type: "thread.visited" | "thread.metadata-updated" | "thread.section-set",
       ): OrchestrationV2DomainEvent => ({
         id: EventId.make(`event:foundation-compact:${suffix}`),
         type,
@@ -983,6 +983,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         events: [
           threadCreatedEvent({ id: "event:foundation-compact:create", thread, now }),
           threadStateEvent("meta", "thread.metadata-updated"),
+          threadStateEvent("section", "thread.section-set"),
           threadStateEvent("visit-1", "thread.visited"),
           messageEvent("message-1", "streaming"),
           nodeEvent("node-1", "running"),
@@ -1037,7 +1038,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const summary = yield* maintenance.compactEventStore;
       // Superseded state spans several discovery pages. Both turn-item updates stay.
-      assert.isAtLeast(summary.deletedEventCount, 507);
+      assert.isAtLeast(summary.deletedEventCount, 508);
       assert.isAtLeast(summary.deletedReceiptCount, 1);
 
       const remaining = yield* sql<{ readonly event_id: string }>`

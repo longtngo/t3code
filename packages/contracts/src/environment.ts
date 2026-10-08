@@ -155,6 +155,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   /** Server persists manual Active order through thread.active.reorder. */
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
+  /** Server stores sidebar section definitions in its settings (primary only reads this). */
+  sidebarSections: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.section.set. Same version-skew contract as threadSettlement. */
+  threadSidebarSections: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.auto-settle.set (per-thread auto-settle off).
       Same version-skew contract as threadSettlement. */
   threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),

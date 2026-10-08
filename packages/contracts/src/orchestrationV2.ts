@@ -32,6 +32,7 @@ import {
   RunId,
   RuntimeRequestId,
   ScheduledTaskId,
+  SidebarSectionId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
@@ -415,6 +416,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Fractional-index slot in the user-arranged active order. */
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** User-defined sidebar section (definitions live in the primary's settings). */
+  sidebarSectionId: Schema.optional(Schema.NullOr(SidebarSectionId)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1669,6 +1672,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
+      "thread.section-set",
       "thread.visited",
       "thread.marked-unread",
       "thread.metadata-updated",
@@ -1918,6 +1922,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Slot in the user-arranged active order; omitted by pre-reorder servers. */
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** Sidebar section membership; omitted by servers without thread.section.set. */
+  sidebarSectionId: Schema.optional(Schema.NullOr(SidebarSectionId)),
   /**
    * Omitted by servers that predate server-side visited tracking; clients fall
    * back to their local visited state when the field is absent.
@@ -2492,6 +2498,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
+      "thread.section-set",
       "thread.visited",
       "thread.marked-unread",
       "thread.pull-request-synced",
@@ -2729,6 +2736,13 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.section.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    /** Null returns the thread to Active. */
+    sectionId: Schema.NullOr(SidebarSectionId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),

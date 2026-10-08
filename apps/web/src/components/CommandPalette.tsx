@@ -58,6 +58,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  ListPlusIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -67,6 +68,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  Trash2Icon,
 } from "lucide-react";
 import {
   useCallback,
@@ -86,6 +88,9 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadActions } from "../hooks/useThreadActions";
+import { useSidebarSectionCommands, useSidebarSections } from "../sidebarCustomSections";
+import { sidebarSectionMoveState } from "../sidebarCustomSections.logic";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
@@ -162,6 +167,8 @@ import {
   buildRootGroups,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildSidebarSectionPickerItem,
+  sidebarSectionMoveEntries,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
   findHighlightedCommandPaletteItem,
@@ -759,6 +766,13 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
+  const sidebarSections = useSidebarSections();
+  const sectionCommands = useSidebarSectionCommands();
+  const canOperateActiveThread = useEnvironmentScope(
+    activeThread?.environmentId ?? null,
+    AuthOrchestrationOperateScope,
+  );
+  const { moveThreadToSidebarSection } = useThreadActions();
   const activeThreadReferenceCopyTarget =
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
       ? null
@@ -2014,6 +2028,68 @@ function OpenCommandPaletteDialog(props: {
         if (refreshed._tag === "Failure") throw squashAtomCommandFailure(refreshed);
       },
     });
+  }
+
+  if (sidebarSections !== null && sectionCommands.canEdit) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-sidebar-section",
+      searchTerms: ["new", "section", "sidebar", "group", "organize"],
+      title: "New sidebar section",
+      icon: <ListPlusIcon className={ITEM_ICON_CLASS} />,
+      run: sectionCommands.create,
+    });
+    for (const [verb, run] of [
+      ["rename", sectionCommands.rename],
+      ["delete", sectionCommands.remove],
+    ] as const) {
+      const Icon = verb === "rename" ? SquarePenIcon : Trash2Icon;
+      const picker = buildSidebarSectionPickerItem({
+        value: `action:${verb}-sidebar-section`,
+        title: verb === "rename" ? "Rename sidebar section…" : "Delete sidebar section…",
+        searchTerms: [
+          ...(verb === "rename" ? ["rename"] : ["delete", "remove"]),
+          "section",
+          "sidebar",
+        ],
+        icon: <Icon className={ITEM_ICON_CLASS} />,
+        addonIcon: <Icon className={ADDON_ICON_CLASS} />,
+        entries: sidebarSections.map((section) => ({
+          key: section.id,
+          name: section.name,
+          run: () => run(section),
+        })),
+      });
+      if (picker !== null) actionItems.push(picker);
+    }
+  }
+  const sectionMove =
+    activeThread === null
+      ? null
+      : sidebarSectionMoveState({
+          sections: sidebarSections,
+          thread: activeThread,
+          supportsSections:
+            activeThreadServerConfig?.environment.capabilities.threadSidebarSections === true,
+          // The palette hides what this connection cannot run.
+          canOperate: canOperateActiveThread,
+        });
+  if (activeThread !== null && sectionMove !== null) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const picker = buildSidebarSectionPickerItem({
+      value: "action:move-thread-to-section",
+      title: "Move thread to section…",
+      searchTerms: ["move", "section"],
+      icon: <ListPlusIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <ListPlusIcon className={ADDON_ICON_CLASS} />,
+      entries: sidebarSectionMoveEntries(
+        sectionMove.sections,
+        sectionMove.currentSectionId,
+        (section) =>
+          moveThreadToSidebarSection(threadRef, section?.id ?? null, section?.name ?? null),
+      ),
+    });
+    if (picker !== null) actionItems.push(picker);
   }
 
   actionItems.push({

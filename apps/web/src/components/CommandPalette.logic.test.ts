@@ -9,6 +9,8 @@ import {
   buildProjectActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
+  buildSidebarSectionPickerItem,
+  sidebarSectionMoveEntries,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
@@ -893,5 +895,83 @@ describe("virtualized command palette rows", () => {
     expect(findHighlightedCommandPaletteItem(groups, "thread-b")?.value).toBe("thread-b");
     expect(findHighlightedCommandPaletteItem(groups, "offline")).toBeNull();
     expect(findHighlightedCommandPaletteItem(groups, null)).toBeNull();
+  });
+});
+
+describe("buildSidebarSectionPickerItem", () => {
+  const run = async () => {};
+  const picker = (names: readonly string[]) =>
+    buildSidebarSectionPickerItem({
+      value: "action:move-thread-to-section",
+      title: "Move thread to section…",
+      searchTerms: ["move", "section"],
+      icon: null,
+      addonIcon: null,
+      entries: names.map((name) => ({ key: name, name, run })),
+    });
+  const rootSearch = (item: CommandPaletteGroup["items"][number], query: string) =>
+    filterCommandPaletteGroups({
+      activeGroups: [{ value: "actions", label: "Actions", items: [item] }],
+      query,
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    }).flatMap((group) => group.items);
+
+  it("is found at the root by any entry's name, since root search skips submenus", () => {
+    const item = picker(["Deep work", "Backlog"])!;
+    expect(rootSearch(item, "backlog")).toEqual([item]);
+    expect(rootSearch(item, "deep")).toEqual([item]);
+    expect(rootSearch(item, "groceries")).toEqual([]);
+  });
+
+  it("lists one row per entry under a unique value", () => {
+    const rows = picker(["Deep work", "Backlog"])!.groups.flatMap((group) => group.items);
+    expect(rows.map((row) => [row.value, row.title])).toEqual([
+      ["action:move-thread-to-section:Deep work", "Deep work"],
+      ["action:move-thread-to-section:Backlog", "Backlog"],
+    ]);
+  });
+
+  it("is omitted when it would list nothing", () => {
+    expect(picker([])).toBeNull();
+  });
+});
+
+describe("sidebarSectionMoveEntries", () => {
+  it("keeps Active apart from a section whose id is 'active'", async () => {
+    const moved: Array<string | null> = [];
+    const sections = [
+      { id: "active", name: "Today", createdAt: "2026-10-07T00:00:00.000Z" },
+      { id: "s2", name: "Later", createdAt: "2026-10-07T00:00:00.000Z" },
+    ];
+    const item = buildSidebarSectionPickerItem({
+      value: "action:move-thread-to-section",
+      title: "Move thread to section…",
+      searchTerms: [],
+      icon: null,
+      addonIcon: null,
+      entries: sidebarSectionMoveEntries(sections, "s2", async (section) => {
+        moved.push(section?.id ?? null);
+      }),
+    })!;
+    const values = item.groups.flatMap((group) => group.items.map((row) => row.value));
+    expect(new Set(values).size).toBe(values.length);
+    const activeRow = item.groups[0]!.items.find((row) => row.title === "Active")!;
+    const highlighted = findHighlightedCommandPaletteItem(item.groups, activeRow.value);
+    if (highlighted?.kind !== "action") throw new Error("expected an action row");
+    await highlighted.run();
+    expect(moved).toEqual([null]);
+  });
+
+  it("offers no Active entry to a thread that already rests in Active", () => {
+    const sections = [{ id: "s1", name: "Now", createdAt: "2026-10-07T00:00:00.000Z" }];
+    const move = async () => {};
+    // No membership, or one naming a deleted section: both render in Active.
+    for (const current of [null, "gone"]) {
+      expect(sidebarSectionMoveEntries(sections, current, move).map(({ key }) => key)).toEqual([
+        "s1",
+      ]);
+    }
   });
 });

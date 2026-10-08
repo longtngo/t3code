@@ -235,6 +235,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.jiraTicketLinks).toBe(true);
       // Clients only call the queue RPCs on a server that advertises this.
       expect(second.capabilities.threadQueue).toBe(true);
+      // Clients show custom sidebar sections, and send thread.section.set, only when advertised.
+      expect(second.capabilities.sidebarSections).toBe(true);
+      expect(second.capabilities.threadSidebarSections).toBe(true);
       // Load-bearing: this test asserts a subset, so a schema field the server stopped
       // advertising would pass and hide the Settings switch on every client.
       expect(second.capabilities.allowSpendingCredits).toBe(true);

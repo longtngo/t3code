@@ -2292,6 +2292,113 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("keeps sidebar section membership out of activity and through rebuilds", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make("runtime-layer-sidebar-section-thread");
+      const command = (suffix: string) => CommandId.make(`runtime-layer-sidebar-section-${suffix}`);
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: command("create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-sidebar-section-project"),
+        title: "Sectioned thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      // Without this the occurredAt re-stamp would equal the old updatedAt and the updatedAt check below could not fail.
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.section.set",
+        commandId: command("set"),
+        threadId,
+        sectionId: "focus",
+      });
+      const millis = (value: DateTime.Utc) => DateTime.toEpochMillis(value);
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.thread.sidebarSectionId, "focus");
+      // Arranging is not activity, in the decided payload AND the persisted row.
+      assert.equal(millis(after.thread.updatedAt), millis(before.thread.updatedAt));
+      const sqlShell = yield* orchestrator.getThreadShell(threadId);
+      assert.isNotNull(sqlShell);
+      assert.equal(sqlShell.sidebarSectionId, "focus");
+      assert.equal(millis(sqlShell.updatedAt), millis(before.thread.updatedAt));
+      // The other shell builder, and a full rebuild from the event log.
+      assert.equal(ProjectionStore.threadShellFromProjection(after).sidebarSectionId, "focus");
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal((yield* orchestrator.getThreadShell(threadId))?.sidebarSectionId, "focus");
+
+      // Lifecycle commands never write membership.
+      yield* orchestrator.dispatch({ type: "thread.pin", commandId: command("pin"), threadId });
+      yield* orchestrator.dispatch({ type: "thread.unpin", commandId: command("unpin"), threadId });
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: command("snooze"),
+        threadId,
+        snoozedUntil: "2099-01-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unsnooze",
+        commandId: command("unsnooze"),
+        threadId,
+        reason: "user",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: command("settle"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: command("unsettle"),
+        threadId,
+        reason: "user",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.sidebarSectionId,
+        "focus",
+      );
+
+      const beforeClear = yield* orchestrator.getThreadProjection(threadId);
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.section.set",
+        commandId: command("clear"),
+        threadId,
+        sectionId: null,
+      });
+      const cleared = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(cleared.thread.sidebarSectionId);
+      // The clear too: Move to Active is not activity either.
+      assert.equal(millis(cleared.thread.updatedAt), millis(beforeClear.thread.updatedAt));
+      const clearedShell = yield* orchestrator.getThreadShell(threadId);
+      assert.isNotNull(clearedShell);
+      assert.equal(millis(clearedShell.updatedAt), millis(beforeClear.thread.updatedAt));
+
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: command("archive"),
+        threadId,
+      });
+      const archived = yield* orchestrator
+        .dispatch({
+          type: "thread.section.set",
+          commandId: command("archived"),
+          threadId,
+          sectionId: "focus",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(archived, Orchestrator.OrchestratorDispatchError);
+    }),
+  );
+
   it.effect("keeps the branch pull request when linking another pull request", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

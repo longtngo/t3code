@@ -109,6 +109,11 @@ export interface ReorderActiveThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
 }
 
+export interface SetThreadSidebarSectionInput extends ThreadCommandInput {
+  /** Null returns the thread to Active. */
+  readonly sectionId: string | null;
+}
+
 export interface SnoozeThreadInput extends ThreadCommandInput {
   readonly snoozedUntil: string;
 }
@@ -503,6 +508,17 @@ export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveT
     orderKey: input.orderKey,
   });
 });
+
+export const setThreadSidebarSection = Effect.fn("EnvironmentCommands.setThreadSidebarSection")(
+  function* (input: SetThreadSidebarSectionInput) {
+    return yield* dispatch({
+      type: "thread.section.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      sectionId: input.sectionId,
+    });
+  },
+);
 
 export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function* (
   input: UnpinThreadInput,

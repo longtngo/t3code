@@ -11,6 +11,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
+  countSidebarThreads,
   createThreadJumpHintVisibilityController,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -138,6 +139,19 @@ describe("animateSidebarLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("countSidebarThreads", () => {
+  it("counts custom section members, so a sidebar whose threads are all filed is not empty", () => {
+    expect(
+      countSidebarThreads({
+        lists: [[], [], []],
+        customThreads: new Map([["focus", ["t1", "t2"]]]),
+      }),
+    ).toBe(2);
+    expect(countSidebarThreads({ lists: [["a"], []], customThreads: new Map() })).toBe(1);
+    expect(countSidebarThreads({ lists: [[]], customThreads: new Map([["focus", []]]) })).toBe(0);
   });
 });
 
@@ -1673,6 +1687,7 @@ describe("applySidebarThreadDrop", () => {
     settledAt: null,
     settledOverride: null,
     unsettledAt: null,
+    sidebarSectionId: null,
     ...overrides,
   });
   const newer = thread({ id: ThreadId.make("newer"), createdAt: "2026-03-09T11:00:00.000Z" });
@@ -2866,6 +2881,13 @@ describe("dragging a Queue row", () => {
     expect(candidate(origin({ activeSection: "active" }), sidebarMarkerId("settled-header"))).toBe(
       false,
     );
+  });
+
+  it("lets a queued section member drop on Active, which only unqueues it", () => {
+    const member = origin({ activeSection: "custom:focus" });
+    expect(candidate(member, "a1")).toBe(true);
+    expect(route(member, "a1")).toMatchObject({ kind: "place", unqueue: true });
+    expect(candidate(member, "p1")).toBe(false);
   });
 
   // A read-only queue ignores every drag into, within, or out of it.

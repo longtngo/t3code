@@ -595,6 +595,39 @@ describe("serverSettings helpers", () => {
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
   });
 
+  it("upserts, renames and removes sidebar sections per entry", () => {
+    const at = "2026-10-07T00:00:00.000Z";
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      sidebarSections: { a: { name: "A", createdAt: at } },
+    });
+    const added = applyServerSettingsPatch(current, {
+      sidebarSections: { b: { name: "  B  ", createdAt: at } },
+    });
+    expect(added.sidebarSections).toEqual({
+      a: { name: "A", createdAt: at },
+      b: { name: "B", createdAt: at },
+    });
+    const renamed = applyServerSettingsPatch(added, {
+      sidebarSections: { a: { name: "Renamed", createdAt: at } },
+    });
+    expect(renamed.sidebarSections.a?.name).toBe("Renamed");
+    const removed = applyServerSettingsPatch(renamed, { sidebarSections: { a: null } });
+    expect(Object.keys(removed.sidebarSections)).toEqual(["b"]);
+    const invalid = applyServerSettingsPatch(removed, {
+      sidebarSections: { "x:y": { name: "Colon", createdAt: at } },
+    });
+    expect(invalid.sidebarSections).toEqual(removed.sidebarSections);
+  });
+
+  it("drops a `__proto__` sidebar section instead of replacing the prototype", () => {
+    const at = "2026-10-07T00:00:00.000Z";
+    const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      sidebarSections: JSON.parse(`{"__proto__":{"name":"P","createdAt":"${at}"}}`),
+    });
+    expect(Object.getPrototypeOf(next.sidebarSections)).toBe(Object.prototype);
+    expect(Object.keys(next.sidebarSections)).toEqual([]);
+  });
+
   it("replaces and removes individual usage prices without clobbering other models", () => {
     const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
     const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {

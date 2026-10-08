@@ -7,6 +7,8 @@ import {
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
 import {
+  customSidebarSection,
+  isCustomSidebarSection,
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
@@ -38,7 +40,11 @@ function layout(
   const rects = items.map((item) => {
     const height =
       item.kind === "thread"
-        ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
+        ? (item.section === "pinned" ||
+          item.section === "active" ||
+          isCustomSidebarSection(item.section)
+            ? cardHeight
+            : 36) * scale
         : item.marker === "pinned-header" || item.marker === "pinned-divider"
           ? 0
           : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
@@ -1037,5 +1043,162 @@ describe("lifted card clearance", () => {
   it("follows the list when it scrolls and includes content preceding Pins", () => {
     expect(511 + apply(511, 36, -500, 96).y).toBe(128);
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
+  });
+});
+
+describe("custom sections during a drag", () => {
+  const focus = customSidebarSection("focus");
+  const customHeader: SidebarListItem = {
+    kind: "marker",
+    marker: "custom-header",
+    sectionId: "focus",
+  };
+  const items: SidebarListItem[] = [
+    pinnedHeader,
+    divider,
+    thread("a", "active"),
+    thread("source", "active"),
+    customHeader,
+    thread("c1", focus),
+    thread("c2", focus),
+    settledHeader,
+  ];
+
+  it("reordering inside Active neither throws nor moves the custom block", () => {
+    const transforms = preview({ items, settledOrder: [], settledExpanded: false }, "source", "a");
+    for (const id of [sidebarListItemId(customHeader), "c1", "c2"]) {
+      expect(transforms.get(id)).toMatchObject({ y: 0, scaleY: 1 });
+    }
+  });
+
+  it.each([0, 200])(
+    "keeps the custom block below the Queue drop zone that sits above it (shelf margin %i)",
+    (shelfMargin) => {
+      const strategy = createSidebarSortingStrategy({
+        items,
+        settledOrder: [],
+        settledExpanded: false,
+      });
+      const header = items.indexOf(customHeader);
+      const measure = (queue: number) => {
+        const args = layout(items, "source", "a");
+        // The Queue renders between Active and the first custom header, outside the sortable list.
+        for (const [index, rect] of args.rects.entries()) {
+          const shift =
+            index < header ? 0 : queue + (items[index] === settledHeader ? shelfMargin : 0);
+          rect.top += shift;
+          rect.bottom += shift;
+        }
+        return (item: SidebarListItem) => strategy({ ...args, index: items.indexOf(item) });
+      };
+      const withQueue = measure(120);
+      for (const item of [customHeader, items[header + 1]!, items[header + 2]!]) {
+        expect(withQueue(item)).toMatchObject({ y: 0 });
+      }
+      // The shelves move exactly as they would with no Queue in the way.
+      expect(withQueue(settledHeader)).toEqual(measure(0)(settledHeader));
+    },
+  );
+
+  it("lifting a custom row into Active closes its slot and moves the block as one", () => {
+    const transforms = preview({ items, settledOrder: [], settledExpanded: false }, "c1", "a");
+    // The lifted card joins Active above the block, so the header shifts down by one card...
+    const card = 82 + 1;
+    expect(transforms.get(sidebarListItemId(customHeader))).toMatchObject({ y: card, scaleY: 1 });
+    // ...and c2, a card like the lifted row, closes up behind it by exactly that much.
+    expect(transforms.get("c2")).toMatchObject({ y: 0, scaleY: 1 });
+  });
+
+  it("sizes the lifted row from a custom card when Pinned and Active have none", () => {
+    const onlyCustom: SidebarListItem[] = [
+      pinnedHeader,
+      divider,
+      marker("active-placeholder"),
+      customHeader,
+      thread("c1", focus),
+      thread("c2", focus),
+      settledHeader,
+    ];
+    const strategy = createSidebarSortingStrategy({
+      items: onlyCustom,
+      settledOrder: [],
+      settledExpanded: false,
+    });
+    // Measured cards are 90px here; the default would be 82.
+    const args = layout(onlyCustom, "c1", sidebarMarkerId("active-placeholder"), 1, 90);
+    const header = onlyCustom.indexOf(customHeader);
+    expect(strategy({ ...args, index: header })).toMatchObject({ y: 90 });
+  });
+
+  it("a pointer over a custom section never resolves to an Active target", () => {
+    const { rects, activeIndex } = layout(items, "source", "a");
+    const sourceRect = rects[activeIndex]!;
+    const rectOf = (item: SidebarListItem) => rects[items.indexOf(item)]!;
+    const nodes = new Map<SidebarListItem, HTMLElement>([
+      [
+        divider,
+        {
+          querySelector: () => ({
+            getBoundingClientRect: () => ({
+              ...rectOf(divider),
+              top: rectOf(divider).top,
+              bottom: rectOf(divider).top + 16,
+            }),
+          }),
+        } as unknown as HTMLElement,
+      ],
+      [
+        customHeader,
+        { getBoundingClientRect: () => rectOf(customHeader) } as unknown as HTMLElement,
+      ],
+      [
+        settledHeader,
+        { getBoundingClientRect: () => rectOf(settledHeader) } as unknown as HTMLElement,
+      ],
+    ]);
+    const detector = createSidebarCollisionDetection(() => true, {
+      items,
+      activationY: sourceRect.top + sourceRect.height / 2,
+    });
+    const at = (y: number) => {
+      const collisionRect = {
+        ...sourceRect,
+        top: y - sourceRect.height / 2,
+        bottom: y + sourceRect.height / 2,
+      };
+      const over = detector({
+        active: {
+          id: "source",
+          data: { current: {} },
+          rect: { current: { initial: sourceRect, translated: collisionRect } },
+        },
+        collisionRect,
+        pointerCoordinates: { x: 130, y },
+        droppableRects: new Map(
+          items.map((item, index) => [sidebarListItemId(item), rects[index]!]),
+        ),
+        droppableContainers: items.map((item, index) => ({
+          id: sidebarListItemId(item),
+          key: sidebarListItemId(item),
+          disabled: false,
+          data: { current: {} },
+          node: { current: nodes.get(item) ?? null },
+          rect: { current: rects[index]! },
+        })),
+      })[0];
+      return over
+        ? (resolveSidebarDropTarget(items, "source", String(over.id))?.section ?? null)
+        : null;
+    };
+    // Control arm: the detector can still report an Active hit (y 150 sits on row "a",
+    // below the divider label, so the Pinned switch does not fire).
+    expect(at(150)).toBe("active");
+    // Over the first custom row (301..383): never Active. The old bound (the Settled header at
+    // 467) re-ranks this pointer onto an Active-resolving candidate.
+    expect(at(356)).toBeNull();
+    // A custom header whose node is missing (a transient list/DOM mismatch) must not hand the
+    // bound to a lower header: that is the same wrong bound.
+    nodes.delete(customHeader);
+    expect(at(356)).toBeNull();
   });
 });

@@ -1,6 +1,8 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
+import { sidebarSectionMoveTargets, type SidebarSectionView } from "../sidebarCustomSections.logic";
+
 /**
  * Ids for the per-thread action menu. Snooze presets are dispatched as
  * `snooze:<presetId>` so the union stays closed while the preset list
@@ -22,6 +24,9 @@ export type ThreadActionMenuId =
   | "unsnooze"
   | "queue"
   | "unqueue"
+  | "move-to-section"
+  | `move-to-section:${string}`
+  | "move-to-active"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -98,6 +103,11 @@ export interface ThreadActionMenuState {
   readonly isQueued?: boolean;
   /** False while the queue is read-only (its server is not reachable yet, or this session cannot operate). */
   readonly queueWritable?: boolean;
+  /** Null when the primary or this thread's server cannot store sections. */
+  readonly sidebarSections?: {
+    readonly sections: readonly SidebarSectionView[];
+    readonly currentSectionId: string | null;
+  } | null;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
@@ -118,6 +128,49 @@ function queueMenuItem(isQueued: boolean, writable = true) {
     ? { id: "unqueue" as const, label: "Remove from queue", icon: "list-x" }
     : { id: "queue" as const, label: "Add to queue", icon: "list-plus" };
   return writable ? item : { ...item, disabled: true };
+}
+
+const MOVE_TO_SECTION_PREFIX = "move-to-section:";
+
+/** A clicked Move to section / Move to Active id, or null for any other action. `sectionName` is
+    null for Active, and "section" for one deleted since the menu opened. */
+export function resolveSidebarSectionMoveAction(
+  action: string,
+  sections: readonly SidebarSectionView[] | null,
+): { readonly sectionId: string | null; readonly sectionName: string | null } | null {
+  if (action === "move-to-active") return { sectionId: null, sectionName: null };
+  if (!action.startsWith(MOVE_TO_SECTION_PREFIX)) return null;
+  const sectionId = action.slice(MOVE_TO_SECTION_PREFIX.length);
+  const name = sections?.find((section) => section.id === sectionId)?.name;
+  return { sectionId, sectionName: name ?? "section" };
+}
+
+function sidebarSectionMenuItems(
+  sidebarSections: ThreadActionMenuState["sidebarSections"],
+): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  if (sidebarSections == null) return [];
+  const targets = sidebarSectionMoveTargets(
+    sidebarSections.sections,
+    sidebarSections.currentSectionId,
+  );
+  return [
+    ...(targets.sections.length > 0
+      ? [
+          {
+            id: "move-to-section" as const,
+            label: "Move to section",
+            icon: "folder",
+            children: targets.sections.map((section) => ({
+              id: `${MOVE_TO_SECTION_PREFIX}${section.id}` as const,
+              label: section.name,
+            })),
+          },
+        ]
+      : []),
+    ...(targets.canMoveToActive
+      ? [{ id: "move-to-active" as const, label: "Move to Active", icon: "folder" }]
+      : []),
+  ];
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -188,6 +241,7 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     queueMenuItem(state.isQueued === true, state.queueWritable),
+    ...sidebarSectionMenuItems(state.sidebarSections),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [

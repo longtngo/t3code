@@ -15,6 +15,7 @@ import {
   ForwardCompatibleOptional,
   OmittedWhenNull,
   ProjectId,
+  SIDEBAR_SECTION_ID_PATTERN,
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
@@ -340,6 +341,39 @@ export const QueueSlotSettings = Schema.Struct({
   providerSlots: Schema.Record(Schema.String, Schema.Number),
 });
 export type QueueSlotSettings = typeof QueueSlotSettings.Type;
+
+export const SIDEBAR_SECTION_NAME_MAX_LENGTH = 60;
+
+export const SidebarSectionDefinition = Schema.Struct({
+  name: Schema.String,
+  /** ISO time; sections list in creation order. */
+  createdAt: Schema.String,
+});
+export type SidebarSectionDefinition = typeof SidebarSectionDefinition.Type;
+
+/** Every stored shape decodes: bad entries are dropped so one bad section never fails the file. */
+export function normalizeSidebarSections(value: unknown): Record<string, SidebarSectionDefinition> {
+  if (!isPlainObject(value)) return {};
+  // An id of `__proto__` (the pattern allows it) is dropped: the server's generic settings
+  // writer assigns by key and would lose it on disk, so memory and disk would disagree.
+  // Entries are still collected rather than assigned to `{}` as a second line of defence.
+  const sections: Array<[string, SidebarSectionDefinition]> = [];
+  for (const [id, entry] of Object.entries(value)) {
+    if (id === "__proto__" || !SIDEBAR_SECTION_ID_PATTERN.test(id) || !isPlainObject(entry))
+      continue;
+    const name =
+      typeof entry.name === "string"
+        ? entry.name.trim().slice(0, SIDEBAR_SECTION_NAME_MAX_LENGTH)
+        : "";
+    const createdAt =
+      typeof entry.createdAt === "string" && !Number.isNaN(Date.parse(entry.createdAt))
+        ? entry.createdAt
+        : "";
+    if (name === "" || createdAt === "") continue;
+    sections.push([id, { name, createdAt }]);
+  }
+  return Object.fromEntries(sections);
+}
 
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
@@ -2012,6 +2046,18 @@ export const ServerSettings = Schema.Struct({
   usageModelAliases: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // User-defined sidebar sections, keyed by id. Membership lives on each thread
+  // (`sidebarSectionId`); this is only the definitions. Lenient like `queueSlots`.
+  sidebarSections: Schema.Unknown.pipe(
+    Schema.decodeTo(
+      Schema.Record(Schema.String, SidebarSectionDefinition),
+      SchemaTransformation.transform<Record<string, SidebarSectionDefinition>, unknown>({
+        decode: normalizeSidebarSections,
+        encode: (value) => value,
+      }),
+    ),
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -2385,6 +2431,10 @@ export const ServerSettingsPatch = Schema.Struct({
   /** Each entry replaces one model's mapping; `null` removes it. */
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
+  ),
+  /** Per entry, like `usageLimitSources`: `null` deletes; a rename resends the whole entry. */
+  sidebarSections: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.NullOr(SidebarSectionDefinition)),
   ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

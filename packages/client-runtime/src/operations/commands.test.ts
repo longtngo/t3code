@@ -47,6 +47,7 @@ import {
   mergeThreadBack,
   promoteQueuedRun,
   reorderActiveThread,
+  setThreadSidebarSection,
   reorderQueuedRun,
   revertThreadCheckpoint,
   settleThread,
@@ -944,6 +945,26 @@ describe("V2 environment commands", () => {
           commandId: "reorder-command",
           threadId: "thread-1",
           orderKey: "mf",
+        },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("sends a sidebar section change", () =>
+    Effect.gen(function* () {
+      const dispatched: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands: dispatched, projects: [] });
+      yield* setThreadSidebarSection({
+        commandId: CommandId.make("section-command"),
+        threadId: ThreadId.make("thread-1"),
+        sectionId: "focus",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(dispatched).toEqual([
+        {
+          type: "thread.section.set",
+          commandId: "section-command",
+          threadId: "thread-1",
+          sectionId: "focus",
         },
       ]);
     }).pipe(Effect.provide(layerTestCrypto)),

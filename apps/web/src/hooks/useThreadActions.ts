@@ -4,7 +4,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
@@ -28,7 +32,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentSession, readEnvironmentScope } from "../state/session";
 import { terminalEnvironment } from "../state/terminal";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { environmentServerConfigsAtom } from "../state/server";
+import { environmentServerConfigsAtom, primaryServerConfigAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -42,6 +46,7 @@ import {
   readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsSidebarSections,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
@@ -49,6 +54,13 @@ import {
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
+import {
+  planSidebarSectionMove,
+  resolveSidebarSections,
+  runSidebarSectionMove,
+  sidebarSectionGone,
+  sidebarSectionMoveFailureTitle,
+} from "../sidebarCustomSections.logic";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
@@ -166,6 +178,15 @@ export class ThreadActiveReorderUnsupportedError extends Schema.TaggedError<Thre
 ) {
   override get message(): string {
     return "Update this environment's server to reorder active threads.";
+  }
+}
+
+export class ThreadSidebarSectionsUnsupportedError extends Schema.TaggedError<ThreadSidebarSectionsUnsupportedError>()(
+  "ThreadSidebarSectionsUnsupportedError",
+  { environmentId: EnvironmentId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return "Update this environment's server to move threads into sections.";
   }
 }
 
@@ -296,6 +317,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const reorderActiveThreadMutation = useOrchestrationCommand(threadEnvironment.reorderActive, {
+    reportFailure: false,
+  });
+  const setThreadSidebarSectionMutation = useOrchestrationCommand(threadEnvironment.setSection, {
     reportFailure: false,
   });
   const snoozeThreadMutation = useOrchestrationCommand(threadEnvironment.snooze, {
@@ -904,6 +928,26 @@ export function useThreadActions() {
     [reorderActiveThreadMutation],
   );
 
+  const setThreadSidebarSection = useCallback(
+    async (target: ScopedThreadRef, sectionId: string | null) => {
+      if (!readEnvironmentSupportsSidebarSections(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadSidebarSectionsUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return setThreadSidebarSectionMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, sectionId },
+      });
+    },
+    [setThreadSidebarSectionMutation],
+  );
+
   const unsnoozeThread = useCallback(
     async (target: ScopedThreadRef) => {
       if (!readEnvironmentSupportsSnooze(target.environmentId)) {
@@ -923,6 +967,55 @@ export function useThreadActions() {
       });
     },
     [unsnoozeThreadMutation],
+  );
+
+  /**
+   * Move to section / Move to Active: membership first, then clear what outranks it, and toast
+   * the step that failed. `sectionName` is null for Active. The unpin offers no Undo: re-pinning
+   * would take the thread back out of the section it was moved to.
+   */
+  const moveThreadToSidebarSection = useCallback(
+    async (target: ScopedThreadRef, sectionId: string | null, sectionName: string | null) => {
+      // The menu or palette may have been built before a peer deleted the section: moving into
+      // it would strip the pin, settle and snooze and leave the thread in plain Active.
+      const live = resolveSidebarSections(appAtomRegistry.get(primaryServerConfigAtom));
+      if (sidebarSectionGone(live, sectionId)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Section was deleted",
+            description: "The thread was not moved.",
+          }),
+        );
+        return;
+      }
+      const thread = readThreadShell(target);
+      if (thread === null) return;
+      const plan = planSidebarSectionMove(thread, sectionId, new Date().toISOString());
+      if (plan === null) return;
+      const failure = await runSidebarSectionMove(plan, {
+        section: () => setThreadSidebarSection(target, plan.sectionId),
+        unpin: () => {
+          ThreadUndo.invalidate("pin", scopedThreadKey(target));
+          return unpinThreadMutation({
+            environmentId: target.environmentId,
+            input: { threadId: target.threadId },
+          });
+        },
+        unsettle: () => unsettleThread(target),
+        unsnooze: () => unsnoozeThread(target),
+      });
+      if (failure === null || isAtomCommandInterrupted(failure.result)) return;
+      const error = squashAtomCommandFailure(failure.result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: sidebarSectionMoveFailureTitle(failure.step, sectionName),
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+    [setThreadSidebarSection, unpinThreadMutation, unsettleThread, unsnoozeThread],
   );
 
   const snoozeThread = useCallback(
@@ -1019,6 +1112,8 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      setThreadSidebarSection,
+      moveThreadToSidebarSection,
       markThreadUnread,
       setThreadAutoSettle,
     }),
@@ -1028,10 +1123,12 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       deleteThread,
       markThreadUnread,
+      moveThreadToSidebarSection,
       pinThread,
       reorderPinnedThread,
       reorderActiveThread,
       setThreadAutoSettle,
+      setThreadSidebarSection,
       settleThread,
       snoozeThread,
       unarchiveThread,
