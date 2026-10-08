@@ -3195,6 +3195,345 @@ describe("Working shelf (beta)", () => {
       expect(above.kind === "move-active" && above.assignments[0]!.orderKey < "m").toBe(true);
     });
 
+    describe("a drop beside a keyed row whose server cannot store an order", () => {
+      // Rows with null keys are keyless; `writable` rows are the ones this client can reorder.
+      const arranged = (
+        plan: SidebarThreadDropPlan,
+        order: readonly string[],
+        keysById: ReadonlyMap<string, string | null>,
+        writable: ReadonlySet<string>,
+      ) => {
+        expect(plan.kind).toBe("move-active");
+        if (plan.kind !== "move-active") return;
+        expect(plan.assignments.every(({ id }) => writable.has(id))).toBe(true);
+        const keys = new Map(keysById);
+        for (const { id, orderKey } of plan.assignments) keys.set(id, orderKey);
+        // Every row that sorts by key reads back in the dropped order; keyless offline rows
+        // sort outside the keyed run and are not part of it.
+        const run = order.filter((key) => writable.has(key) || keysById.get(key) != null);
+        const runKeys = run.map((key) => keys.get(key));
+        expect(runKeys.every((key) => key != null)).toBe(true);
+        expect(runKeys.every((key, index) => index === 0 || runKeys[index - 1]! < key!)).toBe(true);
+      };
+      const keysById = new Map<string, string | null>([
+        ["a1", "d"],
+        ["a2", null],
+        ["x", "m"],
+        ["s1", null],
+        ["f1", null],
+        ["y", "m"],
+      ]);
+      const writable = new Set(["a1", "a2", "s1", "f1"]);
+      const board = {
+        pinnedOrder: [],
+        pinnedKeysById: new Map(),
+        activeOrder: ["a1", "a2", "x"],
+        activeKeysById: keysById,
+        activeReorderableKeys: writable,
+        supportsSettlement: true,
+        supportsSections: true,
+        customSectionIds: new Set(["focus"]),
+        customOrders: new Map([["focus", ["f1", "y"]]]),
+      };
+
+      it("reorders within Active, keying only the rows it can write", () => {
+        const order = ["a2", "a1", "x"];
+        arranged(
+          planSidebarThreadDrop({
+            ...board,
+            activeKey: "a1",
+            activeSection: "active",
+            target: { section: "active", pinnedOrder: [], activeOrder: order },
+          }),
+          order,
+          keysById,
+          writable,
+        );
+      });
+
+      it.each([
+        ["Settled", "settled" as const, { activeSettled: true }],
+        ["Snoozed", "snoozed" as const, {}],
+        ["the Queue", "active" as const, { fromQueue: true }],
+      ])("takes a row from %s into Active", (_, activeSection, extra) => {
+        const order = ["a1", "a2", "s1", "x"];
+        arranged(
+          planSidebarThreadDrop({
+            ...board,
+            ...extra,
+            activeKey: "s1",
+            activeSection,
+            target: { section: "active", pinnedOrder: [], activeOrder: order },
+          }),
+          order,
+          keysById,
+          writable,
+        );
+      });
+
+      it("takes a row into a custom section", () => {
+        const plan = planSidebarThreadDrop({
+          ...board,
+          activeKey: "s1",
+          activeSection: "active",
+          target: {
+            section: "custom:focus",
+            pinnedOrder: [],
+            activeOrder: ["a1", "a2", "x"],
+            customAfter: "f1",
+          },
+        });
+        arranged(plan, ["f1", "s1", "y"], keysById, writable);
+        expect(plan.kind === "move-active" && plan.joinsSection).toBe("focus");
+      });
+
+      it.each([
+        {
+          name: "several offline rows",
+          order: ["w1", "x1", "m", "w2", "x2", "w3"],
+          keys: { w1: null, x1: "f", m: "w", w2: null, x2: "p", w3: null },
+        },
+        {
+          name: "an offline row at the head",
+          order: ["x1", "m", "w1"],
+          keys: { x1: "c", m: "t", w1: null },
+        },
+        {
+          name: "an offline row at the tail",
+          order: ["w1", "m", "x1"],
+          keys: { w1: null, m: "c", x1: "w" },
+        },
+        {
+          name: "every other row offline, keyed or not",
+          order: ["x1", "k1", "m", "x2", "k2"],
+          keys: { x1: "f", k1: null, m: null, x2: "p", k2: null },
+        },
+        {
+          name: "an offline row the client has no key record for",
+          order: ["w1", "m", "u", "x1"],
+          keys: { w1: null, m: "c", x1: "w" },
+        },
+      ])("keeps every offline key with $name", ({ order, keys }) => {
+        const keysById = new Map<string, string | null>(Object.entries(keys));
+        const writable = new Set(order.filter((key) => key === "m" || key.startsWith("w")));
+        arranged(
+          planSidebarThreadDrop({
+            ...board,
+            activeKey: "m",
+            activeSection: "active",
+            target: { section: "active", pinnedOrder: [], activeOrder: order },
+            activeOrder: order.filter((key) => key !== "m").concat("m"),
+            activeKeysById: keysById,
+            activeReorderableKeys: writable,
+          }),
+          order,
+          keysById,
+          writable,
+        );
+      });
+
+      it("leaves a run that already sorts in place, and never reuses a hidden row's key", () => {
+        const order = ["w1", "w2", "x1", "w3", "m", "x2"];
+        const keysById = new Map<string, string | null>([
+          ["w1", "b"],
+          ["w2", "c"],
+          ["x1", "f"],
+          ["w3", null],
+          ["m", "t"],
+          ["x2", "p"],
+          // A row outside this list, e.g. settled, keeps its key; "k" is the first fresh key.
+          ["hidden", "k"],
+        ]);
+        const writable = new Set(["w1", "w2", "w3", "m"]);
+        const plan = planSidebarThreadDrop({
+          ...board,
+          activeKey: "m",
+          activeSection: "active",
+          target: { section: "active", pinnedOrder: [], activeOrder: order },
+          activeOrder: ["w1", "w2", "x1", "w3", "x2", "m"],
+          activeKeysById: keysById,
+          activeReorderableKeys: writable,
+        });
+        arranged(plan, order, keysById, writable);
+        if (plan.kind !== "move-active") return;
+        expect(plan.assignments.map(({ id }) => id)).toEqual(["w3", "m"]);
+        expect(plan.assignments.some(({ orderKey }) => orderKey === "k")).toBe(false);
+      });
+
+      it("keeps fresh keys short in a long run, and skips a key that already matches", () => {
+        const rows = Array.from({ length: 60 }, (_, index) => `w${index}`);
+        const order = ["x1", "m", ...rows, "x2"];
+        const keysById = new Map<string, string | null>([
+          ["x1", "f"],
+          ["m", null],
+          ["x2", "g"],
+          ...rows.map((row) => [row, null] as const),
+        ]);
+        const writable = new Set(["m", ...rows]);
+        const plan = planSidebarThreadDrop({
+          ...board,
+          activeKey: "m",
+          activeSection: "settled",
+          activeSettled: true,
+          target: { section: "active", pinnedOrder: [], activeOrder: order },
+          activeOrder: order.filter((key) => key !== "m"),
+          activeKeysById: keysById,
+          activeReorderableKeys: writable,
+        });
+        arranged(plan, order, keysById, writable);
+        if (plan.kind !== "move-active") return;
+        expect(Math.max(...plan.assignments.map(({ orderKey }) => orderKey.length))).toBe(3);
+
+        // "k" is the fresh key for the run's middle row between "f" and "p", and w1 already has it.
+        const short = ["x1", "w0", "w1", "w2", "m", "x2"];
+        const shortWritable = new Set(["w0", "w1", "w2", "m"]);
+        const shortKeys = new Map<string, string | null>([
+          ["x1", "f"],
+          ["w0", null],
+          ["w1", "k"],
+          ["w2", null],
+          ["m", null],
+          ["x2", "p"],
+        ]);
+        const kept = planSidebarThreadDrop({
+          ...board,
+          activeKey: "m",
+          activeSection: "active",
+          target: { section: "active", pinnedOrder: [], activeOrder: short },
+          activeOrder: ["x1", "m", "w0", "w1", "w2", "x2"],
+          activeKeysById: shortKeys,
+          activeReorderableKeys: shortWritable,
+        });
+        arranged(kept, short, shortKeys, shortWritable);
+        expect(kept.kind === "move-active" && kept.assignments.map(({ id }) => id)).toEqual([
+          "w0",
+          "w2",
+          "m",
+        ]);
+      });
+
+      it("arranges a pinned drop the same way", () => {
+        const order = ["p2", "p1", "x"];
+        const pinnedKeysById = new Map<string, string | null>([
+          ["p1", "d"],
+          ["p2", null],
+          ["x", "m"],
+        ]);
+        const plan = planSidebarThreadDrop({
+          ...board,
+          activeKey: "p1",
+          activeSection: "pinned",
+          target: { section: "pinned", pinnedOrder: order, activeOrder: [] },
+          pinnedOrder: ["p1", "p2", "x"],
+          pinnedKeysById,
+          reorderableKeys: new Set(["p1", "p2"]),
+        });
+        expect(plan.kind).toBe("reorder-pinned");
+        if (plan.kind !== "reorder-pinned") return;
+        expect(plan.assignments.map(({ id }) => id).sort()).toEqual(["p1", "p2"]);
+        const [p2, p1] = ["p2", "p1"].map(
+          (id) => plan.assignments.find((assignment) => assignment.id === id)!.orderKey,
+        );
+        expect(p2! < p1! && p1! < "m").toBe(true);
+      });
+
+      const between = (left: string, right: string) => {
+        const order = ["x1", "w1", "m", "x2"];
+        const keysById = new Map<string, string | null>([
+          ["x1", left],
+          ["w1", null],
+          ["m", null],
+          ["x2", right],
+        ]);
+        const writable = new Set(["w1", "m"]);
+        const plan = planSidebarThreadDrop({
+          ...board,
+          activeKey: "m",
+          activeSection: "active",
+          target: { section: "active", pinnedOrder: [], activeOrder: order },
+          activeOrder: ["x1", "w1", "x2", "m"],
+          activeKeysById: keysById,
+          activeReorderableKeys: writable,
+        });
+        return { plan, order, keysById, writable };
+      };
+      const refusal = { kind: "refuse", reason: expect.stringContaining("can't store") };
+
+      it("refuses, saying why, when the offline rows around it share a key", () => {
+        expect(between("m", "m").plan).toEqual(refusal);
+      });
+
+      it.each([
+        ["below", "ma", "p"],
+        ["above", "f", "ma"],
+      ])("places between offline rows whose key %s ends in a stray a", (_, left, right) => {
+        const { plan, order, keysById, writable } = between(left, right);
+        arranged(plan, order, keysById, writable);
+      });
+
+      it("re-keys a writable row that ties the offline row after it", () => {
+        // Sorted by id, w before x on the shared key "m": the drop puts mv between them.
+        const order = ["w", "mv", "x"];
+        const keysById = new Map<string, string | null>([
+          ["w", "m"],
+          ["mv", "z"],
+          ["x", "m"],
+        ]);
+        const writable = new Set(["w", "mv"]);
+        arranged(
+          planSidebarThreadDrop({
+            ...board,
+            activeKey: "mv",
+            activeSection: "active",
+            target: { section: "active", pinnedOrder: [], activeOrder: order },
+            activeOrder: ["w", "x", "mv"],
+            activeKeysById: keysById,
+            activeReorderableKeys: writable,
+          }),
+          order,
+          keysById,
+          writable,
+        );
+      });
+
+      it("refuses a Pinned or custom-section drop with no room the same way", () => {
+        const keysById = new Map<string, string | null>([
+          ["x1", "m"],
+          ["w1", null],
+          ["m", null],
+          ["x2", "m"],
+        ]);
+        const writable = new Set(["w1", "m"]);
+        expect(
+          planSidebarThreadDrop({
+            ...board,
+            activeKey: "m",
+            activeSection: "pinned",
+            target: { section: "pinned", pinnedOrder: ["x1", "w1", "m", "x2"], activeOrder: [] },
+            pinnedOrder: ["x1", "w1", "x2", "m"],
+            pinnedKeysById: keysById,
+            reorderableKeys: writable,
+          }),
+        ).toEqual(refusal);
+        expect(
+          planSidebarThreadDrop({
+            ...board,
+            activeKey: "m",
+            activeSection: "active",
+            target: {
+              section: "custom:focus",
+              pinnedOrder: [],
+              activeOrder: [],
+              customAfter: "w1",
+            },
+            customOrders: new Map([["focus", ["x1", "w1", "x2"]]]),
+            activeKeysById: keysById,
+            activeReorderableKeys: writable,
+          }),
+        ).toEqual(refusal);
+      });
+    });
+
     it("only changes lifecycle when the inbox is time-ordered", () => {
       const base = {
         pinnedOrder: ["p1"],

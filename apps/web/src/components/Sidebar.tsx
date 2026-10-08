@@ -4985,9 +4985,18 @@ export default function Sidebar() {
               }),
             ),
           removeFromQueue: () => queue.remove(activeKey),
+          reportRefusal: (reason) =>
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Can't place thread here",
+                description: reason,
+              }),
+            ),
         }) ||
         // Unreachable once started; narrows `plan`.
-        plan.kind === "none"
+        plan.kind === "none" ||
+        plan.kind === "refuse"
       )
         return;
       // A renumbered row that vanished meanwhile is skipped, not a failure.

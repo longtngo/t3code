@@ -664,7 +664,9 @@ describe("a join is held in its section until it lands", () => {
   ) => {
     const target = resolveSidebarDropTarget(sectioned(), drag.activeKey, overId)!;
     const planned = plan(drag, src, target, onBoard);
-    if (planned.kind === "none" || planned.kind === "unpark") throw new Error(planned.kind);
+    if (planned.kind === "none" || planned.kind === "refuse" || planned.kind === "unpark") {
+      throw new Error(planned.kind);
+    }
     return sidebarOptimisticDrop({
       key: drag.activeKey,
       sourceSection: drag.activeSection,
@@ -1492,6 +1494,7 @@ describe("the start of a place drop", () => {
         return options.canOperate;
       },
       removeFromQueue: () => calls.push("unqueue"),
+      reportRefusal: (reason) => calls.push(`refused: ${reason}`),
     });
     return { runs, calls };
   };
@@ -1528,6 +1531,12 @@ describe("the start of a place drop", () => {
       runs: false,
       calls: ["check"],
     });
+  });
+
+  it("a refused plan says why and keeps its Queue entry", () => {
+    expect(
+      start({ kind: "refuse", reason: "no room" }, { unqueue: "now", canOperate: true }),
+    ).toEqual({ runs: false, calls: ["refused: no room"] });
   });
 
   it("an empty plan only leaves the Queue: it writes no thread, so nothing to check", () => {

@@ -1228,6 +1228,15 @@ tests passed while the real CLI ignored it. Per-turn instruction delivery is an 
 Probe: `grep -c subagentBackendKey apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts` is
 `0` (the reverted version, `e716ce3135`, gives 4).
 
+### 64. A sidebar drop arranges around keyed rows it cannot write instead of refusing
+
+Upstream's `arrange` in `planSidebarThreadDrop` (#16291) refuses a drop whose key spread would
+re-key a keyed row this client cannot write (CodeRabbit's open Major there). The fork falls back to
+`planReorderAroundFixedRows`, and a drop with no room says why (`kind: "refuse"`, a toast no test
+sees). Keep both when upstream rewrites `arrange`. Probes:
+`grep -c planReorderAroundFixedRows apps/web/src/components/Sidebar.logic.ts` is `2`, and
+`grep -c "Can't place thread here" apps/web/src/components/Sidebar.tsx` is `1`.
+
 ### 45. RETIRED with orchestrator v2: the manual-Effect-runner debt ceilings
 
 Upstream deleted its per-file `maxOccurrences` ledger with the V1 tests it listed. The fork's

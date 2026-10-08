@@ -12,7 +12,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
-import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
+import { pinOrderKeyBetween, planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
   resolveSnoozePresets,
@@ -772,6 +772,8 @@ export function resolveSidebarDropTarget(
 
 export type SidebarThreadDropPlan =
   | { readonly kind: "none" }
+  /** The drop has no order it can write: say why instead of snapping back. */
+  | { readonly kind: "refuse"; readonly reason: string }
   /** Within the pinned block: the existing key writes. */
   | {
       readonly kind: "reorder-pinned";
@@ -883,6 +885,69 @@ export function sidebarThreadKeyAtY(list: HTMLElement, y: number): string | null
   return key;
 }
 
+type OrderAssignments = ReadonlyArray<{ readonly id: string; readonly orderKey: string }>;
+
+/** `count` increasing keys strictly between two bounds (null is open), skipping `reserved`;
+    null when no key fits. Bisects, so the keys stay short. */
+function orderKeysBetween(
+  before: string | null,
+  after: string | null,
+  count: number,
+  reserved: ReadonlySet<string>,
+): string[] | null {
+  if (count === 0) return [];
+  let middle = pinOrderKeyBetween(before, after);
+  while (middle !== null && reserved.has(middle)) middle = pinOrderKeyBetween(middle, after);
+  if (middle === null) return null;
+  const below = orderKeysBetween(before, middle, Math.floor((count - 1) / 2), reserved);
+  const above = orderKeysBetween(middle, after, count - 1 - (below?.length ?? 0), reserved);
+  return below && above ? [...below, middle, ...above] : null;
+}
+
+/** Fork: `planPinnedReorder`'s fallback re-keys every row, and a row this client cannot write
+    must keep its key. Those rows stay fixed and bound the writable rows between them; a run that
+    already sorts in place is left alone. Null when a run has no room between its bounds. */
+function planReorderAroundFixedRows(
+  order: readonly string[],
+  keysById: ReadonlyMap<string, string | null | undefined>,
+  writable: ReadonlySet<string>,
+): OrderAssignments | null {
+  const visible = new Set(order);
+  const reserved = new Set(
+    [...keysById].flatMap(([id, key]) => (!visible.has(id) && key != null ? [key] : [])),
+  );
+  const assignments: Array<{ readonly id: string; readonly orderKey: string }> = [];
+  let before: string | null = null;
+  let run: string[] = [];
+  for (const id of [...order, null]) {
+    if (id !== null && writable.has(id)) {
+      run.push(id);
+      continue;
+    }
+    // The caller keeps only writable and keyed rows, so a row that ends a run has a key. A key
+    // ending in "a" is corrupt (never generated), but no valid key sorts between it and the key
+    // without those "a"s, so that key bounds the run in its place.
+    const bound = id === null ? null : (keysById.get(id) ?? null);
+    const after = bound?.replace(/a+$/, "") || bound;
+    const keys = run.map((key) => keysById.get(key) ?? null);
+    const chain = [before, ...keys, after];
+    const inPlace =
+      keys.every((key) => key !== null) &&
+      chain.slice(1).every((key, index) => pinOrderKeyBetween(chain[index] ?? null, key) !== null);
+    if (!inPlace) {
+      const fresh = orderKeysBetween(before, after, run.length, reserved);
+      if (fresh === null) return null;
+      run.forEach((key, index) => {
+        if (keysById.get(key) !== fresh[index])
+          assignments.push({ id: key, orderKey: fresh[index]! });
+      });
+    }
+    before = after;
+    run = [];
+  }
+  return assignments;
+}
+
 export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
@@ -944,15 +1009,20 @@ export function planSidebarThreadDrop(input: {
     order: readonly string[],
     keysById: ReadonlyMap<string, string | null | undefined>,
     writable: ReadonlySet<string> | undefined,
-  ) => {
+  ): OrderAssignments | Extract<SidebarThreadDropPlan, { kind: "none" | "refuse" }> => {
     if (!writable) return planPinnedReorder({ orderedIds: order, keysById, movedId: activeKey });
-    if (!writable.has(activeKey)) return null;
-    const assignments = planPinnedReorder({
-      orderedIds: order.filter((key) => writable.has(key) || keysById.get(key) != null),
-      keysById,
-      movedId: activeKey,
-    });
-    return assignments.every(({ id }) => writable.has(id)) ? assignments : null;
+    if (!writable.has(activeKey)) return { kind: "none" };
+    const kept = order.filter((key) => writable.has(key) || keysById.get(key) != null);
+    const assignments = planPinnedReorder({ orderedIds: kept, keysById, movedId: activeKey });
+    if (assignments.every(({ id }) => writable.has(id))) return assignments;
+    // Fork: the fallback re-keyed a row that cannot be written. Arrange around it instead.
+    return (
+      planReorderAroundFixedRows(kept, keysById, writable) ?? {
+        kind: "refuse",
+        reason:
+          "The threads around it are on a server that can't store their order right now, and there is no room between them.",
+      }
+    );
   };
   if (isCustomSidebarSection(target.section)) {
     if (input.supportsSections !== true) return { kind: "none" };
@@ -978,7 +1048,7 @@ export function planSidebarThreadDrop(input: {
       return { kind: "none" };
     }
     const assignments = arrange(order, activeKeysById, activeReorderableKeys);
-    if (assignments === null) return { kind: "none" };
+    if ("kind" in assignments) return assignments;
     return { kind: "move-active", order, assignments, ...join };
   }
   switch (target.section) {
@@ -1020,7 +1090,7 @@ export function planSidebarThreadDrop(input: {
         return { kind: "none" };
       }
       const assignments = arrange(order, activeKeysById, activeReorderableKeys);
-      if (assignments === null) return { kind: "none" };
+      if ("kind" in assignments) return assignments;
       return {
         kind: "move-active",
         order,
@@ -1046,7 +1116,7 @@ export function planSidebarThreadDrop(input: {
         return { kind: "none" };
       }
       const assignments = arrange(order, pinnedKeysById, reorderableKeys);
-      if (assignments === null) return { kind: "none" };
+      if ("kind" in assignments) return assignments;
       if (activeSection === "pinned") {
         return assignments.length === 0
           ? { kind: "none" }
@@ -1197,7 +1267,7 @@ export function sidebarOptimisticDrop(input: {
   readonly key: string;
   readonly sourceSection: SidebarSection;
   readonly section: SidebarOptimisticDrop["section"];
-  readonly plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "unpark" }>;
+  readonly plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "refuse" | "unpark" }>;
   readonly assignments: ReadonlyArray<{ readonly id: string; readonly orderKey: string }>;
   readonly occurredAt: string;
   readonly pinnedKeysById: ReadonlyMap<string, string | null>;
@@ -1353,7 +1423,7 @@ export interface SidebarDropCommands {
 export function holdSidebarDrop(
   holdDuring: ReturnType<typeof useSidebarDropHold>["holdDuring"],
   drop: SidebarOptimisticDrop,
-  plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "unpark" }>,
+  plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "refuse" | "unpark" }>,
   commands: SidebarDropCommands,
 ): Promise<void> {
   return holdDuring(drop, () => runSidebarDropCommands(plan, commands));
@@ -1375,7 +1445,8 @@ export function sidebarDropUnqueue(
 
 /**
  * A `place` drop's first step, before any command or hold. Returns whether the plan's commands
- * run: not for an empty plan, nor for a settle of a thread already settling.
+ * run: not for an empty plan, nor for a settle of a thread already settling. A refused plan keeps
+ * its Queue entry.
  */
 export function startSidebarPlaceDrop(input: {
   readonly plan: SidebarThreadDropPlan;
@@ -1386,7 +1457,13 @@ export function startSidebarPlaceDrop(input: {
   /** `checkThreadOperations` for every row the plan writes: false (already reported) refuses. */
   readonly checkOperate: () => boolean;
   readonly removeFromQueue: () => void;
+  /** Says why a `refuse` plan writes nothing. */
+  readonly reportRefusal: (reason: string) => void;
 }): boolean {
+  if (input.plan.kind === "refuse") {
+    input.reportRefusal(input.plan.reason);
+    return false;
+  }
   const runs = input.plan.kind !== "none" && !(input.plan.kind === "settle" && input.settling);
   // A refused drop leaves the row where it was, Queue entry included.
   if (runs && !input.checkOperate()) return false;
@@ -1396,7 +1473,7 @@ export function startSidebarPlaceDrop(input: {
 
 /** A drop's commands in order. An unpark runs without a hold: its row never leaves its section. */
 export async function runSidebarDropCommands(
-  plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" }>,
+  plan: Exclude<SidebarThreadDropPlan, { readonly kind: "none" | "refuse" }>,
   commands: SidebarDropCommands,
 ): Promise<void> {
   switch (plan.kind) {
