@@ -1753,6 +1753,61 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("does not treat reordering the active list as thread activity", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const createdAt = yield* DateTime.now;
+      const reorderedAt = DateTime.add(createdAt, { seconds: 1 });
+      const threadId = ThreadId.make("thread:projection-active-reorder");
+      const thread = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: ProjectId.make("project:projection-active-reorder"),
+        title: "Projection active reorder",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: {
+          parentThreadId: null,
+          relationshipToParent: null,
+          rootThreadId: threadId,
+        },
+        forkedFrom: null,
+        createdAt,
+        updatedAt: createdAt,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-active-reorder:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: createdAt,
+        payload: thread,
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-active-reorder:reordered"),
+        type: "thread.active-reordered",
+        threadId,
+        occurredAt: reorderedAt,
+        payload: { ...thread, activeOrderKey: "a0" },
+      });
+
+      const reordered = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(reordered.thread.activeOrderKey, "a0");
+      assert.deepEqual(reordered.thread.updatedAt, createdAt);
+    }),
+  );
+
   it.effect("preserves delegated completion ownership across stale run and task updates", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
