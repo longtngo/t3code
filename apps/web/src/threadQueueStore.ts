@@ -588,7 +588,13 @@ export const useThreadQueueStore = create<ThreadQueueState>()(
             "user",
           ),
         remove: (threadKey) => dispatch({ kind: "remove", keys: [threadKey] }, "user"),
-        setPaused: (paused) => dispatch({ kind: "set-paused", paused }, "user"),
+        setPaused: (paused) =>
+          dispatch(
+            paused
+              ? { kind: "set-paused", paused }
+              : { kind: "set-paused", paused, seenFailure: get().lastFailure },
+            "user",
+          ),
         claimEntry: ({ key, claimId, now, resolve }) => {
           const state = get();
           if (state.readOnly) return null;

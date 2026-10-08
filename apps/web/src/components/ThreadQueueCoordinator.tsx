@@ -138,6 +138,8 @@ export function ThreadQueueCoordinator() {
     reportFailure: false,
   });
   const sendingRef = useRef(false);
+  /** The entry a decision picked while a send was running, and skipped. */
+  const skippedClaimRef = useRef<string | null>(null);
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
   const refreshLocalStatus = useAtomCommand(vcsEnvironment.refreshLocalStatus, {
     reportFailure: false,
@@ -313,17 +315,26 @@ export function ThreadQueueCoordinator() {
       useThreadQueueStore.getState().clearInFlight(action.claimId, action.ifUnsent);
       return;
     }
-    if (action.kind !== "claim" || sendingRef.current) return;
+    if (action.kind !== "claim") return;
+    if (sendingRef.current) {
+      skippedClaimRef.current = action.key;
+      return;
+    }
     sendingRef.current = true;
+    skippedClaimRef.current = null;
     const claimId = randomUUID();
     void runQueuedSend(action.key, claimId).then(
       (started) => {
         sendingRef.current = false;
         // After a send, decide again at once: changes that arrived mid-send were skipped. A claim
         // that never started (refused, unconfirmed, a server that cannot save it, or taken over)
-        // waits for the next change or tick: deciding again on the same document would pick the
-        // same entry and spin.
-        if (started) setTick((value) => value + 1);
+        // decides again only if a change mid-send already called for a claim of another entry:
+        // re-renders mid-send decide the same entry on an unchanged document, and deciding again
+        // would claim it again and spin.
+        const skipped = skippedClaimRef.current;
+        if (started || (skipped !== null && skipped !== action.key)) {
+          setTick((value) => value + 1);
+        }
       },
       (error: unknown) => {
         // The claim step, or a refused storage write, threw (a held claim fails visibly):

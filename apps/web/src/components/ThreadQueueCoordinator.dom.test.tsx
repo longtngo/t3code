@@ -397,6 +397,140 @@ describe("ThreadQueueCoordinator on the server's queue", () => {
     expect(startedThreadIds()).toEqual([]);
   });
 
+  it("a claim refused behind a change that frees the next entry sends it at once, not at the next tick", async () => {
+    useComposerDraftStore
+      .getState()
+      .setPrompt(scopeThreadRef(env, threadId("queued-a")), "continue queued-a");
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    enter({ entries: [queuedOnServer("queued-b"), queuedOnServer("queued-a")] });
+    // Another tab removes queued-b just before this tab's claim of it reaches the server.
+    let document: ThreadQueueDocument = useThreadQueueStore.getState().server!;
+    let beaten = false;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        writes.push(input);
+        if (!beaten) {
+          beaten = true;
+          document = {
+            ...document,
+            revision: document.revision + 1,
+            entries: [queuedOnServer("queued-a")],
+          };
+        }
+        const ok = input.expectedRevision === document.revision;
+        if (ok) document = { ...document, ...input.state, revision: document.revision + 1 };
+        return { ok, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    await renderDom(<ThreadQueueCoordinator />);
+    await vi.waitFor(() => expect(startedThreadIds()).toEqual(["queued-a"]));
+    expect(writes[0]?.state.inFlight?.entry.threadId).toBe("queued-b");
+  });
+
+  it("a skipped claim re-decides once: a later claim the server cannot save still waits", async () => {
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    enter({ entries: [queuedOnServer("queued-b"), queuedOnServer("queued-a")] });
+    // queued-b is removed elsewhere first, then the state dir turns unwritable.
+    let document: ThreadQueueDocument = useThreadQueueStore.getState().server!;
+    let beaten = false;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        if (!beaten) {
+          beaten = true;
+          document = {
+            ...document,
+            revision: document.revision + 1,
+            entries: [queuedOnServer("queued-a")],
+          };
+          return { ok: false, document, serverTime: Date.now() - 10 * 60_000 };
+        }
+        if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
+        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims(50);
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      for (let flush = 0; flush < 200; flush += 1) await act(async () => {});
+      // queued-b, then queued-a once.
+      expect(claims.attempts).toBe(2);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+    expect(startedThreadIds()).toEqual([]);
+  });
+
+  it("a claim the server cannot save still waits when something re-renders mid-send", async () => {
+    enter({ entries: [queuedOnServer("queued-b")] });
+    let attempts = 0;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        attempts += 1;
+        // Any dependency change while the claim is in flight (here equal slot settings, as a
+        // fresh object) re-runs the decision on the unchanged document.
+        useQueueSlotSettingsStore.setState({ providerSlots: { codex: 1, claudeAgent: 1 } });
+        const document = useThreadQueueStore.getState().server!;
+        if (input.state.inFlight !== null) throw new Error("ThreadQueueWriteError: disk full");
+        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims(1000);
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      for (let flush = 0; flush < 2000; flush += 1) await act(async () => {});
+      expect(claims.attempts).toBe(1);
+      expect(attempts).toBe(2);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+  });
+
+  it("a claim skipped during an earlier send does not re-decide a later one", async () => {
+    useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+    // queued-b has no draft, so its send ends at once as empty; queued-a's claim cannot be saved.
+    enter({ entries: [queuedOnServer("queued-b"), queuedOnServer("queued-a")] });
+    let document: ThreadQueueDocument = useThreadQueueStore.getState().server!;
+    let churned = false;
+    useThreadQueueStore.getState().setWriter({
+      write: async (input) => {
+        if (!churned) {
+          churned = true;
+          // A re-render while queued-b's claim is in flight decides queued-b again: skipped.
+          useQueueSlotSettingsStore.setState({ providerSlots: { codex: 2, claudeAgent: 1 } });
+        }
+        if (input.state.inFlight?.entry.threadId === "queued-a") {
+          throw new Error("ThreadQueueWriteError: disk full");
+        }
+        if (input.expectedRevision === document.revision) {
+          document = { ...document, ...input.state, revision: document.revision + 1 };
+        }
+        return { ok: true, document, serverTime: Date.now() - 10 * 60_000 };
+      },
+      reportFailure: vi.fn(),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claims = countClaims(50);
+    try {
+      await renderDom(<ThreadQueueCoordinator />);
+      for (let flush = 0; flush < 400; flush += 1) await act(async () => {});
+      // queued-b, then queued-a once.
+      expect(claims.attempts).toBe(2);
+    } finally {
+      claims.restore();
+      error.mockRestore();
+    }
+    expect(useThreadQueueStore.getState().server?.entries.map((entry) => entry.threadId)).toEqual([
+      "queued-a",
+    ]);
+  });
+
   it("a session that may not write the queue issues nothing: no prune, no claim, no abandon", async () => {
     useComposerDraftStore
       .getState()

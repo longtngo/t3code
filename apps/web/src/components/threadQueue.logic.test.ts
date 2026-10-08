@@ -14,12 +14,16 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import { type ThreadQueueEntry, type ThreadQueueInFlight } from "../threadQueueRules";
 import { removeSentThreadFromQueue, useThreadQueueStore } from "../threadQueueStore";
+import { runSidebarWakeAndQueue } from "./Sidebar.logic";
 import {
   addToQueue,
   claimAndSendQueueEntry,
+  explainQueueAdd,
   nextThreadQueueAction,
   QUEUE_BRANCH_READ_TIMEOUT_MS,
   QUEUE_CLAIM_ABANDON_MS,
+  QUEUE_FULL_MESSAGE,
+  QUEUE_SENDING_MESSAGE,
   isQueueBusy,
   listQueueSlotInstances,
   queueEntriesToPrune,
@@ -996,13 +1000,73 @@ describe("addToQueue", () => {
     }));
     useThreadQueueStore.setState({ entries: full });
     const fresh = { environmentId: env, threadId: ThreadId.make("new"), draftId: null };
-    expect(addToQueue(fresh)).toBe(false);
-    expect(addToQueue(full[0]!)).toBe(true);
+    expect(addToQueue(fresh)).toBe("full");
+    expect(addToQueue(full[0]!)).toBe("added");
     expect(useThreadQueueStore.getState().entries).toHaveLength(THREAD_QUEUE_MAX_ENTRIES);
     useThreadQueueStore.setState({ entries: full.slice(1) });
-    expect(addToQueue(fresh)).toBe(true);
+    expect(addToQueue(fresh)).toBe("added");
     expect(useThreadQueueStore.getState().entries.at(-1)?.threadId).toBe("new");
   });
+
+  it("says a thread the queue is about to send is already sending, and adds it once sent", async () => {
+    useThreadQueueStore.getState().setConnection({
+      primaryId: null,
+      noPrimary: true,
+      configSource: null,
+      capability: false,
+      connected: false,
+      canWrite: true,
+    });
+    await useThreadQueueStore.persist.rehydrate();
+    const thread = { environmentId: env, threadId: ThreadId.make("A"), draftId: null };
+    useThreadQueueStore.setState({ entries: [], paused: false, inFlight: null });
+    expect(addToQueue(thread)).toBe("added");
+    const claim = useThreadQueueStore.getState().claimEntry({
+      key: `${env}:A`,
+      claimId: "c1",
+      now: 1,
+      resolve: (entry) => ({
+        entry,
+        prior: { userMessageAt: null, turnId: null, sessionUpdatedAt: null },
+      }),
+    });
+    expect(claim?.claimId).toBe("c1");
+    expect(addToQueue(thread)).toBe("sending");
+    expect(useThreadQueueStore.getState().entries).toEqual([]);
+    // Only the thread being sent: another one still gets in.
+    const other = { environmentId: env, threadId: ThreadId.make("B"), draftId: null };
+    expect(addToQueue(other)).toBe("added");
+    useThreadQueueStore.getState().remove(`${env}:B`);
+    useThreadQueueStore.getState().markSent("c1", 2);
+    expect(addToQueue(thread)).toBe("added");
+    expect(useThreadQueueStore.getState().entries.map((entry) => entry.threadId)).toEqual(["A"]);
+  });
+});
+
+describe("explainQueueAdd", () => {
+  it.each([
+    ["added", true, []],
+    ["full", false, [QUEUE_FULL_MESSAGE]],
+    ["sending", false, [QUEUE_SENDING_MESSAGE]],
+  ] as const)("%s: added %s, says %j", (result, added, said) => {
+    const titles: string[] = [];
+    expect(explainQueueAdd(result, (title) => titles.push(title))).toBe(added);
+    expect(titles).toEqual(said);
+  });
+
+  // Snooze -> Queue wakes only a thread the Queue took.
+  it.each(["full", "sending"] as const)(
+    "Wake & queue wakes nothing when the add is %s",
+    async (result) => {
+      const wake = vi.fn(async () => {});
+      await runSidebarWakeAndQueue({
+        checkOperate: () => true,
+        enqueue: () => explainQueueAdd(result, () => {}),
+        wake,
+      });
+      expect(wake).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("listQueueSlotInstances", () => {

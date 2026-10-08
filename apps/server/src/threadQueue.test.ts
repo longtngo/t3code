@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -269,6 +270,61 @@ it.layer(NodeServices.layer)("thread queue service", (it) => {
           assert.strictEqual(yield* Queue.take(seen), 2);
         }),
       );
+    }).pipe(Effect.scoped),
+  );
+
+  // A write that lands after a subscriber subscribed but before it read the document is in
+  // both the document it read and its subscription: it must arrive once. Where the
+  // subscriber yields depends on its operation budget, so each budget times the write
+  // differently; some land it in that window.
+  it.effect("a write landing while a subscriber starts is delivered once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const deliveredWhileStarting = (budget: number) =>
+        Effect.gen(function* () {
+          const renamed = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          // The first write is on disk and waits to be released before it is applied.
+          const stalling = FileSystem.FileSystem.of({
+            ...fs,
+            rename: (from: string, to: string) =>
+              fs
+                .rename(from, to)
+                .pipe(
+                  Effect.andThen(Deferred.succeed(renamed, undefined)),
+                  Effect.andThen(Deferred.await(release)),
+                ),
+          });
+          return yield* withQueue(
+            yield* tempDir,
+            Effect.gen(function* () {
+              const queue = yield* ThreadQueue.ThreadQueueService;
+              const { document } = yield* current;
+              const write = (expectedRevision: number, next: ThreadQueueState) =>
+                queue.set({ bootId: document.bootId, expectedRevision, state: next });
+              const writer = yield* Effect.forkChild(write(0, state({ entries: [entry("A")] })));
+              yield* Deferred.await(renamed);
+              const seen = yield* Queue.unbounded<number>();
+              yield* Deferred.succeed(release, undefined);
+              yield* Stream.runForEach(queue.changes, (snapshot) =>
+                Queue.offer(seen, snapshot.document.revision),
+              ).pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, budget), Effect.forkScoped);
+              yield* Fiber.join(writer);
+              yield* write(1, state({ entries: [entry("A")], paused: true }));
+              const revisions: number[] = [];
+              while (revisions.at(-1) !== 2) revisions.push(yield* Queue.take(seen));
+              return revisions;
+            }),
+          ).pipe(Effect.provideService(FileSystem.FileSystem, stalling));
+        });
+      for (let budget = 4; budget <= 16; budget++) {
+        const revisions = yield* deliveredWhileStarting(budget);
+        assert.deepEqual(
+          revisions,
+          [...new Set(revisions)].toSorted((x, y) => x - y),
+          `operation budget ${budget}`,
+        );
+      }
     }).pipe(Effect.scoped),
   );
 

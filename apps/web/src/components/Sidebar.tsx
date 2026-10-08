@@ -261,7 +261,7 @@ import {
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
-import { addToQueue, QUEUE_FULL_MESSAGE } from "./threadQueue.logic";
+import { addToQueue, explainQueueAdd } from "./threadQueue.logic";
 import { useSidebarSectionCommands, useSidebarSections } from "../sidebarCustomSections";
 import { sidebarSectionMoveState, type SidebarSectionView } from "../sidebarCustomSections.logic";
 import {
@@ -406,11 +406,9 @@ function sidebarSnoozeGateOf(
   };
 }
 
-/** "Add to queue" from the sidebar: a full queue says so rather than doing nothing. */
-function addToQueueOrSayFull(entry: Parameters<typeof addToQueue>[0]): boolean {
-  if (addToQueue(entry)) return true;
-  toastManager.add({ type: "info", title: QUEUE_FULL_MESSAGE });
-  return false;
+/** "Add to queue" from the sidebar: a refused add says why rather than doing nothing. */
+function addToQueueOrSayWhy(entry: Parameters<typeof addToQueue>[0]): boolean {
+  return explainQueueAdd(addToQueue(entry), (title) => toastManager.add({ type: "info", title }));
 }
 
 function compactSidebarTimeLabel(label: string): string {
@@ -3279,7 +3277,7 @@ export default function Sidebar() {
     if (store.entries.some((entry) => threadQueueEntryKey(entry) === key)) store.remove(key);
     else {
       const prompt = useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt ?? "";
-      addToQueueOrSayFull({
+      addToQueueOrSayWhy({
         environmentId: session.environmentId,
         threadId: session.threadId,
         draftId,
@@ -4926,11 +4924,11 @@ export default function Sidebar() {
         if (liveSection === "snoozed") {
           void runSidebarWakeAndQueue({
             checkOperate: () => checkThreadOperations([activeThread]),
-            enqueue: () => addToQueueOrSayFull(queueEntry),
+            enqueue: () => addToQueueOrSayWhy(queueEntry),
             wake: () => run(unsnoozeThread(threadRef), "Failed to wake thread"),
           });
         } else {
-          addToQueueOrSayFull(queueEntry);
+          addToQueueOrSayWhy(queueEntry);
         }
         return;
       }
@@ -4943,7 +4941,7 @@ export default function Sidebar() {
             performSnooze(threadRef, { snoozedUntil }, { undoAlso }),
           unqueue: () => useThreadQueueStore.getState().remove(activeKey),
           // Undo of a Queue -> Snooze appends it to the Queue again; a full Queue says so.
-          requeue: () => void addToQueueOrSayFull(queueEntry),
+          requeue: () => void addToQueueOrSayWhy(queueEntry),
           reportFailure: errorToast("Failed to snooze thread"),
           reportRequeueFailure: errorToast("Failed to queue thread"),
         });
@@ -5629,7 +5627,7 @@ export default function Sidebar() {
             attemptPin(threadRef);
             return;
           case "queue":
-            addToQueueOrSayFull({
+            addToQueueOrSayWhy({
               environmentId: thread.environmentId,
               threadId: thread.id,
               draftId: null,

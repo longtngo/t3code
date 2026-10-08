@@ -43,6 +43,8 @@ const handSent = applyQueueAction(claimed, {
   now: 15,
 });
 
+const failure = { threadKey: "env-1:A", title: "A", message: "boom" };
+
 // Every action is a no-op when re-run on a document that already contains it.
 describe("applyQueueAction is idempotent", () => {
   const cases: ReadonlyArray<readonly [string, ThreadQueueData, QueueAction]> = [
@@ -65,6 +67,11 @@ describe("applyQueueAction is idempotent", () => {
       { kind: "remove-sent", threadKey: "env-2:x", draftId: DraftId.make("draft-B"), now: 15 },
     ],
     ["set-paused", queued, { kind: "set-paused", paused: true }],
+    [
+      "resume",
+      { ...queued, paused: true, lastFailure: failure },
+      { kind: "set-paused", paused: false, seenFailure: failure },
+    ],
     [
       "claim",
       queued,
@@ -168,6 +175,38 @@ describe("fail", () => {
     const other = applyQueueAction(claimed, { kind: "fail", claimId: "c2", failure });
     expect(other).toMatchObject({ paused: true, lastFailure: failure });
     expect(other.inFlight).toBe(claimed.inFlight);
+  });
+});
+
+describe("resume", () => {
+  const resume = (state: ThreadQueueData, seenFailure: typeof failure | null) =>
+    applyQueueAction(state, { kind: "set-paused", paused: false, seenFailure });
+  const pausedBy = (lastFailure: typeof failure | null): ThreadQueueData => ({
+    ...queued,
+    paused: true,
+    lastFailure,
+  });
+
+  it("clears the failure it was shown", () => {
+    expect(resume(pausedBy(failure), { ...failure })).toMatchObject({
+      paused: false,
+      lastFailure: null,
+    });
+  });
+
+  // The failure has no id: thread, title and message together name it.
+  it.each([
+    ["thread", { ...failure, threadKey: "env-1:B" }],
+    ["title", { ...failure, title: "B" }],
+    ["message", { ...failure, message: "other" }],
+    ["none shown", null],
+  ] as const)("keeps a failure that differs from the one shown by its %s", (_field, newer) => {
+    const state = pausedBy(newer === null ? failure : newer);
+    expect(resume(state, newer === null ? null : failure)).toBe(state);
+  });
+
+  it("resumes a queue paused by hand after the failure it was shown was cleared", () => {
+    expect(resume(pausedBy(null), failure)).toMatchObject({ paused: false, lastFailure: null });
   });
 });
 

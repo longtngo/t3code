@@ -14,6 +14,7 @@ import { stripInlineContextReferences } from "../lib/composerContextReferences";
 import type { QueuedSendOutcome } from "../lib/threadSend/executeQueuedSend";
 import type { QueuedSendSnapshot } from "../lib/threadSend/queuedSend";
 import {
+  isSendingThread,
   threadQueueEntryKey,
   type ThreadQueueEntry,
   type ThreadQueueInFlight,
@@ -40,17 +41,31 @@ export const QUEUE_EMPTY_DRAFT_MESSAGE =
   "There is nothing to send, so it left the queue. Open the thread to write the message.";
 
 export const QUEUE_FULL_MESSAGE = `The queue is full (${THREAD_QUEUE_MAX_ENTRIES}).`;
+export const QUEUE_SENDING_MESSAGE = "Already sending. Add it again once it has gone out.";
 
-/** Adds a thread or draft for a user action. False when the queue is full and takes nothing new. */
+export type QueueAddResult = "added" | "full" | "sending";
+
+/** A user's add: true when added; a refusal says why (`say`) rather than doing nothing. */
+export function explainQueueAdd(result: QueueAddResult, say: (title: string) => void): boolean {
+  if (result === "added") return true;
+  say(result === "full" ? QUEUE_FULL_MESSAGE : QUEUE_SENDING_MESSAGE);
+  return false;
+}
+
+/**
+ * Adds a thread or draft for a user action. "full" when the queue takes nothing new, "sending"
+ * when the queue is about to send this thread's draft; neither adds anything.
+ */
 export function addToQueue(
   entry: Parameters<ReturnType<typeof useThreadQueueStore.getState>["enqueue"]>[0],
-): boolean {
+): QueueAddResult {
   const queue = useThreadQueueStore.getState();
   const key = threadQueueEntryKey(entry);
   const queued = queue.entries.some((candidate) => threadQueueEntryKey(candidate) === key);
-  if (!queued && queue.entries.length >= THREAD_QUEUE_MAX_ENTRIES) return false;
+  if (!queued && isSendingThread(queue, key)) return "sending";
+  if (!queued && queue.entries.length >= THREAD_QUEUE_MAX_ENTRIES) return "full";
   queue.enqueue(entry);
-  return true;
+  return "added";
 }
 
 export type ThreadQueueAction =

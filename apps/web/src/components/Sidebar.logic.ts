@@ -680,8 +680,8 @@ export async function runSidebarSnoozeDrop(input: {
   }
 }
 
-/** Snooze -> Queue: queue it, then wake it, or a send would find it snoozed. `enqueue` says
-    "full" itself and returns false; then nothing else happens. */
+/** Snooze -> Queue: queue it, then wake it, or a send would find it snoozed. `enqueue` says why
+    it refused and returns false; then nothing else happens. */
 export async function runSidebarWakeAndQueue(input: {
   /** `checkThreadOperations` for the thread: false (already reported) refuses before queueing. */
   readonly checkOperate: () => boolean;

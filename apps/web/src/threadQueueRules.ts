@@ -72,7 +72,13 @@ export type QueueAction =
       readonly draftId: DraftId | null;
       readonly now: number;
     }
-  | { readonly kind: "set-paused"; readonly paused: boolean }
+  | { readonly kind: "set-paused"; readonly paused: true }
+  /** A failure other than the one the user was shown keeps the queue paused, showing it. */
+  | {
+      readonly kind: "set-paused";
+      readonly paused: false;
+      readonly seenFailure: ThreadQueueFailure | null;
+    }
   | {
       readonly kind: "claim";
       readonly key: string;
@@ -104,6 +110,23 @@ function withEntries(
     : { ...state, entries };
 }
 
+/**
+ * The claim holding this thread has not been sent yet, so its draft is still the queue's: adding
+ * the thread again would queue the same draft twice. Once sent, the composer holds a new message.
+ */
+export function isSendingThread(state: Pick<ThreadQueueData, "inFlight">, key: string): boolean {
+  const claim = state.inFlight;
+  return claim !== null && claim.sentAt === null && threadQueueEntryKey(claim.entry) === key;
+}
+
+const sameFailure = (a: ThreadQueueFailure | null, b: ThreadQueueFailure | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.threadKey === b.threadKey &&
+    a.title === b.title &&
+    a.message === b.message);
+
 export function applyQueueAction(state: ThreadQueueData, action: QueueAction): ThreadQueueData {
   switch (action.kind) {
     case "enqueue": {
@@ -112,6 +135,7 @@ export function applyQueueAction(state: ThreadQueueData, action: QueueAction): T
       if (existing && action.index === undefined) return state;
       // A move re-run after another device claimed or removed the entry must not bring it back.
       if (!existing && action.index !== undefined) return state;
+      if (!existing && isSendingThread(state, key)) return state;
       // The server refuses a longer document, so a full queue takes nothing new.
       if (!existing && state.entries.length >= THREAD_QUEUE_MAX_ENTRIES) return state;
       const others = state.entries.filter((candidate) => threadQueueEntryKey(candidate) !== key);
@@ -147,6 +171,9 @@ export function applyQueueAction(state: ThreadQueueData, action: QueueAction): T
     }
     case "set-paused":
       if (action.paused) return state.paused ? state : { ...state, paused: true };
+      if (state.lastFailure !== null && !sameFailure(state.lastFailure, action.seenFailure)) {
+        return state;
+      }
       return !state.paused && state.lastFailure === null
         ? state
         : { ...state, paused: false, lastFailure: null };

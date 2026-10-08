@@ -293,6 +293,17 @@ describe("threadQueueStore", () => {
     expect(state.lastFailure).toBeNull();
   });
 
+  it("adding a thread whose claimed draft has not been sent yet does not queue it twice", () => {
+    store().enqueue(a);
+    store().claimEntry({ key: "env-1:thread-A", claimId: "one", now: 1, resolve: resolveWith() });
+    store().enqueue(a);
+    expect(keys()).toEqual([]);
+    // Once sent, the composer holds a new message: adding queues that one.
+    store().markSent("one", 2);
+    store().enqueue(a);
+    expect(keys()).toEqual(["env-1:thread-A"]);
+  });
+
   it("claims the named entry wherever it sits, once", () => {
     const store = useThreadQueueStore.getState();
     store.enqueue(a);
@@ -1123,6 +1134,37 @@ describe("server mode", () => {
     store().clearInFlight("device-b-claim", true);
     await idle();
     expect(server.document.inFlight).toMatchObject({ claimId: "device-b-claim", sentAt: 5 });
+  });
+
+  // The resume was decided on a queue with no failure; another device's send failed first.
+  it("a resume refused behind another device's failure keeps that failure showing", async () => {
+    const server = casServer("boot-1");
+    server.replace({ paused: true });
+    const failure = { title: "B", message: "boom", threadKey: "env-1:thread-B" };
+    enterServer(server, { write: beatenOnce(server, { lastFailure: failure }) });
+    store().setPaused(false);
+    await idle();
+    expect(server.document).toMatchObject({ paused: true, lastFailure: failure });
+    expect(store().lastFailure).toEqual(failure);
+  });
+
+  // The add was decided before another device claimed the same thread.
+  it("an add refused behind another device's claim of that thread does not queue it again", async () => {
+    const server = casServer("boot-1");
+    const claimOfA = {
+      entry: { ...queued(a), ownerId: "device-b" },
+      claimId: "device-b-claim",
+      claimedAt: 1,
+      priorUserMessageAt: null,
+      priorTurnId: null,
+      priorSessionUpdatedAt: null,
+      sentAt: null,
+    };
+    enterServer(server, { write: beatenOnce(server, { inFlight: claimOfA }) });
+    store().enqueue(a);
+    await idle();
+    expect(server.document.entries).toEqual([]);
+    expect(server.document.inFlight?.claimId).toBe("device-b-claim");
   });
 
   // A refusal carrying no newer document cannot converge: re-sending would loop forever.
