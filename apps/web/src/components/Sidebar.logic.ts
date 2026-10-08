@@ -680,16 +680,20 @@ export async function runSidebarSnoozeDrop(input: {
   }
 }
 
-/** Snooze -> Queue: queue it, then wake it, or a send would find it snoozed. `enqueue` says why
-    it refused and returns false; then nothing else happens. */
-export async function runSidebarWakeAndQueue(input: {
+/** A drop on the Queue. From Snoozed it is "Wake & queue": queue it, then wake it, or a send
+    would find it snoozed. `enqueue` says why it refused and returns false; then nothing else
+    happens. */
+export async function runSidebarEnqueueDrop(input: {
+  /** Where the thread rests now (`sidebarReleaseSnoozeState(...).liveSection`). */
+  readonly liveSection: SidebarSection;
   /** `checkThreadOperations` for the thread: false (already reported) refuses before queueing. */
   readonly checkOperate: () => boolean;
   readonly enqueue: () => boolean;
   readonly wake: () => Promise<unknown>;
 }): Promise<void> {
+  // A queued thread this connection cannot operate would only fail at send.
   if (!input.checkOperate()) return;
-  if (input.enqueue()) await input.wake();
+  if (input.enqueue() && input.liveSection === "snoozed") await input.wake();
 }
 
 export function resolveSidebarDropTarget(
@@ -1367,6 +1371,27 @@ export function sidebarDropUnqueue(
 ): "now" | "on-join" | null {
   if (!unqueue) return null;
   return plan.kind === "move-active" && plan.joinsSection !== undefined ? "on-join" : "now";
+}
+
+/**
+ * A `place` drop's first step, before any command or hold. Returns whether the plan's commands
+ * run: not for an empty plan, nor for a settle of a thread already settling.
+ */
+export function startSidebarPlaceDrop(input: {
+  readonly plan: SidebarThreadDropPlan;
+  /** `sidebarDropUnqueue(...)`. */
+  readonly unqueue: "now" | "on-join" | null;
+  /** A settle of this thread is already in flight. */
+  readonly settling: boolean;
+  /** `checkThreadOperations` for every row the plan writes: false (already reported) refuses. */
+  readonly checkOperate: () => boolean;
+  readonly removeFromQueue: () => void;
+}): boolean {
+  const runs = input.plan.kind !== "none" && !(input.plan.kind === "settle" && input.settling);
+  // A refused drop leaves the row where it was, Queue entry included.
+  if (runs && !input.checkOperate()) return false;
+  if (input.unqueue === "now") input.removeFromQueue();
+  return runs;
 }
 
 /** A drop's commands in order. An unpark runs without a hold: its row never leaves its section. */

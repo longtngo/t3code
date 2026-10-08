@@ -220,7 +220,8 @@ import {
   isSidebarDragCandidate,
   routeSidebarDragEnd,
   runSidebarSnoozeDrop,
-  runSidebarWakeAndQueue,
+  runSidebarEnqueueDrop,
+  startSidebarPlaceDrop,
   nextSidebarDragOver,
   sidebarReleaseSnoozeState,
   sidebarDragListItems,
@@ -4919,16 +4920,12 @@ export default function Sidebar() {
         return false;
       };
       if (route.kind === "enqueue") {
-        // Snooze -> Queue: "Wake & queue".
-        if (liveSection === "snoozed") {
-          void runSidebarWakeAndQueue({
-            checkOperate: () => checkThreadOperations([activeThread]),
-            enqueue: () => addToQueueOrSayWhy(queueEntry),
-            wake: () => run(unsnoozeThread(threadRef), "Failed to wake thread"),
-          });
-        } else {
-          addToQueueOrSayWhy(queueEntry);
-        }
+        void runSidebarEnqueueDrop({
+          liveSection,
+          checkOperate: () => checkThreadOperations([activeThread]),
+          enqueue: () => addToQueueOrSayWhy(queueEntry),
+          wake: () => run(unsnoozeThread(threadRef), "Failed to wake thread"),
+        });
         return;
       }
       if (route.kind === "snooze") {
@@ -4964,9 +4961,6 @@ export default function Sidebar() {
         ),
       );
       const unqueue = sidebarDropUnqueue(route.unqueue, plan);
-      if (unqueue === "now") queue.remove(activeKey);
-      if (plan.kind === "none") return;
-      if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
       const assignments =
         plan.kind === "pin"
           ? [
@@ -4976,15 +4970,24 @@ export default function Sidebar() {
           : plan.kind === "reorder-pinned" || plan.kind === "move-active"
             ? plan.assignments
             : [];
-      // A drop rewrites the dragged row and every row it renumbers, so all of
-      // them must be writable before any of them changes.
       if (
-        !checkThreadOperations(
-          [activeKey, ...assignments.map(({ id }) => id)].flatMap((key) => {
-            const thread = threadByKey.get(key);
-            return thread ? [thread] : [];
-          }),
-        )
+        !startSidebarPlaceDrop({
+          plan,
+          unqueue,
+          settling: settlingThreadKeysRef.current.has(activeKey),
+          // A drop rewrites the dragged row and every row it renumbers, so all of
+          // them must be writable before any of them changes.
+          checkOperate: () =>
+            checkThreadOperations(
+              [activeKey, ...assignments.map(({ id }) => id)].flatMap((key) => {
+                const thread = threadByKey.get(key);
+                return thread ? [thread] : [];
+              }),
+            ),
+          removeFromQueue: () => queue.remove(activeKey),
+        }) ||
+        // Unreachable once started; narrows `plan`.
+        plan.kind === "none"
       )
         return;
       // A renumbered row that vanished meanwhile is skipped, not a failure.

@@ -21,7 +21,7 @@ import {
   QUEUE_READ_ONLY_MESSAGE,
   QUEUE_SENDING_MESSAGE,
 } from "../threadQueueAdd";
-import { runSidebarWakeAndQueue } from "./Sidebar.logic";
+import { runSidebarEnqueueDrop } from "./Sidebar.logic";
 import {
   claimAndSendQueueEntry,
   nextThreadQueueAction,
@@ -1102,7 +1102,8 @@ describe("explainQueueAdd", () => {
     "Wake & queue wakes nothing when the add is %s",
     async (result) => {
       const wake = vi.fn(async () => {});
-      await runSidebarWakeAndQueue({
+      await runSidebarEnqueueDrop({
+        liveSection: "snoozed",
         checkOperate: () => true,
         enqueue: () => explainQueueAdd(result, () => {}),
         wake,

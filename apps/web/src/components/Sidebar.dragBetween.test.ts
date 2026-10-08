@@ -16,7 +16,7 @@ import {
   resolveSidebarDropVerb,
   routeSidebarDragEnd,
   runSidebarSnoozeDrop,
-  runSidebarWakeAndQueue,
+  runSidebarEnqueueDrop,
   shouldReleaseOptimisticDrop,
   sidebarDropDestinationKeys,
   sidebarDropPlanInput,
@@ -38,6 +38,7 @@ import {
   sidebarSnoozeDropAllowed,
   sidebarSnoozeZoneIds,
   sortThreadsForSidebar,
+  startSidebarPlaceDrop,
   withQueuedRow,
   type SidebarDragOrigin,
   type SidebarDragOverState,
@@ -46,6 +47,7 @@ import {
   type SidebarOptimisticDrop,
   type SidebarSection,
   type SidebarSnoozeOutcome,
+  type SidebarThreadDropPlan,
 } from "./Sidebar.logic";
 
 const none = { total: 0, visible: [] as string[] };
@@ -1407,7 +1409,8 @@ describe("a drop on the Snoozed shelf", () => {
 describe("Snooze -> Queue", () => {
   it("wakes only after the Queue took it", async () => {
     const calls: string[] = [];
-    await runSidebarWakeAndQueue({
+    await runSidebarEnqueueDrop({
+      liveSection: "snoozed",
       checkOperate: () => true,
       enqueue: () => {
         calls.push("enqueue");
@@ -1422,13 +1425,19 @@ describe("Snooze -> Queue", () => {
 
   it("a full Queue changes nothing", async () => {
     const wake = vi.fn(async () => {});
-    await runSidebarWakeAndQueue({ enqueue: () => false, checkOperate: () => true, wake });
+    await runSidebarEnqueueDrop({
+      liveSection: "snoozed",
+      enqueue: () => false,
+      checkOperate: () => true,
+      wake,
+    });
     expect(wake).not.toHaveBeenCalled();
   });
 
   it("a thread this connection cannot operate is neither queued nor woken", async () => {
     const calls: string[] = [];
-    await runSidebarWakeAndQueue({
+    await runSidebarEnqueueDrop({
+      liveSection: "snoozed",
       // `checkThreadOperations`: false after it said "Thread action unavailable".
       checkOperate: () => false,
       enqueue: () => {
@@ -1441,6 +1450,152 @@ describe("Snooze -> Queue", () => {
     });
     expect(calls).toEqual([]);
   });
+});
+
+describe("the start of a place drop", () => {
+  const moveActive: SidebarThreadDropPlan = {
+    kind: "move-active",
+    order: ["q1", "a1"],
+    assignments: [{ id: "q1", orderKey: "a0" }],
+    unpin: false,
+    unsettle: false,
+    unsnooze: false,
+  };
+  const pin: SidebarThreadDropPlan = {
+    kind: "pin",
+    order: ["q1", "p1"],
+    orderKey: "a0",
+    extraAssignments: [],
+  };
+  const settle: SidebarThreadDropPlan = { kind: "settle", unsnooze: false };
+  const unpark: SidebarThreadDropPlan = {
+    kind: "unpark",
+    unpin: true,
+    unsettle: false,
+    unsnooze: false,
+  };
+  const start = (
+    dropPlan: SidebarThreadDropPlan,
+    options: {
+      unqueue: "now" | "on-join" | null;
+      canOperate: boolean;
+      settling?: boolean;
+    },
+  ) => {
+    const calls: string[] = [];
+    const runs = startSidebarPlaceDrop({
+      plan: dropPlan,
+      unqueue: options.unqueue,
+      settling: options.settling ?? false,
+      checkOperate: () => {
+        calls.push("check");
+        return options.canOperate;
+      },
+      removeFromQueue: () => calls.push("unqueue"),
+    });
+    return { runs, calls };
+  };
+
+  it.each([
+    ["Active", moveActive],
+    ["Pinned", pin],
+    ["Settled", settle],
+    ["Active as an unpark", unpark],
+  ] as const)(
+    "Queue -> %s that this connection cannot operate stays queued and runs nothing",
+    (_, dropPlan) => {
+      // `checkThreadOperations`: false after it said "Thread action unavailable".
+      expect(start(dropPlan, { unqueue: "now", canOperate: false })).toEqual({
+        runs: false,
+        calls: ["check"],
+      });
+    },
+  );
+
+  it("Queue -> Active that this connection can operate leaves the Queue, then runs", () => {
+    expect(start(moveActive, { unqueue: "now", canOperate: true })).toEqual({
+      runs: true,
+      calls: ["check", "unqueue"],
+    });
+  });
+
+  it("a row joining a section leaves the Queue only on join, never here", () => {
+    expect(start(moveActive, { unqueue: "on-join", canOperate: true })).toEqual({
+      runs: true,
+      calls: ["check"],
+    });
+    expect(start(moveActive, { unqueue: "on-join", canOperate: false })).toEqual({
+      runs: false,
+      calls: ["check"],
+    });
+  });
+
+  it("an empty plan only leaves the Queue: it writes no thread, so nothing to check", () => {
+    expect(start({ kind: "none" }, { unqueue: "now", canOperate: false })).toEqual({
+      runs: false,
+      calls: ["unqueue"],
+    });
+  });
+
+  it("a settle of a thread already settling only leaves the Queue", () => {
+    expect(start(settle, { unqueue: "now", canOperate: true, settling: true })).toEqual({
+      runs: false,
+      calls: ["unqueue"],
+    });
+    // Settling guards only a settle.
+    expect(start(pin, { unqueue: null, canOperate: true, settling: true })).toEqual({
+      runs: true,
+      calls: ["check"],
+    });
+  });
+
+  it("a main-list row this connection cannot operate runs nothing", () => {
+    expect(start(pin, { unqueue: null, canOperate: false })).toEqual({
+      runs: false,
+      calls: ["check"],
+    });
+  });
+});
+
+describe("Active -> Queue", () => {
+  it("queues a thread this connection can operate, and wakes nothing", async () => {
+    const calls: string[] = [];
+    await runSidebarEnqueueDrop({
+      liveSection: "active",
+      checkOperate: () => {
+        calls.push("check");
+        return true;
+      },
+      enqueue: () => {
+        calls.push("enqueue");
+        return true;
+      },
+      wake: async () => {
+        calls.push("wake");
+      },
+    });
+    expect(calls).toEqual(["check", "enqueue"]);
+  });
+
+  it.each(["active", "pinned", "settled", "custom:later"] as const)(
+    "a thread this connection cannot operate is not queued from %s",
+    async (liveSection) => {
+      const calls: string[] = [];
+      await runSidebarEnqueueDrop({
+        liveSection,
+        // `checkThreadOperations`: false after it said "Thread action unavailable".
+        checkOperate: () => false,
+        enqueue: () => {
+          calls.push("enqueue");
+          return true;
+        },
+        wake: async () => {
+          calls.push("wake");
+        },
+      });
+      expect(calls).toEqual([]);
+    },
+  );
 });
 
 describe("drag-over state", () => {
