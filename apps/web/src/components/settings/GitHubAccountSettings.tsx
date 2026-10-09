@@ -1,9 +1,15 @@
-import type { EnvironmentId, SourceControlProviderAuth } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type SourceControlProviderAuth,
+} from "@t3tools/contracts";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../../permissionCopy";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -54,6 +60,8 @@ export function GitHubAccountSettings({
     label: "save GitHub account settings",
   });
   const [saving, setSaving] = useState(false);
+  // FORK: a login paired before the permission split cannot save; say so instead of a refusal.
+  const writeDenied = useEnvironmentScopeDenied(environmentId, AuthSettingsWriteScope);
   const [revealed, setRevealed] = useState(false);
   const groups = groupGitHubAccounts(auth.accounts ?? []);
 
@@ -88,6 +96,8 @@ export function GitHubAccountSettings({
         <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
           Choose which <code className="rounded bg-muted px-1 py-px text-2xs">gh</code> login each
           GitHub host uses, or turn a host off.
+          {/* FORK: the reason the controls below are disabled for a login without `settings:write`. */}
+          {writeDenied ? ` ${ENVIRONMENT_SETTINGS_READ_ONLY}` : null}
         </p>
         <Button
           size="icon-xs"
@@ -119,7 +129,8 @@ export function GitHubAccountSettings({
               </div>
               <Switch
                 checked={enabled}
-                disabled={saving}
+                // FORK: disabled for a login without `settings:write`.
+                disabled={saving || writeDenied}
                 aria-label={`Use GitHub on ${group.host}`}
                 onCheckedChange={(checked) => void save(group.host, { enabled: checked })}
               />
@@ -130,7 +141,8 @@ export function GitHubAccountSettings({
                 <div className="w-64 max-w-full">
                   <Select
                     value={pinned}
-                    disabled={saving || !enabled}
+                    // FORK: disabled for a login without `settings:write`.
+                    disabled={saving || writeDenied || !enabled}
                     onValueChange={(value) => {
                       if (typeof value !== "string") return;
                       void save(group.host, {

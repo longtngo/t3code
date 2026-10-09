@@ -6,13 +6,17 @@ import {
   resolveAssetUrl,
 } from "@t3tools/client-runtime/state/assets";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  type AssetResource,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 
 import { assetEnvironment } from "~/state/assets";
 import { useFilesystemReadAccess } from "~/state/filesystem";
-import { usePreparedConnection } from "~/state/session";
+import { readEnvironmentScopeDenied, usePreparedConnection } from "~/state/session";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 export { resolveAssetUrl, type AssetUrlState } from "@t3tools/client-runtime/state/assets";
@@ -52,6 +56,16 @@ export function useAssetUrlRefresh(
   });
   return useCallback(async () => {
     if (environmentId === null || resource === null || httpBaseUrl === null) return null;
+    // FORK: a grant still loading defers to the server, but a loaded one without file reads
+    // (a pairing from before the permission split) is not asked again just to be refused.
+    if (
+      (resource._tag === "workspace-file" ||
+        resource._tag === "media-file" ||
+        resource._tag === "draft-workspace-file") &&
+      readEnvironmentScopeDenied(environmentId, AuthFilesystemReadScope)
+    ) {
+      throw new Error("This connection cannot read host files.");
+    }
     const result = await refresh({ environmentId, input: { resource } });
     if (result._tag === "Failure") throw squashAtomCommandFailure(result);
     return resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);

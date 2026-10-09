@@ -1,9 +1,15 @@
-import type { BitbucketSettings, EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  type BitbucketSettings,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../../permissionCopy";
 import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
@@ -89,6 +95,8 @@ export function BitbucketCredentialsSettings({
   const [emailDraft, setEmailDraft] = useState<string | null>(null);
   const [apiToken, setApiToken] = useState("");
   const [saving, setSaving] = useState(false);
+  // FORK: a login paired before the permission split cannot save; say so instead of a refusal.
+  const writeDenied = useEnvironmentScopeDenied(environmentId, AuthSettingsWriteScope);
   const current = savedMethod(saved);
   const method = methodChoice ?? current ?? "access-token";
   const methodIsSaved = current === method;
@@ -138,7 +146,11 @@ export function BitbucketCredentialsSettings({
       }}
     >
       {/* Locked while saving: a successful save clears the drafts, which would drop edits made mid-request. */}
-      <fieldset disabled={saving} className="contents">
+      {/* FORK: a login without `settings:write` gets a disabled form and the reason. */}
+      <fieldset disabled={saving || writeDenied} className="contents">
+        {writeDenied ? (
+          <p className="text-xs text-muted-foreground">{ENVIRONMENT_SETTINGS_READ_ONLY}</p>
+        ) : null}
         <ToggleGroup
           aria-label="Bitbucket sign-in method"
           variant="segmented"

@@ -19,7 +19,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { serverEnvironment } from "~/state/server";
-import { readEnvironmentScope } from "~/state/session";
+import { readEnvironmentScope, readEnvironmentScopeDenied } from "~/state/session";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -153,6 +153,12 @@ export default function ProjectScriptsControl({
       previewUrl: fileScript.previewUrl ?? null,
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
     };
+    // FORK: actions are saved in environment settings; a login without `settings:write` gets the
+    // prefilled dialog, which says why it is read-only, instead of the server's refusal.
+    if (readEnvironmentScopeDenied(environmentId, AuthSettingsWriteScope)) {
+      setEditorRequest({ scriptId: null, initial: payload });
+      return;
+    }
     const result = await onAddScript(payload);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       // Surface the failure through the regular add dialog, prefilled so the
@@ -468,6 +474,8 @@ export default function ProjectScriptsControl({
 
       <ProjectScriptEditorDialog
         environmentId={environmentId}
+        // FORK: these actions are saved in environment settings, so editing needs `settings:write`.
+        editScope={AuthSettingsWriteScope}
         request={editorRequest}
         scripts={scripts}
         onSubmit={submitScript}

@@ -11,7 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const permissions = vi.hoisted(() => ({ canWriteSettings: false, canEditProject: true }));
 
-vi.mock("~/state/session", () => ({
+vi.mock("~/state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/session")>()),
+  useEnvironmentScopeDenied: () => false,
   readEnvironmentScope: (_id: EnvironmentId, scope: AuthEnvironmentScope) =>
     scope === AuthOrchestrationOperateScope
       ? permissions.canEditProject

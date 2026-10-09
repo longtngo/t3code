@@ -34,7 +34,12 @@ import {
 } from "~/lib/projectScriptKeybindings";
 import { keybindingFromKeyboardEvent } from "~/components/settings/KeybindingsSettings.logic";
 import { commandForProjectScript, nextProjectScriptId } from "~/projectScripts";
-import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "~/permissionCopy";
+import {
+  readEnvironmentScope,
+  useEnvironmentScope,
+  useEnvironmentScopeDenied,
+} from "~/state/session";
 import { useComposerMenuState } from "./chat/useComposerMenuState";
 import {
   AlertDialog,
@@ -171,6 +176,10 @@ export function ProjectScriptEditorDialog({
 }) {
   const canEditActions = useEnvironmentScope(environmentId, editScope);
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  // FORK: a settings-backed action under a login without `settings:write` says why it is read-only.
+  const settingsWriteDenied =
+    useEnvironmentScopeDenied(environmentId, AuthSettingsWriteScope) &&
+    editScope === AuthSettingsWriteScope;
   const formId = React.useId();
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
@@ -342,6 +351,11 @@ export function ProjectScriptEditorDialog({
           </DialogHeader>
           <DialogPanel>
             <form id={formId} onSubmit={submit}>
+              {settingsWriteDenied ? (
+                <p className="mb-4 text-xs text-muted-foreground">
+                  {ENVIRONMENT_SETTINGS_READ_ONLY}
+                </p>
+              ) : null}
               <fieldset className="space-y-4" disabled={isSaving || !canEditActions}>
                 <div className="space-y-1.5">
                   <Label htmlFor="script-name">Name</Label>

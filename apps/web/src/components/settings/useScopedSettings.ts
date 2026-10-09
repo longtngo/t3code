@@ -4,7 +4,7 @@ import {
   requiredScopesForServerSettingsPatch,
   EnvironmentAuthorizationError,
 } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
+import { readEnvironmentScopeDenied } from "../../state/session";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
@@ -75,8 +75,10 @@ function useRunScopedPlan() {
       void persistScopedSettingsPatch(
         plan,
         async (request) => {
-          const missing = requiredScopesForServerSettingsPatch(request.input.patch).find(
-            (scope) => !readEnvironmentScope(request.environmentId, scope),
+          // FORK: only a loaded grant without the scope is refused here; a loading one is the
+          // server's to judge, like the other gated reads.
+          const missing = requiredScopesForServerSettingsPatch(request.input.patch).find((scope) =>
+            readEnvironmentScopeDenied(request.environmentId, scope),
           );
           if (missing)
             return AsyncResult.failure(
@@ -96,12 +98,38 @@ function useRunScopedPlan() {
           type: "error",
           title:
             savedEnvironmentCount > 0 ? "Setting saved on some environments" : "Setting not saved",
-          description: `Could not update ${failedEnvironments.map((environment) => environment.label).join(", ")}.${savedEnvironmentCount > 0 ? " The other selected environments saved the change." : ""}`,
+          // FORK: names the environments refused for a missing permission, not only "could not update".
+          description: describeFailedWrites(failedEnvironments, savedEnvironmentCount),
         });
       });
     },
     [persistServer],
   );
+}
+
+// FORK: the toast copy for failed scoped settings writes (`labelList`, `labels`, `describeFailedWrites`).
+const labelList = new Intl.ListFormat("en", { type: "conjunction" });
+const labels = (writes: readonly { readonly label: string }[]) =>
+  labelList.format(writes.map((write) => write.label));
+
+/** Names the failed environments, and says which of them lack the permission to write. */
+function describeFailedWrites(
+  failed: readonly { readonly label: string; readonly refused: boolean }[],
+  savedEnvironmentCount: number,
+): string {
+  const refused = failed.filter((write) => write.refused);
+  const other = failed.filter((write) => !write.refused);
+  return [
+    other.length > 0 ? `Could not update ${labels(other)}.` : null,
+    refused.length === 1
+      ? `The connection to ${labels(refused)} does not have permission to change environment settings.`
+      : refused.length > 1
+        ? `The connections to ${labels(refused)} do not have permission to change environment settings.`
+        : null,
+    savedEnvironmentCount > 0 ? "The other selected environments saved the change." : null,
+  ]
+    .filter((sentence) => sentence !== null)
+    .join(" ");
 }
 
 export function useUpdateScopedSettings() {

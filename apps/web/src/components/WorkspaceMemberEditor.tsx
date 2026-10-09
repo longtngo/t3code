@@ -2,13 +2,18 @@ import {
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
 } from "@t3tools/client-runtime/state/filesystem";
-import type { EnvironmentId, WorkspaceMember } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  type EnvironmentId,
+  type WorkspaceMember,
+} from "@t3tools/contracts";
 import { CornerLeftUpIcon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useEffect, useId, useMemo, useState } from "react";
 
 import { filesystemEnvironment } from "../state/filesystem";
 import { useEnvironmentQuery } from "../state/query";
+import { useEnvironmentScopeDenied } from "../state/session";
 import { vcsEnvironment } from "../state/vcs";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
@@ -94,8 +99,12 @@ export default function WorkspaceMemberEditor({
   // Repository path
   // ---------------------------------------------------------------------------
   const browsePath = useMemo(() => getFilesystemBrowsePath(path), [path]);
+  // A pairing from before the permission split lacks `filesystem:read`; the server refuses
+  // every browse, so the list says why instead of sitting empty. Only a loaded grant without
+  // it skips the browse: one still loading, or a refresh that failed, leaves it to the server.
+  const browseDenied = useEnvironmentScopeDenied(environmentId, AuthFilesystemReadScope);
   const browseQuery = useEnvironmentQuery(
-    browsePath.isBrowsing && browsePath.directoryPath.length > 0
+    !browseDenied && browsePath.isBrowsing && browsePath.directoryPath.length > 0
       ? filesystemEnvironment.browse({
           environmentId,
           input: { partialPath: browsePath.directoryPath },
@@ -115,11 +124,13 @@ export default function WorkspaceMemberEditor({
   // that folder — the same drill-down the command palette and the mobile
   // "Add project" screen use. Trailing separators are stripped on save.
   const pathItems = useMemo(() => {
+    // Without access "Go up" would only lead to another refusal, and it would hide the reason.
+    if (browseDenied) return [];
     const entries = visibleEntries.map((entry) => `${entry.fullPath}/`);
     return browsePath.canBrowseUp && browsePath.parentPath !== null
       ? [browsePath.parentPath, ...entries]
       : entries;
-  }, [browsePath.canBrowseUp, browsePath.parentPath, visibleEntries]);
+  }, [browseDenied, browsePath.canBrowseUp, browsePath.parentPath, visibleEntries]);
 
   // ---------------------------------------------------------------------------
   // Integration branch
@@ -248,9 +259,13 @@ export default function WorkspaceMemberEditor({
             <AutocompleteEmpty>
               {!browsePath.isBrowsing
                 ? "Start with ~/ or / to browse folders."
-                : browseQuery.isPending
-                  ? "Reading folder…"
-                  : "No folders here."}
+                : browseDenied
+                  ? "This connection cannot browse host folders."
+                  : browseQuery.isPending
+                    ? "Reading folder…"
+                    : browseQuery.error !== null
+                      ? "Could not list this folder."
+                      : "No folders here."}
             </AutocompleteEmpty>
             <AutocompleteList>
               {pathItems.map((itemPath) => {

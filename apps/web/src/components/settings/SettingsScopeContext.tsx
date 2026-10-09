@@ -1,4 +1,9 @@
-import { T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@t3tools/contracts";
+import { sessionResultDeniesScope } from "@t3tools/client-runtime/state/sessionScope";
+import {
+  AuthFilesystemReadScope,
+  T3_PROJECT_FILE_NAME,
+  type T3ProjectFile,
+} from "@t3tools/contracts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
@@ -6,6 +11,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { createContext, type ReactNode, useContext, useMemo } from "react";
 
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { environmentSession } from "../../state/session";
 import { getProjectFileQueryAtom, optimisticFileAtom } from "../files/projectFilesQueryState";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { resolveScopedSettingsTargets, selectScopedSettingsEnvironments } from "./scopedSettings";
@@ -15,7 +21,9 @@ import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
 /**
  * Each member's decoded t3.json, so file-backed settings show the file as a
  * layer in the inheritance chain. A member is only present once its read has
- * settled; the query atom caches per (environment, cwd).
+ * settled; the query atom caches per (environment, cwd). FORK: a loaded grant without
+ * `filesystem:read` is never asked and settles as having no file, as its
+ * refused read did; a grant still loading or failing to refresh is asked.
  */
 function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
   const members = scope.kind === "project" || scope.kind === "checkout" ? scope.members : [];
@@ -25,6 +33,12 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
         Atom.make((get) => {
           const files = new Map<string, T3ProjectFile | null>();
           for (const member of members) {
+            // FORK: a loaded grant without file reads settles as no file instead of a refused read.
+            const grant = get(environmentSession.sessionStateAtom(member.environmentId));
+            if (sessionResultDeniesScope(grant, AuthFilesystemReadScope)) {
+              files.set(member.physicalProjectKey, null);
+              continue;
+            }
             const result = get(
               getProjectFileQueryAtom(
                 member.environmentId,

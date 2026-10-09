@@ -3,6 +3,7 @@ import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  AuthSettingsWriteScope,
   ProviderDriverKind,
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
@@ -32,7 +33,9 @@ import {
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { environmentPresentations } from "../../state/presentation";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../../permissionCopy";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { isModelPickerOpen } from "../../modelPickerVisibility";
 import { shortcutLabelForCommand } from "../../keybindings";
@@ -889,7 +892,8 @@ export function UsagePage() {
 
 const CURSOR_KEYCHAIN_COPY = "Requires access to your Cursor login in macOS Keychain.";
 
-function CursorEnableButton({
+// FORK-ONLY export: settingsWriteGates.dom.test.tsx renders the button under each login.
+export function CursorEnableButton({
   environmentId,
   label,
   onEnabled,
@@ -906,6 +910,8 @@ function CursorEnableButton({
     label: "enable Cursor account usage",
   });
   const [pending, setPending] = useState(false);
+  // FORK: a login paired before the permission split cannot enable it; say so instead.
+  const writeDenied = useEnvironmentScopeDenied(environmentId, AuthSettingsWriteScope);
   const enable = async () => {
     setPending(true);
     try {
@@ -918,6 +924,9 @@ function CursorEnableButton({
       setPending(false);
     }
   };
+  if (writeDenied) {
+    return <span className="text-xs text-muted-foreground">{ENVIRONMENT_SETTINGS_READ_ONLY}</span>;
+  }
   const button = tooltip ? (
     <InlineButton
       disabled={pending}

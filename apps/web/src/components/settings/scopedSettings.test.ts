@@ -1,9 +1,11 @@
 import {
+  EnvironmentAuthorizationError,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProjectId,
   type ServerSettings,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
@@ -411,7 +413,7 @@ describe("scoped settings writes", () => {
     const persistServer = vi
       .fn()
       .mockResolvedValueOnce({ _tag: "Success" })
-      .mockResolvedValueOnce({ _tag: "Failure" })
+      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Rejected")) })
       .mockRejectedValueOnce(new Error("Disconnected during save"))
       .mockResolvedValueOnce({ _tag: "Success" });
     const result = await persistScopedSettingsPatch(
@@ -425,6 +427,36 @@ describe("scoped settings writes", () => {
       third.label,
     ]);
     expect(persistServer).toHaveBeenCalledTimes(4);
+  });
+
+  it("marks a write refused only when its failure is an authorization error", async () => {
+    const third = environment("Third");
+    const fourth = environment("Fourth");
+    const selected = [...environments, third, fourth];
+    const scope = resolveSettingsScope({}, [], selected);
+    const persistServer = vi
+      .fn()
+      .mockResolvedValueOnce({
+        _tag: "Failure",
+        cause: Cause.fail(
+          new EnvironmentAuthorizationError({ message: "denied", requiredScope: "settings:write" }),
+        ),
+      })
+      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Rejected")) })
+      // Threw, as a dropped connection does: a plain failure, never a refusal.
+      .mockRejectedValueOnce(new Error("Disconnected during save"))
+      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.die(new Error("Socket closed")) });
+    const result = await persistScopedSettingsPatch(
+      planScopedSettingsPatch(scope, selected, { enableAgentBrowserAccess: false }),
+      persistServer,
+      vi.fn(),
+    );
+    expect(result.failedEnvironments.map(({ label, refused }) => [label, refused])).toEqual([
+      [laptop.label, true],
+      [server.label, false],
+      [third.label, false],
+      [fourth.label, false],
+    ]);
   });
 });
 
