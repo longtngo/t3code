@@ -83,6 +83,12 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
             typeof surface.target.name === "string" &&
             (surface.target.platform === "ios" || surface.target.platform === "android")))
       );
+    case "trustedFile":
+      return (
+        typeof surface.absolutePath === "string" &&
+        surface.absolutePath.length > 0 &&
+        surface.id === `trustedFile:${surface.absolutePath}`
+      );
     case "pull-request":
       return (
         typeof surface.projectId === "string" &&
@@ -94,6 +100,7 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         (surface.url === undefined || typeof surface.url === "string")
       );
     default:
+      surface satisfies never;
       return false;
   }
 };
@@ -135,6 +142,16 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
           entries: Array.isArray(entries)
             ? entries.filter(isClosedViewEntry).filter(isPersistentView)
             : [],
+        };
+      },
+      // Entries saved by an older build can name a tab kind that no longer exists, or be malformed.
+      merge: (persisted, current) => {
+        const entries = (persisted as { entries?: unknown } | undefined)?.entries;
+        return {
+          ...current,
+          entries: Array.isArray(entries)
+            ? entries.filter(isClosedViewEntry).filter(isPersistentView)
+            : current.entries,
         };
       },
       partialize: ({ entries }) => ({ entries: entries.filter(isPersistentView) }),

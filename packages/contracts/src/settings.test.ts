@@ -1749,3 +1749,19 @@ describe("sidebarSections", () => {
     ).toEqual({ sidebarSections: { focus: { name: "Focus", createdAt: at }, old: null } });
   });
 });
+
+describe("threadDetailsSectionRowLimit", () => {
+  const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+  it("reads 6 when absent", () => {
+    expect(decode({}).threadDetailsSectionRowLimit).toBe(6);
+  });
+  it("keeps values in 1-50", () => {
+    expect(decode({ threadDetailsSectionRowLimit: 1 }).threadDetailsSectionRowLimit).toBe(1);
+    expect(decode({ threadDetailsSectionRowLimit: 50 }).threadDetailsSectionRowLimit).toBe(50);
+  });
+  it("rejects out-of-range and non-integer values like every client setting", () => {
+    for (const value of [0, 51, "6", 6.5]) {
+      expect(() => decode({ threadDetailsSectionRowLimit: value })).toThrow();
+    }
+  });
+});

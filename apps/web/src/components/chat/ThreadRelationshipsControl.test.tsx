@@ -36,14 +36,13 @@ describe("thread lineage row list", () => {
     expect(resolveThreadLineageWindow(rows.slice(0, 6), 6).hiddenCount).toBe(0);
   });
 
-  it("keeps the rows in a bounded, labelled scroll region and the button outside it", () => {
+  it("keeps the rows in a labelled list that never scrolls on its own, button after it", () => {
     const markup = renderRowList(6);
     const list = /<ul([^>]*)>/.exec(markup)?.[1] ?? "";
 
     expect(list).toContain('aria-label="Related threads"');
-    expect(list).toContain("max-h-[13.5rem]");
-    expect(list).toContain("overflow-y-auto");
-    expect(list).toContain("overscroll-contain");
+    expect(list).not.toContain("max-h-");
+    expect(list).not.toContain("overflow-y-auto");
     expect(markup.indexOf("</ul>")).toBeLessThan(markup.indexOf("<button"));
   });
 });

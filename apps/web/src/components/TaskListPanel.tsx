@@ -1,31 +1,32 @@
 /**
- * Task list right-panel surface: the thread's primary task list expanded at the top, earlier
- * runs' lists collapsed below it. Reuses the composer drawer's step rows so the two readings
- * never disagree. Data comes from `deriveTaskListView` over the thread's v2 plans.
+ * Tasks section of the thread details card: the thread's primary task list windowed to the
+ * card's row limit, earlier runs' lists folded below it. Step rows come from `TaskStepList`;
+ * data comes from `deriveTaskListView` over the thread's v2 plans.
  *
  * Relative times follow the minute clock; nothing animates continuously.
  */
-import { ChevronRightIcon, ListTodoIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { memo } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import { cn } from "~/lib/utils";
 import { useNowMinute } from "../hooks/useNowMinute";
 import type { ActivePlanState } from "../session-logic";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { ComposerBanner } from "./chat/ComposerBanner";
 import { TaskSegments, TaskStepList } from "./chat/TaskStepList";
+import { ThreadDetailsRowGroup } from "./chat/ThreadDetailsRowGroup";
+import { ThreadDetailsSection } from "./chat/ThreadDetailsSection";
 import {
-  taskListCurrentStep,
   taskListHeaderState,
+  type TaskListEntry,
   type TaskListHeaderChip,
   type TaskListView,
 } from "./TaskListPanel.logic";
 
 /**
  * The step rows' grid reads these from `ComposerBanner.Root`, which the panel does not use: Root
- * and Scroll carry the composer's attachment overlap and a height cap a full-height panel must not
+ * and Scroll carry the composer's attachment overlap and a height cap a card section must not
  * inherit. Keep in step with Root's own values.
  */
 const STEP_ROW_VARIABLES =
@@ -42,68 +43,21 @@ function completedCount(plan: ActivePlanState): number {
   return plan.steps.filter((step) => step.status === "completed").length;
 }
 
-function StepList({ plan }: { plan: ActivePlanState }) {
-  const completed = completedCount(plan);
+/** `steps` are the rows to show; the label counts the whole of `plan`. */
+function StepList({
+  plan,
+  steps = plan.steps,
+}: {
+  plan: ActivePlanState;
+  steps?: ReadonlyArray<ActivePlanState["steps"][number]>;
+}) {
   return (
     <ComposerBanner.Children
       render={<ul />}
-      aria-label={`Task list. ${completed} of ${plan.steps.length} complete.`}
+      aria-label={`Task list. ${completedCount(plan)} of ${plan.steps.length} complete.`}
     >
-      <TaskStepList steps={plan.steps} />
+      <TaskStepList steps={steps} />
     </ComposerBanner.Children>
-  );
-}
-
-function PanelMessage({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <ListTodoIcon aria-hidden className="size-6 text-muted-foreground/60" />
-      <p className="text-sm font-medium">{title}</p>
-      {detail ? <p className="max-w-56 text-xs text-muted-foreground">{detail}</p> : null}
-    </div>
-  );
-}
-
-function TaskListHeader({
-  primary,
-  chip,
-}: {
-  primary: ActivePlanState;
-  chip: TaskListHeaderChip | null;
-}) {
-  const completed = completedCount(primary);
-  const total = primary.steps.length;
-  return (
-    <header className="flex flex-col gap-1.5 border-b border-border/60 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <ListTodoIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          {taskListCurrentStep(primary.steps)?.step}
-        </span>
-        <span
-          className={cn(
-            "shrink-0 font-mono text-2xs tabular-nums text-muted-foreground",
-            total > 0 && completed === total && "text-success",
-          )}
-        >
-          {completed}/{total} complete
-        </span>
-      </div>
-      <div className="flex min-w-0 items-center gap-2 text-2xs text-muted-foreground">
-        {chip ? (
-          <span
-            className={cn(
-              "shrink-0 rounded-sm border px-1.5 py-px font-medium",
-              CHIP_TONE_CLASSES[chip.tone],
-            )}
-          >
-            {chip.label}
-            {chip.tone === "promoted" && chip.time ? ` · ${chip.time}` : null}
-          </span>
-        ) : null}
-        <TaskSegments className="ml-auto w-20" steps={primary.steps} />
-      </div>
-    </header>
   );
 }
 
@@ -112,7 +66,7 @@ const TaskHistoryGroup = memo(function TaskHistoryGroup({
   group,
   nowMs,
 }: {
-  group: ActivePlanState;
+  group: TaskListEntry;
   nowMs: number;
 }) {
   const completed = completedCount(group);
@@ -145,52 +99,69 @@ const TaskHistoryGroup = memo(function TaskHistoryGroup({
 });
 
 export const TaskListPanel = memo(function TaskListPanel({
+  threadKey,
   primary,
   primaryKind,
   history,
   latestRunActive,
 }: {
-  primary: TaskListView["primary"];
+  threadKey: string;
+  primary: TaskListEntry | null;
   primaryKind: TaskListView["primaryKind"];
-  history: TaskListView["history"];
-  /** Whether the thread's latest run is still working; only its own list can be live. */
+  history: ReadonlyArray<TaskListEntry>;
+  /** Whether the thread's activity run is still working; only its own list can be live. */
   latestRunActive: boolean;
 }) {
   const nowMinute = useNowMinute();
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
-
-  if (primary === null) {
-    return (
-      <PanelMessage
-        title="No task list yet"
-        detail="The agent hasn't written a plan for this thread."
-      />
-    );
-  }
-
+  if (primary === null) return null;
   const chip = taskListHeaderState(primary, primaryKind, latestRunActive, nowMs);
+  const completed = completedCount(primary);
+  const runningIndex = primary.steps.findIndex((step) => step.status === "inProgress");
+  const currentIndex =
+    runningIndex >= 0 ? runningIndex : primary.steps.findIndex((step) => step.status === "pending");
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <TaskListHeader primary={primary} chip={chip} />
-      <ScrollArea className="min-h-0 flex-1">
-        <div className={cn("flex flex-col gap-2 p-2", STEP_ROW_VARIABLES)}>
-          <StepList plan={primary} />
-          {history.length > 0 ? (
-            <section className="flex flex-col gap-0.5 pt-2">
-              <div className="px-1.5 pb-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
-                Earlier in this thread
-              </div>
-              {history.map((group) => (
-                <TaskHistoryGroup
-                  key={group.runId ?? group.createdAt}
-                  group={group}
-                  nowMs={nowMs}
-                />
-              ))}
-            </section>
+    <ThreadDetailsSection
+      headingId="thread-details-tasks-heading"
+      title={`Tasks · ${completed}/${primary.steps.length}`}
+      data-thread-details-activity
+      actions={
+        <>
+          {chip ? (
+            <span
+              className={cn(
+                "shrink-0 rounded-sm border px-1.5 py-px text-2xs font-medium",
+                CHIP_TONE_CLASSES[chip.tone],
+              )}
+            >
+              {chip.label}
+              {chip.tone === "promoted" && chip.time ? ` · ${chip.time}` : null}
+            </span>
           ) : null}
-        </div>
-      </ScrollArea>
-    </div>
+          <TaskSegments className="w-16" steps={primary.steps} />
+        </>
+      }
+    >
+      <div className={cn("flex flex-col gap-1", STEP_ROW_VARIABLES)}>
+        <ThreadDetailsRowGroup
+          key={`${threadKey}:${primary.groupKey}`}
+          rows={primary.steps}
+          minVisible={currentIndex + 1}
+        >
+          {(steps) => <StepList plan={primary} steps={steps} />}
+        </ThreadDetailsRowGroup>
+        <ThreadDetailsRowGroup
+          key={`${threadKey}:history`}
+          label="Previous task lists"
+          rows={history}
+        >
+          {(groups) =>
+            groups.map((group) => (
+              <TaskHistoryGroup key={group.groupKey} group={group} nowMs={nowMs} />
+            ))
+          }
+        </ThreadDetailsRowGroup>
+      </div>
+    </ThreadDetailsSection>
   );
 });

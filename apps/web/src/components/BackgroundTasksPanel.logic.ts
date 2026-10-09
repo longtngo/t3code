@@ -4,12 +4,12 @@ import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2P
 const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["preparing", "starting", "running"]);
 
 /**
- * The Background tab's rows: provider-owned work that outlives (or may outlive) the turn that
+ * The details card's Background section rows: provider-owned work that outlives (or may outlive) the turn that
  * started it.
  *
  * Once the latest run settles, the rows are exactly `settledTasks`, the list the composer's
- * background-work banner shows and Stop ends, so the tab and the banner cannot disagree. While a
- * run is still working that list is empty by design (the turn's own Stop covers it), so the tab
+ * background-work banner shows and Stop ends, so the section and the banner cannot disagree. While a
+ * run is still working that list is empty by design (the turn's own Stop covers it), so the section
  * reads the active provider thread's roster instead: a background shell launched mid-turn is
  * listed as soon as the provider reports it.
  */

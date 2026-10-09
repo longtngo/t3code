@@ -136,6 +136,54 @@ describe("closedViewStore", () => {
     expect(useClosedViewStore.getState().entries).toEqual(entries);
   });
 
+  it("drops saved tabs whose kind no longer exists without migrating the history", async () => {
+    const tab = (id: string, surface: Record<string, unknown>) => ({
+      id,
+      kind: "panel-tab",
+      threadRef: refA,
+      surface,
+    });
+    const { storage, name } = useClosedViewStore.persist.getOptions();
+    await storage!.setItem(name!, {
+      state: {
+        entries: [
+          tab("tasks", { kind: "tasks", id: "tasks" }),
+          tab("background", { kind: "background", id: "background" }),
+          tab("trusted", { kind: "trustedFile", id: "trustedFile:/x", absolutePath: "/x" }),
+          tab("diff", { kind: "diff", id: "diff" }),
+          tab("file", {
+            kind: "file",
+            id: "file:x",
+            relativePath: "x",
+            revealLine: null,
+            revealRequestId: 0,
+          }),
+          tab("trusted-mismatch", {
+            kind: "trustedFile",
+            id: "trustedFile:/other",
+            absolutePath: "/y",
+          }),
+          null,
+          5,
+          { kind: "panel-tab" },
+          {},
+          { kind: "browser" },
+          { id: "no-ref", kind: "panel-tab", surface: { kind: "diff", id: "diff" } },
+        ] as unknown as ClosedViewEntry[],
+      },
+      version: 2,
+    });
+    await useClosedViewStore.persist.rehydrate();
+    expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
+    expect(
+      useClosedViewStore
+        .getState()
+        .entries.map(
+          (entry: unknown) => (entry as { surface?: { kind?: unknown } })?.surface?.kind,
+        ),
+    ).toEqual(["trustedFile", "diff", "file"]);
+  });
+
   it("keeps private tabs available in memory without saving their metadata", async () => {
     const store = useClosedViewStore.getState();
     const publicId = store.remember(diff(refA));

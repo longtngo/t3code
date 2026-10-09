@@ -62,19 +62,14 @@ function renderTabs(onMoveSurface: (id: string, toIndex: number) => void = () =>
       onAddPullRequests={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
-      onAddTasks={() => undefined}
-      onAddBackground={() => undefined}
       onAddDevice={() => undefined}
       onRenameDevice={() => undefined}
-      liveBackgroundCount={0}
       browserAvailable
       terminalAvailable={false}
       diffAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
       pullRequestsAvailable={false}
-      tasksAvailable={false}
-      backgroundAvailable={false}
       deviceAvailable={false}
     >
       <div>content</div>

@@ -198,7 +198,6 @@ import {
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   selectHandoffImageResources,
   type TimelineEntriesProjection,
-  deriveActivePlanState,
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
   findLatestProposedPlan,
@@ -246,6 +245,7 @@ import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useElementWidth } from "../hooks/useElementWidth";
+import { useDelayedStatus } from "../hooks/useDelayedStatus";
 import { usePreviewPanelInlineSize } from "../hooks/usePreviewPanelInlineSize";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
@@ -296,9 +296,7 @@ import { removeSentThreadFromQueue, useThreadQueueStore } from "../threadQueueSt
 import { openPreviewSession } from "./preview/openPreviewSession";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
-import { TaskListPanel } from "./TaskListPanel";
-import { deriveTaskListView, latestRunTaskCounts } from "./TaskListPanel.logic";
-import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
+import { deriveTaskListView, taskListToggleSummary } from "./TaskListPanel.logic";
 import { backgroundPanelTasks } from "./BackgroundTasksPanel.logic";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
@@ -2563,37 +2561,12 @@ export default function ChatView(props: ChatViewProps) {
     });
   }, [activeTerminalDrawerPresence.present, activeThreadKey, existingOpenTerminalThreadKeys]);
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
-  const activePlan = useMemo(
-    () => deriveActivePlanState(serverProjection, activeActivityRun?.runId),
+  // FORK: the details card's task list and its toggle summary share one read of the thread's v2 plans.
+  const taskListView = useMemo(
+    () => deriveTaskListView(serverProjection, activeActivityRun?.runId ?? null),
     [activeActivityRun?.runId, serverProjection],
   );
-  // Tasks progress for the running turn's own plan only — deriveActivePlanState
-  // falls back to older runs' plans, which must not label fresh work.
-  const activeComposerTasksProgress = useMemo(() => {
-    if (
-      isLatestRunSettled(activeActivityRun, activeRuntime) ||
-      !activePlan ||
-      activePlan.runId !== (activeActivityRun?.runId ?? null)
-    ) {
-      return null;
-    }
-    const totalSteps = activePlan.steps.length;
-    if (totalSteps === 0) return null;
-    const completedSteps = activePlan.steps.filter((step) => step.status === "completed").length;
-    const step =
-      activePlan.steps.find((candidate) => candidate.status === "inProgress")?.step ??
-      activePlan.steps.find((candidate) => candidate.status === "pending")?.step ??
-      activePlan.steps.at(-1)!.step;
-    return { step, completedSteps, totalSteps };
-  }, [activeActivityRun, activePlan, activeRuntime]);
-  const activeComposerTaskSteps =
-    activeComposerTasksProgress && activePlan ? activePlan.steps : null;
-  // FORK: the Task list tab and its launcher pill share one read of the thread's v2 plans.
-  const taskListView = useMemo(
-    () => deriveTaskListView(serverProjection, activeLatestRun?.runId ?? null),
-    [activeLatestRun?.runId, serverProjection],
-  );
-  const taskCounts = useMemo(() => latestRunTaskCounts(taskListView), [taskListView]);
+  const taskListActive = !isLatestRunSettled(activeActivityRun, activeRuntime);
   const activeProjectRef = useMemo(
     () =>
       activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
@@ -2788,6 +2761,16 @@ export default function ChatView(props: ChatViewProps) {
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
+  // The toggle's task fraction hides while a thread resync lasts.
+  const threadResyncing = useDelayedStatus(
+    activeThreadKey ?? "",
+    activeEnvironmentUnavailable ? null : threadSyncPhase,
+  );
+  const threadPanelSummary = taskListToggleSummary(
+    taskListView,
+    taskListActive,
+    threadResyncing !== null,
+  );
   const activeReconnectingEnvironmentId =
     activeEnvironmentConnectionPhase === "connecting" ||
     activeEnvironmentConnectionPhase === "reconnecting"
@@ -3772,7 +3755,7 @@ export default function ChatView(props: ChatViewProps) {
       }),
     ];
   }, [serverProjection]);
-  // FORK: the Background tab's rows; the settled half is the banner's own list.
+  // FORK: the details card's Background section rows; the settled half is the banner's own list.
   const liveBackgroundTasks = useMemo(
     () =>
       backgroundPanelTasks({ projection: serverProjection, settledTasks: pendingBackgroundTasks }),
@@ -5665,14 +5648,6 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
-  const addTasksSurface = useCallback(() => {
-    if (!activeThreadRef) return;
-    useRightPanelStore.getState().open(activeThreadRef, "tasks");
-  }, [activeThreadRef]);
-  const addBackgroundSurface = useCallback(() => {
-    if (!activeThreadRef) return;
-    useRightPanelStore.getState().open(activeThreadRef, "background");
-  }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -11506,15 +11481,6 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
-    ) : renderedRightPanelSurface?.kind === "tasks" ? (
-      <TaskListPanel
-        primary={taskListView.primary}
-        primaryKind={taskListView.primaryKind}
-        history={taskListView.history}
-        latestRunActive={!latestRunSettled}
-      />
-    ) : renderedRightPanelSurface?.kind === "background" ? (
-      <BackgroundTasksPanel tasks={liveBackgroundTasks} />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -11638,6 +11604,9 @@ export default function ChatView(props: ChatViewProps) {
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
     onDeleteProjectScript: deleteProjectScript,
+    taskListView,
+    taskListActive,
+    backgroundTasks: liveBackgroundTasks,
   };
   const panelToggleControlProps = {
     terminalAvailable: activeProject !== null,
@@ -11649,6 +11618,7 @@ export default function ChatView(props: ChatViewProps) {
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     threadPanelHasAttention:
       activeEnvironmentUnavailableState !== null || showVersionMismatchBanner,
+    threadPanelSummary,
     rightPanelAvailable: activeProject !== null,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
@@ -11782,6 +11752,7 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadTitle={activeThread.title}
             activeProject={activeProject ?? null}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
+            controlsSummaryVisible={threadPanelSummary !== null}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
@@ -12155,8 +12126,6 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               activeThreadModelSelection={activeThread?.modelSelection}
                               activeContextWindow={activeContextWindow}
-                              activeTasksProgress={activeComposerTasksProgress}
-                              activeTaskSteps={activeComposerTaskSteps}
                               compactThreadUnavailable={compactThreadUnavailable}
                               compactDisabled={compactDisabled}
                               compactDisabledReason={compactDisabledReason}
@@ -12429,8 +12398,6 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddDevice={addDeviceSurface}
-          onAddTasks={addTasksSurface}
-          onAddBackground={addBackgroundSurface}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
@@ -12438,11 +12405,6 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
-          tasksAvailable
-          backgroundAvailable
-          liveBackgroundCount={liveBackgroundTasks.length}
-          taskCompletedCount={taskCounts?.completed}
-          taskTotalCount={taskCounts?.total}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -12495,8 +12457,6 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddDevice={addDeviceSurface}
-            onAddTasks={addTasksSurface}
-            onAddBackground={addBackgroundSurface}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
             diffAvailable={isServerThread && isGitRepo}
@@ -12504,11 +12464,6 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
-            tasksAvailable
-            backgroundAvailable
-            liveBackgroundCount={liveBackgroundTasks.length}
-            taskCompletedCount={taskCounts?.completed}
-            taskTotalCount={taskCounts?.total}
           >
             {rightPanelContent}
           </RightPanelTabs>

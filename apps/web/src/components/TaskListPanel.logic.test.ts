@@ -17,9 +17,9 @@ import type { ActivePlanState } from "../session-logic";
 import { makeThreadProjectionFixture } from "../test-fixtures";
 import {
   deriveTaskListView,
-  latestRunTaskCounts,
-  taskListCurrentStep,
   taskListHeaderState,
+  taskListToggleSummary,
+  type TaskListView,
 } from "./TaskListPanel.logic";
 
 const NOW = Date.parse("2026-09-12T12:00:00.000Z");
@@ -215,8 +215,6 @@ describe("deriveTaskListView", () => {
     expect(stepTexts(view.primary)).toEqual(["Second:completed"]);
     expect(view.primary?.createdAt).toBe("2026-09-12T09:00:00.000Z");
     expect(view.history.map((group) => group.steps[0]?.step)).toEqual(["First"]);
-    // A promoted list must not light the launcher's progress pill.
-    expect(latestRunTaskCounts(view)).toBeNull();
   });
 
   it("ignores proposed plans and empty lists, and is empty without a projection", () => {
@@ -237,21 +235,37 @@ describe("deriveTaskListView", () => {
     expect(deriveTaskListView(null, null).primary).toBeNull();
   });
 
-  it("counts the latest run's own list for the launcher pill", () => {
-    const view = deriveTaskListView(
+  it("keys each list by its run, or its plan id when runless, stable across updates", () => {
+    const before = deriveTaskListView(
       projection(
         [
-          todo("p1", 1, [
-            ["A", "completed"],
-            ["B", "running"],
-            ["C", "pending"],
-          ]),
+          todo("p-run", 2, [["Run step", "running"]]),
+          todo("p-solo", null, [["Solo step", "running"]]),
         ],
-        [run(1, "running")],
+        [run(2, "running")],
+        [todoItem("p-solo", "2026-09-12T10:00:00.000Z")],
       ),
-      RunId.make("run-1"),
+      RunId.make("run-2"),
     );
-    expect(latestRunTaskCounts(view)).toEqual({ completed: 1, total: 3 });
+    const after = deriveTaskListView(
+      projection(
+        [
+          todo("p-run", 2, [["Run step", "running"]], "superseded"),
+          todo("p-run-2", 2, [
+            ["Run step", "completed"],
+            ["Next step", "running"],
+          ]),
+          todo("p-solo", null, [["Solo step", "completed"]]),
+        ],
+        [run(2, "running")],
+        [todoItem("p-solo", "2026-09-12T11:00:00.000Z")],
+      ),
+      RunId.make("run-2"),
+    );
+    for (const view of [before, after]) {
+      expect(view.primary?.groupKey).toBe("run-2");
+      expect(view.history.map((entry) => entry.groupKey)).toEqual(["plan:p-solo"]);
+    }
   });
 });
 
@@ -265,6 +279,52 @@ function plan(
     steps: statuses.map((status, index) => ({ step: `step ${index + 1}`, status })),
   };
 }
+
+function viewWith(
+  kind: "latest" | "promoted",
+  statuses: ReadonlyArray<ActivePlanState["steps"][number]["status"]>,
+): TaskListView {
+  return { primary: { ...plan(statuses), groupKey: "run-1" }, primaryKind: kind, history: [] };
+}
+
+describe("taskListToggleSummary", () => {
+  it("shows the activity run's own list fraction while it works", () => {
+    expect(
+      taskListToggleSummary(viewWith("latest", ["completed", "pending", "pending"]), true, false),
+    ).toBe("1/3");
+  });
+  it("is absent while the thread resyncs, and shows the fraction otherwise", () => {
+    const view = viewWith("latest", ["completed", "pending", "pending"]);
+    expect(taskListToggleSummary(view, true, true)).toBeNull();
+    expect(taskListToggleSummary(view, true, false)).toBe("1/3");
+  });
+  it("is absent for a promoted list, an empty list, or a settled run", () => {
+    expect(taskListToggleSummary(viewWith("promoted", ["completed"]), true, false)).toBeNull();
+    expect(taskListToggleSummary(viewWith("latest", []), true, false)).toBeNull();
+    expect(taskListToggleSummary(viewWith("latest", ["completed"]), false, false)).toBeNull();
+    expect(
+      taskListToggleSummary({ primary: null, primaryKind: null, history: [] }, true, false),
+    ).toBeNull();
+  });
+  it("follows the working run's own list past a queued follow-up and a late superseded list", () => {
+    // "p-r2-stale" sorts after "p-r2-live" by plan id, so a snapshot delivers it last.
+    const view = deriveTaskListView(
+      projection(
+        [
+          todo("p-r2-live", 2, [
+            ["Read", "completed"],
+            ["Fix", "running"],
+          ]),
+          todo("p-r2-stale", 2, [["Read", "running"]], "superseded"),
+        ],
+        [run(1), run(2, "running"), run(3, "queued")],
+      ),
+      RunId.make("run-2"),
+    );
+    expect(view.primaryKind).toBe("latest");
+    expect(taskListToggleSummary(view, true, false)).toBe("1/2");
+  });
+});
 
 describe("taskListHeaderState", () => {
   it("reads Updating while the latest run works, even with every step complete", () => {
@@ -292,17 +352,5 @@ describe("taskListHeaderState", () => {
     expect(
       taskListHeaderState(plan(["pending"], "2026-09-12T12:05:00.000Z"), "promoted", false, NOW),
     ).toEqual({ tone: "promoted", label: "Last task list", time: "just now" });
-  });
-});
-
-describe("taskListCurrentStep", () => {
-  it("prefers the first running step, then the first pending, then the last step", () => {
-    expect(taskListCurrentStep(plan(["completed", "pending", "inProgress"]).steps)?.step).toBe(
-      "step 3",
-    );
-    expect(taskListCurrentStep(plan(["completed", "pending", "pending"]).steps)?.step).toBe(
-      "step 2",
-    );
-    expect(taskListCurrentStep(plan(["completed", "completed"]).steps)?.step).toBe("step 2");
   });
 });

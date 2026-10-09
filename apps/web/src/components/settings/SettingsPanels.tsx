@@ -43,6 +43,8 @@ import {
   MIN_PANEL_ANIMATION_DURATION_MS,
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  MAX_THREAD_DETAILS_SECTION_ROW_LIMIT,
+  MIN_THREAD_DETAILS_SECTION_ROW_LIMIT,
   MIN_USAGE_PACE_TOLERANCE,
   MAX_USAGE_PACE_TOLERANCE,
   type ResponseStreamingMode,
@@ -560,6 +562,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.usagePaceTolerance !== DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance
         ? ["Pace tolerance"]
         : []),
+      ...(settings.threadDetailsSectionRowLimit !==
+      DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit
+        ? ["Thread details rows"]
+        : []),
       ...(settings.notificationMode !== DEFAULT_UNIFIED_SETTINGS.notificationMode
         ? ["Thread notifications"]
         : []),
@@ -734,6 +740,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.showSkillsInSlashMenu,
       settings.alwaysShowMessageTimestamps,
       settings.timestampFormat,
+      settings.usagePaceTolerance,
+      settings.threadDetailsSectionRowLimit,
       settings.notificationMode,
       settings.inAppNotificationsEnabled,
       settings.wordWrap,
@@ -811,6 +819,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       usagePaceTolerance: DEFAULT_UNIFIED_SETTINGS.usagePaceTolerance,
+      threadDetailsSectionRowLimit: DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
@@ -2688,6 +2697,35 @@ export function GeneralSettingsPanel() {
               max={MAX_USAGE_PACE_TOLERANCE}
               ariaLabel="Pace tolerance in points"
               onCommit={(usagePaceTolerance) => updateSettings({ usagePaceTolerance })}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("thread-details-rows")}
+          description="How many tasks, background jobs and related threads each section of the thread details card shows before Show more."
+          resetAction={
+            settings.threadDetailsSectionRowLimit !==
+            DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit ? (
+              <SettingResetButton
+                label="thread details rows"
+                onClick={() =>
+                  updateSettings({
+                    threadDetailsSectionRowLimit:
+                      DEFAULT_UNIFIED_SETTINGS.threadDetailsSectionRowLimit,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <BoundedIntegerInput
+              value={settings.threadDetailsSectionRowLimit}
+              min={MIN_THREAD_DETAILS_SECTION_ROW_LIMIT}
+              max={MAX_THREAD_DETAILS_SECTION_ROW_LIMIT}
+              ariaLabel="Rows per thread details section"
+              onCommit={(threadDetailsSectionRowLimit) =>
+                updateSettings({ threadDetailsSectionRowLimit })
+              }
             />
           }
         />

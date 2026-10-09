@@ -92,6 +92,18 @@ export const UsagePaceTolerance = Schema.Int.check(
 );
 export type UsagePaceTolerance = typeof UsagePaceTolerance.Type;
 export const DEFAULT_USAGE_PACE_TOLERANCE: UsagePaceTolerance = 15;
+
+export const MIN_THREAD_DETAILS_SECTION_ROW_LIMIT = 1;
+export const MAX_THREAD_DETAILS_SECTION_ROW_LIMIT = 50;
+/** Rows each thread details section (Tasks, Background, Lineage) shows before "Show more". */
+export const ThreadDetailsSectionRowLimit = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_THREAD_DETAILS_SECTION_ROW_LIMIT,
+    maximum: MAX_THREAD_DETAILS_SECTION_ROW_LIMIT,
+  }),
+);
+export type ThreadDetailsSectionRowLimit = typeof ThreadDetailsSectionRowLimit.Type;
+export const DEFAULT_THREAD_DETAILS_SECTION_ROW_LIMIT: ThreadDetailsSectionRowLimit = 6;
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -601,6 +613,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   usagePaceTolerance: UsagePaceTolerance.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_USAGE_PACE_TOLERANCE)),
+  ),
+  threadDetailsSectionRowLimit: ThreadDetailsSectionRowLimit.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_DETAILS_SECTION_ROW_LIMIT)),
   ),
   snapShotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snapShotIncludeAccessibility: Schema.Boolean.pipe(
@@ -2545,6 +2560,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   usagePaceTolerance: Schema.optionalKey(UsagePaceTolerance),
+  threadDetailsSectionRowLimit: Schema.optionalKey(ThreadDetailsSectionRowLimit),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),

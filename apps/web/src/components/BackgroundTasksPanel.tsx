@@ -1,15 +1,16 @@
 /**
- * Background right-panel surface: the provider work still running for this thread (background
- * shells, monitors, subagents). Answers "what is it waiting on?" when the thread reads Waiting.
+ * Background section of the thread details card: the provider work still running for this
+ * thread (background shells, monitors, subagents). Answers "what is it waiting on?" when the
+ * thread reads Waiting.
  *
  * Rows come from `backgroundPanelTasks`; nothing here animates. The fork's "started X ago" and
  * duration are not shown: the v2 background roster carries no timestamps.
  */
 import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { ActivityIcon } from "lucide-react";
 import { memo } from "react";
 
-import { ScrollArea } from "~/components/ui/scroll-area";
+import { ThreadDetailsRowGroup } from "./chat/ThreadDetailsRowGroup";
+import { ThreadDetailsSection } from "./chat/ThreadDetailsSection";
 import { backgroundTaskKindLabel } from "./BackgroundTasksPanel.logic";
 
 function BackgroundTaskRow({ task }: { task: PendingBackgroundWorkTask }) {
@@ -31,37 +32,28 @@ function BackgroundTaskRow({ task }: { task: PendingBackgroundWorkTask }) {
 }
 
 export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
+  threadKey,
   tasks,
 }: {
+  threadKey: string;
   tasks: ReadonlyArray<PendingBackgroundWorkTask>;
 }) {
-  if (tasks.length === 0) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <ActivityIcon aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">No background tasks</p>
-        <p className="max-w-56 text-xs text-muted-foreground">
-          Nothing is running in the background for this thread.
-        </p>
-      </div>
-    );
-  }
+  if (tasks.length === 0) return null;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2">
-        <ActivityIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">Background</span>
-        <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
-          {tasks.length} running
-        </span>
-      </header>
-      <ScrollArea className="min-h-0 flex-1">
-        <ul className="flex flex-col gap-0.5 p-2">
-          {tasks.map((task) => (
-            <BackgroundTaskRow key={task.taskId} task={task} />
-          ))}
-        </ul>
-      </ScrollArea>
-    </div>
+    <ThreadDetailsSection
+      headingId="thread-details-background-heading"
+      title={`Background · ${tasks.length} running`}
+      data-thread-details-activity
+    >
+      <ThreadDetailsRowGroup key={`${threadKey}:background`} rows={tasks}>
+        {(visible) => (
+          <ul className="flex flex-col gap-0.5">
+            {visible.map((task) => (
+              <BackgroundTaskRow key={task.taskId} task={task} />
+            ))}
+          </ul>
+        )}
+      </ThreadDetailsRowGroup>
+    </ThreadDetailsSection>
   );
 });

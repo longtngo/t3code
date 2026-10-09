@@ -4,19 +4,21 @@ import * as DateTime from "effect/DateTime";
 import type { ActivePlanState } from "../session-logic";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 
-type TaskStep = ActivePlanState["steps"][number];
 type TodoPlan = Extract<
   OrchestrationV2ThreadProjection["plans"][number],
   { readonly kind: "todo_list" }
 >;
 
+/** A run's list, keyed by its run (or its plan id when runless) so updates keep one identity. */
+export type TaskListEntry = ActivePlanState & { readonly groupKey: string };
+
 export interface TaskListView {
   /** The group the panel renders expanded at the top, or null when the thread has none. */
-  readonly primary: ActivePlanState | null;
+  readonly primary: TaskListEntry | null;
   /** `latest`: the latest run's own list. `promoted`: the newest list of an earlier run. */
   readonly primaryKind: "latest" | "promoted" | null;
   /** Every other run's final list, newest first. */
-  readonly history: ReadonlyArray<ActivePlanState>;
+  readonly history: ReadonlyArray<TaskListEntry>;
 }
 
 const EMPTY_VIEW: TaskListView = { primary: null, primaryKind: null, history: [] };
@@ -107,10 +109,10 @@ export function deriveTaskListView(
   if (finalPlanByGroup.size === 0) return EMPTY_VIEW;
 
   const runOrdinal = new Map(projection.runs.map((run) => [run.id, run.ordinal]));
-  const groups = [...finalPlanByGroup.values()]
-    .map((plan) => ({
+  const groups = [...finalPlanByGroup]
+    .map(([key, plan]) => ({
       plan,
-      state: toPlanState(projection, plan),
+      state: { ...toPlanState(projection, plan), groupKey: key },
       ordinal: plan.runId === null ? undefined : runOrdinal.get(plan.runId),
     }))
     .toSorted(
@@ -133,18 +135,24 @@ export function deriveTaskListView(
 }
 
 /**
- * Counts for the launcher pill. Non-null only for the latest run's own list with at least one
- * step: a promoted list would leave a stale count lit on a thread whose run is long over.
+ * The header toggle's progress: the working run's own list only, so a stale list never lights it,
+ * and nothing while the thread resyncs (the list may be mid-replay).
  */
-export function latestRunTaskCounts(
+export function taskListToggleSummary(
   view: TaskListView,
-): { readonly completed: number; readonly total: number } | null {
+  active: boolean,
+  resyncing: boolean,
+): string | null {
   const { primary, primaryKind } = view;
-  if (primaryKind !== "latest" || primary === null || primary.steps.length === 0) return null;
-  return {
-    completed: primary.steps.filter((step) => step.status === "completed").length,
-    total: primary.steps.length,
-  };
+  if (
+    resyncing ||
+    !active ||
+    primaryKind !== "latest" ||
+    primary === null ||
+    primary.steps.length === 0
+  )
+    return null;
+  return `${primary.steps.filter((step) => step.status === "completed").length}/${primary.steps.length}`;
 }
 
 export type TaskListHeaderChip =
@@ -176,14 +184,4 @@ export function taskListHeaderState(
   return primary.steps.every((step) => step.status === "completed")
     ? { tone: "finished", label: "Finished" }
     : { tone: "stopped", label: "Stopped" };
-}
-
-/** The step the header names: the first running, else the first pending, else the last. */
-export function taskListCurrentStep(steps: ReadonlyArray<TaskStep>): TaskStep | null {
-  return (
-    steps.find((step) => step.status === "inProgress") ??
-    steps.find((step) => step.status === "pending") ??
-    steps.at(-1) ??
-    null
-  );
 }

@@ -5,6 +5,7 @@ import type {
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
+import type { PendingBackgroundWorkTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";
@@ -15,12 +16,15 @@ import {
   type EnvironmentOption,
 } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
+import { BackgroundTasksPanel } from "../BackgroundTasksPanel";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
+import { TaskListPanel } from "../TaskListPanel";
+import type { TaskListView } from "../TaskListPanel.logic";
 import { Button } from "../ui/button";
 import type { ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
@@ -75,6 +79,10 @@ export interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  taskListView: TaskListView;
+  /** Whether the run behind `taskListView` is still working. */
+  taskListActive: boolean;
+  backgroundTasks: ReadonlyArray<PendingBackgroundWorkTask>;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -85,6 +93,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   // Same rule as the composer strip: a lone remote machine still gets a row,
   // shown as a static label because there is nothing to pick.
   const canPickEnvironment = props.availableEnvironments.length > 1;
+  const threadKey = `${props.environmentId}:${props.threadId}`;
   const showEnvironment = shouldShowEnvironmentIndicator({
     activeEnvironment:
       props.availableEnvironments.find((env) => env.environmentId === props.environmentId) ?? null,
@@ -220,6 +229,19 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {!props.draftId ? (
+            <>
+              <TaskListPanel
+                threadKey={threadKey}
+                primary={props.taskListView.primary}
+                primaryKind={props.taskListView.primaryKind}
+                history={props.taskListView.history}
+                latestRunActive={props.taskListActive}
+              />
+              <BackgroundTasksPanel threadKey={threadKey} tasks={props.backgroundTasks} />
+            </>
           ) : null}
 
           {density === "full" && !props.draftId ? (

@@ -5,7 +5,7 @@ import { formatDuration } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 
-export interface ComposerTaskStep {
+interface ComposerTaskStep {
   readonly durationMs?: number;
   readonly step: string;
   readonly status: "pending" | "inProgress" | "completed";
@@ -56,7 +56,7 @@ export function TaskSegments({
   );
 }
 
-/** The task step rows shared by the composer's tasks drawer and the task list panel. */
+/** The task step rows of the thread details card's Tasks section. */
 export const TaskStepList = memo(function TaskStepList({
   steps,
 }: {

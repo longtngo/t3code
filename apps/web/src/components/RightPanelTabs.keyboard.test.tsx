@@ -92,11 +92,6 @@ async function renderPanel(overrides: Partial<ComponentProps<typeof RightPanelTa
         pullRequestAvailable={false}
         pullRequestsAvailable={false}
         deviceAvailable={false}
-        onAddTasks={noop}
-        onAddBackground={noop}
-        tasksAvailable={false}
-        backgroundAvailable={false}
-        liveBackgroundCount={0}
         {...overrides}
       >
         content

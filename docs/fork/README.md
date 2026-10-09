@@ -60,8 +60,8 @@ Upstream's Expo 58 upgrade dropped two native race fixes; see invariant 2.
 The 41st (2026-09-25, 57 commits), against `origin/main`. Upstream turned on four
 more web lint errors (invariant 59), added migration 054 (applied id 63, invariant 1), and shipped
 Claude banked resets on its own config-dir rule (invariant 40). Upstream #13572's "View agents"
-button on the live-work banner is not taken: the fork's banner title parts already open the
-Agents and Background tabs.
+button on the live-work banner is not taken: the banner's subagent names already open each
+subagent's thread, and the thread details card's Background section lists the rest.
 
 The 40th (2026-09-24, 88 commits): upstream made `shadcn/no-restyle` a lint error, so the fork's
 own restyles were migrated (invariant 58), and upstream's review-index fix replaced the fork's
@@ -221,6 +221,23 @@ ordinary upstream additions by the 17th reconcile:
 
 - **RETIRED with orchestrator v2:** the `showSendWhileRunning` rejection. v2 has no such prop on
   either side; upstream's Stop-or-send model (queue or steer, invariant 5) is adopted.
+
+- Upstream's composer task drawer (`ComposerTasksBadge.tsx` and its mounts in `ChatComposer.tsx`), Lineage's
+  fixed six rows and its own scroll box are removed: tasks and background work live in the thread details card,
+  paged by the rows-per-section setting, and the card scrolls as one. After a reconcile these probes must print 0:
+  `git grep -n -E '<ComposerTasks(Drawer|Badge|Content)' -- apps/web/src | wc -l`,
+  `git grep -n 'THREAD_LINEAGE_INITIAL_COUNT' -- apps/web/src | wc -l`,
+  `git grep -nE 'overflow-y-auto|max-h-|ScrollArea' -- apps/web/src/components/chat/ThreadRelationshipsControl.tsx apps/web/src/components/TaskListPanel.tsx apps/web/src/components/BackgroundTasksPanel.tsx apps/web/src/components/chat/ThreadDetailsRowGroup.tsx apps/web/src/components/chat/TaskStepList.tsx | wc -l`,
+  `git ls-files apps/web/src/components/chat/ComposerTasksBadge.tsx | wc -l` (a modify/delete conflict on that
+  file resolves as delete). These must print 1 or more:
+  `git grep -n threadDetailsSectionRowLimit -- apps/web/src/components/chat/ThreadRelationshipsControl.tsx | wc -l`,
+  `git grep -n -E '^[[:space:]]*\{threadPanelSummary\}$' -- apps/web/src/components/chat/PanelLayoutControls.tsx | wc -l`;
+  and this must print 2 (upstream rewrites the panel block around the mounts, so taking its side can drop both
+  sections with a green build):
+  `git grep -n -E '<(TaskListPanel|BackgroundTasksPanel)( |$)' -- apps/web/src/components/chat/ThreadDetailsPanel.tsx | wc -l`.
+  The fraction probe is the task fraction on the thread details toggle. Upstream deleted the toggle's attention dot in the
+  same hunk, so a resolver can drop the fraction's span with a green build; the aria-label still names
+  `threadPanelSummary`, which is why the probe matches the span's child line and not the bare name.
 
 ### 4b. Send-blocked and environment-unavailable are different states
 

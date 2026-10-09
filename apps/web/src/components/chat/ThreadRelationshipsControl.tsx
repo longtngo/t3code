@@ -58,17 +58,14 @@ import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadR
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { useClientSettings } from "../../hooks/useSettings";
 import {
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
-// Lineage paging: a busy thread can accumulate dozens of forks and subagents,
-// and the panel it lives in already scrolls. Show a workable window, keep the
-// rest behind Show more, and bound what is shown so the sections below Lineage
-// stay reachable.
-const THREAD_LINEAGE_INITIAL_COUNT = 6;
+// Lineage paging: show the user's rows-per-section setting, keep the rest behind Show more.
 const THREAD_LINEAGE_PAGE_COUNT = 12;
 
 export function resolveThreadLineageWindow<Row>(
@@ -86,18 +83,7 @@ export function ThreadLineageRowList(props: {
 }) {
   return (
     <>
-      {/*
-        Bounded rather than free-growing so Lineage cannot push the rest of the
-        thread details panel out of view. Plain overflow, not a ScrollArea
-        component: this sits inside an already scrolling panel, where a
-        max-height-only virtual viewport measures badly. Every row is a focusable
-        button, so keyboard users reach and scroll the region through the rows
-        themselves and the container needs no extra tab stop of its own.
-      */}
-      <ul
-        aria-label="Related threads"
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
-      >
+      <ul aria-label="Related threads" className="m-0 list-none p-0">
         {props.children}
       </ul>
       {props.hiddenCount > 0 ? (
@@ -121,8 +107,9 @@ function ThreadLineageGroup(props: {
   readonly children: (rows: ReadonlyArray<ThreadRelationshipWalkRow>) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(props.expanded);
-  const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
-  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(props.rows, visibleCount);
+  const limit = useClientSettings((settings) => settings.threadDetailsSectionRowLimit);
+  const [extra, setExtra] = useState(0);
+  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(props.rows, limit + extra);
   const failedCount = props.rows.filter(
     ({ edge }) => edge.status === "failed" || edge.status === "error",
   ).length;
@@ -144,7 +131,7 @@ function ThreadLineageGroup(props: {
       {expanded ? (
         <ThreadLineageRowList
           hiddenCount={hiddenCount}
-          onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
+          onShowMore={() => setExtra((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
         >
           {props.children(visibleRows)}
         </ThreadLineageRowList>

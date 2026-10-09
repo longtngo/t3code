@@ -489,6 +489,8 @@ describe("rightPanelStore", () => {
     { kind: "plan", isOpen: true },
     { kind: "agents", isOpen: true },
     { kind: "agents", isOpen: false },
+    { kind: "tasks", isOpen: true },
+    { kind: "background", isOpen: false },
   ])("drops $kind with isOpen=$isOpen and falls back", ({ kind, isOpen }) => {
     expect(
       migratePersistedRightPanelState({
@@ -625,73 +627,33 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("opens the task list as a singleton surface beside the background surface", () => {
-    useRightPanelStore.getState().open(refA, "tasks");
-    useRightPanelStore.getState().open(refA, "background");
-    useRightPanelStore.getState().open(refA, "tasks");
-
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      isOpen: true,
-      activeSurfaceId: "tasks",
-      surfaces: [
-        { id: "tasks", kind: "tasks" },
-        { id: "background", kind: "background" },
-      ],
-    });
-  });
-
-  it("opens background as a singleton surface beside the task list", () => {
-    useRightPanelStore.getState().open(refA, "background");
-    useRightPanelStore.getState().open(refA, "tasks");
-    useRightPanelStore.getState().open(refA, "background");
-
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      isOpen: true,
-      activeSurfaceId: "background",
-      surfaces: [
-        { id: "background", kind: "background" },
-        { id: "tasks", kind: "tasks" },
-      ],
-    });
-  });
-
-  it("toggles the task list surface closed and back open without duplicating it", () => {
-    useRightPanelStore.getState().toggle(refA, "tasks");
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("tasks");
-    useRightPanelStore.getState().toggle(refA, "tasks");
-    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
-    useRightPanelStore.getState().toggle(refA, "tasks");
-    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
-      isOpen: true,
-      activeSurfaceId: "tasks",
-      surfaces: [{ id: "tasks", kind: "tasks" }],
-    });
-  });
-
-  it("migrates state persisted at version 13 and then opens the task list", async () => {
+  it("migrates task and background tabs saved at version 16 on rehydrate", async () => {
     const storage = useRightPanelStore.persist.getOptions().storage;
     const name = useRightPanelStore.persist.getOptions().name;
     if (!storage || !name) throw new Error("right panel store is not persisted");
-    const agentsState = {
-      isOpen: true,
-      activeSurfaceId: "agents",
-      surfaces: [{ id: "agents", kind: "agents" }],
-    };
     await storage.setItem(name, {
-      state: { byThreadKey: { "env-1:thread-A": agentsState } },
-      version: 13,
+      state: {
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "tasks",
+            surfaces: [
+              { id: "tasks", kind: "tasks" },
+              { id: "diff", kind: "diff" },
+            ],
+          },
+        },
+      },
+      version: 16,
     });
     await useRightPanelStore.persist.rehydrate();
-    useRightPanelStore.getState().open(refA, "tasks");
 
-    const persisted = await storage.getItem(name);
-    expect(persisted?.version).toBe(16);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "tasks",
-      // Version 16 re-runs upstream's Agents-tab cleanup for fork installs at 15.
-      surfaces: [{ id: "tasks", kind: "tasks" }],
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
     });
+    expect((await storage.getItem(name))?.version).toBe(17);
   });
 
   it("keeps files as a singleton surface", () => {

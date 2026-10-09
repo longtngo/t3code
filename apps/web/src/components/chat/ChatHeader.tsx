@@ -46,6 +46,8 @@ interface ChatHeaderProps {
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   rightPanelOpen: boolean;
+  /** The header controls carry a summary (the task fraction), so they need more room. */
+  controlsSummaryVisible: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
 }
@@ -78,6 +80,7 @@ export const ChatHeader = memo(function ChatHeader({
   isServerThread,
   activeProject,
   rightPanelOpen,
+  controlsSummaryVisible,
   onNewThreadInProject,
   onOpenProjectSettings,
 }: ChatHeaderProps) {
@@ -255,7 +258,13 @@ export const ChatHeader = memo(function ChatHeader({
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
+        rightPanelOpen
+          ? controlsSummaryVisible
+            ? "pr-18"
+            : "pr-10"
+          : controlsSummaryVisible
+            ? "pr-32"
+            : "pr-24",
       )}
       onContextMenu={handleHeaderContextMenu}
     >

@@ -15,7 +15,18 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useMemo: reactHookHarness.useMemo,
+    // Honour deps like React does, so a dep missing from a list shows up as a stale value.
+    useMemo: <T,>(factory: () => T, deps: readonly unknown[]): T => {
+      const slot = reactHookHarness.useRef<{ deps: readonly unknown[]; value: T } | null>(null);
+      if (
+        slot.current === null ||
+        slot.current.deps.length !== deps.length ||
+        slot.current.deps.some((dep, index) => !Object.is(dep, deps[index]))
+      ) {
+        slot.current = { deps, value: factory() };
+      }
+      return slot.current.value;
+    },
   };
 });
 
@@ -77,6 +88,25 @@ describe("restoring V2 settings", () => {
     expect(state.update).toHaveBeenCalledOnce();
     expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
   });
+
+  it.each([
+    ["threadDetailsSectionRowLimit", 10, "Thread details rows"],
+    ["usagePaceTolerance", 30, "Pace tolerance"],
+  ] as const)(
+    "lists %s once it changes after the first render, and restores it",
+    async (key, value, label) => {
+      hooks.beginRender();
+      expect(useSettingsRestore().changedSettingLabels).toEqual([]);
+
+      state.settings = { ...DEFAULT_UNIFIED_SETTINGS, [key]: value };
+      hooks.beginRender();
+      const restore = useSettingsRestore();
+
+      expect(restore.changedSettingLabels).toEqual([label]);
+      await restore.restoreDefaults();
+      expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
+    },
+  );
 
   it("does not reset settings after cancellation", async () => {
     state.settings = { ...DEFAULT_UNIFIED_SETTINGS, autoResumeLimitedThreads: true };

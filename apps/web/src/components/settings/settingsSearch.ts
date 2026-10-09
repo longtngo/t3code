@@ -380,6 +380,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["usage limit colour color yellow red pace threshold cursor claude codex"],
   },
   {
+    id: "thread-details-rows",
+    title: "Thread details rows",
+    to: "/settings/general",
+    searchTerms: ["rows per section tasks background lineage agents show more limit card"],
+  },
+  {
     id: "response-streaming",
     title: "Response streaming",
     to: "/settings/general",

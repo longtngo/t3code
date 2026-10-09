@@ -20,6 +20,8 @@ export interface PanelLayoutControlsProps {
   threadPanelPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
   threadPanelShortcutLabel: string | null;
   threadPanelHasAttention: boolean;
+  /** Progress shown beside the toggle's icon, e.g. the working run's task fraction. */
+  threadPanelSummary?: string | null;
   rightPanelAvailable: boolean;
   rightPanelOpen: boolean;
   rightPanelShortcutLabel: string | null;
@@ -41,6 +43,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   threadPanelPopoverHandle,
   threadPanelShortcutLabel,
   threadPanelHasAttention,
+  threadPanelSummary,
   rightPanelAvailable,
   rightPanelOpen,
   rightPanelShortcutLabel,
@@ -53,11 +56,20 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
     <Toggle
       className="relative shrink-0 [-webkit-app-region:no-drag]"
       pressed={threadPanelOpen}
-      aria-label="Toggle thread details panel"
+      aria-label={
+        threadPanelSummary
+          ? `Toggle thread details panel (${threadPanelSummary} tasks complete)`
+          : "Toggle thread details panel"
+      }
       variant="ghost"
       size="sm"
     >
       <SquareMenuIcon className="size-4" />
+      {threadPanelSummary ? (
+        <span className="font-mono text-2xs tabular-nums text-muted-foreground">
+          {threadPanelSummary}
+        </span>
+      ) : null}
       {threadPanelHasAttention ? (
         <span
           className="absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-background"
