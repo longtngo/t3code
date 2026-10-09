@@ -42,6 +42,21 @@ import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
 let renderer: ReactTestRenderer;
 
+// Row-group disclosures, excluding the section's own fold toggle in its heading.
+const rowGroupToggles = (root: ReactTestInstance, expanded: boolean) =>
+  root.findAll((node) => {
+    if (node.type !== "button" || node.props["aria-expanded"] !== expanded) return false;
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      if (parent.type === "h3") return false;
+    }
+    return true;
+  });
+const rowGroupToggle = (root: ReactTestInstance, expanded: boolean) => {
+  const [toggle, ...rest] = rowGroupToggles(root, expanded);
+  if (!toggle || rest.length > 0) throw new Error(`Expected one row-group toggle (${expanded})`);
+  return toggle;
+};
+
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   vi.unstubAllGlobals();
@@ -216,7 +231,7 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).not.toContain("tok");
   expect(text()).not.toContain("Unlinked agent");
   expect(text()).not.toContain("Active agents");
-  expect(renderer.root.findAllByProps({ type: "button", "aria-expanded": true })).toHaveLength(0);
+  expect(rowGroupToggles(renderer.root, true)).toHaveLength(0);
 
   state.projection = {
     ...projection,
@@ -231,12 +246,10 @@ it("shows the matching child agent details and refreshes them when the agent set
     ],
   };
   await act(async () => renderer.update(cloneElement(panel)));
-  expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
+  expect(renderer.root.findByType("h3").findByType("span").children).toEqual(["Lineage"]);
   expect(text()).toContain("Previous agents (1)");
   expect(text()).not.toContain("Checker");
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
-  );
+  await act(async () => rowGroupToggle(renderer.root, false).props.onClick());
   expect(text()).toContain("Checker");
   // A started agent's row shows only its compact time; the icon carries the status.
   expect(text()).toContain("Checker 2m");
@@ -244,14 +257,10 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).not.toContain("Done");
   expect(text()).not.toContain("running");
   expect(text()).not.toContain("Worker");
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
-  );
+  await act(async () => rowGroupToggle(renderer.root, true).props.onClick());
   expect(text()).not.toContain("Checker");
   expect(text()).toContain("Previous agents (1)");
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
-  );
+  await act(async () => rowGroupToggle(renderer.root, false).props.onClick());
   expect(text()).toContain("Checker");
 
   state.projection = {
@@ -634,9 +643,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     ],
   };
   await act(async () => renderer.update(cloneElement(panel)));
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
-  );
+  await act(async () => rowGroupToggle(renderer.root, false).props.onClick());
   expect(text()).toContain("Final checks passed.");
   expect(text()).not.toContain("Stale progress");
   expect(text()).not.toContain("Hidden tail");

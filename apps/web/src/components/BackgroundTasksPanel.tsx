@@ -42,6 +42,7 @@ export const BackgroundTasksPanel = memo(function BackgroundTasksPanel({
   return (
     <ThreadDetailsSection
       headingId="thread-details-background-heading"
+      collapseKey="background"
       title={`Background · ${tasks.length} running`}
       data-thread-details-activity
     >

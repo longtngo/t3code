@@ -123,6 +123,7 @@ export const TaskListPanel = memo(function TaskListPanel({
   return (
     <ThreadDetailsSection
       headingId="thread-details-tasks-heading"
+      collapseKey="tasks"
       title={`Tasks · ${completed}/${primary.steps.length}`}
       data-thread-details-activity
       actions={

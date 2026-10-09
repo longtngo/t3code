@@ -113,6 +113,7 @@ export function useLocalStorage<T, E>(
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
+      if (typeof window === "undefined") return () => {};
       const handleStorageChange = (event: StorageEvent) => {
         if (event.key === key) {
           onStoreChange();
