@@ -76,14 +76,14 @@ map to U+FFFD. All 516 live ids are 36-char UUIDs.
 
 ### Resolution
 
-| `enabled` | thread mode | global file | per-thread file                                                                                                                                                          |
-| --------- | ----------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| false     | any         | any         | `OFF`                                                                                                                                                                    |
-| true      | `off`       | any         | `OFF`                                                                                                                                                                    |
-| true      | `inherit`   | cursor      | copy of the global file's resolved content                                                                                                                               |
-| true      | `inherit`   | default     | `OFF`                                                                                                                                                                    |
-| true      | `on`        | cursor      | cursor, global file's `instanceId`/`model`                                                                                                                               |
-| true      | `on`        | default     | `resolveCursorTarget(settings, cursorInstances(settings)[0]?.instanceId)`, model `"auto"` (the wrapper's default and `setBackend`'s, `:304`); `OFF` if it cannot resolve |
+| `enabled` | thread mode | global file | per-thread file                                                                                                                                                                                 |
+| --------- | ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| false     | any         | any         | `OFF`                                                                                                                                                                                           |
+| true      | `off`       | any         | `OFF`                                                                                                                                                                                           |
+| true      | `inherit`   | cursor      | copy of the global file's resolved content                                                                                                                                                      |
+| true      | `inherit`   | default     | copy of the global file (Default, `binaryPath` null, carrying the remembered instance/model)                                                                                                    |
+| true      | `on`        | cursor      | cursor, global file's `instanceId`/`model`                                                                                                                                                      |
+| true      | `on`        | default     | `resolveCursorTarget` on the remembered instance if it is still an enabled Cursor instance, else the first enabled one; model = the remembered model, else `"auto"`; `OFF` if it cannot resolve |
 
 `OFF` is the module's existing constant, written as-is on the rows that name it plainly; the
 master-off row carries `degraded: MASTER_OFF_REASON`, and the rows that copy or resolve a target

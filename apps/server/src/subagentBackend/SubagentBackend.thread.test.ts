@@ -28,7 +28,9 @@ import { ServerSettingsService, layerTest as serverSettingsLayerTest } from "../
 import {
   CREDIT_BLOCK_RECONCILED,
   MASTER_OFF_REASON,
+  buildState,
   OFF,
+  parsePersistedBackend,
   type PersistedBackend,
   readBackendFile,
   readThreadBackendFile,
@@ -64,6 +66,7 @@ afterEach(() => {
 });
 
 const t1 = ThreadId.make("t1");
+const REMEMBERED: PersistedBackend = { ...OFF, instanceId: "second", model: "gpt-5" };
 
 const CURSOR: PersistedBackend = {
   schemaVersion: 1,
@@ -80,6 +83,7 @@ function settings(input: {
   enabled?: boolean;
   modes?: Record<string, "inherit" | "on" | "off">;
   cursor?: boolean;
+  second?: boolean;
 }): ServerSettings {
   return {
     subagentBackendEnabled: input.enabled ?? true,
@@ -94,6 +98,16 @@ function settings(input: {
               enabled: true,
               config: { binaryPath: "/tmp/agent", apiEndpoint: "" },
             },
+            ...(input.second
+              ? {
+                  second: {
+                    driver: "cursor",
+                    displayName: "Second",
+                    enabled: true,
+                    config: { binaryPath: "/tmp/agent", apiEndpoint: "" },
+                  },
+                }
+              : {}),
           },
   } as unknown as ServerSettings;
 }
@@ -169,6 +183,79 @@ describe("resolveThreadBackend", () => {
         expect(r.model).toBe("auto");
       }),
     );
+
+    it.effect("on with a default global uses the remembered instance and model", () =>
+      Effect.gen(function* () {
+        const r = yield* resolveThreadBackend({
+          settings: settings({ modes: { t1: "on" }, second: true }),
+          threadId: t1,
+          global: REMEMBERED,
+          creditsBlockedReason: null,
+        });
+        expect(r.backend).toBe("cursor");
+        expect(r.instanceId).toBe("second");
+        expect(r.model).toBe("gpt-5");
+      }),
+    );
+
+    it.effect(
+      "on with a remembered instance that is gone falls back to the first, keeping the model",
+      () =>
+        Effect.gen(function* () {
+          const r = yield* resolveThreadBackend({
+            settings: settings({ modes: { t1: "on" } }),
+            threadId: t1,
+            global: REMEMBERED,
+            creditsBlockedReason: null,
+          });
+          expect(r.instanceId).toBe("cursor");
+          expect(r.model).toBe("gpt-5");
+        }),
+    );
+
+    it.effect("inherit with a remembered default global stays default and cannot dispatch", () =>
+      Effect.gen(function* () {
+        const r = yield* resolveThreadBackend({
+          settings: settings({ second: true }),
+          threadId: t1,
+          global: REMEMBERED,
+          creditsBlockedReason: null,
+        });
+        expect(r.backend).toBe("default");
+        expect(r.binaryPath).toBeNull();
+      }),
+    );
+
+    it("a default file keeps the remembered instance and model but never a binary", () => {
+      const parsed = parsePersistedBackend(
+        JSON.stringify({
+          backend: "default",
+          instanceId: "second",
+          model: "gpt-5",
+          binaryPath: "/x",
+        }),
+      );
+      expect(parsed.backend).toBe("default");
+      expect(parsed.instanceId).toBe("second");
+      expect(parsed.model).toBe("gpt-5");
+      expect(parsed.binaryPath).toBeNull();
+    });
+
+    it("buildState shows a remembered instance only while it is an enabled cursor instance", () => {
+      const gone = buildState({ ...OFF, instanceId: "gone", model: "m" }, settings({}), []);
+      expect(gone.instanceId).toBeNull();
+      expect(gone.model).toBe("m");
+      expect(
+        buildState({ ...OFF, instanceId: "cursor", model: "m" }, settings({}), []).instanceId,
+      ).toBe("cursor");
+      const disabled = {
+        ...settings({}),
+        providerInstances: { cursor: { driver: "cursor", enabled: false, config: {} } },
+      } as unknown as ServerSettings;
+      expect(
+        buildState({ ...OFF, instanceId: "cursor", model: "m" }, disabled, []).instanceId,
+      ).toBeNull();
+    });
 
     it.effect("an inherited Object.prototype key is not an override", () =>
       Effect.gen(function* () {
@@ -444,6 +531,54 @@ describe("thread flag files", () => {
           "default",
         );
       }).pipe(Effect.provide(withLayers(["a"], cursorSettings))),
+    );
+
+    it.effect("a default set remembers the target and an on thread dispatches to it", () =>
+      Effect.gen(function* () {
+        const { subagentThreadsDir } = yield* ServerConfig;
+        yield* setBackend({
+          backend: "default",
+          instanceId: ProviderInstanceId.make("cursor"),
+          model: "gpt-5",
+        });
+        const thread = yield* readThreadBackendFile(subagentThreadsDir, ThreadId.make("a"));
+        expect(thread.backend).toBe("cursor");
+        expect(thread.model).toBe("gpt-5");
+      }).pipe(
+        Effect.provide(
+          withLayers(["a"], {
+            ...cursorSettings,
+            subagentBackendThreadModes: { [ThreadId.make("a")]: "on" },
+          }),
+        ),
+      ),
+    );
+
+    it.effect("reconcile downgrades a gone instance but keeps the remembered target", () =>
+      Effect.gen(function* () {
+        yield* writeBackendFile({ ...CURSOR, instanceId: "gone" });
+        yield* reconcileAllBackends();
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("gone");
+        expect(file.model).toBe("sonnet");
+        expect(file.degraded).not.toBeNull();
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
+    );
+
+    it.effect("a Cursor set naming a missing instance keeps the picked target", () =>
+      Effect.gen(function* () {
+        yield* setBackend({
+          backend: "cursor",
+          instanceId: ProviderInstanceId.make("gone"),
+          model: "sonnet",
+        });
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("gone");
+        expect(file.model).toBe("sonnet");
+        expect(file.degraded).not.toBeNull();
+      }).pipe(Effect.provide(withLayers([], cursorSettings))),
     );
 
     it.effect("master off writes no thread files from setBackend", () =>

@@ -45,6 +45,15 @@ describe("parsePersistedBackend", () => {
     expect(parsed.degraded).toContain("no binary");
   });
 
+  it("keeps the remembered instance and model on a cursor payload with no binary", () => {
+    const parsed = parsePersistedBackend('{"backend":"cursor","instanceId":"x","model":"m"}');
+    expect(parsed.backend).toBe("default");
+    expect(parsed.binaryPath).toBeNull();
+    expect(parsed.instanceId).toBe("x");
+    expect(parsed.model).toBe("m");
+    expect(parsed.degraded).not.toBeNull();
+  });
+
   it("treats empty content as an absent toggle, not damage", () => {
     expect(parsePersistedBackend("").backend).toBe("default");
     expect(parsePersistedBackend("").degraded).toBeNull();

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  ProviderInstanceId,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
   type SubagentBackendInstance,
+  type ServerSettings,
   type SubagentBackendState,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import {
@@ -12,6 +15,11 @@ import {
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
   subagentCursorModelOptions,
+  subagentCursorTargetInstanceId,
+  subagentTargetSetInput,
+  subagentTargetVisible,
+  offloadedThreadCount,
+  threadOffloadedToCursor,
   threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
 
@@ -174,17 +182,22 @@ describe("subagentBackendApplyInput", () => {
     ).toEqual({ backend: SUBAGENT_BACKEND_CURSOR });
   });
 
-  it("switching to default drops instanceId and model", () => {
+  it("switching to default carries instanceId and model", () => {
     expect(
       subagentBackendApplyInput(
-        state({
-          backend: SUBAGENT_BACKEND_CURSOR,
-          instanceId: instance("cursor_default").instanceId,
-          model: "auto",
-        }),
+        state({ instanceId: instance("cursor").instanceId, model: "m" }),
         SUBAGENT_BACKEND_DEFAULT,
       ),
-    ).toEqual({ backend: SUBAGENT_BACKEND_DEFAULT });
+    ).toEqual({ backend: SUBAGENT_BACKEND_DEFAULT, instanceId: "cursor", model: "m" });
+    expect(
+      subagentBackendApplyInput(
+        state({ instances: [instance("cursor_default")] }),
+        SUBAGENT_BACKEND_DEFAULT,
+      ),
+    ).toEqual({ backend: SUBAGENT_BACKEND_DEFAULT, instanceId: "cursor_default" });
+    expect(subagentBackendApplyInput(state({}), SUBAGENT_BACKEND_DEFAULT)).toEqual({
+      backend: SUBAGENT_BACKEND_DEFAULT,
+    });
   });
 });
 
@@ -331,5 +344,207 @@ describe("threadOffloadNotes", () => {
         }),
       ).toEqual(["Applies to Claude Code threads."]);
     }
+  });
+});
+
+const cursorInstance = { driver: "cursor", enabled: true, config: {} };
+const base = {
+  subagentBackendEnabled: true,
+  subagentBackendThreadModes: { a: "on", b: "off", c: "on", gone: "on" },
+  providerInstances: { cursor: cursorInstance },
+} as unknown as ServerSettings;
+const t = (id: string) => ThreadId.make(id);
+
+describe("offloaded thread rules", () => {
+  it("is true only for mode on, master on, with an enabled cursor instance", () => {
+    expect(threadOffloadedToCursor(base, t("a"))).toBe(true);
+    expect(threadOffloadedToCursor(base, t("b"))).toBe(false);
+    expect(threadOffloadedToCursor(base, t("x"))).toBe(false);
+    expect(threadOffloadedToCursor({ ...base, subagentBackendEnabled: false }, t("a"))).toBe(false);
+    expect(
+      threadOffloadedToCursor({ ...base, providerInstances: {} } as ServerSettings, t("a")),
+    ).toBe(false);
+    expect(
+      threadOffloadedToCursor(
+        {
+          ...base,
+          providerInstances: { cursor: { ...cursorInstance, enabled: false } },
+        } as unknown as ServerSettings,
+        t("a"),
+      ),
+    ).toBe(false);
+    expect(threadOffloadedToCursor(null, t("a"))).toBe(false);
+  });
+
+  it("is false with only an enabled non-Cursor instance", () => {
+    expect(
+      threadOffloadedToCursor(
+        {
+          ...base,
+          providerInstances: { claude: { driver: "claudeAgent", enabled: true, config: {} } },
+        } as unknown as ServerSettings,
+        t("a"),
+      ),
+    ).toBe(false);
+  });
+
+  it("counts offloaded threads that exist and are not archived", () => {
+    const threads = new Map([
+      [t("a"), { archivedAt: null }],
+      [t("b"), { archivedAt: null }],
+      [t("c"), { archivedAt: "2026-10-01T00:00:00Z" }],
+    ]);
+    expect(offloadedThreadCount(base, threads)).toBe(1);
+    expect(offloadedThreadCount(null, threads)).toBe(0);
+  });
+});
+
+describe("offloaded thread status", () => {
+  const def = state({ instances: [instance("cursor_default")] });
+  it("reports a partial dot with the thread count", () => {
+    expect(subagentBackendRowStatus(def, undefined, true, 2)).toEqual({
+      dot: "partial",
+      text: "2 threads set to Cursor",
+    });
+    expect(subagentBackendRowStatus(def, undefined, true, 1)).toEqual({
+      dot: "partial",
+      text: "1 thread set to Cursor",
+    });
+  });
+  it("falls back to Default when master is off or the count is 0", () => {
+    expect(subagentBackendRowStatus(def, undefined, false, 2)).toEqual({
+      dot: "off",
+      text: "Default",
+    });
+    expect(subagentBackendRowStatus(def, undefined, true, 0)).toEqual({
+      dot: "off",
+      text: "Default",
+    });
+  });
+  it("shows the thread count on a degraded Default file, since those threads still offload", () => {
+    // A Default file is degraded after its remembered Cursor instance is disabled, while
+    // threads set to Cursor keep offloading to another enabled instance.
+    expect(
+      subagentBackendRowStatus(
+        state({ degraded: "bad" as never, instances: def.instances }),
+        undefined,
+        true,
+        2,
+      ),
+    ).toEqual({ dot: "partial", text: "2 threads set to Cursor" });
+  });
+  it("keeps Degraded on a degraded Default file with no thread set to Cursor, or master off", () => {
+    const degraded = state({ degraded: "bad" as never, instances: def.instances });
+    expect(subagentBackendRowStatus(degraded, undefined, true, 0).text).toBe("Degraded");
+    expect(subagentBackendRowStatus(degraded, undefined, false, 2).text).toBe("Degraded");
+  });
+  it("keeps degraded, unavailable and Cursor-backend precedence", () => {
+    expect(
+      subagentBackendRowStatus(
+        state({
+          backend: SUBAGENT_BACKEND_CURSOR,
+          degraded: "bad" as never,
+          instances: def.instances,
+        }),
+        undefined,
+        true,
+        2,
+      ),
+    ).toEqual({ dot: "off", text: "Degraded" });
+    expect(subagentBackendRowStatus(state({}), undefined, true, 2).text).toBe("Cursor unavailable");
+    expect(
+      subagentBackendRowStatus({ ...def, backend: SUBAGENT_BACKEND_CURSOR }, undefined, true, 2)
+        .dot,
+    ).toBe("on");
+  });
+});
+
+describe("subagentCursorTargetInstanceId", () => {
+  it("prefers the stored instance, else the first, else null", () => {
+    const withInstances = state({ instanceId: null, instances: [instance("cursor")] });
+    expect(subagentCursorTargetInstanceId(withInstances)).toBe("cursor");
+    expect(
+      subagentCursorTargetInstanceId({
+        ...withInstances,
+        instanceId: instance("x").instanceId,
+      }),
+    ).toBe("x");
+    expect(subagentCursorTargetInstanceId(null)).toBeNull();
+  });
+});
+
+describe("subagentTargetSetInput", () => {
+  const first = instance("cursor_default");
+  const second = instance("cursor_personal");
+
+  it("keeps the Default backend when a model is picked, targeting the first instance when none is stored", () => {
+    expect(
+      subagentTargetSetInput(
+        state({ backend: SUBAGENT_BACKEND_DEFAULT, instances: [first, second] }),
+        { model: "gpt-5" },
+      ),
+    ).toEqual({
+      backend: SUBAGENT_BACKEND_DEFAULT,
+      instanceId: first.instanceId,
+      model: "gpt-5",
+    });
+  });
+
+  it("keeps the Cursor backend when an instance is picked, carrying the stored model", () => {
+    expect(
+      subagentTargetSetInput(
+        state({
+          backend: SUBAGENT_BACKEND_CURSOR,
+          instanceId: first.instanceId,
+          model: "auto",
+          instances: [first, second],
+        }),
+        { instanceId: ProviderInstanceId.make("cursor_personal") },
+      ),
+    ).toEqual({
+      backend: SUBAGENT_BACKEND_CURSOR,
+      instanceId: second.instanceId,
+      model: "auto",
+    });
+  });
+
+  it("omits keys that are null", () => {
+    expect(subagentTargetSetInput(state({}), {})).toEqual({ backend: SUBAGENT_BACKEND_DEFAULT });
+  });
+});
+
+describe("subagentTargetVisible", () => {
+  const base = {
+    isCursor: false,
+    threadOnCursor: false,
+    offloadedThreads: 0,
+    cursorAvailable: true,
+  };
+
+  it("shows on Default when threads elsewhere are offloaded", () => {
+    expect(subagentTargetVisible({ ...base, offloadedThreads: 2 })).toBe(true);
+  });
+
+  it("shows on Default when the open thread is on Cursor", () => {
+    expect(subagentTargetVisible({ ...base, threadOnCursor: true })).toBe(true);
+  });
+
+  it("hides on Default with no thread on Cursor", () => {
+    expect(subagentTargetVisible(base)).toBe(false);
+  });
+
+  it("hides without an enabled Cursor instance", () => {
+    expect(
+      subagentTargetVisible({
+        ...base,
+        threadOnCursor: true,
+        offloadedThreads: 2,
+        cursorAvailable: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows when Cursor is the machine backend", () => {
+    expect(subagentTargetVisible({ ...base, isCursor: true })).toBe(true);
   });
 });

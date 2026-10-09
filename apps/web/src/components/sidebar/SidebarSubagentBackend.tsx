@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { useParams } from "@tanstack/react-router";
 import { BotIcon, Loader2Icon } from "lucide-react";
+import { Atom } from "effect/reactivity";
 import {
+  AuthSettingsWriteScope,
   ProviderInstanceId,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
@@ -20,6 +22,8 @@ import {
 } from "~/hooks/useSettings";
 import { useSubagentBackend } from "~/hooks/useSubagentBackend";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentScope } from "~/state/session";
+import { offloadedThreadCountAtom } from "~/state/subagentOffload";
 import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/providerInstances";
 import { getAppModelOptionsForInstance } from "~/modelSelection";
 import { primaryServerProvidersAtom } from "~/state/server";
@@ -40,10 +44,16 @@ import {
   subagentCursorAvailable,
   subagentCursorInstancesPickable,
   subagentCursorModelOptions,
+  subagentCursorTargetInstanceId,
+  subagentTargetVisible,
+  subagentTargetSetInput,
+  threadOffloadedToCursor,
   threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
 
 const PANEL_ID = "sidebar-subagent-backend-panel";
+
+const ZERO_ATOM = Atom.make(0);
 
 const THREAD_MODE_LABELS: Record<SubagentBackendThreadMode, string> = {
   inherit: "Inherit",
@@ -89,6 +99,7 @@ function ThreadOffloadControl(props: {
   const threadMasterEnabled = settings.subagentBackendEnabled;
   const mode = subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const notes = threadOffloadNotes({ threadMasterEnabled, primaryMasterEnabled, cursorAvailable });
   if (!threadMasterEnabled && notes.length === 0) return null;
   return (
@@ -106,11 +117,16 @@ function ThreadOffloadControl(props: {
           }}
         >
           {Object.entries(THREAD_MODE_LABELS).map(([value, label]) => (
-            <Toggle key={value} value={value}>
+            <Toggle key={value} value={value} disabled={!canWrite}>
               {label}
             </Toggle>
           ))}
         </ToggleGroup>
+      ) : null}
+      {threadMasterEnabled && !canWrite ? (
+        <p className="text-2xs leading-snug text-muted-foreground">
+          This connection does not have permission to change environment settings.
+        </p>
       ) : null}
       {notes.map((note) => (
         <p key={note} className="text-2xs leading-snug text-muted-foreground">
@@ -149,6 +165,9 @@ export function SidebarSubagentBackend() {
   const paceTolerance = useClientSettings((s) => s.usagePaceTolerance);
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const offloadedThreads = useAtomValue(
+    environmentId === null ? ZERO_ATOM : offloadedThreadCountAtom(environmentId),
+  );
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
@@ -159,26 +178,41 @@ export function SidebarSubagentBackend() {
     environments.find((environment) => environment.environmentId === threadRef.environmentId)
       ?.serverConfig?.environment.capabilities.subagentBackendThreadModes === true;
 
-  // The picker offers the Cursor provider's own visible models for the selected instance, not
+  const targetInstanceId = subagentCursorTargetInstanceId(state);
+  // The picker offers the Cursor provider's own visible models for the target instance, not
   // the CLI's advertised id list. `null` while that instance has no snapshot yet, which
   // `subagentCursorModelOptions` treats differently from a user who hid every model.
   const visibleModels = useMemo(() => {
-    const instanceId = state?.instanceId;
-    if (instanceId == null) return null;
-    const entry = getProviderInstanceEntry(providers, instanceId);
+    if (targetInstanceId == null) return null;
+    const entry = getProviderInstanceEntry(providers, targetInstanceId);
     if (entry === undefined) return null;
     return getAppModelOptionsForInstance(settings, entry, state?.model);
-  }, [providers, settings, state?.instanceId, state?.model]);
+  }, [providers, settings, targetInstanceId, state?.model]);
 
   const modelOptions = subagentCursorModelOptions(state, visibleModels);
 
   if (!supported || environmentId == null) return null;
 
   const masterEnabled = settings.subagentBackendEnabled;
-  const status = subagentBackendRowStatus(state, modelOptions, masterEnabled);
+  const status = subagentBackendRowStatus(state, modelOptions, masterEnabled, offloadedThreads);
   const cursorAvailable = subagentCursorAvailable(state);
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
+  // A thread set to Cursor dispatches with the stored Cursor target even while the machine
+  // backend is Default, so its model stays pickable there.
+  const threadOnCursor =
+    threadRef?.environmentId === environmentId &&
+    threadOffloadedToCursor(settings, threadRef.threadId);
+  const showTarget = subagentTargetVisible({
+    isCursor,
+    threadOnCursor,
+    offloadedThreads,
+    cursorAvailable,
+  });
+  // Default-route threads run `auto` when no model is remembered; show it only if it is an option.
+  const selectedModel =
+    state?.model ??
+    (!isCursor && modelOptions.some((option) => option.id === "auto") ? "auto" : "");
   const usageCycle = usage ? cycleWindow(usage.startsAt, usage.resetsAt) : null;
   // The same pace -> severity pair the panel's `WindowRow` colours its bar with.
   // Shown only while offload is genuinely on (the green-icon rule), not merely while Cursor is the
@@ -210,12 +244,19 @@ export function SidebarSubagentBackend() {
                 onClick={() => setOpen((value) => !value)}
                 aria-expanded={open}
                 aria-controls={open ? PANEL_ID : undefined}
-                aria-label="Subagents"
+                aria-label={`Subagents · ${status.text}`}
               >
                 {pending ? (
                   <Loader2Icon className="size-3.5 animate-spin" />
                 ) : status.dot === "on" ? (
                   <BotIcon className="size-3.5 text-success" />
+                ) : status.dot === "partial" ? (
+                  <>
+                    <BotIcon className="size-3.5 text-warning" />
+                    <span className="text-3xs tabular-nums text-warning" aria-hidden>
+                      {offloadedThreads}
+                    </span>
+                  </>
                 ) : (
                   <BotIcon className="size-3.5" />
                 )}
@@ -279,20 +320,28 @@ export function SidebarSubagentBackend() {
 
             {isCursor ? null : (
               <p className="text-2xs leading-snug text-muted-foreground">
-                Subagents run on the same provider and model as the thread that spawns them.
+                {showTarget
+                  ? "Threads on Inherit run subagents on their own provider and model."
+                  : "Subagents run on the same provider and model as the thread that spawns them."}
               </p>
             )}
 
-            {isCursor && instancesPickable && state ? (
+            {showTarget && !isCursor ? (
+              <div className="text-2xs leading-snug text-muted-foreground">
+                Model for this machine's threads set to Cursor:
+              </div>
+            ) : null}
+
+            {showTarget && instancesPickable && state ? (
               <Select
-                value={state.instanceId ?? ""}
+                value={targetInstanceId ?? ""}
                 onValueChange={(instanceId: string | null) => {
                   if (!instanceId) return;
-                  set({
-                    backend: SUBAGENT_BACKEND_CURSOR,
-                    instanceId: ProviderInstanceId.make(instanceId),
-                    ...(state.model ? { model: state.model } : {}),
-                  });
+                  set(
+                    subagentTargetSetInput(state, {
+                      instanceId: ProviderInstanceId.make(instanceId),
+                    }),
+                  );
                 }}
                 disabled={controlsDisabled || !masterEnabled}
               >
@@ -321,18 +370,14 @@ export function SidebarSubagentBackend() {
               </Select>
             ) : null}
 
-            {/* Cursor-only configuration, hidden rather than disabled while the backend is
-                `default`: with nothing to configure, a dead control is just noise. */}
-            {isCursor ? (
+            {/* Cursor-only configuration, hidden rather than disabled while nothing dispatches to
+                Cursor: with nothing to configure, a dead control is just noise. */}
+            {showTarget ? (
               <Select
-                value={state?.model ?? ""}
+                value={selectedModel}
                 onValueChange={(model: string | null) => {
                   if (!model || state == null) return;
-                  set({
-                    backend: SUBAGENT_BACKEND_CURSOR,
-                    ...(state.instanceId ? { instanceId: state.instanceId } : {}),
-                    model,
-                  });
+                  set(subagentTargetSetInput(state, { model }));
                 }}
                 disabled={controlsDisabled || modelOptions.length === 0 || !masterEnabled}
               >

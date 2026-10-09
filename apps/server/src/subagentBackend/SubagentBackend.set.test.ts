@@ -277,6 +277,153 @@ describe("setBackend", () => {
       ),
     );
 
+    it.effect("a default set remembers the instance and model, under master-off too", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "gpt-5" });
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("gpt-5");
+        expect(file.binaryPath).toBeNull();
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({ ...settings, subagentBackendEnabled: false }),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("a bare default set keeps the remembered instance and model", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "sonnet" });
+        yield* setBackend({ backend: "default" });
+        const file = yield* readBackendFile();
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("sonnet");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a refused Cursor set without a model keeps the remembered model", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "sonnet" });
+        const result = yield* setBackend({ backend: "cursor", instanceId: cursorOffId });
+        expect(result.degraded).toContain("not an enabled Cursor instance");
+        const file = yield* readBackendFile();
+        expect(file.model).toBe("sonnet");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a refused Cursor pick keeps the model that belongs to the kept instance", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "sonnet" });
+        // "gpt-5" was chosen for the refused instance; pairing it with the remembered
+        // "cursor" would hand that instance a model nobody picked for it.
+        const result = yield* setBackend({
+          backend: "cursor",
+          instanceId: cursorOffId,
+          model: "gpt-5",
+        });
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("sonnet");
+        expect(result.degraded).toContain("not an enabled Cursor instance");
+        expect(file.degraded).not.toBeNull();
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a Cursor set naming the remembered instance keeps the remembered model", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "some-model" });
+        const result = yield* setBackend({ backend: "cursor", instanceId: cursorId });
+        expect(result.backend).toBe("cursor");
+        expect((yield* readBackendFile()).model).toBe("some-model");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a bare Cursor set uses the remembered instance when it is valid", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "some-model" });
+        const result = yield* setBackend({ backend: "cursor" });
+        expect(result.backend).toBe("cursor");
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("cursor");
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("some-model");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a refused Cursor pick keeps a remembered second instance", () =>
+      Effect.gen(function* () {
+        const second = ProviderInstanceId.make("cursor_two");
+        yield* setBackend({ backend: "default", instanceId: second, model: "sonnet" });
+        const result = yield* setBackend({ backend: "cursor", instanceId: cursorOffId });
+        expect(result.degraded).toContain("not an enabled Cursor instance");
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("cursor_two");
+        expect(file.model).toBe("sonnet");
+        expect(file.degraded).not.toBeNull();
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({
+              providerInstances: {
+                ...settings.providerInstances,
+                cursor_two: {
+                  driver: "cursor",
+                  displayName: "Two",
+                  enabled: true,
+                  config: { binaryPath: "agent" },
+                },
+              },
+            } as unknown as ServerSettings),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("a Cursor pick naming another instance does not inherit the old one's model", () =>
+      Effect.gen(function* () {
+        const second = ProviderInstanceId.make("cursor_two");
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "sonnet" });
+        const result = yield* setBackend({ backend: "cursor", instanceId: second });
+        expect(result.backend).toBe("cursor");
+        const file = yield* readBackendFile();
+        expect(file.instanceId).toBe("cursor_two");
+        expect(file.model).toBe("auto");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({
+              providerInstances: {
+                ...settings.providerInstances,
+                cursor_two: {
+                  driver: "cursor",
+                  displayName: "Two",
+                  enabled: true,
+                  config: { binaryPath: "agent" },
+                },
+              },
+            } as unknown as ServerSettings),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("a refused bare Cursor pick keeps a model saved without an instance", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", model: "x" });
+        const result = yield* setBackend({ backend: "cursor" });
+        expect(result.degraded).not.toBeNull();
+        expect((yield* readBackendFile()).model).toBe("x");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
     it.effect("writes default without naming an instance", () =>
       Effect.gen(function* () {
         const result = yield* setBackend({ backend: "default" });

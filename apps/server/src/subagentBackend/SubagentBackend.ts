@@ -107,19 +107,27 @@ export function parsePersistedBackend(contents: string): PersistedBackend {
   }
 
   const record = raw as Record<string, unknown>;
+  // A non-dispatching file still remembers the last Cursor target, so threads switched to
+  // Cursor (and a later flip back to Cursor) reuse the user's pick. `binaryPath` stays null,
+  // so neither the wrapper nor any reader can dispatch from it.
+  const remembered = {
+    ...OFF,
+    instanceId: str(record.instanceId),
+    model: str(record.model),
+    updatedAt: str(record.updatedAt),
+  };
   if (record.backend !== SUBAGENT_BACKEND_CURSOR) {
     // Includes both an explicit "default" and any value a newer build might write.
     // `degraded` is read back here too: the reconciler downgrades to "default" with
     // a reason attached, and that reason must survive the round trip so a real
     // downgrade stays distinguishable from a deliberate Off (see the module note).
-    return { ...OFF, updatedAt: str(record.updatedAt), degraded: str(record.degraded) };
+    return { ...remembered, degraded: str(record.degraded) };
   }
 
   const binaryPath = str(record.binaryPath);
   if (binaryPath === null) {
     return {
-      ...OFF,
-      updatedAt: str(record.updatedAt),
+      ...remembered,
       degraded: "The subagent toggle names Cursor but no binary, so it cannot dispatch.",
     };
   }
@@ -249,14 +257,6 @@ function decodeCursorInstanceConfig(config: unknown): CursorSettings | null {
   }
 }
 
-const isProviderInstanceId = Schema.is(ProviderInstanceId);
-
-/** Narrows a flag-file instance id to the branded slug, or null when it does not conform. */
-function validInstanceIdOrNull(value: string | null): ProviderInstanceId | null {
-  if (value === null) return null;
-  return isProviderInstanceId(value) ? value : null;
-}
-
 /** Enabled Cursor instances this machine can dispatch subagents to. */
 export function cursorInstances(settings: ServerSettings): readonly SubagentBackendInstance[] {
   const instances: SubagentBackendInstance[] = [];
@@ -373,7 +373,7 @@ const readCreditsBlockedReason = Effect.fn("subagentBackend.creditsBlocked")(fun
 /**
  * The one truth table every per-thread writer uses. Master off beats everything;
  * `"inherit"` and an absent entry are the same thing; `"on"` reuses the global Cursor
- * target when there is one and otherwise resolves the first enabled Cursor instance,
+ * target when there is one and otherwise resolves the remembered instance, else the first enabled one,
  * so a thread can offload without the user first flipping the machine-wide toggle.
  *
  * Only an explicit `"on"` may enable offload — see `subagentBackendThreadMode` for why the
@@ -396,10 +396,12 @@ export const resolveThreadBackend = Effect.fn("subagentBackend.resolveThread")(f
   if (mode === "off") return OFF;
   if (mode !== "on") return global;
   if (global.backend === SUBAGENT_BACKEND_CURSOR) return global;
-  const first = cursorInstances(settings)[0]?.instanceId;
-  const validated = validateCursorInstance(settings, first);
+  const remembered = validateCursorInstance(settings, global.instanceId ?? undefined);
+  const validated = remembered.ok
+    ? remembered
+    : validateCursorInstance(settings, cursorInstances(settings)[0]?.instanceId);
   if (!validated.ok) return { ...OFF, degraded: validated.reason } satisfies PersistedBackend;
-  return yield* resolveCursorTarget(validated, "auto");
+  return yield* resolveCursorTarget(validated, global.model ?? "auto");
 });
 
 class ThreadBackendNameTooLongError extends Data.TaggedError("ThreadBackendNameTooLongError")<{
@@ -613,6 +615,10 @@ export const prepareThreadBackend = Effect.fn("subagentBackend.prepareThread")(f
  * user set last stays as it was and the returned `degraded` says why nothing changed. A
  * selection of "default" is still admitted, so the master switch is not a one-way door
  * that strands the global file on a Cursor target with no way to clear it.
+ *
+ * A selection that names no instance or model uses the ones already remembered in the
+ * file. A model belongs to its instance: naming a different instance without a model drops
+ * the remembered one, and a refused Cursor pick keeps a remembered instance with its model.
  */
 export const setBackend = Effect.fn("subagentBackend.set")(function* (
   input: SubagentBackendSetInput,
@@ -621,18 +627,28 @@ export const setBackend = Effect.fn("subagentBackend.set")(function* (
   return yield* backendWriteSemaphore.withPermits(1)(
     Effect.gen(function* () {
       const settings = yield* serverSettings.getRawSettings;
+      const current = yield* readBackendFile();
       if (settings.subagentBackendEnabled === false && input.backend === SUBAGENT_BACKEND_CURSOR) {
-        const current = yield* readBackendFile();
         return { ...current, degraded: MASTER_OFF_REASON } satisfies PersistedBackend;
       }
+      // A bare selection (an old cached web bundle sends none) keeps the remembered pick.
+      const instanceId = input.instanceId ?? current.instanceId;
+      const model = input.model ?? (instanceId === current.instanceId ? current.model : null);
       let next: PersistedBackend;
       if (input.backend !== SUBAGENT_BACKEND_CURSOR) {
-        next = OFF;
+        next = { ...OFF, instanceId, model };
       } else {
-        const validated = validateCursorInstance(settings, input.instanceId);
+        const validated = validateCursorInstance(settings, instanceId ?? undefined);
         next = validated.ok
-          ? yield* resolveCursorTarget(validated, input.model ?? "auto")
-          : { ...OFF, degraded: validated.reason };
+          ? yield* resolveCursorTarget(validated, model ?? "auto")
+          : // A refused pick must not overwrite a remembered instance that may still be
+            // valid, and the model stays with whichever instance is kept.
+            {
+              ...OFF,
+              instanceId: current.instanceId ?? input.instanceId ?? null,
+              model: current.instanceId !== null ? current.model : model,
+              degraded: validated.reason,
+            };
       }
       yield* writeBackendFileBody(next);
       // The global file is already on disk, so a crashing fan-out must not turn a saved
@@ -655,16 +671,13 @@ export function buildState(
   settings: ServerSettings,
   models: readonly SubagentBackendModelOption[],
 ) {
+  const instances = cursorInstances(settings);
   return {
     backend: persisted.backend,
-    // Validated, not cast: unlike the other `ProviderInstanceId` sites in this module —
-    // which read keys of `settings.providerInstances`, already checked on settings decode —
-    // this value comes from the flag FILE, which is hand-editable. An id that does not match
-    // the branded slug pattern would otherwise fail success-encoding at the RPC boundary
-    // instead of degrading, taking the whole panel down over one bad character.
-    instanceId: validInstanceIdOrNull(persisted.instanceId),
+    // Hidden unless it is an enabled Cursor instance, on Default and Cursor files alike.
+    instanceId: instances.find((i) => i.instanceId === persisted.instanceId)?.instanceId ?? null,
     model: persisted.model,
-    instances: cursorInstances(settings),
+    instances,
     models,
     degraded: persisted.degraded,
   };
@@ -733,7 +746,7 @@ function haveReconcilableFieldsChanged(next: PersistedBackend, current: Persiste
  * re-resolved, because a reconciler that only downgrades would otherwise leave
  * the file pointing at a binary the user has since moved or reconfigured.
  *
- * A no-op when the file is already `default`: with no flagged instance there is
+ * A no-op when the file is already `default`: with no flagged Cursor target (Default only remembers one) there is
  * nothing here to check against `settings`, and a lazy check inside `read`/`set`
  * was considered and rejected — the wrapper reads the file directly, never
  * `read`, so a lazy path would never run where it matters.
@@ -749,7 +762,12 @@ export const reconcileBackendBody = Effect.fn("subagentBackend.reconcileBody")(f
   const validated = validateCursorInstance(settings, current.instanceId ?? undefined);
   let next: PersistedBackend;
   if (!validated.ok) {
-    next = { ...OFF, degraded: validated.reason };
+    next = {
+      ...OFF,
+      instanceId: current.instanceId,
+      model: current.model,
+      degraded: validated.reason,
+    };
   } else {
     const resolved = yield* resolveCursorTarget(validated, current.model ?? "auto");
     next = { ...resolved, model: current.model };

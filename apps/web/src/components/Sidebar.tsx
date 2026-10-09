@@ -63,6 +63,7 @@ import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -341,6 +342,7 @@ import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
+import { threadOffloadedToCursor } from "./sidebar/sidebarSubagentBackend.logic";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import {
@@ -1605,6 +1607,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the pinning capability is confirmed, and stays a passive marker while
   // the descriptor is not loaded. Pinning itself lives in the context menu.
   pinningSupported: boolean;
+  offloadedToCursor: boolean;
   isPinned: boolean;
   // Present on rows whose server supports every drop outcome: dnd-kit
   // sortable bag applied to the row root so the whole row drags (the
@@ -2238,6 +2241,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       />
     </span>
   ) : null;
+  const subagentIndicator = props.offloadedToCursor ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label="Subagents set to Cursor"
+            data-testid="sidebar-subagent-indicator"
+            className="inline-flex shrink-0 items-center justify-center text-muted-foreground"
+          >
+            <BotIcon className="size-3.5" />
+          </span>
+        }
+      />
+      <TooltipPopup side="top">Subagents set to Cursor</TooltipPopup>
+    </Tooltip>
+  ) : null;
   // Same pen the new-thread draft rows lead with, so both kinds of unsent
   // work read the same way in the list.
   const draftIndicator = hasUnsentDraft ? (
@@ -2342,6 +2362,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {title}
             <ThreadProviderChip thread={thread} />
             {pinIndicator}
+            {subagentIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -2699,6 +2720,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <TooltipPopup side="top">{props.queueNote}</TooltipPopup>
                 </Tooltip>
               ) : null}
+              {subagentIndicator}
               {terminalStatusIcon}
               {prBadge}
               {diff ? (
@@ -6266,6 +6288,10 @@ export default function Sidebar() {
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadPinning === true
                             }
+                            offloadedToCursor={threadOffloadedToCursor(
+                              serverConfigs.get(thread.environmentId)?.settings,
+                              thread.id,
+                            )}
                             isPinned={thread.pinnedAt != null}
                             sortable={sortable}
                             dropVerb={dragState?.activeKey === threadKey ? overlayVerb : null}

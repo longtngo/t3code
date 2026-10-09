@@ -235,6 +235,10 @@ With a thread open, a second segment appears for that thread alone. Inherit foll
 the machine-wide choice, Cursor offloads this thread even when the default is off,
 and Default keeps this thread's subagents local even when the default is on.
 
+With the machine-wide choice on Default, the Subagents row marks when threads on this
+machine (the primary environment) are set to Cursor, and its panel picks the model those
+threads use.
+
 Settings → General has a Subagent offload switch. Turn it off to stop every T3 Code
 thread from offloading. The per-thread segment then disappears, Cursor is greyed out
 in the machine-wide segment while Default stays available, and it all comes back when

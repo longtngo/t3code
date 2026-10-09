@@ -1,13 +1,18 @@
 import {
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
+  type ServerSettings,
   type SubagentBackendModelOption,
   type SubagentBackendSetInput,
+  type ProviderInstanceId,
   type SubagentBackendState,
+  type ThreadId,
+  subagentBackendThreadMode,
 } from "@t3tools/contracts";
 
-/** Dot tone for the collapsed row: green when Cursor is actually dispatching, grey otherwise. */
-export type SubagentBackendDotTone = "on" | "off";
+/** Dot tone for the collapsed row: green when Cursor is actually dispatching, "partial" when only
+ *  some threads are set to Cursor, grey otherwise. */
+export type SubagentBackendDotTone = "on" | "partial" | "off";
 
 export interface SubagentBackendRowStatus {
   readonly dot: SubagentBackendDotTone;
@@ -19,12 +24,17 @@ export interface SubagentBackendRowStatus {
  *
  * 1. No state yet (still loading the first `get`) — a neutral placeholder.
  * 2. `degraded` — the on-disk state couldn't be used as written; surfaced here (not just in
- *    the panel) so a broken toggle is visible without expanding it.
+ *    the panel) so a broken toggle is visible without expanding it. Not on a Default backend
+ *    with threads set to Cursor (step 5): a Default file is degraded when its remembered
+ *    Cursor instance is disabled, yet those threads still offload to another enabled one, so
+ *    the count wins and the panel carries the reason.
  * 3. No enabled Cursor instance — Cursor cannot be the active backend regardless of what the
  *    persisted `backend` field says, so the row says so directly.
  * 4. Cursor is the active backend — the selected model's label, falling back to its raw id
  *    (unrecognised by the cached model list) and then to "Auto" (no model chosen yet).
- * 5. Anything else — including the "default" backend and any unrecognised value, which the
+ * 5. Default backend, master on, and some live threads set to Cursor — a partial dot and the
+ *    thread count.
+ * 6. Anything else — including the "default" backend and any unrecognised value, which the
  *    wire contract says must read as default — is the default route.
  *
  * `masterEnabled: false` forces the dot grey without changing the text. This row is always
@@ -36,15 +46,57 @@ export function subagentBackendRowStatus(
   state: SubagentBackendState | null,
   options?: ReadonlyArray<SubagentBackendModelOption>,
   masterEnabled?: boolean,
+  offloadedThreads = 0,
 ): SubagentBackendRowStatus {
   if (state == null) return { dot: "off", text: "Loading…" };
-  if (state.degraded != null) return { dot: "off", text: "Degraded" };
+  const cursorBackend = state.backend === SUBAGENT_BACKEND_CURSOR;
+  const partial = !cursorBackend && masterEnabled !== false && offloadedThreads > 0;
+  if (state.degraded != null && !partial) return { dot: "off", text: "Degraded" };
   if (state.instances.length === 0) return { dot: "off", text: "Cursor unavailable" };
-  if (state.backend === SUBAGENT_BACKEND_CURSOR) {
+  if (cursorBackend) {
     const dot = masterEnabled === false ? "off" : "on";
     return { dot, text: subagentModelLabel(state, options ?? state.models) };
   }
+  if (partial) {
+    return {
+      dot: "partial",
+      text: `${offloadedThreads} thread${offloadedThreads === 1 ? "" : "s"} set to Cursor`,
+    };
+  }
   return { dot: "off", text: "Default" };
+}
+
+type OffloadSettings = Pick<
+  ServerSettings,
+  "subagentBackendEnabled" | "subagentBackendThreadModes" | "providerInstances"
+>;
+
+/** Whether this thread's own server offloads its subagents to Cursor because the thread is set to
+ *  Cursor: the master switch is on, the server has an enabled Cursor instance, and the thread's
+ *  override is "on". A Cursor machine backend is not counted here; the footer's green icon covers it. */
+export function threadOffloadedToCursor(
+  settings: OffloadSettings | null | undefined,
+  threadId: ThreadId,
+): boolean {
+  if (settings == null || settings.subagentBackendEnabled === false) return false;
+  if (subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId) !== "on") {
+    return false;
+  }
+  return Object.values(settings.providerInstances).some(
+    (instance) => instance.driver === SUBAGENT_BACKEND_CURSOR && instance.enabled === true,
+  );
+}
+
+/** Live threads set to Cursor. The modes map is never pruned when a thread is deleted, so ids are
+ *  checked against the environment's threads; archived threads do not run and are not counted. */
+export function offloadedThreadCount(
+  settings: OffloadSettings | null | undefined,
+  threads: ReadonlyMap<ThreadId, { readonly archivedAt: unknown }>,
+): number {
+  if (settings == null) return 0;
+  return (Object.keys(settings.subagentBackendThreadModes) as ThreadId[]).filter(
+    (id) => threads.get(id)?.archivedAt === null && threadOffloadedToCursor(settings, id),
+  ).length;
 }
 
 function subagentModelLabel(
@@ -59,6 +111,20 @@ function subagentModelLabel(
  *  control and the "Cursor unavailable" copy. */
 export function subagentCursorAvailable(state: SubagentBackendState | null): boolean {
   return (state?.instances.length ?? 0) > 0;
+}
+
+/** Whether the panel shows the Cursor model picker: always on Cursor, and on Default whenever
+ *  some thread (the open one or any other) is set to Cursor and an instance exists. */
+export function subagentTargetVisible(input: {
+  readonly isCursor: boolean;
+  readonly threadOnCursor: boolean;
+  readonly offloadedThreads: number;
+  readonly cursorAvailable: boolean;
+}): boolean {
+  return (
+    input.isCursor ||
+    ((input.threadOnCursor || input.offloadedThreads > 0) && input.cursorAvailable)
+  );
 }
 
 /** The provider (instance) select only earns its place in the panel when there is an actual
@@ -93,24 +159,42 @@ export function threadOffloadNotes(input: {
   ];
 }
 
+/** The Cursor instance the model picker lists: the stored one, else the first enabled one (a
+ *  Default state from before any pick names none, and one instance shows no instance picker). */
+export function subagentCursorTargetInstanceId(state: SubagentBackendState | null) {
+  return state?.instanceId ?? state?.instances[0]?.instanceId ?? null;
+}
+
+/** The `set` payload for the instance and model pickers: the machine backend stays as it is
+ *  (Cursor stays Cursor, anything else stays Default), only the picked target changes. */
+export function subagentTargetSetInput(
+  state: SubagentBackendState,
+  pick: { readonly instanceId?: ProviderInstanceId; readonly model?: string },
+): SubagentBackendSetInput {
+  const instanceId = pick.instanceId ?? subagentCursorTargetInstanceId(state);
+  const model = pick.model ?? state.model;
+  return {
+    backend:
+      state.backend === SUBAGENT_BACKEND_CURSOR
+        ? SUBAGENT_BACKEND_CURSOR
+        : SUBAGENT_BACKEND_DEFAULT,
+    ...(instanceId ? { instanceId } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
 /**
- * Builds the `set` payload for the segmented toggle. Off never has a persisted
- * `instanceId` (see `OFF` in `SubagentBackend.ts`), so switching to Cursor from a
- * fresh/off state must fall back to the first available instance — otherwise the
- * request omits `instanceId` entirely, the server rejects it, and the toggle can
- * never be turned on.
+ * Builds the `set` payload for the segmented toggle. Both backends remember the target
+ * (`instanceId`/`model`), falling back to the first available instance when none is stored:
+ * a fresh state has none, and a Cursor request without one is rejected, so the toggle could
+ * never be turned on. Switching to Default stores that first instance too; dispatch is
+ * unchanged because readers fall back to the same instance.
  */
 export function subagentBackendApplyInput(
   state: SubagentBackendState,
   backend: string,
 ): SubagentBackendSetInput {
-  if (backend !== SUBAGENT_BACKEND_CURSOR) return { backend: SUBAGENT_BACKEND_DEFAULT };
-  const instanceId = state.instanceId ?? state.instances[0]?.instanceId;
-  return {
-    backend: SUBAGENT_BACKEND_CURSOR,
-    ...(instanceId !== undefined ? { instanceId } : {}),
-    ...(state.model ? { model: state.model } : {}),
-  };
+  return subagentTargetSetInput({ ...state, backend }, {});
 }
 
 /**
