@@ -2,7 +2,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { describe, expect, it } from "vite-plus/test";
 
-import { remarkNormalizeListItemIndentation } from "./markdown-list-indentation";
+import { remarkNormalizeListItemIndentation } from "@t3tools/shared/markdownListIndentation";
 import { renderDom } from "./testing/renderDom";
 
 function renderMarkdown(markdown: string) {

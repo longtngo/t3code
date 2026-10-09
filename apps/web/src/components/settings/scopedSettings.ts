@@ -1,7 +1,6 @@
 import {
   ClientSettingsSchema,
   type ClientSettingsPatch,
-  EnvironmentAuthorizationError,
   type EnvironmentId,
   isNullableProjectSettingsOverride,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
@@ -21,8 +20,6 @@ import {
 } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Equal from "effect/Equal";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
 
@@ -392,20 +389,13 @@ export function planProjectOverridesClear(
   };
 }
 
-const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
-
 /** Wait for every target so a failed environment does not hide successful or later writes. */
-// FORK: each failed write says whether it was refused for a missing permission, client- or
-// server-side, so the caller can say why instead of a bare "could not update".
 export async function persistScopedSettingsPatch(
   plan: ReturnType<typeof planScopedSettingsPatch>,
   persistServer: (input: {
     environmentId: EnvironmentId;
     input: { patch: ServerSettingsPatch };
-  }) => Promise<
-    | { readonly _tag: "Success" }
-    | { readonly _tag: "Failure"; readonly cause: Cause.Cause<unknown> }
-  >,
+  }) => Promise<{ readonly _tag: "Success" | "Failure"; readonly cause?: Cause.Cause<unknown> }>,
   persistClient: (patch: ClientSettingsPatch) => void,
 ) {
   if (plan.hasClientWrite) persistClient(plan.clientPatch);
@@ -414,17 +404,32 @@ export async function persistScopedSettingsPatch(
       persistServer({ environmentId, input: { patch } }),
     ),
   );
-  const failedEnvironments = plan.serverWrites.flatMap((write, index) => {
+  const failedEnvironments = plan.serverWrites.flatMap((environment, index) => {
     const result = results[index];
     if (result?.status === "fulfilled" && result.value._tag === "Success") return [];
-    const refused =
-      result?.status === "fulfilled" &&
-      result.value._tag === "Failure" &&
-      Option.exists(Cause.findErrorOption(result.value.cause), isEnvironmentAuthorizationError);
-    return [{ ...write, refused }];
+    const error: unknown =
+      result?.status === "rejected"
+        ? result.reason
+        : result?.status === "fulfilled" && result.value.cause
+          ? Cause.squash(result.value.cause)
+          : undefined;
+    return [
+      {
+        ...environment,
+        message:
+          error instanceof Error
+            ? error.message
+            : "The save failed. Try reconnecting and saving again.",
+      },
+    ];
+  });
+  const savedEnvironments = plan.serverWrites.filter((_, index) => {
+    const result = results[index];
+    return result?.status === "fulfilled" && result.value._tag === "Success";
   });
   return {
     failedEnvironments,
-    savedEnvironmentCount: plan.serverWrites.length - failedEnvironments.length,
+    savedEnvironments,
+    savedEnvironmentCount: savedEnvironments.length,
   };
 }

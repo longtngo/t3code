@@ -21,11 +21,13 @@ import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { isCheckpointRestoreIsolated } from "./CheckpointRestoreSafety.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as EventSink from "./EventSink.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2RollbackThreadInput } from "./ProviderAdapter.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as WorkspaceMemberHooks from "./WorkspaceMemberHooks.ts";
@@ -67,6 +69,7 @@ it.effect("rejects a non-ready checkpoint before opening a session or restoring 
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
+        ThreadCommandExecutor.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -145,6 +148,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
+        ThreadCommandExecutor.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -226,6 +230,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
+        ThreadCommandExecutor.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -298,6 +303,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
     Layer.provide(
       Layer.mergeAll(
         WorkspaceMemberHooks.inert,
+        ThreadCommandExecutor.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
         Layer.mock(EventSink.EventSinkV2)({}),
         IdAllocator.layer,
@@ -364,6 +370,15 @@ it.effect.each([
     const checkpointId = CheckpointId.make("rewind-start");
     const scopeId = CheckpointScopeId.make("rewind-scope");
     const calls: string[] = [];
+    let lockedThreads = Effect.succeed<ReadonlyArray<ThreadId>>([]);
+    const layerThreadCommands = Layer.effect(
+      ThreadCommandExecutor.ThreadCommandExecutor,
+      Effect.tap(KeyedLock.make<ThreadId>(), (lock) =>
+        Effect.sync(() => {
+          lockedThreads = lock.activeKeys;
+        }),
+      ),
+    );
     const providerThread = {
       id: providerThreadId,
       providerSessionId,
@@ -402,6 +417,7 @@ it.effect.each([
     const layerTest = layerCheckpointRollbackService.pipe(
       Layer.provide(
         Layer.mergeAll(
+          layerThreadCommands,
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             restore: () =>
               Effect.sync(() => {
@@ -410,7 +426,10 @@ it.effect.each([
           }),
           Layer.mock(EventSink.EventSinkV2)({
             write: ({ events }) =>
-              Effect.sync(() => {
+              Effect.map(lockedThreads, (locked) => {
+                // A thread command that planned against the old provider thread
+                // must not commit after this and undo the rollback.
+                assert.include(locked, threadId);
                 assert.ok(
                   events.some(
                     (event) =>
@@ -451,7 +470,7 @@ it.effect.each([
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             open: () =>
               Effect.succeed({
-                rollbackThread: (input: ProviderAdapterV2RollbackThreadInput) =>
+                rollbackThread: (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
                   Effect.gen(function* () {
                     const count = yield* resolveCodexRollbackTurnCount(input);
                     assert.equal(count, 2 - targetOrdinal);

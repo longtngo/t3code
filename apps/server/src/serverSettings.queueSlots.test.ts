@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import { ProviderInstanceId } from "@t3tools/contracts";
 import * as NodeFS from "node:fs";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
@@ -147,11 +148,17 @@ it.layer(NodeServices.layer)("queue slot settings writes", (it) => {
         )
         VALUES ('thread-cursor', 'ready', 'cursor', 'cursor', '2026-08-25T00:00:00.000Z')
       `;
-      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true}\n');
+      // History only enables a provider while the file still carries the retired
+      // `providers` map (upstream #17300), so the fixture is such a file.
+      NodeFS.writeFileSync(settingsPath, '{"enableAgentDeviceAccess": true, "providers": {}}\n');
       yield* settings.getRawSettings;
+      // Loading rewrote the file once to drop the retired map; an import holds off until the
+      // cache has caught up with that write, which the watch rescan does.
+      yield* settings.rescan;
       yield* settings.updateSettings({ queueSlotsImport: Q });
-      assert.isTrue((yield* settings.getSettings).providers.cursor.enabled);
-      assert.notEqual(fileJson(settingsPath).providers?.cursor?.enabled, false);
+      const cursor = ProviderInstanceId.make("cursor");
+      assert.isTrue((yield* settings.getSettings).providerInstances[cursor]?.enabled);
+      assert.notEqual(fileJson(settingsPath).providerInstances?.cursor?.enabled, false);
       assert.deepEqual(fileJson(settingsPath).queueSlots, Q);
     }).pipe(Effect.provide(layer())),
   );

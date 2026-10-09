@@ -24,6 +24,7 @@ const canvas = {
   clearPreview: () => {},
   registerTimeline: () => {},
   reportDetailsCard: () => {},
+  detailsCardTopInset: 0,
 };
 
 // happy-dom has no layout, so every height is 0. Give each activity section a tall height and

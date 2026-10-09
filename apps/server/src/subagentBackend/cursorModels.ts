@@ -27,7 +27,7 @@ import * as Option from "effect/Option";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 
 const LIST_MODELS_TIMEOUT = Duration.seconds(10);
 const CACHE_TTL_MILLIS = Duration.toMillis(Duration.minutes(10));

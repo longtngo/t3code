@@ -19,7 +19,6 @@ export interface PanelLayoutControlsProps {
   threadPanelPresentation: ThreadPanelPresentation;
   threadPanelPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
   threadPanelShortcutLabel: string | null;
-  threadPanelHasAttention: boolean;
   /** Progress shown beside the toggle's icon, e.g. the working run's task fraction. */
   threadPanelSummary?: string | null;
   rightPanelAvailable: boolean;
@@ -42,7 +41,6 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   threadPanelPresentation,
   threadPanelPopoverHandle,
   threadPanelShortcutLabel,
-  threadPanelHasAttention,
   threadPanelSummary,
   rightPanelAvailable,
   rightPanelOpen,
@@ -69,12 +67,6 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
         <span className="font-mono text-2xs tabular-nums text-muted-foreground">
           {threadPanelSummary}
         </span>
-      ) : null}
-      {threadPanelHasAttention ? (
-        <span
-          className="absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-background"
-          aria-hidden="true"
-        />
       ) : null}
     </Toggle>
   );

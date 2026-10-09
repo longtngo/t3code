@@ -1,7 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  CursorSettings,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
   type ServerProvider,
@@ -13,6 +12,7 @@ import {
   type ThreadId,
   subagentBackendThreadMode,
 } from "@t3tools/contracts";
+import { CursorSettings } from "@t3tools/provider-cursor/settings";
 import { cursorOffloadBlockedReason, cursorTotalUsageLimits } from "@t3tools/shared/usageLimits";
 
 /** Dot tone for the collapsed row: green when Cursor is actually dispatching, "partial" when only

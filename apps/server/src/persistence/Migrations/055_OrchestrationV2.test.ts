@@ -13,8 +13,8 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        // Fork ids: upstream's 055-058 apply as 64-67 (registry section 1).
-        Array.from({ length: 67 }, (_, index) => index + 1),
+        // Fork ids: upstream's 055-060 apply as 64-69 (registry section 1).
+        Array.from({ length: 69 }, (_, index) => index + 1),
       );
     }),
   );
@@ -31,6 +31,8 @@ layer("055_OrchestrationV2", (it) => {
         [65, "RemoveRedundantProjectionIndexes"],
         [66, "ScheduledTaskWebhooks"],
         [67, "WebhookRelayDeliveries"],
+        [68, "McpAppModelContext"],
+        [69, "ThreadSnapshotWindowIndexes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -55,6 +57,8 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 65, name: "RemoveRedundantProjectionIndexes" },
         { migration_id: 66, name: "ScheduledTaskWebhooks" },
         { migration_id: 67, name: "WebhookRelayDeliveries" },
+        { migration_id: 68, name: "McpAppModelContext" },
+        { migration_id: 69, name: "ThreadSnapshotWindowIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

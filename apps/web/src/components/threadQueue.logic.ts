@@ -333,7 +333,7 @@ export interface QueueSlotInstance {
 export function listQueueSlotInstances(
   sources: ReadonlyArray<{
     providers: ReadonlyArray<ServerProvider>;
-    settings: Pick<ServerSettings, "providerInstances" | "providers">;
+    settings: Pick<ServerSettings, "providerInstances">;
   }>,
 ): ReadonlyArray<QueueSlotInstance> {
   const slots = new Map<string, QueueSlotInstance>();

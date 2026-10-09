@@ -12,7 +12,6 @@ const controls = (threadPanelSummary: string | null) => (
     threadPanelOpen={false}
     threadPanelPresentation="inline"
     threadPanelShortcutLabel={null}
-    threadPanelHasAttention={false}
     threadPanelSummary={threadPanelSummary}
     rightPanelAvailable={false}
     rightPanelOpen={false}

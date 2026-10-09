@@ -50,7 +50,19 @@ busy checkout. The policy is a `Context.Reference` that defaults to "idle", so `
 under running threads with nothing failing. The fork's "Undo closed tab" stack and its
 `closedTabUndoLimit` setting are retired for upstream's reopen-closed-view shortcut (#15207).
 Upstream #10298 bound a JS boolean in `AuthPairingLinks.consumeAvailable`, which `node:sqlite`
-rejects, breaking every pairing-code exchange; it binds `1`/`0` here.
+rejects; upstream #16730 now binds `1`/`0` itself, so that line is upstream's again.
+
+The 46th reconcile (2026-10-09, 167 commits) moved every provider but Codex and Claude into its
+own package (`packages/provider-{core,acp,acp-registry,cursor,grok,opencode,pi,muse,testing}`),
+and drivers now read settings through `ProviderHost` (`host.settings.get`), not
+`ServerSettingsService`. Fork-only files keep their paths and import the moved modules by package
+specifier (`@t3tools/provider-core/server/IdAllocator`, `@t3tools/shared/atomicWrite`,
+`@t3tools/provider-cursor/settings` for `CursorSettings`, ...); git's rename map is the lookup.
+Upstream #17300 dropped the legacy per-driver `providers` settings map, so the fork's patch
+mirrors for it (`configDirPath`, `outputStyle`, Codex `setupMode`) and their tests went with it;
+`providerInstances.*.config` is the only Claude settings path. The fork's scoped-settings refusal
+copy was retired for upstream's per-environment failure messages, and the composer's
+resume-compaction menu for upstream's Compact/Full chip.
 
 The 43rd reconcile (2026-10-02, 55 commits) stopped at `e0db2a5e58`, just before #2829. Upstream's
 beta Working shelf (#13926) is taken alongside the fork's Queue: the Queue block renders above it,
@@ -100,9 +112,10 @@ id**, and the two deliberately diverge. Several filename numbers appear twice (`
 `038`, `039`) because upstream and the fork both claimed them; the applied ids stay unique because
 the manifest assigns upstream's migration the next free id rather than its filename number.
 
-Current: 67 entries, ids 1-67, unique and monotonic. Upstream's v2 schema
+Current: 69 entries, ids 1-69, unique and monotonic. Upstream's v2 schema
 `055_OrchestrationV2` is applied id **64**, `056_RemoveRedundantProjectionIndexes` is **65**,
-`057_ScheduledTaskWebhooks` is **66** and `058_WebhookRelayDeliveries` is **67**.
+`057_ScheduledTaskWebhooks` is **66**, `058_WebhookRelayDeliveries` is **67**,
+`059_McpAppModelContext` is **68** and `060_ThreadSnapshotWindowIndexes` is **69**.
 Filename numbers double up on `033`, `037`, `038`, `039`, `041` and `042`. Id `34` is
 `PushSubscriptions`, the fork's first Web Push migration: real databases record it, so the manifest
 registers it with the same idempotent body as id `37`. Leaving it unregistered makes the v2 runner
@@ -118,7 +131,7 @@ grep -oE '^\s*\[[0-9]+, "' $F | grep -oE '[0-9]+' \
 grep -c '^\s*\[34, "PushSubscriptions", Migration0037\]' $F
 ```
 
-Expect `67 67 ok` and `1`.
+Expect `69 69 ok` and `1`.
 
 A migration's **test** carries this too. Upstream's migration tests run `toMigrationInclusive:` at
 their **filename** numbers (`49` then `50`), which on this fork are unrelated migrations, so the
@@ -535,10 +548,9 @@ and reads it on every load; a client patch would re-run or skip the migration. *
 fork-only — upstream has no patch-parity test — so every `ServerSettings` field upstream adds
 without a `ServerSettingsPatch` counterpart arrives as a red test in `packages/contracts`, with
 nothing in the conflict markers to warn you.** Decide writer-ownership, then either mirror it or
-list it here. The 42nd reconcile mirrored upstream's `providers.codex.setupMode`: the server reads it
-as the default Codex instance's fallback, so a dropped patch would silently lose the mode. The 45th
-listed upstream's `previousWorktreesDirectories`, which `applyServerSettingsPatch` maintains when
-`worktreesDirectory` changes.
+list it here. The 45th listed upstream's `previousWorktreesDirectories`, which `applyServerSettingsPatch`
+maintains when `worktreesDirectory` changes. (The `providers.*` entries this list once carried went
+with upstream's legacy providers map at the 46th reconcile.)
 
 ### 11. One `environmentId` for markdown rendered without a thread
 
@@ -748,7 +760,8 @@ the fork's Vitals gauge sits behind the same flag so a resting composer stays on
 
 ### 25. ACP cancel keeps the fork's generation guard over upstream's dispatch semaphore
 
-Upstream's Antigravity rework of `AcpSessionRuntime.ts` (`activePromptRef`,
+Upstream's Antigravity rework of `AcpSessionRuntime.ts` (now
+`packages/provider-acp/src/server/AcpSessionRuntime.ts`; `activePromptRef`,
 `promptDispatchSemaphore`, `acquireUseRelease`, `cancelBehavior`) does not cover the fork's fix
 `73ac45066`: a prompt parked on `promptSerializationSemaphore` has run none of the body that
 registers it, so `cancel` cannot see it and it goes to the agent after Stop. The semaphore only
@@ -760,13 +773,14 @@ gated on `cancelBehavior !== "wait-for-prompt"` — ungated it would fire on eve
 of a running prompt and turn its wait-for-confirmation into a failed cancel. Mutation-checked:
 dropping the bump in `cancel` turns `AcpJsonRpcConnection.test.ts`'s parked-prompt case red.
 
-### 26. `isKnownFilesystemRootPath` is a FORK-ONLY export of client-runtime
+### 26. `isKnownFilesystemRootPath` is a FORK-ONLY export of `@t3tools/shared/markdownLinks`
 
 Upstream #9250 (`922bd6922`) moved `apps/web`'s path helpers into
 `packages/client-runtime/src/markdownLinks.ts` and kept `POSIX_FILE_ROOT_PREFIXES` module-private.
 The fork's chat prose linkifier (`chatFilePathLinks.ts`) and the link gate must share one answer to
-"is this a filesystem path", so the predicate is exported from client-runtime and re-exported by
-`apps/web/src/markdown-links.ts`. It tests Windows **drive** paths only — an escaped backslash in
+"is this a filesystem path", so the predicate is exported and re-exported by `apps/web/src/markdown-links.ts`. The 46th
+reconcile followed upstream's move of that module to `packages/shared/src/markdownLinks.ts`
+(`splitFilePathPosition` and friends now live in `@t3tools/shared/fileLinks`). It tests Windows **drive** paths only — an escaped backslash in
 prose is not a UNC path (measured 0 true positives). Three of upstream's new helpers are the fork's
 own re-implemented line for line (`fileBasename` = `basenamePathSegment`, `workspaceRelativeFilePath`
 = the local `workspaceRelativePath`, `formatFilePathPosition` = `withPosition`), so the fork's copies
@@ -1010,6 +1024,9 @@ importer is fork code, which is the good case. Three had to be given their `expo
   still defined, still called internally, no longer exported. The fork's `claudeCliContextWindow`
   switch (invariant 22) needs the window **mode** (`"1m"`), and upstream's surviving
   `resolveClaudeCatalogContextWindowTokens` returns a token count, so it is not a substitute.
+  Lost its `export` again, outside any marker, at the 46th reconcile; the invariant re-probe caught
+  it before typecheck did, and the sweep reported it only as a dropped upstream line.
+
 - **`SettingsSearchTargetProvider`** (`apps/web/src/components/settings/settingsLayout.tsx`) -
   un-exported by upstream #9917 with its only upstream test; the fork's
   `settingsLayout.dom.test.tsx` drives it directly. Restored at the 38th reconcile.

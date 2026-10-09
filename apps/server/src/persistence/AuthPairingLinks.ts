@@ -172,7 +172,6 @@ export const make = Effect.gen(function* () {
             proof_key_thumbprint IS NULL
             OR proof_key_thumbprint = ${proofKeyThumbprint}
           )
-          -- FORK: node:sqlite cannot bind a JS boolean (upstream #10298 passed one).
           AND (${requestedScopes === undefined ? 1 : 0} OR EXISTS (
             SELECT 1
             FROM json_each(${JSON.stringify(requestedScopes ?? [])}) AS requested

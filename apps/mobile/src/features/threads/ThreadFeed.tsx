@@ -36,9 +36,9 @@ import { writeComposerContextClipboard } from "../../lib/composerContextClipboar
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
-} from "@t3tools/client-runtime/codex-artifact-templates";
+} from "@t3tools/shared/codexArtifactTemplates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import { isMarkdownFileLinkLabel } from "@t3tools/client-runtime/markdown-links";
+import { isMarkdownFileLinkLabel } from "@t3tools/shared/markdownLinks";
 import { getTextContent, type MarkdownNode } from "react-native-nitro-markdown/headless";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -50,7 +50,7 @@ import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presen
 import {
   renderCodexFileCitationsAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
-} from "@t3tools/client-runtime/codex-markdown-directives";
+} from "@t3tools/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
@@ -188,6 +188,7 @@ import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
+import { mcpAppRowHeight, ThreadMcpApp } from "./McpAppWebView";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
   assetEnvironment,
@@ -197,6 +198,7 @@ import {
 } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
+import { useLiveThreadLinkLabels } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
 import * as Option from "effect/Option";
@@ -907,16 +909,15 @@ interface MarkdownLinkHandlers {
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  readonly environmentId: EnvironmentId;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
-  const segments = useMemo(
-    () => splitCodexArtifactTemplateMarkdown(props.markdown),
-    [props.markdown],
-  );
+  const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
+  const segments = useMemo(() => splitCodexArtifactTemplateMarkdown(liveMarkdown), [liveMarkdown]);
 
   return segments.map((segment) => {
     if (segment.kind === "artifact-template") {
@@ -1599,6 +1600,20 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "mcp-app") {
+    return (
+      <ThreadMcpApp
+        environmentId={props.environmentId}
+        threadId={entry.sourceThreadId}
+        conversationThreadId={props.threadId}
+        itemId={entry.itemId}
+        revision={entry.revision}
+        app={entry.app}
+        width={props.contentWidth}
+      />
+    );
+  }
+
   if (entry.type === "work-toggle") {
     return (
       <ThreadWorkGroupToggle
@@ -1615,6 +1630,7 @@ function renderFeedEntry(
         summaryToolIcon={entry.summaryToolIcon}
         hasFailure={entry.hasFailure}
         shimmer={entry.shimmer}
+        thought={entry.thought}
         onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
       />
     );
@@ -1891,6 +1907,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
               onUseArtifactTemplate={props.onUseArtifactTemplate}
@@ -1924,6 +1941,13 @@ function renderFeedEntry(
         })}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
+            <CopyTextButton
+              accessibilityLabel="Copy message"
+              text={renderedText}
+              tintColor={iconSubtleColor}
+              buttonSize={28}
+              iconSize={13}
+            />
             {message.projectedItem ? (
               <AssistantForkButton
                 environmentId={props.environmentId}
@@ -1932,13 +1956,6 @@ function renderFeedEntry(
                 sourceTitle={props.threadTitle}
               />
             ) : null}
-            <CopyTextButton
-              accessibilityLabel="Copy message"
-              text={renderedText}
-              tintColor={iconSubtleColor}
-              buttonSize={28}
-              iconSize={13}
-            />
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
@@ -1988,7 +2005,8 @@ function UserMessageContent(props: UserMessageContentProps) {
   const [selected, setSelected] = useState<{ contextId: string; label: string } | null>(null);
   const navigation = useNavigation();
   const { selectedThread } = useThreadSelection();
-  const text = replaceComposerContextReferences(props.text, (ref) => {
+  const liveText = useLiveThreadLinkLabels(props.text, props.environmentId);
+  const text = replaceComposerContextReferences(liveText, (ref) => {
     const available = props.context?.records.some((record) => record.contextId === ref.contextId);
     return `[${ref.label}${available ? "" : " (unavailable)"}](t3-context://v1/${ref.kind}/${ref.contextId})`;
   });
@@ -2279,11 +2297,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
-      const threadLink = parseThreadLinkHref(href);
-      if (threadLink) {
+      // A thread link names a thread in this feed's environment.
+      const linkedThreadId = parseThreadLinkHref(href);
+      if (linkedThreadId) {
         navigation.navigate("Thread", {
-          environmentId: String(threadLink.environmentId),
-          threadId: String(threadLink.threadId),
+          environmentId: String(props.environmentId),
+          threadId: String(linkedThreadId),
         });
         return;
       }
@@ -2491,13 +2510,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (text: string) => (
       <AssistantMarkdownContent
         markdown={text}
+        environmentId={props.environmentId}
         markdownStyles={markdownStyles.assistant}
         linkHandlers={markdownLinkHandlers}
         renderImage={renderMarkdownImage}
         skills={props.skills}
       />
     ),
-    [markdownStyles.assistant, markdownLinkHandlers, renderMarkdownImage, props.skills],
+    [
+      markdownStyles.assistant,
+      markdownLinkHandlers,
+      renderMarkdownImage,
+      props.skills,
+      props.environmentId,
+    ],
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
@@ -2917,6 +2943,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       if (entry.type === "html-render") {
         return htmlRenderRowHeight(htmlRenderFrameHeight(entry.render, contentWidth));
       }
+      if (entry.type === "mcp-app") return mcpAppRowHeight();
       if (workRowSizing.fixedRowHeight === undefined) {
         return undefined;
       }
@@ -2924,6 +2951,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         case "run-fold":
           return resolveThreadFeedFixedItemSize(entry.type);
         case "work-toggle":
+          // A live thought wraps up to four lines, so that row measures itself.
+          return entry.thought ? undefined : WORK_GROUP_TOGGLE_HEIGHT;
         case "thinking":
           return WORK_GROUP_TOGGLE_HEIGHT;
         case "activity-group":

@@ -13,9 +13,8 @@
  * value a click would follow.
  */
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { CHAT_MARKDOWN_REHYPE_PLUGINS } from "@t3tools/shared/markdownPipeline";
 import { describe, expect, it } from "vite-plus/test";
 
 import { collectKnownAbsolutePaths } from "./chatFilePathLinks";
@@ -30,7 +29,7 @@ function render(markdown: string) {
   return renderDom(
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, rehypeSanitize, [rehypeChatFilePathLinks, resolution]]}
+      rehypePlugins={[...CHAT_MARKDOWN_REHYPE_PLUGINS, [rehypeChatFilePathLinks, resolution]]}
       urlTransform={(href) => rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href)}
     >
       {markdown}

@@ -26,12 +26,13 @@
  */
 import {
   formatFilePathPosition,
+  resolvePathLinkTarget,
   splitFilePathPosition,
-} from "@t3tools/client-runtime/markdown-links";
+} from "@t3tools/shared/fileLinks";
 
 import { classifyFileViewerKind } from "./lib/codeFileTypes";
 import { isKnownFilesystemRootPath } from "./markdown-links";
-import { extractTerminalLinks, resolvePathLinkTarget } from "./terminal-links";
+import { extractTerminalLinks } from "./terminal-links";
 
 export interface ChatFilePathMention {
   /** The matched text, exactly as it appears in the message. */

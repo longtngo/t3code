@@ -29,7 +29,7 @@ import {
   ProviderAdapterProtocolError,
   type ProviderAdapterV2InterruptInput,
   type ProviderAdapterV2SessionRuntime,
-} from "./ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 

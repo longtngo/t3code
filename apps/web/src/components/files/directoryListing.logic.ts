@@ -9,7 +9,7 @@
  * @module directoryListing.logic
  */
 
-import { isAbsolutePath } from "~/terminal-links";
+import { isAbsolutePath } from "@t3tools/shared/path";
 
 /**
  * Whether a `filesystem.browse` success is actually a folder listing.

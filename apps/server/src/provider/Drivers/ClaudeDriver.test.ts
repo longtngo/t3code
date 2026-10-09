@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -22,12 +23,17 @@ import { HttpClient } from "effect/http";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ClaudeAdapterV2 from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
-import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../../serverSettings.ts";
-import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as ProviderHostLive from "../ProviderHostLive.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { ClaudeDriver, getCachedCapabilitiesDroppingMisses } from "./ClaudeDriver.ts";
 
 describe("getCachedCapabilitiesDroppingMisses", () => {
@@ -75,9 +81,21 @@ describe("getCachedCapabilitiesDroppingMisses", () => {
 // that answers Claude Code's resume question.
 describe("ClaudeDriver offerThreadCompaction wiring", () => {
   const driverLayer = (offerThreadCompaction: boolean) =>
+    ProviderHostLive.layer.pipe(Layer.provideMerge(driverDeps(offerThreadCompaction)));
+  const driverDeps = (offerThreadCompaction: boolean) =>
     ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-driver-offer-" }).pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(IdAllocator.layer),
+      Layer.provideMerge(McpProviderSessions.layer),
+      Layer.provideMerge(ProviderLatestVersions.layer),
+      Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
+      Layer.provideMerge(
+        Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+          getEnvironmentId: Effect.succeed(
+            EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
+          ),
+        }),
+      ),
       Layer.provideMerge(ServerSettings.layerTest({ offerThreadCompaction })),
       Layer.provideMerge(
         Layer.mock(BackgroundPolicy.BackgroundPolicy)({

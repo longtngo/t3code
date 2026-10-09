@@ -8,7 +8,7 @@ import type {
 } from "@t3tools/contracts";
 import { getModel, getProvider } from "@t3tools/shared/localLlm";
 
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 export type ManagedEngineId = "mlx-serve";
 

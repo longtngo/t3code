@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import { renderDom } from "../../testing/renderDom";
-import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
+import { providerClients } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 
 // These mount the real form so the dropdown can be opened and chosen from. What a helper test
@@ -14,7 +14,7 @@ const renderClaudeForm = (
   value: unknown,
   onChange: (next: Record<string, unknown> | undefined) => void = () => {},
 ) => {
-  const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+  const claude = providerClients.get(ProviderDriverKind.make("claudeAgent"));
   expect(claude).toBeDefined();
   return renderDom(
     <ProviderSettingsForm

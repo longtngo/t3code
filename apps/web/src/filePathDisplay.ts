@@ -1,10 +1,9 @@
 import {
   fileBasename,
-  formatFilePathPosition,
-  splitFilePathPosition,
   stripSlashPrefixedWindowsDrive,
-} from "@t3tools/client-runtime/markdown-links";
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+  isWindowsAbsolutePath,
+} from "@t3tools/shared/path";
+import { formatFilePathPosition, splitFilePathPosition } from "@t3tools/shared/fileLinks";
 
 function normalizePathSeparators(path: string): string {
   return path.replaceAll("\\", "/");
@@ -19,7 +18,7 @@ function trimTrailingPathSeparators(path: string): string {
  * `client-runtime` as `fileBasename`. Kept exported from here because the chat,
  * composer and right-panel chips all import the segment label from this module.
  */
-export { fileBasename as basenamePathSegment } from "@t3tools/client-runtime/markdown-links";
+export { fileBasename as basenamePathSegment } from "@t3tools/shared/path";
 
 function stripRelativePrefixes(path: string): string {
   return path.replace(/^\.\/+/, "").replace(/^\/+/, "");

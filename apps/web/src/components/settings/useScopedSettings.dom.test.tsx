@@ -114,7 +114,7 @@ describe("useUpdateScopedSettings", () => {
 
     expect(fixture.sent).toEqual([]);
     expect(description).toBe(
-      "The connection to Local does not have permission to change environment settings.",
+      "Could not save on Local: This connection lacks permission to change these settings.",
     );
   });
 
@@ -135,7 +135,11 @@ describe("useUpdateScopedSettings", () => {
 
     expect(fixture.sent).toEqual(["loading", "flaky"]);
     expect(description).toBe(
-      "Could not update Flaky. The connections to Legacy and Loading do not have permission to change environment settings.",
+      [
+        "Could not save on Legacy: This connection lacks permission to change these settings.",
+        "Could not save on Loading: The authenticated token is missing required scope: settings:write.",
+        "Could not save on Flaky: offline",
+      ].join("\n"),
     );
   });
 
@@ -152,7 +156,7 @@ describe("useUpdateScopedSettings", () => {
     expect(fixture.sent).toEqual(["laptop"]);
     expect(lastToastTitle()).toBe("Setting saved on some environments");
     expect(description).toBe(
-      "The connection to Legacy does not have permission to change environment settings. The other selected environments saved the change.",
+      "Could not save on Legacy: This connection lacks permission to change these settings.\nSaved on Laptop.",
     );
   });
 });

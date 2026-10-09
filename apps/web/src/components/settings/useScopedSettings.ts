@@ -85,51 +85,32 @@ function useRunScopedPlan() {
               Cause.fail(
                 new EnvironmentAuthorizationError({
                   requiredScope: missing,
-                  message: "This connection cannot change these settings.",
+                  message: "This connection lacks permission to change these settings.",
                 }),
               ),
             );
           return persistServer(request);
         },
         persistClientSettingsPatch,
-      ).then(({ failedEnvironments, savedEnvironmentCount }) => {
+      ).then(({ failedEnvironments, savedEnvironments, savedEnvironmentCount }) => {
         if (failedEnvironments.length === 0) return;
         toastManager.add({
           type: "error",
           title:
             savedEnvironmentCount > 0 ? "Setting saved on some environments" : "Setting not saved",
-          // FORK: names the environments refused for a missing permission, not only "could not update".
-          description: describeFailedWrites(failedEnvironments, savedEnvironmentCount),
+          description: [
+            ...failedEnvironments.map(
+              ({ label, message }) => `Could not save on ${label}: ${message}`,
+            ),
+            ...(savedEnvironmentCount > 0
+              ? [`Saved on ${savedEnvironments.map(({ label }) => label).join(", ")}.`]
+              : []),
+          ].join("\n"),
         });
       });
     },
     [persistServer],
   );
-}
-
-// FORK: the toast copy for failed scoped settings writes (`labelList`, `labels`, `describeFailedWrites`).
-const labelList = new Intl.ListFormat("en", { type: "conjunction" });
-const labels = (writes: readonly { readonly label: string }[]) =>
-  labelList.format(writes.map((write) => write.label));
-
-/** Names the failed environments, and says which of them lack the permission to write. */
-function describeFailedWrites(
-  failed: readonly { readonly label: string; readonly refused: boolean }[],
-  savedEnvironmentCount: number,
-): string {
-  const refused = failed.filter((write) => write.refused);
-  const other = failed.filter((write) => !write.refused);
-  return [
-    other.length > 0 ? `Could not update ${labels(other)}.` : null,
-    refused.length === 1
-      ? `The connection to ${labels(refused)} does not have permission to change environment settings.`
-      : refused.length > 1
-        ? `The connections to ${labels(refused)} do not have permission to change environment settings.`
-        : null,
-    savedEnvironmentCount > 0 ? "The other selected environments saved the change." : null,
-  ]
-    .filter((sentence) => sentence !== null)
-    .join(" ");
 }
 
 export function useUpdateScopedSettings() {

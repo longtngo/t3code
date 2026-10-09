@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 
 /** Resolved resctl binary. Overridable for non-PATH installs; defaults to the name on PATH. */
 const RESCTL_CMD = process.env.T3CODE_RESCTL_CMD?.trim() || "resctl";

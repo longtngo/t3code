@@ -25,7 +25,13 @@ export type ModelOption = {
   readonly isUnavailable?: boolean;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
+  readonly providerUpdateRequired?: ProviderUpdateRequired;
 };
+
+type ProviderUpdateRequired = Pick<
+  T3ServerConfig["providers"][number],
+  "driver" | "updateRequiredModels"
+>;
 
 export type ProviderGroup = {
   readonly providerKey: string;
@@ -33,6 +39,8 @@ export type ProviderGroup = {
   readonly providerDriver: string;
   readonly continuationGroupKey: string | null;
   readonly models: ReadonlyArray<ModelOption>;
+  /** The provider fields that name announced models its CLI is too old to run. */
+  readonly updateRequired?: ProviderUpdateRequired;
 };
 
 function providerDisplayLabel(provider: {
@@ -177,6 +185,9 @@ export function buildModelOptions(
     }
 
     const providerLabel = providerDisplayLabel(provider);
+    const updateRequired = provider.updateRequiredModels?.length
+      ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
+      : undefined;
     for (const model of provider.models) {
       const key = `${provider.instanceId}:${model.slug}`;
       options.set(key, {
@@ -193,6 +204,7 @@ export function buildModelOptions(
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
+        ...(updateRequired ? { providerUpdateRequired: updateRequired } : {}),
         capabilities: model.capabilities,
         selection: normalizeSelectionOptions(
           {
@@ -244,7 +256,8 @@ export function buildModelOptions(
         continuationGroupKey: provider?.continuation?.groupKey ?? null,
         isDefault: false,
         isLegacy: model?.isLegacy === true,
-        ...(isModelSelectionUnavailable(config, fallbackModelSelection)
+        ...(isModelSelectionUnavailable(config, fallbackModelSelection) ||
+        provider?.updateRequiredModels?.some((gated) => gated.slug === fallbackModelSelection.model)
           ? { isUnavailable: true }
           : {}),
         capabilities: model?.capabilities ?? null,
@@ -264,18 +277,21 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
       providerDriver: string;
       continuationGroupKey: string | null;
       models: ModelOption[];
+      updateRequired: ProviderUpdateRequired | undefined;
     }
   >();
   for (const option of options) {
     const existing = groups.get(option.providerKey);
     if (existing) {
       existing.models.push(option);
+      existing.updateRequired ??= option.providerUpdateRequired;
     } else {
       groups.set(option.providerKey, {
         providerLabel: option.providerLabel,
         providerDriver: option.providerDriver,
         continuationGroupKey: option.continuationGroupKey,
         models: [option],
+        updateRequired: option.providerUpdateRequired,
       });
     }
   }
@@ -286,6 +302,7 @@ export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyAr
     providerDriver: group.providerDriver,
     continuationGroupKey: group.continuationGroupKey,
     models: group.models,
+    ...(group.updateRequired ? { updateRequired: group.updateRequired } : {}),
   }));
 }
 

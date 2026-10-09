@@ -212,17 +212,6 @@ describe("custom model settings", () => {
       { slug: "named", name: "Named", capabilities },
     ]);
   });
-
-  it("accepts entries at the settings patch boundary", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: { codex: { customModels: [{ slug: "x", capabilities }] } },
-      }).providers?.codex?.customModels,
-    ).toEqual([{ slug: "x", capabilities }]);
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { codex: { customModels: [{ name: "no slug" }] } } }),
-    ).toThrow();
-  });
 });
 
 describe("ClaudeSettings auto-compaction", () => {
@@ -252,36 +241,6 @@ describe("ClaudeSettings auto-compaction", () => {
       expect(decodeClaudeSettings({ autoCompactWindow: value }).autoCompactWindow).toBe("");
     },
   );
-
-  it.each(["99999", "300k", "60", "0%", "101%"])(
-    "still rejects an unsupported threshold at the patch boundary: %s",
-    (value) => {
-      // Strict where it can report: a bad value fails only the update that
-      // introduced it, so it never reaches the file in the first place.
-      expect(() =>
-        decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: value } } }),
-      ).toThrow();
-    },
-  );
-
-  it("keeps the rest of the file when one provider value is unreadable", () => {
-    const decoded = decodeServerSettings({
-      providers: {
-        claudeAgent: { autoCompactWindow: "60", binaryPath: "/custom/claude" },
-      },
-    });
-    expect(decoded.providers.claudeAgent.autoCompactWindow).toBe("");
-    expect(decoded.providers.claudeAgent.binaryPath).toBe("/custom/claude");
-  });
-
-  it("rejects an unsupported threshold at the settings patch boundary", () => {
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300k" } } }),
-    ).toThrow();
-    expect(
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
-    ).toBeDefined();
-  });
 });
 
 describe("ClaudeSettings output style", () => {
@@ -300,34 +259,10 @@ describe("ClaudeSettings output style", () => {
   it.each(["concise", "CONCISE", "NoSuchStyleXyz", "Creative", "custom"])(
     "recovers an unknown style to no style rather than failing the document: %s",
     (value) => {
-      // Same containment as `autoCompactWindow`, and the two blobs this schema
-      // decodes fail differently without it: the legacy `providers.claudeAgent`
-      // blob takes the whole settings file down (which `loadSettingsFromDisk`
-      // answers by reverting to defaults), while `providerInstances.*.config`
-      // marks the Claude instance unavailable. Both are worse than "no style".
+      // Same containment as `autoCompactWindow`: without it a bad value in
+      // `providerInstances.*.config` marks the Claude instance unavailable,
+      // which is worse than "no style".
       expect(decodeClaudeSettings({ outputStyle: value }).outputStyle).toBe("");
-    },
-  );
-
-  it("keeps the rest of the file when the style is unreadable", () => {
-    const decoded = decodeServerSettings({
-      providers: {
-        claudeAgent: { outputStyle: "Creative", binaryPath: "/custom/claude" },
-      },
-    });
-    expect(decoded.providers.claudeAgent.outputStyle).toBe("");
-    expect(decoded.providers.claudeAgent.binaryPath).toBe("/custom/claude");
-  });
-
-  it.each(["concise", "NoSuchStyleXyz", "custom"])(
-    "rejects an unknown style at the patch boundary: %s",
-    (value) => {
-      // Guards a hand-written patch and the legacy blob. It is NOT what guards
-      // the settings form, which writes an instance `config` blob typed as
-      // `Schema.Unknown` — the form's dropdown is what does that.
-      expect(() =>
-        decodeServerSettingsPatch({ providers: { claudeAgent: { outputStyle: value } } }),
-      ).toThrow();
     },
   );
 
@@ -353,17 +288,6 @@ describe("ClaudeSettings output style", () => {
     expect(pattern.test("")).toBe(true);
     expect(pattern.test("Concise")).toBe(false);
   });
-
-  it.each(["", ...CLAUDE_OUTPUT_STYLES])(
-    "accepts a selectable style at the patch boundary: %s",
-    (value) => {
-      // Every style the form can offer, so a narrowed pattern that admits only one of
-      // them cannot pass.
-      expect(
-        decodeServerSettingsPatch({ providers: { claudeAgent: { outputStyle: value } } }),
-      ).toBeDefined();
-    },
-  );
 });
 
 describe("ClientSettings notifications", () => {
@@ -901,9 +825,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providerInstances).toEqual({});
-    // Legacy `providers` struct is still hydrated with its per-driver defaults
-    // so existing call sites keep working through the migration.
-    expect(decoded.providers.codex.enabled).toBe(true);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -950,27 +871,23 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables only the stable bindings by default", () => {
-    const decoded = decodeServerSettings({});
-    expect(decoded.providers.codex.enabled).toBe(true);
-    expect(decoded.providers.claudeAgent.enabled).toBe(true);
-    expect(decoded.providers.cursor.enabled).toBe(false);
-    expect(decoded.providers.grok.enabled).toBe(false);
-    expect(decoded.providers.opencode.enabled).toBe(false);
+  it("keeps Muse disabled until a configured instance opts in", () => {
+    const muse = ProviderDriverKind.make("muse");
+    expect(resolveProviderInstanceEnabled({ driver: muse, config: {} })).toBe(false);
+    expect(resolveProviderInstanceEnabled({ driver: muse, enabled: true, config: {} })).toBe(true);
+    expect(
+      resolveProviderInstanceEnabled({ driver: muse, enabled: true, config: { enabled: false } }),
+    ).toBe(false);
   });
 
-  it("keeps Cursor enabled when an existing user explicitly opted in", () => {
-    const cursor = ProviderDriverKind.make("cursor");
-    const cursorId = ProviderInstanceId.make("cursor");
-    const decoded = decodeServerSettings({
-      providers: { cursor: { enabled: true } },
-      providerInstances: {
-        [cursorId]: { driver: cursor, enabled: true, config: {} },
-      },
-    });
-
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(resolveProviderInstanceEnabled(decoded.providerInstances[cursorId]!)).toBe(true);
+  it("enables only the stable bindings by default", () => {
+    const enabledByDefault = (driver: string) =>
+      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make(driver), config: {} });
+    expect(enabledByDefault("codex")).toBe(true);
+    expect(enabledByDefault("claudeAgent")).toBe(true);
+    for (const driver of ["cursor", "grok", "muse", "pi", "opencode", "antigravity"]) {
+      expect(enabledByDefault(driver)).toBe(false);
+    }
   });
 
   it("resolves instance enabled state with explicit false winning", () => {
@@ -1039,42 +956,6 @@ describe("ServerSettings worktree defaults", () => {
     );
     expect(decodeServerSettings({ worktreeSubmodules: "shallow" }).worktreeSubmodules).toBeNull();
     expect(decodeServerSettingsPatch({ worktreeSubmodules: null }).worktreeSubmodules).toBeNull();
-  });
-});
-
-describe("ServerSettings Cursor legacy settings", () => {
-  it("preserves V1 Cursor CLI settings when reading and writing shared settings", () => {
-    const decoded = decodeServerSettings({
-      providers: {
-        cursor: {
-          enabled: true,
-          binaryPath: "cursor-agent",
-          apiEndpoint: "http://127.0.0.1:3774",
-        },
-      },
-    });
-
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(encodeServerSettings(decoded).providers?.cursor).toMatchObject({
-      binaryPath: "cursor-agent",
-      apiEndpoint: "http://127.0.0.1:3774",
-    });
-  });
-
-  it("ignores obsolete Cursor CLI settings in patches", () => {
-    const patch = decodeServerSettingsPatch({
-      providers: {
-        cursor: {
-          enabled: true,
-          binaryPath: "cursor-agent",
-          apiEndpoint: "http://127.0.0.1:3774",
-        },
-      },
-    });
-
-    expect(patch.providers?.cursor?.enabled).toBe(true);
-    expect(patch.providers?.cursor).not.toHaveProperty("binaryPath");
-    expect(patch.providers?.cursor).not.toHaveProperty("apiEndpoint");
   });
 });
 
@@ -1150,13 +1031,6 @@ describe("ServerSettingsPatch string normalization", () => {
       observability: {
         otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
       },
-      providers: {
-        codex: {
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          homePath: "  ~/.codex  ",
-          launchArgs: "  --strict-config --enable foo  ",
-        },
-      },
       providerInstances: {
         codex_personal: {
           driver: "  codex  ",
@@ -1169,9 +1043,6 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.addProjectBaseDirectory).toBe("~/Development");
     expect(patch.textGenerationModelSelection?.model).toBe("gpt-5.4-mini");
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
-    expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(patch.providers?.codex?.homePath).toBe("~/.codex");
-    expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",
     );
@@ -1188,19 +1059,9 @@ describe("ServerSettingsPatch string normalization", () => {
     const encoded = encodeServerSettings({
       ...defaultSettings,
       addProjectBaseDirectory: "  ~/Development  ",
-      providers: {
-        ...defaultSettings.providers,
-        codex: {
-          ...defaultSettings.providers.codex,
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          launchArgs: "  --strict-config  ",
-        },
-      },
     });
 
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
-    expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
 
@@ -1343,10 +1204,6 @@ describe("settings schema / patch parity", () => {
       // (apps/server/src/serverSettings.ts). The server writes it once and reads
       // it on every load; a client patch would re-run or skip the migration.
       "projectSettingsFolded",
-      // Upstream #2829 retired the Cursor CLI settings: still decoded from old
-      // settings files, but patches ignore them ("ignores obsolete Cursor CLI settings").
-      "providers.cursor.apiEndpoint",
-      "providers.cursor.binaryPath",
       // Upstream: maintained by the server when `worktreesDirectory` changes
       // (packages/shared/src/serverSettings.ts), never sent by a client.
       "previousWorktreesDirectories",
@@ -1447,20 +1304,6 @@ describe("subagentBackendThreadMode", () => {
     for (const id of ["constructor", "__proto__", "toString", "valueOf"]) {
       expect(subagentBackendThreadMode({}, ThreadId.make(id))).toBe("inherit");
     }
-  });
-});
-
-describe("ClaudeSettingsPatch config directory", () => {
-  it("keeps configDirPath through a patch instead of silently dropping it", () => {
-    // The RPC decodes edits through the patch mirror, so a field missing from it
-    // never reaches disk. This one was missing, which made "Reset to defaults"
-    // unable to clear a custom Claude config directory.
-    const patch = decodeServerSettingsPatch({
-      providers: { claudeAgent: { configDirPath: "~/.claude-personal", homePath: "/x" } },
-    });
-
-    expect(patch.providers?.claudeAgent?.configDirPath).toBe("~/.claude-personal");
-    expect(patch.providers?.claudeAgent?.homePath).toBe("/x");
   });
 });
 

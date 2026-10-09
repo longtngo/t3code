@@ -50,8 +50,9 @@ import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+} from "@t3tools/provider-core/server/ProviderAdapter";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import {
   applyClaudeTaskToolResult,
@@ -372,7 +373,7 @@ const makeHarness = (options?: {
     const allOpenedOptions: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions> = [];
     const interruptRequested = yield* Deferred.make<void>();
     const getContextUsage = options?.getContextUsage;
-    const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
+    const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
       instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_CLAUDE_SETTINGS,
       environment: {},
@@ -477,7 +478,9 @@ const makeHarness = (options?: {
     };
   });
 
-const provide = Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer));
+const provide = Effect.provide(
+  Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+);
 
 let uuidCounter = 0;
 const nextUuid = () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, "0")}`;

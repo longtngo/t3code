@@ -1281,8 +1281,7 @@ describe("listQueueSlotInstances", () => {
       },
       codex: { driver: "codex", enabled: false },
     },
-    providers: {},
-  } as unknown as Pick<ServerSettings, "providerInstances" | "providers">;
+  } as unknown as Pick<ServerSettings, "providerInstances">;
 
   it("lists visible instances, labelled and deduped across sources", () => {
     const providers = [
@@ -1306,7 +1305,6 @@ describe("listQueueSlotInstances", () => {
     const providers = [provider("myDriver", "myDriver")];
     const custom = {
       providerInstances: { myDriver: { driver: "myDriver", enabled: true } },
-      providers: {},
     } as unknown as typeof settings;
     expect(listQueueSlotInstances([{ providers, settings: custom }])).toEqual([
       { instanceId: "myDriver", label: "My Driver" },

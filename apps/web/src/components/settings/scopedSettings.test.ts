@@ -1,6 +1,6 @@
 import {
-  EnvironmentAuthorizationError,
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentAuthorizationError,
   EnvironmentId,
   ProjectId,
   type ServerSettings,
@@ -413,7 +413,15 @@ describe("scoped settings writes", () => {
     const persistServer = vi
       .fn()
       .mockResolvedValueOnce({ _tag: "Success" })
-      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Rejected")) })
+      .mockResolvedValueOnce({
+        _tag: "Failure",
+        cause: Cause.fail(
+          new EnvironmentAuthorizationError({
+            requiredScope: "settings:write",
+            message: "This connection lacks permission to change settings.",
+          }),
+        ),
+      })
       .mockRejectedValueOnce(new Error("Disconnected during save"))
       .mockResolvedValueOnce({ _tag: "Success" });
     const result = await persistScopedSettingsPatch(
@@ -422,41 +430,19 @@ describe("scoped settings writes", () => {
       vi.fn(),
     );
     expect(result.savedEnvironmentCount).toBe(2);
+    expect(result.savedEnvironments.map(({ label }) => label)).toEqual([
+      laptop.label,
+      fourth.label,
+    ]);
+    expect(result.failedEnvironments.map(({ message }) => message)).toEqual([
+      "This connection lacks permission to change settings.",
+      "Disconnected during save",
+    ]);
     expect(result.failedEnvironments.map(({ label }) => label)).toEqual([
       server.label,
       third.label,
     ]);
     expect(persistServer).toHaveBeenCalledTimes(4);
-  });
-
-  it("marks a write refused only when its failure is an authorization error", async () => {
-    const third = environment("Third");
-    const fourth = environment("Fourth");
-    const selected = [...environments, third, fourth];
-    const scope = resolveSettingsScope({}, [], selected);
-    const persistServer = vi
-      .fn()
-      .mockResolvedValueOnce({
-        _tag: "Failure",
-        cause: Cause.fail(
-          new EnvironmentAuthorizationError({ message: "denied", requiredScope: "settings:write" }),
-        ),
-      })
-      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Rejected")) })
-      // Threw, as a dropped connection does: a plain failure, never a refusal.
-      .mockRejectedValueOnce(new Error("Disconnected during save"))
-      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.die(new Error("Socket closed")) });
-    const result = await persistScopedSettingsPatch(
-      planScopedSettingsPatch(scope, selected, { enableAgentBrowserAccess: false }),
-      persistServer,
-      vi.fn(),
-    );
-    expect(result.failedEnvironments.map(({ label, refused }) => [label, refused])).toEqual([
-      [laptop.label, true],
-      [server.label, false],
-      [third.label, false],
-      [fourth.label, false],
-    ]);
   });
 });
 

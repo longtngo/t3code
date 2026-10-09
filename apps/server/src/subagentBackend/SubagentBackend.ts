@@ -32,7 +32,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import {
-  CursorSettings,
   ProviderInstanceId,
   type ServerSettings,
   SUBAGENT_BACKEND_CURSOR,
@@ -43,10 +42,11 @@ import {
   subagentBackendThreadMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import { CursorSettings } from "@t3tools/provider-cursor/settings";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { cursorOffloadBlockedReason, cursorTotalUsageLimits } from "@t3tools/shared/usageLimits";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { ServerConfig } from "../config.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";

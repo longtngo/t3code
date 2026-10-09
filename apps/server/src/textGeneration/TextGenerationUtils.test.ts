@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { cliFailureDetail } from "./TextGenerationUtils.ts";
+import { cliFailureDetail } from "@t3tools/provider-core/server/textGenerationUtils";
 
 describe("cliFailureDetail", () => {
   it("reports stderr when the CLI explained itself", () => {
