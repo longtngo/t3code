@@ -206,6 +206,23 @@ it.effect(
     ),
 );
 
+it.effect("requires orchestration operate to change the subagent backend", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const set = createCommandPermissions(runtime, WS_METHODS.subagentBackendSet);
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(set.permissionAtom(env))).toBe(false);
+      expect((yield* set.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+        AuthOrchestrationOperateScope,
+      );
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      expect(registry.get(set.permissionAtom(env))).toBe(true);
+      yield* set.authorize(registry, env);
+    }),
+  ),
+);
+
 it.effect("honors exact empty permissions and preserves legacy parent grants", () =>
   Effect.scoped(
     Effect.gen(function* () {

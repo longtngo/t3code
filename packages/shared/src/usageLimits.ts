@@ -494,6 +494,39 @@ export function exhaustedUsageWindows(
   );
 }
 
+/** The first enabled Cursor instance's usage, narrowed to its overall window (the plan total;
+ *  the per-pool windows can each fill while the plan still has room). Server and client both
+ *  gate Cursor subagent offload on it. */
+export function cursorTotalUsageLimits(
+  providers: ReadonlyArray<Pick<ServerProvider, "driver" | "enabled" | "usageLimits">>,
+): ServerProviderUsageLimits | undefined {
+  for (const provider of providers) {
+    if (provider.driver !== "cursor" || provider.enabled === false) continue;
+    const limits = provider.usageLimits;
+    const total = limits?.windows.find((window) => window.id === "totalPercentUsed");
+    if (limits === undefined || total === undefined) continue;
+    return { ...limits, windows: [total] };
+  }
+  return undefined;
+}
+
+/**
+ * Why Cursor subagent offload is withheld, or `null` when it is allowed.
+ *
+ * `cursorLimits` is Cursor's overall window only (`cursorTotalUsageLimits`), as on the
+ * fork: the per-pool windows can each fill while the plan still has room. Reset-aware like
+ * the turn-start gate, so a 100% reading whose reset has passed no longer blocks.
+ */
+export function cursorOffloadBlockedReason(input: {
+  readonly allowSpendingCredits: boolean;
+  readonly cursorLimits: ServerProviderUsageLimits | undefined;
+  readonly nowMs: number;
+}): string | null {
+  if (input.allowSpendingCredits) return null;
+  if (exhaustedUsageWindows(input.cursorLimits, input.nowMs).length === 0) return null;
+  return `Cursor has used 100% of its usage and "Allow to spend credits" is off.`;
+}
+
 /** The one-line status under a provider heading when there are no bars to draw. */
 export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
   if (limits.unavailable?.reason === "unsupported") {

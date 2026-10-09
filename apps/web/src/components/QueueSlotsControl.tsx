@@ -3,6 +3,7 @@ import { SettingsIcon } from "lucide-react";
 import { MAX_QUEUE_SLOTS, type QueueSlotSettings } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../permissionCopy";
 import { environmentServerConfigsAtom } from "../state/server";
 import { useQueueSlotSettings, useQueueSlotsAccess, useSetQueueSlots } from "../queueSlotSettings";
 import { queueSlotSources } from "./queueSlotSources";
@@ -24,7 +25,7 @@ export function useQueueSlots() {
   const writable = access !== "none";
   const notice =
     access === "none"
-      ? QUEUE_SLOTS_READ_ONLY
+      ? ENVIRONMENT_SETTINGS_READ_ONLY
       : access === "device"
         ? QUEUE_SLOTS_DEVICE_ONLY
         : null;
@@ -164,8 +165,6 @@ export function ProviderSlotsField(props: {
   );
 }
 
-export const QUEUE_SLOTS_READ_ONLY =
-  "This connection does not have permission to change environment settings.";
 export const QUEUE_SLOTS_DEVICE_ONLY =
   "Saved on this device only. This connection cannot change environment settings.";
 export const NO_PROVIDERS = "No providers enabled";

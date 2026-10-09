@@ -1,6 +1,10 @@
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import {
+  CursorSettings,
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
+  type ServerProvider,
   type ServerSettings,
   type SubagentBackendModelOption,
   type SubagentBackendSetInput,
@@ -9,6 +13,7 @@ import {
   type ThreadId,
   subagentBackendThreadMode,
 } from "@t3tools/contracts";
+import { cursorOffloadBlockedReason, cursorTotalUsageLimits } from "@t3tools/shared/usageLimits";
 
 /** Dot tone for the collapsed row: green when Cursor is actually dispatching, "partial" when only
  *  some threads are set to Cursor, grey otherwise. */
@@ -66,36 +71,91 @@ export function subagentBackendRowStatus(
   return { dot: "off", text: "Default" };
 }
 
-type OffloadSettings = Pick<
-  ServerSettings,
-  "subagentBackendEnabled" | "subagentBackendThreadModes" | "providerInstances"
->;
+/** What one environment's server reports: its settings and its providers (a `ServerConfig`). */
+interface OffloadSource {
+  readonly settings: Pick<
+    ServerSettings,
+    | "subagentBackendEnabled"
+    | "subagentBackendThreadModes"
+    | "providerInstances"
+    | "allowSpendingCredits"
+  >;
+  readonly providers: ReadonlyArray<Pick<ServerProvider, "driver" | "enabled" | "usageLimits">>;
+}
+
+const decodeCursorSettings = Schema.decodeUnknownOption(CursorSettings);
+
+/** Whether one environment's server can offload a thread set to Cursor: "unavailable" with the
+ *  master switch off or no enabled Cursor instance, a refusal reason, or "ready". */
+export type CursorOffloadReadiness = "unavailable" | "ready" | { readonly refused: string };
+
+/**
+ * The per-environment half of the server's `resolveThreadBackend` for a Default machine: Cursor
+ * credits must not be used up with spending off (`cursorOffloadBlockedReason`), and the first
+ * enabled Cursor instance must have a config that decodes (`validateCursorInstance`). One known
+ * gap: the server tries the remembered instance before the first one, and these settings do not
+ * carry it.
+ */
+export function cursorOffloadReadiness(
+  source: OffloadSource | null | undefined,
+  nowMs = Date.now(),
+): CursorOffloadReadiness {
+  const settings = source?.settings;
+  if (settings == null || settings.subagentBackendEnabled === false) return "unavailable";
+  const first = Object.entries(settings.providerInstances).find(
+    ([, entry]) => entry.driver === SUBAGENT_BACKEND_CURSOR && entry.enabled === true,
+  );
+  if (first === undefined) return "unavailable";
+  const creditsBlocked = cursorOffloadBlockedReason({
+    allowSpendingCredits: settings.allowSpendingCredits,
+    cursorLimits: cursorTotalUsageLimits(source?.providers ?? []),
+    nowMs,
+  });
+  if (creditsBlocked !== null) return { refused: creditsBlocked };
+  const [instanceId, instance] = first;
+  if (Option.isNone(decodeCursorSettings(instance.config ?? {}))) {
+    return { refused: `Instance "${instanceId}" has a Cursor config that could not be read.` };
+  }
+  return "ready";
+}
+
+/** Whether a thread set to Cursor offloads ("on"), why it does not, or "off" when it is not set
+ *  to Cursor or its server cannot offload at all. A Cursor machine backend is not counted here;
+ *  the footer's green icon covers it. */
+export function threadCursorOffload(
+  source: OffloadSource | null | undefined,
+  threadId: ThreadId,
+  readiness: CursorOffloadReadiness,
+): "off" | "on" | { readonly refused: string } {
+  if (source == null || readiness === "unavailable") return "off";
+  if (subagentBackendThreadMode(source.settings.subagentBackendThreadModes, threadId) !== "on") {
+    return "off";
+  }
+  return readiness === "ready" ? "on" : readiness;
+}
 
 /** Whether this thread's own server offloads its subagents to Cursor because the thread is set to
- *  Cursor: the master switch is on, the server has an enabled Cursor instance, and the thread's
- *  override is "on". A Cursor machine backend is not counted here; the footer's green icon covers it. */
+ *  Cursor; see `threadCursorOffload`. */
 export function threadOffloadedToCursor(
-  settings: OffloadSettings | null | undefined,
+  source: OffloadSource | null | undefined,
   threadId: ThreadId,
+  nowMs = Date.now(),
 ): boolean {
-  if (settings == null || settings.subagentBackendEnabled === false) return false;
-  if (subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId) !== "on") {
-    return false;
-  }
-  return Object.values(settings.providerInstances).some(
-    (instance) => instance.driver === SUBAGENT_BACKEND_CURSOR && instance.enabled === true,
-  );
+  return threadCursorOffload(source, threadId, cursorOffloadReadiness(source, nowMs)) === "on";
 }
 
 /** Live threads set to Cursor. The modes map is never pruned when a thread is deleted, so ids are
  *  checked against the environment's threads; archived threads do not run and are not counted. */
 export function offloadedThreadCount(
-  settings: OffloadSettings | null | undefined,
+  source: OffloadSource | null | undefined,
   threads: ReadonlyMap<ThreadId, { readonly archivedAt: unknown }>,
+  nowMs = Date.now(),
 ): number {
-  if (settings == null) return 0;
-  return (Object.keys(settings.subagentBackendThreadModes) as ThreadId[]).filter(
-    (id) => threads.get(id)?.archivedAt === null && threadOffloadedToCursor(settings, id),
+  if (source == null) return 0;
+  const readiness = cursorOffloadReadiness(source, nowMs);
+  return (Object.keys(source.settings.subagentBackendThreadModes) as ThreadId[]).filter(
+    (id) =>
+      threads.get(id)?.archivedAt === null && threadCursorOffload(source, id, readiness) === "on",
   ).length;
 }
 
@@ -139,12 +199,15 @@ export function subagentCursorInstancesPickable(state: SubagentBackendState | nu
  * primary (when both are off, the panel's own master-off line has already said it).
  * `cursorAvailable` is `null` when unknown — a thread on another environment (the primary's
  * instance list says nothing about that server) or state not yet loaded — so no Cursor note
- * is offered on a guess.
+ * is offered on a guess. `refused` leads, since it explains why a thread set to Cursor is not
+ * offloading.
  */
 export function threadOffloadNotes(input: {
   readonly threadMasterEnabled: boolean;
   readonly primaryMasterEnabled: boolean;
   readonly cursorAvailable: boolean | null;
+  /** Why the server will not offload this thread although it is set to Cursor. */
+  readonly refused?: string | null;
 }): ReadonlyArray<string> {
   if (!input.threadMasterEnabled) {
     return input.primaryMasterEnabled
@@ -152,6 +215,7 @@ export function threadOffloadNotes(input: {
       : [];
   }
   return [
+    ...(input.refused ? [input.refused] : []),
     ...(input.cursorAvailable === false
       ? ["Add a Cursor instance in Settings to use Cursor here."]
       : []),
@@ -165,22 +229,28 @@ export function subagentCursorTargetInstanceId(state: SubagentBackendState | nul
   return state?.instanceId ?? state?.instances[0]?.instanceId ?? null;
 }
 
-/** The `set` payload for the instance and model pickers: the machine backend stays as it is
- *  (Cursor stays Cursor, anything else stays Default), only the picked target changes. */
-export function subagentTargetSetInput(
+function subagentSetInput(
   state: SubagentBackendState,
+  backend: string,
   pick: { readonly instanceId?: ProviderInstanceId; readonly model?: string },
 ): SubagentBackendSetInput {
   const instanceId = pick.instanceId ?? subagentCursorTargetInstanceId(state);
   const model = pick.model ?? state.model;
   return {
     backend:
-      state.backend === SUBAGENT_BACKEND_CURSOR
-        ? SUBAGENT_BACKEND_CURSOR
-        : SUBAGENT_BACKEND_DEFAULT,
+      backend === SUBAGENT_BACKEND_CURSOR ? SUBAGENT_BACKEND_CURSOR : SUBAGENT_BACKEND_DEFAULT,
     ...(instanceId ? { instanceId } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+/** The `set` payload for the instance and model pickers: only the picked target changes (see
+ *  `SubagentBackendSetInput.targetOnly`). */
+export function subagentTargetSetInput(
+  state: SubagentBackendState,
+  pick: { readonly instanceId?: ProviderInstanceId; readonly model?: string },
+): SubagentBackendSetInput {
+  return { ...subagentSetInput(state, state.backend, pick), targetOnly: true };
 }
 
 /**
@@ -194,7 +264,7 @@ export function subagentBackendApplyInput(
   state: SubagentBackendState,
   backend: string,
 ): SubagentBackendSetInput {
-  return subagentTargetSetInput({ ...state, backend }, {});
+  return subagentSetInput(state, backend, {});
 }
 
 /**

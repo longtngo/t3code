@@ -33,6 +33,20 @@ export function useEnvironmentScope(
   return sessionHasScope(result, scope);
 }
 
+/** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial, so
+ *  this stays false while the grant loads or an offline cache is unconfirmed. */
+export function useEnvironmentScopeDenied(
+  environmentId: EnvironmentId | null,
+  scope: AuthEnvironmentScope,
+): boolean {
+  const result = useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+  );
+  return sessionResultDeniesScope(result, scope);
+}
+
 /** See `sessionResultDeniesScope`: only a current answer without `scope` is a denial. */
 export function readEnvironmentScopeDenied(
   environmentId: EnvironmentId,

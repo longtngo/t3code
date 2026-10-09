@@ -4,6 +4,7 @@ import { useParams } from "@tanstack/react-router";
 import { BotIcon, Loader2Icon } from "lucide-react";
 import { Atom } from "effect/reactivity";
 import {
+  AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   ProviderInstanceId,
   SUBAGENT_BACKEND_CURSOR,
@@ -22,7 +23,7 @@ import {
 } from "~/hooks/useSettings";
 import { useSubagentBackend } from "~/hooks/useSubagentBackend";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { useEnvironmentScope } from "~/state/session";
+import { useEnvironmentScope, useEnvironmentScopeDenied } from "~/state/session";
 import { offloadedThreadCountAtom } from "~/state/subagentOffload";
 import { getProviderInstanceEntry, normalizeProviderAccentColor } from "~/providerInstances";
 import { getAppModelOptionsForInstance } from "~/modelSelection";
@@ -34,6 +35,7 @@ import {
   sidebarFooterSeverityBadgeClass,
 } from "./sidebarFooterBadge";
 import { resolveThreadRouteTarget } from "~/threadRoutes";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "~/permissionCopy";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarMenuItem } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -47,7 +49,8 @@ import {
   subagentCursorTargetInstanceId,
   subagentTargetVisible,
   subagentTargetSetInput,
-  threadOffloadedToCursor,
+  cursorOffloadReadiness,
+  threadCursorOffload,
   threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
 
@@ -89,6 +92,11 @@ function ThreadOffloadControl(props: {
   readonly primaryMasterEnabled: boolean;
   /** `null` when unknown — see `threadOffloadNotes`. */
   readonly cursorAvailable: boolean | null;
+  /** See `threadOffloadNotes`. */
+  readonly refused: string | null;
+  /** The panel already says this connection cannot change the backend on this same
+   *  environment; one permission line is enough, so this control's own stays hidden. */
+  readonly permissionNoteShown: boolean;
 }) {
   const { environmentId, threadId, primaryMasterEnabled, cursorAvailable } = props;
   // The master switch is per-environment, not shared (absent from `SHARED_SERVER_SETTING_KEYS`),
@@ -100,7 +108,12 @@ function ThreadOffloadControl(props: {
   const mode = subagentBackendThreadMode(settings.subagentBackendThreadModes, threadId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const canWrite = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
-  const notes = threadOffloadNotes({ threadMasterEnabled, primaryMasterEnabled, cursorAvailable });
+  const notes = threadOffloadNotes({
+    threadMasterEnabled,
+    primaryMasterEnabled,
+    cursorAvailable,
+    refused: props.refused,
+  });
   if (!threadMasterEnabled && notes.length === 0) return null;
   return (
     <div className="space-y-1">
@@ -123,9 +136,9 @@ function ThreadOffloadControl(props: {
           ))}
         </ToggleGroup>
       ) : null}
-      {threadMasterEnabled && !canWrite ? (
+      {threadMasterEnabled && !canWrite && !props.permissionNoteShown ? (
         <p className="text-2xs leading-snug text-muted-foreground">
-          This connection does not have permission to change environment settings.
+          {ENVIRONMENT_SETTINGS_READ_ONLY}
         </p>
       ) : null}
       {notes.map((note) => (
@@ -157,7 +170,10 @@ export function SidebarSubagentBackend() {
   // fires a `get` as soon as it has a non-null `environmentId`.
   const environmentId = supported ? primaryEnvironmentId : null;
   const [open, setOpen] = useState(false);
-  const { state, usage, pending, set } = useSubagentBackend(environmentId, open);
+  const { state, usage, pending, refusal, canSet, set } = useSubagentBackend(environmentId, open);
+  // `canSet` disables the controls; the sentence is said only on a confirmed denial, not while
+  // the grant loads or an offline cache is unconfirmed.
+  const setDenied = useEnvironmentScopeDenied(environmentId, AuthOrchestrationOperateScope);
   const now = usePanelNow(
     open ? 1000 : state?.backend === SUBAGENT_BACKEND_CURSOR && usage ? 60_000 : null,
   );
@@ -199,10 +215,20 @@ export function SidebarSubagentBackend() {
   const instancesPickable = subagentCursorInstancesPickable(state);
   const isCursor = state?.backend === SUBAGENT_BACKEND_CURSOR;
   // A thread set to Cursor dispatches with the stored Cursor target even while the machine
-  // backend is Default, so its model stays pickable there.
+  // backend is Default, so its model stays pickable there, including while the server refuses
+  // to offload it (the pick is used once it can).
   const threadOnCursor =
     threadRef?.environmentId === environmentId &&
-    threadOffloadedToCursor(settings, threadRef.threadId);
+    subagentBackendThreadMode(settings.subagentBackendThreadModes, threadRef.threadId) === "on";
+  // Only the primary's providers are known here, so a remote thread gets no refusal note.
+  const threadOffload =
+    threadRef?.environmentId === environmentId
+      ? threadCursorOffload(
+          { settings, providers },
+          threadRef.threadId,
+          cursorOffloadReadiness({ settings, providers }, now),
+        )
+      : "off";
   const showTarget = subagentTargetVisible({
     isCursor,
     threadOnCursor,
@@ -225,7 +251,7 @@ export function SidebarSubagentBackend() {
           now,
         )
       : null;
-  const controlsDisabled = pending || state == null;
+  const controlsDisabled = pending || state == null || !canSet;
 
   const applyBackend = (backend: string) => {
     if (state == null) return;
@@ -398,6 +424,8 @@ export function SidebarSubagentBackend() {
               <div className="text-2xs leading-snug text-warning">{state.degraded}</div>
             ) : null}
 
+            {refusal ? <div className="text-2xs leading-snug text-warning">{refusal}</div> : null}
+
             {isCursor && usage ? (
               <WindowRow
                 label={usage.label}
@@ -407,6 +435,12 @@ export function SidebarSubagentBackend() {
                 now={now}
                 timestampFormat={timestampFormat}
               />
+            ) : null}
+
+            {setDenied ? (
+              <p className="text-2xs leading-snug text-muted-foreground">
+                This connection does not have permission to change the subagent backend.
+              </p>
             ) : null}
 
             {!masterEnabled ? (
@@ -431,6 +465,8 @@ export function SidebarSubagentBackend() {
                     ? cursorAvailable
                     : null
                 }
+                refused={typeof threadOffload === "object" ? threadOffload.refused : null}
+                permissionNoteShown={setDenied && threadRef.environmentId === environmentId}
               />
             ) : null}
           </div>

@@ -48,6 +48,12 @@ export const SubagentBackendState = Schema.Struct({
    * panel can warn instead of silently reading as Default forever.
    */
   degraded: Schema.NullOr(Schema.String),
+  /**
+   * Set only on a `set` response that changed nothing: why it was refused. The rest of the
+   * state is what is stored, so a refusal never reads as a degraded backend. Absent from
+   * servers that predate it, which report refusals through `degraded`.
+   */
+  refused: Schema.optional(Schema.String),
 });
 export type SubagentBackendState = typeof SubagentBackendState.Type;
 
@@ -55,6 +61,13 @@ export const SubagentBackendSetInput = Schema.Struct({
   backend: Schema.String,
   instanceId: Schema.optional(ProviderInstanceId),
   model: Schema.optional(Schema.String),
+  /**
+   * Only the Cursor target (`instanceId`/`model`) changes; the server keeps the backend already
+   * on disk and ignores `backend`. Sent by the instance and model pickers, whose view of the
+   * backend can be stale. `backend` is still required so servers that predate this field (which
+   * ignore it) keep their old behaviour.
+   */
+  targetOnly: Schema.optional(Schema.Boolean),
 });
 export type SubagentBackendSetInput = typeof SubagentBackendSetInput.Type;
 

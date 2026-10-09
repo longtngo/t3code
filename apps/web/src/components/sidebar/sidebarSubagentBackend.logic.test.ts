@@ -4,6 +4,7 @@ import {
   SUBAGENT_BACKEND_CURSOR,
   SUBAGENT_BACKEND_DEFAULT,
   type SubagentBackendInstance,
+  type ServerProvider,
   type ServerSettings,
   type SubagentBackendState,
   ThreadId,
@@ -18,7 +19,9 @@ import {
   subagentCursorTargetInstanceId,
   subagentTargetSetInput,
   subagentTargetVisible,
+  cursorOffloadReadiness,
   offloadedThreadCount,
+  threadCursorOffload,
   threadOffloadedToCursor,
   threadOffloadNotes,
 } from "./sidebarSubagentBackend.logic";
@@ -350,26 +353,48 @@ describe("threadOffloadNotes", () => {
 const cursorInstance = { driver: "cursor", enabled: true, config: {} };
 const base = {
   subagentBackendEnabled: true,
+  allowSpendingCredits: false,
   subagentBackendThreadModes: { a: "on", b: "off", c: "on", gone: "on" },
   providerInstances: { cursor: cursorInstance },
 } as unknown as ServerSettings;
 const t = (id: string) => ThreadId.make(id);
+/** What the server reports for one environment: its settings and its providers. */
+const env = (settings: ServerSettings, providers: ReadonlyArray<ServerProvider> = []) => ({
+  settings,
+  providers,
+});
+const NOW_MS = Date.parse("2026-10-09T12:00:00.000Z");
+/** A Cursor provider whose overall window reads `usedPercent`, resetting at `resetsAt`. */
+const cursorProvider = (usedPercent: number, resetsAt = "2026-11-01T00:00:00.000Z") =>
+  ({
+    instanceId: "cursor",
+    driver: "cursor",
+    enabled: true,
+    usageLimits: {
+      checkedAt: "2026-10-09T11:00:00.000Z",
+      windows: [
+        { id: "totalPercentUsed", kind: "monthly", label: "Overall", usedPercent, resetsAt },
+      ],
+    },
+  }) as unknown as ServerProvider;
 
 describe("offloaded thread rules", () => {
   it("is true only for mode on, master on, with an enabled cursor instance", () => {
-    expect(threadOffloadedToCursor(base, t("a"))).toBe(true);
-    expect(threadOffloadedToCursor(base, t("b"))).toBe(false);
-    expect(threadOffloadedToCursor(base, t("x"))).toBe(false);
-    expect(threadOffloadedToCursor({ ...base, subagentBackendEnabled: false }, t("a"))).toBe(false);
+    expect(threadOffloadedToCursor(env(base), t("a"))).toBe(true);
+    expect(threadOffloadedToCursor(env(base), t("b"))).toBe(false);
+    expect(threadOffloadedToCursor(env(base), t("x"))).toBe(false);
+    expect(threadOffloadedToCursor(env({ ...base, subagentBackendEnabled: false }), t("a"))).toBe(
+      false,
+    );
     expect(
-      threadOffloadedToCursor({ ...base, providerInstances: {} } as ServerSettings, t("a")),
+      threadOffloadedToCursor(env({ ...base, providerInstances: {} } as ServerSettings), t("a")),
     ).toBe(false);
     expect(
       threadOffloadedToCursor(
-        {
+        env({
           ...base,
           providerInstances: { cursor: { ...cursorInstance, enabled: false } },
-        } as unknown as ServerSettings,
+        } as unknown as ServerSettings),
         t("a"),
       ),
     ).toBe(false);
@@ -379,13 +404,71 @@ describe("offloaded thread rules", () => {
   it("is false with only an enabled non-Cursor instance", () => {
     expect(
       threadOffloadedToCursor(
-        {
+        env({
           ...base,
           providerInstances: { claude: { driver: "claudeAgent", enabled: true, config: {} } },
-        } as unknown as ServerSettings,
+        } as unknown as ServerSettings),
         t("a"),
       ),
     ).toBe(false);
+  });
+
+  // The server withholds offload while Cursor's overall window is full and spending is off.
+  it("is false while Cursor credits are used up and spending is off", () => {
+    const full = [cursorProvider(100)];
+    expect(threadOffloadedToCursor(env(base, full), t("a"), NOW_MS)).toBe(false);
+    expect(
+      threadOffloadedToCursor(env({ ...base, allowSpendingCredits: true }, full), t("a"), NOW_MS),
+    ).toBe(true);
+    expect(threadOffloadedToCursor(env(base, [cursorProvider(99)]), t("a"), NOW_MS)).toBe(true);
+    // A full window whose reset has passed no longer blocks.
+    expect(
+      threadOffloadedToCursor(
+        env(base, [cursorProvider(100, "2026-10-09T11:59:00.000Z")]),
+        t("a"),
+        NOW_MS,
+      ),
+    ).toBe(true);
+  });
+
+  // The server refuses a Cursor instance whose config does not decode rather than guess a binary.
+  it("is false when the Cursor instance's config cannot be read", () => {
+    const unreadable = {
+      ...base,
+      providerInstances: { cursor: { ...cursorInstance, config: { binaryPath: 42 } } },
+    } as unknown as ServerSettings;
+    expect(threadOffloadedToCursor(env(unreadable), t("a"))).toBe(false);
+  });
+
+  // The server resolves the remembered instance, else the FIRST enabled one; it never skips a
+  // broken first instance for a later one.
+  it("counts only the first enabled Cursor instance when nothing is remembered", () => {
+    const firstBroken = {
+      ...base,
+      providerInstances: {
+        broken: { ...cursorInstance, config: { binaryPath: 42 } },
+        cursor: cursorInstance,
+      },
+    } as unknown as ServerSettings;
+    expect(threadOffloadedToCursor(env(firstBroken), t("a"))).toBe(false);
+  });
+
+  it("names why a thread set to Cursor does not offload", () => {
+    expect(threadCursorOffload(env(base), t("a"), cursorOffloadReadiness(env(base)))).toBe("on");
+    expect(threadCursorOffload(env(base), t("b"), cursorOffloadReadiness(env(base)))).toBe("off");
+    const full = env(base, [cursorProvider(100)]);
+    expect(threadCursorOffload(full, t("a"), cursorOffloadReadiness(full, NOW_MS))).toEqual({
+      refused: 'Cursor has used 100% of its usage and "Allow to spend credits" is off.',
+    });
+    // A thread not set to Cursor has nothing to explain.
+    expect(threadCursorOffload(full, t("b"), cursorOffloadReadiness(full, NOW_MS))).toBe("off");
+    const unreadable = env({
+      ...base,
+      providerInstances: { cursor: { ...cursorInstance, config: { binaryPath: 42 } } },
+    } as unknown as ServerSettings);
+    expect(threadCursorOffload(unreadable, t("a"), cursorOffloadReadiness(unreadable))).toEqual({
+      refused: 'Instance "cursor" has a Cursor config that could not be read.',
+    });
   });
 
   it("counts offloaded threads that exist and are not archived", () => {
@@ -394,7 +477,8 @@ describe("offloaded thread rules", () => {
       [t("b"), { archivedAt: null }],
       [t("c"), { archivedAt: "2026-10-01T00:00:00Z" }],
     ]);
-    expect(offloadedThreadCount(base, threads)).toBe(1);
+    expect(offloadedThreadCount(env(base), threads)).toBe(1);
+    expect(offloadedThreadCount(env(base, [cursorProvider(100)]), threads, NOW_MS)).toBe(0);
     expect(offloadedThreadCount(null, threads)).toBe(0);
   });
 });
@@ -487,6 +571,7 @@ describe("subagentTargetSetInput", () => {
       backend: SUBAGENT_BACKEND_DEFAULT,
       instanceId: first.instanceId,
       model: "gpt-5",
+      targetOnly: true,
     });
   });
 
@@ -505,11 +590,15 @@ describe("subagentTargetSetInput", () => {
       backend: SUBAGENT_BACKEND_CURSOR,
       instanceId: second.instanceId,
       model: "auto",
+      targetOnly: true,
     });
   });
 
   it("omits keys that are null", () => {
-    expect(subagentTargetSetInput(state({}), {})).toEqual({ backend: SUBAGENT_BACKEND_DEFAULT });
+    expect(subagentTargetSetInput(state({}), {})).toEqual({
+      backend: SUBAGENT_BACKEND_DEFAULT,
+      targetOnly: true,
+    });
   });
 });
 

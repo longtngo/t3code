@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  cursorOffloadBlockedReason,
   type LimitAccount,
   isUsageLimitsCommand,
   collectProviderUsageLimits,
@@ -1276,5 +1277,70 @@ describe("ChatGPT sharing presentation", () => {
         auth: { status: "unauthenticated", subscriptionSharing: true },
       }),
     ).toBe(false);
+  });
+});
+
+describe("cursorOffloadBlockedReason", () => {
+  const NOW_MS = Date.parse("2026-09-14T01:00:00.000Z");
+  const cursorLimits = (usedPercent: number, resetsAt?: string) => ({
+    checkedAt: "2026-09-14T00:00:00.000Z",
+    windows: [
+      {
+        id: "totalPercentUsed",
+        kind: "monthly" as const,
+        label: "Overall",
+        usedPercent,
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+      },
+    ],
+  });
+
+  it("never blocks while spending is allowed", () => {
+    expect(
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: true,
+        cursorLimits: cursorLimits(100),
+        nowMs: NOW_MS,
+      }),
+    ).toBeNull();
+  });
+
+  it("blocks at the cap and allows below it", () => {
+    expect(
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(100),
+        nowMs: NOW_MS,
+      }),
+    ).not.toBeNull();
+    expect(
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(99),
+        nowMs: NOW_MS,
+      }),
+    ).toBeNull();
+  });
+
+  it("stops blocking once the window's reset has passed", () => {
+    const blocked = (resetsAt: string) =>
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: cursorLimits(100, resetsAt),
+        nowMs: NOW_MS,
+      });
+    expect(blocked("2026-09-14T02:00:00.000Z")).not.toBeNull();
+    expect(blocked("2026-09-14T01:00:00.000Z")).toBeNull();
+  });
+
+  it("does not block when the usage could not be read", () => {
+    // A failed Cursor read is null, never an error (design P9). Absence is not 100%.
+    expect(
+      cursorOffloadBlockedReason({
+        allowSpendingCredits: false,
+        cursorLimits: undefined,
+        nowMs: NOW_MS,
+      }),
+    ).toBeNull();
   });
 });

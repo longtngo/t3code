@@ -236,7 +236,9 @@ describe("setBackend", () => {
         const result = yield* setBackend({ backend: "cursor", instanceId: cursorId });
         expect(result.backend).toBe("cursor");
         expect(result.instanceId).toBe("cursor");
-        expect(result.degraded).toBe(MASTER_OFF_REASON);
+        // A refusal changes nothing, so it is reported apart from the stored state.
+        expect(result.refused).toBe(MASTER_OFF_REASON);
+        expect(result.degraded).toBe(before.degraded);
         const after = yield* readBackendFile();
         expect(after.updatedAt).toBe(before.updatedAt);
       }).pipe(
@@ -421,6 +423,118 @@ describe("setBackend", () => {
         const result = yield* setBackend({ backend: "cursor" });
         expect(result.degraded).not.toBeNull();
         expect((yield* readBackendFile()).model).toBe("x");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    // A panel opened while the machine was on Default still says Default after another device
+    // switched it to Cursor; its model pick must not switch the machine back (and the reverse).
+    it.effect("a target-only pick keeps a Cursor machine on Cursor", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "cursor", instanceId: cursorId, model: "auto" });
+        const result = yield* setBackend({
+          backend: "default",
+          targetOnly: true,
+          model: "sonnet",
+        });
+        expect(result.backend).toBe("cursor");
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("cursor");
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("sonnet");
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a refused target-only pick leaves a Cursor machine untouched and says why", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "cursor", instanceId: cursorId, model: "auto" });
+        const before = yield* readBackendFile();
+        // The RPC body: `refused` is what the panel shows; the stored state is untouched, so
+        // the collapsed row does not read "Degraded" over a running Cursor backend.
+        const state = yield* setBackendState({
+          backend: "cursor",
+          targetOnly: true,
+          instanceId: cursorOffId,
+        });
+        expect(state.backend).toBe("cursor");
+        expect(state.instanceId).toBe("cursor");
+        expect(state.refused).toContain("not an enabled Cursor instance");
+        expect(state.degraded).toBe(before.degraded);
+        expect(yield* readBackendFile()).toEqual(before);
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("a refused target-only pick on a Default machine keeps the remembered target", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "m-old" });
+        const before = yield* readBackendFile();
+        const state = yield* setBackendState({
+          backend: "default",
+          targetOnly: true,
+          instanceId: cursorOffId,
+          model: "m-new",
+        });
+        expect(state.refused).toContain("not an enabled Cursor instance");
+        expect(state.instanceId).toBe("cursor");
+        expect(state.model).toBe("m-old");
+        expect(yield* readBackendFile()).toEqual(before);
+      }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
+    );
+
+    it.effect("under master-off, a target-only pick cannot change a Cursor machine", () =>
+      Effect.gen(function* () {
+        yield* writeBackendFile({
+          schemaVersion: 1,
+          backend: "cursor",
+          instanceId: "cursor",
+          model: "auto",
+          binaryPath: "agent",
+          apiEndpoint: "",
+          updatedAt: null,
+          degraded: null,
+        });
+        const before = yield* readBackendFile();
+        // A stale Default panel: `backend` says default, the file says Cursor.
+        const result = yield* setBackend({ backend: "default", targetOnly: true, model: "x" });
+        expect(result.refused).toBe(MASTER_OFF_REASON);
+        expect(yield* readBackendFile()).toEqual(before);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({ ...settings, subagentBackendEnabled: false }),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("under master-off, a target-only pick on a Default machine saves the model", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "auto" });
+        // A stale Cursor panel: `backend` says cursor, the file says Default.
+        const result = yield* setBackend({ backend: "cursor", targetOnly: true, model: "sonnet" });
+        expect(result.refused).toBeUndefined();
+        expect(result.degraded).toBeNull();
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.model).toBe("sonnet");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            staticSettingsLayer({ ...settings, subagentBackendEnabled: false }),
+            supportLayer,
+          ),
+        ),
+      ),
+    );
+
+    it.effect("a target-only pick keeps a Default machine on Default", () =>
+      Effect.gen(function* () {
+        yield* setBackend({ backend: "default", instanceId: cursorId, model: "auto" });
+        yield* setBackend({ backend: "cursor", targetOnly: true, model: "sonnet" });
+        const file = yield* readBackendFile();
+        expect(file.backend).toBe("default");
+        expect(file.instanceId).toBe("cursor");
+        expect(file.model).toBe("sonnet");
       }).pipe(Effect.provide(Layer.mergeAll(staticSettingsLayer(settings), supportLayer))),
     );
 

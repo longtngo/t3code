@@ -44,14 +44,13 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { resolveCommandPath } from "@t3tools/shared/shell";
+import { cursorOffloadBlockedReason, cursorTotalUsageLimits } from "@t3tools/shared/usageLimits";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
-import { cursorOffloadBlockedReason } from "../provider/creditSpendGuard.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { listCursorModels, peekCursorModels } from "./cursorModels.ts";
-import { cursorTotalUsageLimits } from "./cursorUsageRead.ts";
 import {
   layer as SubagentLiveThreadsLayer,
   registerActiveSubagentThreadBackend,
@@ -612,14 +611,18 @@ export const prepareThreadBackend = Effect.fn("subagentBackend.prepareThread")(f
  * or by none.
  *
  * Under master-off only a selection of Cursor is refused, without writing: the file the
- * user set last stays as it was and the returned `degraded` says why nothing changed. A
+ * user set last stays as it was and the returned `refused` says why nothing changed. A
  * selection of "default" is still admitted, so the master switch is not a one-way door
  * that strands the global file on a Cursor target with no way to clear it.
  *
  * A selection that names no instance or model uses the ones already remembered in the
  * file. A model belongs to its instance: naming a different instance without a model drops
  * the remembered one, and a refused Cursor pick keeps a remembered instance with its model.
+ * `targetOnly`: see `SubagentBackendSetInput`.
  */
+/** What `setBackend` returns: the record now on disk, plus `refused` when nothing was written. */
+export type SetBackendResult = PersistedBackend & { readonly refused?: string };
+
 export const setBackend = Effect.fn("subagentBackend.set")(function* (
   input: SubagentBackendSetInput,
 ) {
@@ -628,17 +631,27 @@ export const setBackend = Effect.fn("subagentBackend.set")(function* (
     Effect.gen(function* () {
       const settings = yield* serverSettings.getRawSettings;
       const current = yield* readBackendFile();
-      if (settings.subagentBackendEnabled === false && input.backend === SUBAGENT_BACKEND_CURSOR) {
-        return { ...current, degraded: MASTER_OFF_REASON } satisfies PersistedBackend;
+      const backend = input.targetOnly === true ? current.backend : input.backend;
+      // Refusals write nothing and return the stored record with the reason beside it.
+      const refuse = (refused: string): SetBackendResult => ({ ...current, refused });
+      if (settings.subagentBackendEnabled === false && backend === SUBAGENT_BACKEND_CURSOR) {
+        return refuse(MASTER_OFF_REASON);
       }
       // A bare selection (an old cached web bundle sends none) keeps the remembered pick.
       const instanceId = input.instanceId ?? current.instanceId;
       const model = input.model ?? (instanceId === current.instanceId ? current.model : null);
-      let next: PersistedBackend;
-      if (input.backend !== SUBAGENT_BACKEND_CURSOR) {
+      let next: SetBackendResult;
+      if (backend !== SUBAGENT_BACKEND_CURSOR) {
+        // A picker naming an instance is validated even on Default, so a stale panel cannot
+        // replace the remembered target with one that could never dispatch.
+        if (input.targetOnly === true && input.instanceId !== undefined) {
+          const validated = validateCursorInstance(settings, input.instanceId);
+          if (!validated.ok) return refuse(validated.reason);
+        }
         next = { ...OFF, instanceId, model };
       } else {
         const validated = validateCursorInstance(settings, instanceId ?? undefined);
+        if (!validated.ok && input.targetOnly === true) return refuse(validated.reason);
         next = validated.ok
           ? yield* resolveCursorTarget(validated, model ?? "auto")
           : // A refused pick must not overwrite a remembered instance that may still be
@@ -667,7 +680,7 @@ export const setBackend = Effect.fn("subagentBackend.set")(function* (
 /** Assembles the wire-shaped state from a persisted record, the instance picker
  * list, and an already-fetched model list (see `listCursorModels`). */
 export function buildState(
-  persisted: PersistedBackend,
+  persisted: SetBackendResult,
   settings: ServerSettings,
   models: readonly SubagentBackendModelOption[],
 ) {
@@ -680,6 +693,7 @@ export function buildState(
     instances,
     models,
     degraded: persisted.degraded,
+    ...(persisted.refused === undefined ? {} : { refused: persisted.refused }),
   };
 }
 

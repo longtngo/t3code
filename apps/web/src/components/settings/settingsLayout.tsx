@@ -21,6 +21,7 @@ import {
   PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
   usePrimarySettingsAvailable,
 } from "../../hooks/useSettings";
+import { ENVIRONMENT_SETTINGS_READ_ONLY } from "../../permissionCopy";
 import { cn } from "../../lib/utils";
 import { WorkspacePageContainer, type WorkspacePageWidth } from "../WorkspacePageContainer";
 import { Button } from "../ui/button";
@@ -392,7 +393,7 @@ export function SettingsRow({
     unavailable && control
       ? inertControl(
           !canWriteSettings
-            ? "This connection does not have permission to change environment settings."
+            ? ENVIRONMENT_SETTINGS_READ_ONLY
             : context
               ? "Reconnect the selected environment to change this setting."
               : PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
